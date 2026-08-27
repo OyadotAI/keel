@@ -11,6 +11,7 @@ use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use keel_harness::quarantine;
 use keel_scanner::{RepoContext, scan};
+use keel_workspace::Workspace;
 
 #[derive(Parser)]
 #[command(name = "keel", version, about = "Make a repo shippable")]
@@ -36,6 +37,30 @@ enum Command {
         strict: bool,
     },
 
+    /// Show everything Claude Code knows about this repository.
+    ///
+    /// Sessions, skills, plugins, subagents and commands all shape how an agent behaves here, and
+    /// none of them are visible while you work. This is the inventory.
+    Workspace {
+        /// Repository to inspect. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: Utf8PathBuf,
+
+        /// Emit JSON instead of a rendered listing.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List Claude Code sessions recorded for this repository.
+    Sessions {
+        #[arg(default_value = ".")]
+        path: Utf8PathBuf,
+
+        /// Show every session rather than the ten most recent.
+        #[arg(long)]
+        all: bool,
+    },
+
     /// Move repository-supplied agent configuration out of the way.
     ///
     /// Run before pointing any agent at a repository you did not write. Claude Code loads a repo's
@@ -46,6 +71,20 @@ enum Command {
         #[arg(default_value = ".")]
         path: Utf8PathBuf,
     },
+}
+
+/// Resolve the repository path and read Claude Code's state for it.
+fn discover(path: &Utf8PathBuf) -> Result<Workspace> {
+    let home = keel_workspace::claude_home()
+        .context("could not locate the Claude Code home directory (is HOME set?)")?;
+
+    // Session transcripts are filed under the absolute working directory, so a relative path finds
+    // nothing until it is canonicalised.
+    let repo = path
+        .canonicalize_utf8()
+        .with_context(|| format!("resolving {path}"))?;
+
+    Ok(Workspace::discover(&repo, &home))
 }
 
 fn main() -> Result<()> {
@@ -74,6 +113,20 @@ fn main() -> Result<()> {
             if strict && !report.is_shippable() {
                 std::process::exit(1);
             }
+        }
+
+        Command::Workspace { path, json } => {
+            let workspace = discover(&path)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&workspace)?);
+            } else {
+                print!("{}", render::workspace(&workspace));
+            }
+        }
+
+        Command::Sessions { path, all } => {
+            let workspace = discover(&path)?;
+            print!("{}", render::sessions(&workspace, all));
         }
 
         Command::Trust { path } => {
