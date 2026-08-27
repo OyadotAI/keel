@@ -24,7 +24,10 @@ impl RepoContext {
         let walker = WalkBuilder::new(&root)
             .hidden(false)
             .git_ignore(true)
-            .git_global(false)
+            // Honour the user's global gitignore too. Personal local files — a developer's own
+            // .claude/settings.local.json is the common case — are not content the repository
+            // ships, and reporting them as such is alarming and wrong.
+            .git_global(true)
             .parents(false)
             // Honour .gitignore even when the tree is not a git checkout yet. Keel scans
             // directories before cloning as well as after, and an ignored file is ignored either
