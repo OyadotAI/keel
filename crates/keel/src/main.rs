@@ -5,6 +5,7 @@
 //! credential.
 
 mod render;
+mod serve;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
@@ -61,6 +62,20 @@ enum Command {
         all: bool,
     },
 
+    /// Open the Keel IDE in a browser.
+    Serve {
+        /// Repository to open. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: Utf8PathBuf,
+
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+
+        /// Do not open a browser window.
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Move repository-supplied agent configuration out of the way.
     ///
     /// Run before pointing any agent at a repository you did not write. Claude Code loads a repo's
@@ -113,6 +128,17 @@ fn main() -> Result<()> {
             if strict && !report.is_shippable() {
                 std::process::exit(1);
             }
+        }
+
+        Command::Serve { path, port, no_open } => {
+            let repo = path
+                .canonicalize_utf8()
+                .with_context(|| format!("resolving {path}"))?;
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("starting the async runtime")?
+                .block_on(serve::run(repo, port, !no_open))?;
         }
 
         Command::Workspace { path, json } => {
