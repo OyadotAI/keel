@@ -70,6 +70,20 @@ provision $6,531 of infrastructure in 24 hours before anyone could see it.
 OS keychain only. Cloudflare tokens are provisioned scoped to a single project and rotated, because
 Cloudflare has no OIDC or keyless deploy path as of August 2026.
 
+## Known gap: the chat panel is not yet behind this contract
+
+Rules 1 and 3 describe `keel-harness::invocation`, which is built and tested. **The IDE's chat panel
+does not use it yet.** It spawns `claude` with `--permission-mode acceptEdits`, so the agent has real
+file access and can run commands.
+
+The reason is not oversight: the locked-down surface depends on `keel-mcp` having an actual server
+behind its tool catalog, and it does not. Until then, an agent restricted to Keel tools would have
+no tools at all and could do nothing useful. Shipping a panel that *claims* containment it does not
+have would be worse than shipping one that says what it is, so the chat header states the permission
+mode in plain language.
+
+Closing this gap means implementing the MCP server and switching the spawn to `Invocation::args()`.
+
 ## Stop, not abandon
 
 `SIGTERM` makes the CLI exit 143 and abandon the turn in progress. The Stop button sends **SIGINT**,

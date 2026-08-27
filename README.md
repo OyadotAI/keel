@@ -29,10 +29,16 @@ keel trust .             # quarantine repo-supplied agent config
 configurable — Keel reads your repositories, your Claude Code sessions and (later) your cloud
 credentials, none of which should be reachable from another machine.
 
-Five views: **Overview** (readiness score, environments, blocking findings, recent sessions),
-**Readiness** (every finding grouped by dimension, with its fix), **Sessions**, **Skills &
-extensions** (skills, plugins, subagents, commands), and **Trust**. Tabs are deep-linkable —
-`#trust` opens straight there.
+The layout is an editor: **file tree**, **source view**, and a **chat panel that runs your installed
+`claude` in the repository** — streaming its text, its tool calls, and its cost as it works. When a
+run finishes, the tree, the open file and the readiness score all refresh, because the agent has
+just changed them.
+
+The inspector opens over the top: **Overview** (readiness score, environments, blocking findings, recent sessions),
+**Readiness** (every finding grouped by dimension, with its fix), **Sessions**, **Skills & extensions**, and **Trust**.
+
+> The chat panel spawns with `acceptEdits`, so the agent really can edit files and run commands.
+> That is **not** the locked-down surface in `docs/guardrails.md` — see the known gap there.
 
 The whole UI is one HTML file compiled into the binary with `include_str!`, so `keel` stays a
 single file with no assets to lose and no build step. It is theme-aware and reads live state on
