@@ -17,10 +17,26 @@ keel scan .              # readiness report
 keel scan . --json       # machine-readable
 keel scan . --strict     # exit 1 if anything critical or high is outstanding
 
+keel serve .             # open the IDE at http://127.0.0.1:7777
 keel workspace .         # everything Claude Code knows about this repo
 keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
+
+## The IDE
+
+`keel serve` opens a local interface at `http://127.0.0.1:7777`. Loopback only, and not
+configurable — Keel reads your repositories, your Claude Code sessions and (later) your cloud
+credentials, none of which should be reachable from another machine.
+
+Five views: **Overview** (readiness score, environments, blocking findings, recent sessions),
+**Readiness** (every finding grouped by dimension, with its fix), **Sessions**, **Skills &
+extensions** (skills, plugins, subagents, commands), and **Trust**. Tabs are deep-linkable —
+`#trust` opens straight there.
+
+The whole UI is one HTML file compiled into the binary with `include_str!`, so `keel` stays a
+single file with no assets to lose and no build step. It is theme-aware and reads live state on
+every request, because you are editing the repository in another window while it is open.
 
 ## The Claude Code IDE
 

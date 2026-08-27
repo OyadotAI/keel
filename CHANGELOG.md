@@ -16,5 +16,7 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 - `keel workspace` — inventory of everything Claude Code knows about a repo: sessions, skills,
   plugins, subagents, commands, hooks and MCP servers, each labelled by scope.
 - `keel sessions` — recorded sessions with generated titles, message counts and resume ids.
+- `keel serve` — the local IDE. Loopback-only axum server with a single embedded HTML page;
+  Overview, Readiness, Sessions, Skills and Trust views, deep-linkable by URL hash.
 - Untrusted marking: project-scoped hooks and MCP servers are flagged because they arrived with the
   repository rather than from the user's own configuration.

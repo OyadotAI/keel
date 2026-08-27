@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keel</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #12181f; --panel-2: #161d26; --line: #232c38;
+    --text: #e3e8ef; --dim: #8b98a9; --faint: #5c6774;
+    --accent: #4cc2ff; --crit: #ff6b6b; --high: #ffa657; --med: #e3c565; --low: #7d8ba1;
+    --ok: #56d364;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f8fa; --panel: #fff; --panel-2: #f0f3f6; --line: #d8dee6;
+      --text: #1c2128; --dim: #57606a; --faint: #8b949e;
+      --accent: #0969da; --crit: #cf222e; --high: #bc4c00; --med: #9a6700; --low: #6e7781;
+      --ok: #1a7f37;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  .app { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+
+  /* ── rail ── */
+  .rail { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 0; }
+  .brand {
+    display: flex; align-items: center; gap: 9px; padding: 0 18px 18px;
+    font-weight: 620; letter-spacing: -.01em; font-size: 15px;
+  }
+  .mark { width: 20px; height: 20px; flex: none; }
+  .repo {
+    padding: 0 18px 18px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--dim); word-break: break-all; line-height: 1.45;
+  }
+  nav { display: flex; flex-direction: column; gap: 1px; padding: 0 10px; }
+  nav button {
+    all: unset; display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--dim);
+    font-size: 13px; transition: background .12s, color .12s;
+  }
+  nav button:hover { background: var(--panel-2); color: var(--text); }
+  nav button[aria-current="true"] { background: var(--panel-2); color: var(--text); font-weight: 560; }
+  nav .n { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  nav .n.warn { color: var(--crit); }
+
+  .conns { margin-top: 22px; padding: 14px 18px 0; border-top: 1px solid var(--line); }
+  .conns h4 { margin: 0 0 9px; font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--faint); font-weight: 600; }
+  .conn { display: flex; align-items: center; gap: 7px; padding: 3px 0;
+    font-size: 12px; color: var(--dim); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.on { background: var(--ok); }
+
+  /* ── main ── */
+  main { padding: 26px 30px 60px; max-width: 1000px; }
+  .head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 620; letter-spacing: -.015em; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 24px; }
+
+  /* score */
+  .score-row { display: flex; align-items: center; gap: 22px; margin-bottom: 26px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
+  .score { font-family: var(--mono); font-size: 40px; font-weight: 600;
+    line-height: 1; letter-spacing: -.03em; }
+  .score small { font-size: 15px; color: var(--faint); font-weight: 400; }
+  .verdict { font-size: 14px; font-weight: 560; margin-bottom: 3px; }
+  .bar { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden;
+    margin-top: 11px; width: 260px; }
+  .bar i { display: block; height: 100%; border-radius: 3px; transition: width .5s ease; }
+
+  .sect { margin-bottom: 26px; }
+  .sect h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--faint); font-weight: 600; margin: 0 0 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden; }
+  .row { display: flex; gap: 13px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .sev { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .05em; padding: 2.5px 7px; border-radius: 4px; height: fit-content;
+    flex: none; width: 62px; text-align: center; font-weight: 600; }
+  .sev.critical { color: var(--crit); background: color-mix(in srgb, var(--crit) 14%, transparent); }
+  .sev.high { color: var(--high); background: color-mix(in srgb, var(--high) 14%, transparent); }
+  .sev.medium { color: var(--med); background: color-mix(in srgb, var(--med) 14%, transparent); }
+  .sev.low, .sev.info { color: var(--low); background: color-mix(in srgb, var(--low) 14%, transparent); }
+  .body { min-width: 0; flex: 1; }
+  .title { font-weight: 545; margin-bottom: 3px; }
+  .title code { font-family: var(--mono); font-size: 12.5px;
+    background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .detail { color: var(--dim); font-size: 12.5px; margin-bottom: 7px; }
+  .fix { font-size: 12.5px; color: var(--dim); display: flex; gap: 7px; }
+  .fix b { color: var(--accent); font-weight: 560; flex: none; }
+  .path { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
+  /* lists */
+  .item { display: grid; grid-template-columns: 1fr auto; gap: 14px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .item:last-child { border-bottom: 0; }
+  /* Grid children default to min-width:auto, so a long nowrap description refuses to shrink and
+     pushes the scope tag off the edge. This is what lets the ellipsis engage instead. */
+  .item > div:first-child { min-width: 0; }
+  .item .nm { font-family: var(--mono); font-size: 12.5px; font-weight: 550; }
+  .item .ds { color: var(--dim); font-size: 12.5px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 4px;
+    background: var(--panel-2); color: var(--faint); white-space: nowrap; }
+  .tag.project { color: var(--high); background: color-mix(in srgb, var(--high) 13%, transparent); }
+  .danger { border-left: 2px solid var(--crit); }
+  .danger .nm::before { content: "! "; color: var(--crit); font-weight: 700; }
+
+  .warn-banner { display: flex; gap: 11px; padding: 13px 16px; border-radius: 9px;
+    background: color-mix(in srgb, var(--crit) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--crit) 28%, transparent); margin-bottom: 14px; }
+  .warn-banner b { color: var(--crit); }
+  .warn-banner code { font-family: var(--mono); font-size: 12px;
+    background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
+
+  .empty { padding: 30px 16px; text-align: center; color: var(--faint); font-size: 13px; }
+  .pane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 17px 18px; }
+  .pane h3 { margin: 0 0 3px; font-size: 13px; font-weight: 600; }
+  .pane .st { font-size: 12.5px; color: var(--faint); }
+  .hidden { display: none; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
+              stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      Keel
+    </div>
+    <div class="repo" id="repo">…</div>
+    <nav id="nav"></nav>
+    <div class="conns">
+      <h4>Connections</h4>
+      <div id="conns"></div>
+    </div>
+  </aside>
+  <main id="main"><div class="empty">Loading…</div></main>
+</div>
+
+<script>
+const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Findings and titles wrap identifiers in backticks; render those as code without trusting the rest.
+const md = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+
+let state = null;
+let tab = (location.hash || '#overview').slice(1);
+
+const TABS = [
+  { id: 'overview',  label: 'Overview'  },
+  { id: 'findings',  label: 'Readiness' },
+  { id: 'sessions',  label: 'Sessions'  },
+  { id: 'skills',    label: 'Skills'    },
+  { id: 'trust',     label: 'Trust'     },
+];
+
+function counts(s) {
+  const w = s.workspace;
+  return {
+    overview: null,
+    findings: s.scan.findings.length,
+    sessions: w.sessions.length,
+    skills: w.skills.length + w.plugins.length + w.agents.length + w.commands.length,
+    trust: w.hooks.filter(h => h.scope === 'project').length
+         + w.mcp_servers.filter(m => m.scope === 'project').length,
+  };
+}
+
+function renderNav() {
+  const c = counts(state);
+  document.getElementById('nav').innerHTML = '';
+  for (const t of TABS) {
+    const n = c[t.id];
+    const warn = t.id === 'trust' && n > 0;
+    const el = $(`<button aria-current="${t.id === tab}">
+      <span>${t.label}</span>
+      ${n === null ? '' : `<span class="n ${warn ? 'warn' : ''}">${n}</span>`}
+    </button>`).firstElementChild;
+    el.onclick = () => { location.hash = t.id; };
+    document.getElementById('nav').append(el);
+  }
+}
+
+function scoreColor(n) {
+  return n >= 90 ? 'var(--ok)' : n >= 70 ? 'var(--med)' : n >= 40 ? 'var(--high)' : 'var(--crit)';
+}
+
+function findingRow(f) {
+  return `<div class="row">
+    <span class="sev ${f.severity}">${f.severity}</span>
+    <div class="body">
+      <div class="title">${md(f.title)}</div>
+      <div class="detail">${md(f.detail)}</div>
+      ${f.path ? `<div class="path">${esc(f.path)}</div>` : ''}
+      <div class="fix"><b>fix</b><span>${esc(f.fix.description)}</span></div>
+    </div>
+  </div>`;
+}
+
+function listCard(items, render, emptyText) {
+  if (!items.length) return `<div class="card"><div class="empty">${esc(emptyText)}</div></div>`;
+  return `<div class="card">${items.map(render).join('')}</div>`;
+}
+
+const views = {
+  overview() {
+    const s = state.scan, w = state.workspace;
+    const top = s.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
+    const untrusted = counts(state).trust;
+    return `
+      <div class="head"><h1>Overview</h1></div>
+      <div class="sub">Readiness, and everything Claude Code knows about this repository.</div>
+
+      <div class="score-row">
+        <div class="score" style="color:${scoreColor(s.score)}">${s.score}<small>/100</small></div>
+        <div>
+          <div class="verdict">${s.findings.some(f => ['critical','high'].includes(f.severity))
+            ? 'Not ready to deploy' : 'No blocking issues'}</div>
+          <div class="detail">${s.findings.length} finding${s.findings.length === 1 ? '' : 's'} ·
+            ${s.findings.filter(f => f.fix.kind === 'automatic').length} fixable automatically</div>
+          <div class="bar"><i style="width:${s.score}%;background:${scoreColor(s.score)}"></i></div>
+        </div>
+      </div>
+
+      ${untrusted > 0 ? `<div class="warn-banner">
+        <b>!</b><div><b>${untrusted} item${untrusted === 1 ? '' : 's'} came with this repository and will execute.</b>
+        Hooks run shell commands at session start and MCP servers connect automatically.
+        Review them under Trust, or run <code>keel trust</code> to quarantine them.</div>
+      </div>` : ''}
+
+      <div class="sect">
+        <h2>Environments</h2>
+        <div class="pane-grid">
+          <div class="pane"><h3>dev</h3><div class="st">Not connected — no Cloudflare account linked</div></div>
+          <div class="pane"><h3>prod</h3><div class="st">Not connected — no Cloudflare account linked</div></div>
+        </div>
+      </div>
+
+      ${top.length ? `<div class="sect"><h2>Blocking</h2>
+        <div class="card">${top.map(findingRow).join('')}</div></div>` : ''}
+
+      <div class="sect">
+        <h2>Recent sessions</h2>
+        ${listCard(w.sessions.slice(0, 4), s => `<div class="item">
+          <div><div class="nm">${esc(s.title ?? '(untitled)')}</div>
+            <div class="ds">${s.messages} messages · ${esc((s.last_active ?? '').slice(0, 16).replace('T', ' '))}</div></div>
+          <span class="tag">${esc(s.id.split('-')[0])}</span>
+        </div>`, 'No sessions recorded for this repository yet.')}
+      </div>`;
+  },
+
+  findings() {
+    const s = state.scan;
+    const groups = {};
+    for (const f of s.findings) (groups[f.dimension] ??= []).push(f);
+    const label = d => d.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+    return `
+      <div class="head"><h1>Readiness</h1></div>
+      <div class="sub">Can an agent safely work here, and can this run on Cloudflare?</div>
+      ${s.findings.length === 0
+        ? `<div class="card"><div class="empty">Nothing to report. This repository is ready.</div></div>`
+        : Object.entries(groups).map(([dim, fs]) => `<div class="sect">
+            <h2>${esc(label(dim))}</h2>
+            <div class="card">${fs.map(findingRow).join('')}</div>
+          </div>`).join('')}`;
+  },
+
+  sessions() {
+    const w = state.workspace;
+    return `
+      <div class="head"><h1>Sessions</h1></div>
+      <div class="sub">Recorded Claude Code conversations. Titles and counts only — message
+        contents never leave the transcript.</div>
+      ${listCard(w.sessions, s => `<div class="item">
+        <div>
+          <div class="nm">${esc(s.title ?? '(untitled)')}</div>
+          <div class="ds">${s.messages} messages · ${esc((s.last_active ?? '').slice(0, 16).replace('T', ' '))}
+            ${s.branch ? ' · ' + esc(s.branch) : ''}${s.version ? ' · v' + esc(s.version) : ''}</div>
+        </div>
+        <span class="tag">claude --resume ${esc(s.id.split('-')[0])}</span>
+      </div>`, 'No sessions recorded for this repository yet.')}`;
+  },
+
+  skills() {
+    const w = state.workspace;
+    const named = (x) => `<div class="item ${x.scope === 'project' ? '' : ''}">
+      <div><div class="nm">${esc(x.name)}</div>
+        ${x.description ? `<div class="ds">${esc(x.description)}</div>` : ''}</div>
+      <span class="tag ${x.scope}">${esc(x.scope)}</span>
+    </div>`;
+    return `
+      <div class="head"><h1>Skills &amp; extensions</h1></div>
+      <div class="sub">What the agent can do here. <code>project</code> means it arrived with the
+        repository.</div>
+      <div class="sect"><h2>Skills</h2>${listCard(w.skills, named, 'No skills.')}</div>
+      <div class="sect"><h2>Plugins</h2>${listCard(w.plugins, p => `<div class="item">
+        <div><div class="nm">${esc(p.name)}</div>
+          <div class="ds">${esc(p.marketplace ?? '')}</div></div>
+        <span class="tag">${esc(p.scope ?? '')}</span></div>`, 'No plugins installed.')}</div>
+      <div class="sect"><h2>Subagents</h2>${listCard(w.agents, named, 'No subagents.')}</div>
+      <div class="sect"><h2>Commands</h2>${listCard(w.commands, named, 'No custom commands.')}</div>`;
+  },
+
+  trust() {
+    const w = state.workspace;
+    const n = counts(state).trust;
+    const row = (x, primary, secondary) => `<div class="item ${x.scope === 'project' ? 'danger' : ''}">
+      <div><div class="nm">${esc(primary)}</div>
+        <div class="ds">${esc(secondary)}</div></div>
+      <span class="tag ${x.scope}">${esc(x.scope)}</span>
+    </div>`;
+    return `
+      <div class="head"><h1>Trust</h1></div>
+      <div class="sub">Configuration that executes. Anything marked <code>project</code> was written
+        by whoever wrote the repository — not necessarily by you.</div>
+      ${n > 0 ? `<div class="warn-banner"><b>!</b><div>
+        <b>${n} item${n === 1 ? '' : 's'} will run when a session starts.</b>
+        Claude Code loads repository hooks with no trust prompt. Run <code>keel trust</code> to move
+        them aside for review.</div></div>` : ''}
+      <div class="sect"><h2>Hooks</h2>${listCard(w.hooks,
+        h => row(h, h.event, h.command), 'No hooks configured.')}</div>
+      <div class="sect"><h2>MCP servers</h2>${listCard(w.mcp_servers,
+        m => row(m, m.name, m.endpoint ?? ''), 'No MCP servers configured.')}</div>`;
+  },
+};
+
+addEventListener('hashchange', () => {
+  const next = location.hash.slice(1);
+  if (views[next]) { tab = next; render(); }
+});
+
+function render() {
+  if (!views[tab]) tab = 'overview';
+  renderNav();
+  document.getElementById('main').innerHTML = views[tab]();
+}
+
+async function load() {
+  const r = await fetch('/api/state');
+  state = await r.json();
+  document.getElementById('repo').textContent = state.repo;
+  document.getElementById('conns').innerHTML = [
+    ['Claude Code', state.connections.claude],
+    ['GitHub', state.connections.github],
+    ['Cloudflare', state.connections.cloudflare],
+  ].map(([n, on]) => `<div class="conn"><span class="dot ${on ? 'on' : ''}"></span>${n}${on ? '' : ' — not connected'}</div>`).join('');
+  render();
+}
+load();
+</script>
+</body>
+</html>
