@@ -65,9 +65,8 @@ impl Check for UntrustedAgentConfig {
                         *detail,
                         Fix::Manual {
                             description: format!(
-                                "Review {path} by hand. Keel quarantines it before any agent runs; \
-                                 restore it only once you have read every hook command and MCP \
-                                 server it defines."
+                                "Run `keel trust` to move {path} aside, then read it before \
+                                 restoring it."
                             ),
                         },
                     )
@@ -87,7 +86,9 @@ impl Check for UntrustedAgentConfig {
                     "Hook scripts are executed by the agent harness at lifecycle points such as \
                      session start. Treat them as arbitrary code from whoever wrote the repo.",
                     Fix::Manual {
-                        description: "Read the script before allowing it to run.".to_string(),
+                        description: "Run `keel trust` to move it aside, then read it before \
+                                      allowing it to run."
+                            .to_string(),
                     },
                 )
                 .at(path.to_owned()),

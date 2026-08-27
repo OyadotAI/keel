@@ -9,6 +9,7 @@ mod render;
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
+use keel_harness::quarantine;
 use keel_scanner::{RepoContext, scan};
 
 #[derive(Parser)]
@@ -33,6 +34,17 @@ enum Command {
         /// Exit non-zero when anything critical or high is outstanding, for CI.
         #[arg(long)]
         strict: bool,
+    },
+
+    /// Move repository-supplied agent configuration out of the way.
+    ///
+    /// Run before pointing any agent at a repository you did not write. Claude Code loads a repo's
+    /// own `.claude/settings.json` hooks and executes them with no trust prompt, so this is what
+    /// stands between a hostile repo and code execution on this machine.
+    Trust {
+        /// Repository to quarantine. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: Utf8PathBuf,
     },
 }
 
@@ -62,6 +74,28 @@ fn main() -> Result<()> {
             if strict && !report.is_shippable() {
                 std::process::exit(1);
             }
+        }
+
+        Command::Trust { path } => {
+            let report = quarantine(&path)
+                .with_context(|| format!("quarantining agent config in {path}"))?;
+
+            if report.is_clean() {
+                println!("\nNothing to quarantine — this repository ships no agent config.\n");
+                return Ok(());
+            }
+
+            println!("\nQuarantined {} item(s):\n", report.quarantined.len());
+            for item in &report.quarantined {
+                println!("  {item}");
+            }
+            if let Some(location) = &report.location {
+                println!("\nMoved to {location}");
+            }
+            println!(
+                "\nRead each one before restoring it. Hooks run shell commands at session start,\n\
+                 and MCP servers are connected automatically.\n"
+            );
         }
     }
 

@@ -42,8 +42,14 @@ impl RepoContext {
             }
             let path = Utf8Path::from_path(entry.path())
                 .context("repository contains a non-UTF-8 path")?;
-            // `.git` internals are noise for every check we have.
-            if path.components().any(|c| c.as_str() == ".git") {
+            // `.git` internals are noise for every check we have. `.keel` is Keel's own working
+            // directory, and skipping it matters for correctness rather than tidiness: it holds
+            // quarantined agent config, and re-reporting a file that `keel trust` already
+            // neutralised would mean the finding could never be cleared.
+            if path
+                .components()
+                .any(|c| matches!(c.as_str(), ".git" | ".keel"))
+            {
                 continue;
             }
             if let Ok(rel) = path.strip_prefix(&root) {
@@ -99,6 +105,18 @@ mod tests {
         let (_dir, ctx) = fixture(&[(".gitignore", "secret.txt\n"), ("secret.txt", "shh")]);
         assert!(!ctx.has("secret.txt"));
         assert!(ctx.has(".gitignore"));
+    }
+
+    /// `keel trust` moves hostile config into `.keel/quarantine`. If the scanner still reported it
+    /// from there, running trust would never clear the finding.
+    #[test]
+    fn ignores_keels_own_quarantine_directory() {
+        let (_dir, ctx) = fixture(&[
+            ("src/app.ts", "export const x = 1"),
+            (".keel/quarantine/.claude/settings.json", r#"{"hooks":{}}"#),
+        ]);
+        assert!(!ctx.has(".keel/quarantine/.claude/settings.json"));
+        assert_eq!(ctx.files().count(), 1);
     }
 
     #[test]
