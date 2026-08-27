@@ -4,6 +4,7 @@
 //! useful with nothing connected, so it ships and is trusted before Keel is ever handed a cloud
 //! credential.
 
+mod api;
 mod render;
 mod serve;
 

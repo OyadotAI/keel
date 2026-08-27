@@ -26,7 +26,85 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
   }
-  .app { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+  .app { display: grid; grid-template-columns: 232px 260px 1fr 420px; height: 100vh; overflow: hidden; }
+  @media (max-width: 1500px) { .app { grid-template-columns: 200px 220px 1fr 380px; } }
+
+  /* file tree */
+  .tree-pane { background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; padding: 12px 0; }
+  .pane-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--faint); font-weight: 600; padding: 0 14px 8px; }
+  .tnode { display: flex; align-items: center; gap: 6px; padding: 3px 14px; cursor: pointer;
+    font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; font-family: var(--mono); }
+  .tnode:hover { background: var(--panel-2); color: var(--text); }
+  .tnode.sel { background: var(--panel-2); color: var(--accent); }
+  .tnode .caret { width: 9px; flex: none; color: var(--faint); font-size: 9px; }
+  .tkids.collapsed { display: none; }
+
+  /* editor */
+  .editor-pane { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  .tabbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 38px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+  .tabbar .fname { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+  .tabbar .meta { font-size: 11px; color: var(--faint); margin-left: auto; }
+  .code { flex: 1; overflow: auto; margin: 0; padding: 14px 0; }
+  .code table { border-collapse: collapse; width: 100%; }
+  .code td { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; vertical-align: top; }
+  .code td.ln { text-align: right; color: var(--faint); user-select: none;
+    width: 1%; padding: 0 14px 0 16px; white-space: nowrap; }
+  .code td.src { white-space: pre-wrap; word-break: break-word; padding-right: 20px; }
+  .k { color: #c678dd; } .s { color: #98c379; } .c { color: var(--faint); font-style: italic; }
+  .n { color: #d19a66; } .f { color: #61afef; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .k { color: #a626a4; }
+    :root:not([data-theme="dark"]) .s { color: #50a14f; }
+    :root:not([data-theme="dark"]) .n { color: #986801; }
+    :root:not([data-theme="dark"]) .f { color: #4078f2; } }
+
+  /* chat */
+  .chat-pane { background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden; }
+  .chat-head { padding: 11px 16px; border-bottom: 1px solid var(--line); flex: none;
+    display: flex; align-items: center; gap: 9px; }
+  .chat-head b { font-size: 13px; font-weight: 600; }
+  .chat-log { flex: 1; overflow-y: auto; padding: 16px; display: flex;
+    flex-direction: column; gap: 14px; }
+  .msg { font-size: 13px; line-height: 1.6; }
+  .msg.user { background: var(--panel-2); border-radius: 9px; padding: 10px 13px; }
+  .msg.user .who { color: var(--accent); }
+  .who { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--faint); font-weight: 600; margin-bottom: 5px; }
+  .msg .txt { white-space: pre-wrap; word-break: break-word; }
+  .tool { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono);
+    font-size: 11.5px; color: var(--dim); padding: 5px 9px; background: var(--panel-2);
+    border-radius: 6px; border-left: 2px solid var(--accent); }
+  .tool .tn { color: var(--accent); font-weight: 600; }
+  .tool .ta { color: var(--faint); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .chat-input { border-top: 1px solid var(--line); padding: 12px; flex: none; }
+  .chat-input textarea { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 8px; padding: 10px 12px; font: 13px/1.5 var(--sans);
+    resize: none; min-height: 66px; outline: none; }
+  .chat-input textarea:focus { border-color: var(--accent); }
+  .chat-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .chat-foot .hint { font-size: 11px; color: var(--faint); margin-right: auto; }
+  .btn { all: unset; background: var(--accent); color: #fff; padding: 6px 15px;
+    border-radius: 7px; font-size: 12.5px; font-weight: 560; cursor: pointer; }
+  .btn:hover { filter: brightness(1.1); }
+  .btn[disabled] { opacity: .45; cursor: default; }
+  .btn.ghost { background: var(--panel-2); color: var(--dim); }
+  .perm { font-size: 11px; color: var(--high); padding: 7px 16px;
+    background: color-mix(in srgb, var(--high) 10%, transparent);
+    border-bottom: 1px solid var(--line); flex: none; }
+
+  /* inspector slide-over */
+  .drawer { position: fixed; inset: 0 0 0 auto; width: min(880px, 78vw); background: var(--bg);
+    border-left: 1px solid var(--line); z-index: 20; overflow-y: auto;
+    box-shadow: -24px 0 60px rgba(0,0,0,.30); }
+  .drawer.hidden { display: none; }
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 19; }
+  .scrim.hidden { display: none; }
+  .drawer-close { position: absolute; top: 18px; right: 22px; }
 
   /* ── rail ── */
   .rail { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 0; }
@@ -147,6 +225,43 @@
       <div id="conns"></div>
     </div>
   </aside>
+
+  <aside class="tree-pane">
+    <div class="pane-title">Files</div>
+    <div id="tree"></div>
+  </aside>
+
+  <section class="editor-pane">
+    <div class="tabbar">
+      <span class="fname" id="fname">No file open</span>
+      <span class="meta" id="fmeta"></span>
+    </div>
+    <div class="code" id="code"><div class="empty">Select a file to view it.</div></div>
+  </section>
+
+  <section class="chat-pane">
+    <div class="chat-head">
+      <span class="dot on"></span><b>Claude Code</b>
+      <span class="meta" id="chatstatus" style="margin-left:auto;font-size:11px;color:var(--faint)"></span>
+    </div>
+    <div class="perm" id="perm">acceptEdits — the agent can edit files and run commands here.</div>
+    <div class="chat-log" id="chatlog">
+      <div class="empty" style="padding:24px 0">Ask Claude Code to change this repository.</div>
+    </div>
+    <div class="chat-input">
+      <textarea id="prompt" placeholder="Describe a change…  (⌘⏎ to send)"></textarea>
+      <div class="chat-foot">
+        <span class="hint" id="hint"></span>
+        <button class="btn ghost hidden" id="stop">Stop</button>
+        <button class="btn" id="send">Send</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="scrim hidden" id="scrim"></div>
+<div class="drawer hidden" id="drawer">
+  <button class="btn ghost drawer-close" id="drawer-close">Close</button>
   <main id="main"><div class="empty">Loading…</div></main>
 </div>
 
@@ -189,7 +304,7 @@ function renderNav() {
       <span>${t.label}</span>
       ${n === null ? '' : `<span class="n ${warn ? 'warn' : ''}">${n}</span>`}
     </button>`).firstElementChild;
-    el.onclick = () => { location.hash = t.id; };
+    el.onclick = () => { tab = t.id; openDrawer(); render(); };
     document.getElementById('nav').append(el);
   }
 }
@@ -348,7 +463,191 @@ function render() {
   document.getElementById('main').innerHTML = views[tab]();
 }
 
-async function load() {
+
+// -- inspector drawer --------------------------------------------------------
+function openDrawer() {
+  document.getElementById('drawer').classList.remove('hidden');
+  document.getElementById('scrim').classList.remove('hidden');
+}
+function closeDrawer() {
+  document.getElementById('drawer').classList.add('hidden');
+  document.getElementById('scrim').classList.add('hidden');
+}
+document.getElementById('scrim').onclick = closeDrawer;
+document.getElementById('drawer-close').onclick = closeDrawer;
+addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+// -- file tree ---------------------------------------------------------------
+let openFile = null;
+
+function treeNode(n, depth) {
+  const pad = 14 + depth * 11;
+  if (!n.dir) {
+    const el = $(`<div class="tnode" style="padding-left:${pad + 15}px" data-p="${esc(n.path)}">${esc(n.name)}</div>`).firstElementChild;
+    el.onclick = () => loadFile(n.path);
+    return el;
+  }
+  const wrap = document.createElement('div');
+  // Collapse nested directories by default so the pane stays scannable on a large repo.
+  const collapsed = depth > 0;
+  const head = $(`<div class="tnode" style="padding-left:${pad}px">
+    <span class="caret">${collapsed ? '▸' : '▾'}</span>${esc(n.name)}</div>`).firstElementChild;
+  const kids = document.createElement('div');
+  kids.className = 'tkids' + (collapsed ? ' collapsed' : '');
+  for (const c of n.children ?? []) kids.append(treeNode(c, depth + 1));
+  head.onclick = () => {
+    kids.classList.toggle('collapsed');
+    head.querySelector('.caret').textContent =
+      kids.classList.contains('collapsed') ? '▸' : '▾';
+  };
+  wrap.append(head, kids);
+  return wrap;
+}
+
+async function loadTree() {
+  const nodes = await (await fetch('/api/tree')).json();
+  const host = document.getElementById('tree');
+  host.innerHTML = '';
+  for (const n of nodes) host.append(treeNode(n, 0));
+}
+
+// Minimal highlighter. Deliberately not a parser -- it colours strings, comments, keywords and
+// numbers well enough to read code, and gets out of the way when it cannot tell.
+const KEYWORDS = /\b(fn|let|mut|pub|use|mod|struct|enum|impl|trait|match|if|else|for|while|loop|return|const|static|async|await|move|where|as|dyn|self|Self|crate|super|type|ref|in|break|continue|unsafe|extern|function|var|class|export|import|from|default|new|try|catch|throw|typeof|instanceof|def|elif|except|lambda|with|yield|None|True|False|null|true|false|undefined)\b/g;
+
+function highlight(src) {
+  let out = esc(src);
+  const stash = [];
+  // A digit-free sentinel. An index-based placeholder gets mangled by the number rule
+  // below before it can be restored, which rendered every comment line as a bare number.
+  const MARK = '\uE000';
+  const keep = (html) => { stash.push(html); return MARK; };
+  // Strings and comments first, stashed so keyword matching cannot reach inside them.
+  out = out.replace(/\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\//g, m => keep(`<span class="c">${m}</span>`));
+  out = out.replace(/(&quot;|&#39;|`)(?:\\.|(?!\1)[^\\])*\1/g, m => keep(`<span class="s">${m}</span>`));
+  out = out.replace(KEYWORDS, '<span class="k">$&</span>');
+  out = out.replace(/\b\d[\d_.]*\b/g, '<span class="n">$&</span>');
+  out = out.replace(/\b([a-zA-Z_]\w*)(?=\()/g, '<span class="f">$1</span>');
+  let i = 0;
+  return out.replace(/\uE000/g, () => stash[i++]);
+}
+
+async function loadFile(path) {
+  document.querySelectorAll('.tnode').forEach(e => e.classList.toggle('sel', e.dataset.p === path));
+  const r = await fetch('/api/file?path=' + encodeURIComponent(path));
+  const code = document.getElementById('code');
+  document.getElementById('fname').textContent = path;
+  if (!r.ok) {
+    document.getElementById('fmeta').textContent = '';
+    code.innerHTML = `<div class="empty">${esc(await r.text())}</div>`;
+    return;
+  }
+  const f = await r.json();
+  openFile = path;
+  const lines = f.content.split('\n');
+  document.getElementById('fmeta').textContent =
+    `${lines.length} lines${f.truncated ? ' · truncated' : ''}`;
+  code.innerHTML = `<table>${lines.map((l, i) =>
+    `<tr><td class="ln">${i + 1}</td><td class="src">${highlight(l) || '&nbsp;'}</td></tr>`).join('')}</table>`;
+  code.scrollTop = 0;
+}
+
+// -- chat --------------------------------------------------------------------
+let stream = null, sessionId = null, liveText = null;
+const log = document.getElementById('chatlog');
+
+function append(html) {
+  const el = $(html).firstElementChild;
+  log.append(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function setRunning(on) {
+  document.getElementById('send').disabled = on;
+  document.getElementById('stop').classList.toggle('hidden', !on);
+  document.getElementById('chatstatus').textContent = on ? 'working...' : '';
+}
+
+/** Render one stream-json record. The browser interprets the shape so there is one place to change. */
+function handleRecord(rec) {
+  if (rec.type === 'system' && rec.subtype === 'init') {
+    sessionId = rec.session_id ?? sessionId;
+    document.getElementById('hint').textContent =
+      `${rec.model ?? ''}${sessionId ? ' · ' + sessionId.split('-')[0] : ''}`;
+    return;
+  }
+
+  // Incremental assistant text.
+  if (rec.type === 'stream_event' && rec.event?.delta?.type === 'text_delta') {
+    if (!liveText) {
+      liveText = append('<div class="msg"><div class="who">Claude</div><div class="txt"></div></div>')
+        .querySelector('.txt');
+    }
+    liveText.textContent += rec.event.delta.text;
+    log.scrollTop = log.scrollHeight;
+    return;
+  }
+
+  if (rec.type === 'assistant') {
+    for (const block of rec.message?.content ?? []) {
+      if (block.type === 'tool_use') {
+        liveText = null;
+        const arg = block.input?.file_path ?? block.input?.command ?? block.input?.pattern ?? '';
+        append(`<div class="tool"><span class="tn">${esc(block.name)}</span><span class="ta">${esc(arg)}</span></div>`);
+      }
+    }
+    return;
+  }
+
+  if (rec.type === 'result') {
+    liveText = null;
+    sessionId = rec.session_id ?? sessionId;
+    const cost = rec.total_cost_usd;
+    document.getElementById('hint').textContent =
+      (cost != null ? `$${cost.toFixed(4)}` : '') +
+      (sessionId ? ` · ${sessionId.split('-')[0]}` : '');
+    // The tree and the open file may have changed underneath us.
+    loadTree();
+    if (openFile) loadFile(openFile);
+    loadState();
+  }
+}
+
+function send() {
+  const box = document.getElementById('prompt');
+  const prompt = box.value.trim();
+  if (!prompt || stream) return;
+
+  log.querySelector('.empty')?.remove();
+  append(`<div class="msg user"><div class="who">You</div><div class="txt">${esc(prompt)}</div></div>`);
+  box.value = '';
+  liveText = null;
+  setRunning(true);
+
+  const url = '/api/chat?prompt=' + encodeURIComponent(prompt) +
+    (sessionId ? '&session=' + encodeURIComponent(sessionId) : '');
+  stream = new EventSource(url);
+
+  stream.addEventListener('msg', e => {
+    try { handleRecord(JSON.parse(e.data)); } catch { /* a partial line is not worth surfacing */ }
+  });
+  stream.addEventListener('fatal', e => {
+    append(`<div class="msg"><div class="who">Error</div><div class="txt">${esc(e.data)}</div></div>`);
+  });
+  stream.addEventListener('done', () => { stream.close(); stream = null; setRunning(false); });
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; setRunning(false); } };
+}
+
+document.getElementById('send').onclick = send;
+document.getElementById('stop').onclick = () => {
+  if (stream) { stream.close(); stream = null; setRunning(false); }
+};
+document.getElementById('prompt').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
+});
+
+async function loadState() {
   const r = await fetch('/api/state');
   state = await r.json();
   document.getElementById('repo').textContent = state.repo;
@@ -359,7 +658,13 @@ async function load() {
   ].map(([n, on]) => `<div class="conn"><span class="dot ${on ? 'on' : ''}"></span>${n}${on ? '' : ' — not connected'}</div>`).join('');
   render();
 }
-load();
+
+loadState();
+loadTree().then(() => {
+  // ?file= opens a file directly, which makes a view shareable and a screenshot reproducible.
+  const wanted = new URLSearchParams(location.search).get('file');
+  if (wanted) loadFile(wanted);
+});
 </script>
 </body>
 </html>

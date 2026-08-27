@@ -5,7 +5,13 @@
 //! bind address is not configurable.
 
 use anyhow::{Context, Result};
-use axum::{Json, Router, extract::State, http::header, response::Html, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::header,
+    response::Html,
+    routing::get,
+};
 use camino::Utf8PathBuf;
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -14,8 +20,8 @@ use std::sync::Arc;
 /// The single page, compiled into the binary so `keel` stays one file with no assets to lose.
 const INDEX: &str = include_str!("../../../ui/index.html");
 
-struct AppState {
-    repo: Utf8PathBuf,
+pub struct AppState {
+    pub repo: Utf8PathBuf,
 }
 
 /// Everything the UI needs, in one request.
@@ -45,6 +51,9 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
     let app = Router::new()
         .route("/", get(index))
         .route("/api/state", get(api_state))
+        .route("/api/tree", get(api_tree))
+        .route("/api/file", get(api_file))
+        .route("/api/chat", get(crate::api::chat))
         .with_state(state);
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -62,6 +71,19 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
 
     axum::serve(listener, app).await.context("serving")?;
     Ok(())
+}
+
+async fn api_tree(State(state): State<Arc<AppState>>) -> Json<Vec<crate::api::Node>> {
+    Json(crate::api::tree(&state.repo))
+}
+
+async fn api_file(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<crate::api::FileQuery>,
+) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
+    crate::api::read_file(&state.repo, &query.path)
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn index() -> impl axum::response::IntoResponse {

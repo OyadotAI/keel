@@ -12,17 +12,19 @@ path = "src/main.rs"
 keel-harness.workspace = true
 keel-mcp.workspace = true
 keel-scanner.workspace = true
-keel-workspace.workspace = true
 keel-providers.workspace = true
 keel-generator.workspace = true
+keel-workspace.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
 camino.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
+tokio-stream = "0.1"
 axum.workspace = true
 open.workspace = true
-serde = { workspace = true }
+ignore.workspace = true
