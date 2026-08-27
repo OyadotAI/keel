@@ -1,0 +1,23 @@
+[package]
+name = "keel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "keel"
+path = "src/main.rs"
+
+[dependencies]
+keel-harness.workspace = true
+keel-mcp.workspace = true
+keel-scanner.workspace = true
+keel-providers.workspace = true
+keel-generator.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+camino.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
