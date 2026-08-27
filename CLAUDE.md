@@ -17,6 +17,9 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 4. **Dev and prod never share a stateful binding.**
 5. **Promotion redeploys the proven artifact**, never rebuilds.
 6. **Stop sends SIGINT**, not SIGTERM. SIGTERM abandons the turn.
+7. **Session transcripts are summarised, never displayed.** Titles, counts and timestamps only.
+   A transcript holds everything the user ever said in that repo; reading one to render a list is
+   not a licence to show it. Asserted by test.
 
 ## Layout
 
@@ -26,6 +29,8 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 - `keel-mcp` — the tool surface.
 - `keel-providers` — GitHub, Cloudflare.
 - `keel-generator` — golden-path templates and workload placement.
+- `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
+  hooks, MCP servers). Read-only, and never surfaces session message bodies.
 
 ## Conventions
 

@@ -9,6 +9,7 @@ keel                       # single binary; serves the UI on http://127.0.0.1:77
 ├── keel-mcp               # Keel's tool surface, served over loopback
 ├── keel-providers         # github / cloudflare
 ├── keel-generator         # golden-path templates and workload placement
+├── keel-workspace         # reads Claude Code's own state; read-only
 └── ui                     # React + Vite, embedded in the binary
 ```
 
@@ -62,3 +63,25 @@ repo produce byte-identical reports. The corpus tests depend on that.
 ephemeral and resets to the image on every restart**, so durable state never goes there. D1 is a
 single-writer database at roughly 50 writes/sec; above that Keel reaches for Hyperdrive in front of
 a managed Postgres rather than pretending D1 scales.
+
+## Reading Claude Code's own state
+
+`keel-workspace` exists because Claude Code's configuration surface is real, consequential and
+invisible. Sessions are JSONL under `~/.claude/projects/<cwd-with-slashes-as-dashes>/`. Skills and
+subagents are Markdown in two scopes. Plugins are a JSON index. Hooks live in settings files and run
+shell commands.
+
+Two rules shape the crate:
+
+**Every discovery degrades to an empty list.** A machine with no plugins is not an error, and
+neither is one where the layout has moved on. A malformed file yields nothing rather than taking the
+listing down, and a truncated transcript line is skipped rather than hiding the conversation.
+
+**Message bodies never leave the transcript.** Sessions are summarised to title, counts and
+timestamps. A transcript contains everything the user has ever said in that repository; reading one
+to render a list is not permission to display it. There is a test asserting no conversation content
+appears in the serialised form.
+
+Scope is the load-bearing distinction. `Project` configuration arrived with the repository, authored
+by whoever wrote it — which is not necessarily the person running it. That is what `untrusted_count`
+counts, what the UI marks with `!`, and what `keel trust` quarantines.

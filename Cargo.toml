@@ -4,6 +4,7 @@ members = [
     "crates/keel-harness",
     "crates/keel-mcp",
     "crates/keel-scanner",
+    "crates/keel-workspace",
     "crates/keel-providers",
     "crates/keel-generator",
 ]
@@ -19,6 +20,7 @@ repository = "https://github.com/keel-dev/keel"
 keel-harness = { path = "crates/keel-harness" }
 keel-mcp = { path = "crates/keel-mcp" }
 keel-scanner = { path = "crates/keel-scanner" }
+keel-workspace = { path = "crates/keel-workspace" }
 keel-providers = { path = "crates/keel-providers" }
 keel-generator = { path = "crates/keel-generator" }
 

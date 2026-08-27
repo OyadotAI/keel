@@ -255,6 +255,7 @@ dependencies = [
  "keel-mcp",
  "keel-providers",
  "keel-scanner",
+ "keel-workspace",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -309,6 +310,17 @@ dependencies = [
  "anyhow",
  "camino",
  "ignore",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "keel-workspace"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "camino",
  "serde",
  "serde_json",
  "tempfile",

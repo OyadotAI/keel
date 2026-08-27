@@ -12,6 +12,7 @@ path = "src/main.rs"
 keel-harness.workspace = true
 keel-mcp.workspace = true
 keel-scanner.workspace = true
+keel-workspace.workspace = true
 keel-providers.workspace = true
 keel-generator.workspace = true
 
