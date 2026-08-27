@@ -1,4 +1,5 @@
 use crate::{Check, Dimension, Finding, Fix, RepoContext, Severity};
+use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,7 +31,15 @@ impl Check for SharedBindings {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
-        let Some(path) = CONFIG_FILES.iter().find(|p| ctx.has(p)) else {
+        let configs = find_configs(ctx);
+
+        if configs.is_empty() {
+            // Not every repository is a Cloudflare service. Telling a Rust CLI or a docs site that
+            // it is missing a Wrangler config is noise, and noise is how a report loses its
+            // audience. Only judge repos that could plausibly deploy as a Worker.
+            if !ctx.has("package.json") {
+                return Vec::new();
+            }
             return vec![Finding::new(
                 "env/no-wrangler-config",
                 self.dimension(),
@@ -44,40 +53,53 @@ impl Check for SharedBindings {
                         .to_string(),
                 },
             )];
-        };
-
-        // TOML support is deliberately deferred: Wrangler's JSON form is the one Keel generates, and
-        // reporting a confident "no problems" after failing to parse would be worse than silence.
-        if path.ends_with(".toml") {
-            return vec![Finding::new(
-                "env/toml-config-not-analysed",
-                self.dimension(),
-                Severity::Info,
-                "Wrangler config is TOML; environment isolation not verified",
-                "Keel reads the JSON form of wrangler config. Migrating to wrangler.jsonc lets it \
-                 verify that dev and prod never share a stateful binding.",
-                Fix::Assisted {
-                    description: "Convert wrangler.toml to wrangler.jsonc.".to_string(),
-                },
-            )];
         }
 
-        let Some(raw) = ctx.read(path) else {
+        configs.iter().flat_map(|p| self.analyse(ctx, p)).collect()
+    }
+}
+
+impl SharedBindings {
+    /// Audit one Wrangler config for environment isolation.
+    fn analyse(&self, ctx: &RepoContext, path: &Utf8Path) -> Vec<Finding> {
+        // TOML support is deliberately deferred: Wrangler's JSON form is the one Keel generates,
+        // and reporting a confident "no problems" after failing to parse would be worse than
+        // silence.
+        if path.as_str().ends_with(".toml") {
+            return vec![
+                Finding::new(
+                    "env/toml-config-not-analysed",
+                    self.dimension(),
+                    Severity::Info,
+                    format!("`{path}` is TOML; environment isolation not verified"),
+                    "Keel reads the JSON form of Wrangler config. Migrating to wrangler.jsonc lets \
+                     it verify that dev and prod never share a stateful binding.",
+                    Fix::Assisted {
+                        description: "Convert wrangler.toml to wrangler.jsonc.".to_string(),
+                    },
+                )
+                .at(path.to_owned()),
+            ];
+        }
+
+        let Some(raw) = ctx.read(path.as_str()) else {
             return Vec::new();
         };
         let Ok(config) = serde_json::from_str::<Value>(&strip_jsonc_comments(&raw)) else {
-            return vec![Finding::new(
-                "env/unparseable-wrangler-config",
-                self.dimension(),
-                Severity::Medium,
-                "Wrangler config could not be parsed",
-                "Environment isolation could not be verified because the config did not parse as \
-                 JSON with comments.",
-                Fix::Assisted {
-                    description: "Fix the syntax error in the Wrangler config.".to_string(),
-                },
-            )
-            .at(*path)];
+            return vec![
+                Finding::new(
+                    "env/unparseable-wrangler-config",
+                    self.dimension(),
+                    Severity::Medium,
+                    format!("`{path}` could not be parsed"),
+                    "Environment isolation could not be verified because the config did not parse \
+                     as JSON with comments.",
+                    Fix::Assisted {
+                        description: "Fix the syntax error in the Wrangler config.".to_string(),
+                    },
+                )
+                .at(path.to_owned()),
+            ];
         };
 
         let Some(envs) = config.get("env").and_then(Value::as_object) else {
@@ -86,15 +108,15 @@ impl Check for SharedBindings {
                     "env/single-environment",
                     self.dimension(),
                     Severity::High,
-                    "Only one environment is defined",
+                    format!("`{path}` defines only one environment"),
                     "A project with a single environment teaches you to test in production. Keel \
-                 provisions dev and prod separately, each with its own D1, KV and R2 resources.",
+                     provisions dev and prod separately, each with its own D1, KV and R2 resources.",
                     Fix::Assisted {
                         description: "Add [env.dev] and [env.prod] with isolated bindings."
                             .to_string(),
                     },
                 )
-                .at(*path),
+                .at(path.to_owned()),
             ];
         };
 
@@ -120,10 +142,13 @@ impl Check for SharedBindings {
                     self.id(),
                     self.dimension(),
                     Severity::Critical,
-                    format!("`{array}` resource `{id}` is shared by {}", envs.join(" and ")),
-                    "These environments write to the same store. An action taken in a non-production \
-                     environment can destroy production data, and no approval gate downstream can \
-                     recover from that.",
+                    format!(
+                        "`{array}` resource `{id}` is shared by {}",
+                        envs.join(" and ")
+                    ),
+                    "These environments write to the same store. An action taken in a \
+                     non-production environment can destroy production data, and no approval gate \
+                     downstream can recover from that.",
                     Fix::Assisted {
                         description: format!(
                             "Provision a separate {array} resource per environment and point each \
@@ -131,10 +156,22 @@ impl Check for SharedBindings {
                         ),
                     },
                 )
-                .at(*path)
+                .at(path.to_owned())
             })
             .collect()
     }
+}
+
+/// Every Wrangler config in the tree, not just the one at the root.
+///
+/// Monorepos keep them under `apps/*` or `packages/*` — the layout of every real Cloudflare project
+/// of any size. Looking only at the root reported "no Wrangler configuration" for a repo that had
+/// two. `.example` templates are skipped: they carry placeholder ids by design.
+fn find_configs(ctx: &RepoContext) -> Vec<Utf8PathBuf> {
+    ctx.files()
+        .filter(|p| p.file_name().is_some_and(|n| CONFIG_FILES.contains(&n)))
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Pull the identifying value out of each entry in a Wrangler resource array.
@@ -244,6 +281,53 @@ mod tests {
     fn isolated_environments_are_clean() {
         let (_dir, ctx) = fixture(&[("wrangler.jsonc", ISOLATED)]);
         assert!(SharedBindings.run(&ctx).is_empty());
+    }
+
+    /// Monorepos keep Wrangler configs under `apps/*`. Looking only at the root reported "no
+    /// Wrangler configuration" for a repo that had two.
+    #[test]
+    fn finds_configs_nested_in_a_monorepo() {
+        let (_dir, ctx) = fixture(&[("package.json", "{}"), ("apps/api/wrangler.jsonc", SHARED)]);
+        let findings = SharedBindings.run(&ctx);
+        assert_eq!(
+            findings.len(),
+            1,
+            "nested config must be analysed, not missed"
+        );
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(
+            findings[0].path.as_deref().map(|p| p.as_str()),
+            Some("apps/api/wrangler.jsonc")
+        );
+    }
+
+    #[test]
+    fn ignores_example_templates() {
+        let (_dir, ctx) = fixture(&[
+            ("package.json", "{}"),
+            ("apps/api/wrangler.jsonc.example", SHARED),
+        ]);
+        let findings = SharedBindings.run(&ctx);
+        assert_eq!(
+            findings[0].id, "env/no-wrangler-config",
+            "templates carry placeholder ids"
+        );
+    }
+
+    #[test]
+    fn a_repo_that_is_not_a_worker_is_left_alone() {
+        let (_dir, ctx) = fixture(&[("Cargo.toml", "[package]\nname = \"cli\"")]);
+        assert!(
+            SharedBindings.run(&ctx).is_empty(),
+            "a Rust CLI is not missing a Wrangler config"
+        );
+    }
+
+    #[test]
+    fn a_node_project_without_wrangler_config_is_flagged() {
+        let (_dir, ctx) = fixture(&[("package.json", "{}")]);
+        let findings = SharedBindings.run(&ctx);
+        assert_eq!(findings[0].id, "env/no-wrangler-config");
     }
 
     #[test]

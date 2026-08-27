@@ -78,7 +78,15 @@ impl Check for CommittedSecrets {
             if contents.len() > 64_000 {
                 continue;
             }
-            if KEY_MARKERS.iter().any(|m| contents.contains(m)) {
+            // A PEM header occupies an entire line in a real key file. In source code the same
+            // text appears inside a string literal, surrounded by quotes and commas — which is how
+            // this check used to flag its own marker constants. Requiring an exact line match
+            // distinguishes the two without needing to special-case this file.
+            let has_pem_block = contents
+                .lines()
+                .any(|line| KEY_MARKERS.contains(&line.trim()));
+
+            if has_pem_block {
                 let looks_like_fixture = FIXTURE_MARKERS.iter().any(|m| path.as_str().contains(m));
 
                 let (severity, detail, fix) = if looks_like_fixture {
@@ -140,9 +148,11 @@ mod tests {
 
     #[test]
     fn key_material_in_a_test_fixture_is_downgraded_not_suppressed() {
+        // A real PEM block, not a quoted marker — the line-exact rule already excludes the
+        // latter. This asserts the *path* heuristic, which is the separate concern.
         let (_dir, ctx) = fixture(&[(
-            "backend/tests/test_redaction.py",
-            "SAMPLE = \"-----BEGIN RSA PRIVATE KEY-----\"",
+            "backend/tests/fixtures/key.pem",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----\n",
         )]);
         let findings = CommittedSecrets.run(&ctx);
         assert_eq!(

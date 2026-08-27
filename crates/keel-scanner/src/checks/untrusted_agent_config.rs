@@ -13,11 +13,33 @@ use crate::{Check, Dimension, Finding, Fix, RepoContext, Severity};
 /// agent run; this check is what tells the user why.
 pub struct UntrustedAgentConfig;
 
-/// Paths that Claude Code will load and act on without asking.
-const EXECUTABLE_CONFIG: &[&str] = &[
-    ".claude/settings.json",
-    ".claude/settings.local.json",
-    ".mcp.json",
+/// Paths Claude Code loads and acts on without asking, and how severe each one is.
+///
+/// The two are not equally dangerous, and saying so is more useful than flattening both to
+/// critical. `--strict-mcp-config` confines a session to the MCP servers Keel passes, so a repo
+/// `.mcp.json` is already neutralised *inside Keel* — it still auto-loads in a plain `claude`
+/// session in that directory, which is why it is reported at all. Hooks in `settings.json` are
+/// mitigated by nothing except quarantine: they run shell commands at lifecycle points.
+const EXECUTABLE_CONFIG: &[(&str, Severity, &str)] = &[
+    (
+        ".claude/settings.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands at lifecycle points such as session start. Nothing \
+         but quarantine prevents that, and no trust dialog is shown first.",
+    ),
+    (
+        ".claude/settings.local.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands at lifecycle points. Nothing but quarantine \
+         prevents that.",
+    ),
+    (
+        ".mcp.json",
+        Severity::High,
+        "MCP servers defined here are connected automatically. Keel passes \
+         `--strict-mcp-config`, so this file is inert within Keel — but a plain `claude` session \
+         started in this directory will load it without asking.",
+    ),
 ];
 
 impl Check for UntrustedAgentConfig {
@@ -32,22 +54,20 @@ impl Check for UntrustedAgentConfig {
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         let mut findings = Vec::new();
 
-        for path in EXECUTABLE_CONFIG {
+        for (path, severity, detail) in EXECUTABLE_CONFIG {
             if ctx.has(path) {
                 findings.push(
                     Finding::new(
                         self.id(),
                         self.dimension(),
-                        Severity::Critical,
+                        *severity,
                         format!("Repository ships executable agent config: {path}"),
-                        "This file is loaded and acted on by Claude Code without a trust prompt. \
-                         Hooks defined here run shell commands, and MCP servers defined here are \
-                         connected automatically. Keel quarantines it before any agent runs, but \
-                         you should read it before restoring it.",
+                        *detail,
                         Fix::Manual {
                             description: format!(
-                                "Review {path} by hand. Keel has moved it aside; restore it only \
-                                 once you have read every hook command and MCP server it defines."
+                                "Review {path} by hand. Keel quarantines it before any agent runs; \
+                                 restore it only once you have read every hook command and MCP \
+                                 server it defines."
                             ),
                         },
                     )
@@ -91,7 +111,17 @@ mod tests {
         ]);
         let findings = UntrustedAgentConfig.run(&ctx);
         assert_eq!(findings.len(), 2);
-        assert!(findings.iter().all(|f| f.severity == Severity::Critical));
+
+        // Hooks are unmitigated; a repo .mcp.json is already inert under --strict-mcp-config.
+        let sev = |needle: &str| {
+            findings
+                .iter()
+                .find(|f| f.path.as_ref().unwrap().as_str().contains(needle))
+                .unwrap()
+                .severity
+        };
+        assert_eq!(sev("settings"), Severity::Critical);
+        assert_eq!(sev(".mcp.json"), Severity::High);
     }
 
     #[test]

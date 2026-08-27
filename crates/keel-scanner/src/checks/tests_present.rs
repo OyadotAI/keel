@@ -27,15 +27,11 @@ impl Check for TestsPresent {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
-        let count = ctx
+        let by_path = ctx
             .files()
-            .filter(|p| {
-                let s = p.as_str();
-                TEST_MARKERS.iter().any(|m| s.contains(m))
-            })
-            .count();
+            .any(|p| TEST_MARKERS.iter().any(|m| p.as_str().contains(m)));
 
-        if count > 0 {
+        if by_path || has_inline_tests(ctx) {
             return Vec::new();
         }
 
@@ -58,6 +54,18 @@ impl Check for TestsPresent {
     }
 }
 
+/// Detect test suites that live inside source files rather than beside them.
+///
+/// Rust puts unit tests in a `#[cfg(test)]` module in the file under test, so a path-based scan
+/// misses them entirely — this check reported Keel's own 41 tests as "no test suite" until it
+/// learned to look inside. Reading is restricted to `.rs` files so the scan stays cheap.
+fn has_inline_tests(ctx: &RepoContext) -> bool {
+    ctx.files()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .filter_map(|p| ctx.read(p.as_str()))
+        .any(|contents| contents.contains("#[cfg(test)]") || contents.contains("#[test]"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +75,18 @@ mod tests {
     fn silent_when_tests_exist() {
         let (_dir, ctx) = fixture(&[("src/api.test.ts", "test('x', () => {})")]);
         assert!(TestsPresent.run(&ctx).is_empty());
+    }
+
+    #[test]
+    fn recognises_rust_inline_test_modules() {
+        let (_dir, ctx) = fixture(&[(
+            "src/lib.rs",
+            "pub fn f() {}\n#[cfg(test)]\nmod tests { #[test] fn t() {} }",
+        )]);
+        assert!(
+            TestsPresent.run(&ctx).is_empty(),
+            "Rust keeps unit tests inside the file under test"
+        );
     }
 
     #[test]
