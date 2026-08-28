@@ -8,6 +8,7 @@ mod api;
 mod clitools;
 mod connect;
 mod dev;
+mod fsops;
 mod permissions;
 mod plugins;
 mod project;

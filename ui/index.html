@@ -231,6 +231,28 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .rowmenu button:hover{background:var(--n5);color:var(--n12)}
 .rowmenu button.danger{color:var(--crit)}
 .rowmenu button.danger:hover{background:color-mix(in srgb,var(--crit) 16%,transparent)}
+
+/* Right-click menus. The browser reserves the native one, so every web IDE draws its own; the
+   cost of that is having to answer the keyboard menu key too, or the menu is mouse-only. */
+.cmenu{position:fixed;z-index:70;min-width:190px;width:max-content;max-width:340px;
+  padding:var(--s1) 0;background:var(--n3);
+  border:1px solid var(--n7);border-radius:var(--r2);
+  box-shadow:0 12px 32px rgba(0,0,0,.5),0 0 0 1px rgba(0,0,0,.3)}
+.cmenu button{all:unset;display:flex;align-items:center;gap:var(--s5);width:100%;
+  box-sizing:border-box;padding:4px var(--s4);font:12.5px/1.5 var(--sans);color:var(--n11);
+  cursor:default;white-space:nowrap}
+.cmenu button:hover:not([disabled]),.cmenu button:focus-visible{background:var(--acc);color:#fff;outline:none}
+.cmenu button[disabled]{color:var(--n8)}
+.cmenu button.danger{color:var(--crit)}
+.cmenu button.danger:hover{background:var(--crit);color:#fff}
+.cmenu .k{margin-left:auto;font:10.5px var(--mono);color:var(--n9);letter-spacing:.02em}
+.cmenu button:hover .k,.cmenu button:focus-visible .k{color:rgba(255,255,255,.72)}
+.cmenu .sep{height:1px;margin:var(--s1) 0;background:var(--n6)}
+
+/* Renaming happens on the row itself. A modal would hide the siblings whose names are the only
+   reason you know what to call this one. */
+input.rename{all:unset;flex:1;min-width:0;padding:0 3px;font:inherit;color:var(--n12);
+  background:var(--n1);border:1px solid var(--acc);border-radius:3px}
 .runbox{margin:0 var(--s4) var(--s4);padding:var(--s3);background:var(--n1);
   border:1px solid var(--n6);border-radius:var(--r2);font:10.5px/1.5 var(--mono);
   color:var(--n11);white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto}
@@ -1022,7 +1044,83 @@ const EDITOR_OPTS={
   tabSize:2,
   wordWrap:'off',
   stickyScroll:{enabled:true},
+  // Monaco's own right-click menu never renders in this vendored build, and half of what it would
+  // offer (go to definition, peek, references) needs a language service that is not loaded anyway.
+  // Keel draws the menu instead, so the editor, the tree and the tabs all share one.
+  contextmenu:false,
 };
+
+/* The editor's right-click menu.
+
+   Monaco's own is disabled: it does not render in this vendored build, and the half of it worth
+   having — go to definition, peek, references — needs a language service that is not loaded, so
+   `getAction` returns nothing for all three. What is left is real (rename, format, change all
+   occurrences, jump to the next problem) and is listed here alongside the agent's actions, in the
+   same menu the tree and the tabs use. */
+function editorMenu(e){
+  e.preventDefault(); e.stopPropagation();
+
+  // Right-click moves the caret first, the way every editor does — otherwise "explain this" is
+  // about wherever the cursor happened to be, not what was pointed at.
+  const t=mon.getTargetAtClientPoint(e.clientX,e.clientY);
+  const sel=mon.getSelection();
+  const inSelection=t?.position&&sel&&!sel.isEmpty()&&sel.containsPosition(t.position);
+  if(t?.position&&!inSelection) mon.setPosition(t.position);
+
+  const has=id=>!!mon.getAction(id);
+  const act=id=>()=>mon.getAction(id)?.run();
+  const text=()=>{ const s=mon.getSelection();
+    return s&&!s.isEmpty()?mon.getModel().getValueInRange(s):''; };
+
+  contextMenu(e.clientX,e.clientY,[
+    {label:'Explain this',   key:MAC?'⌘I':'Ctrl+I', run:act('keel.explain')},
+    {label:'Add to prompt',  run:act('keel.addcontext')},
+    {label:'Fix this',       run:act('keel.fix')},
+    {sep:true},
+    {label:'Copy',           disabled:!text(), run:()=>copyText(text())},
+    {sep:true},
+    {label:'Rename symbol',  key:'F2', disabled:!has('editor.action.rename'),
+                             run:act('editor.action.rename')},
+    {label:'Change all occurrences', disabled:!has('editor.action.changeAll'),
+                             run:act('editor.action.changeAll')},
+    {label:'Format document',disabled:!has('editor.action.formatDocument'),
+                             run:act('editor.action.formatDocument')},
+    {sep:true},
+    {label:'Next problem',   key:'F8', disabled:!has('editor.action.marker.next'),
+                             run:act('editor.action.marker.next')},
+    {label:'Command palette',key:MAC?'⌘⇧P':'Ctrl+Shift+P', run:()=>openPal('>')},
+  ]);
+}
+
+/* The agent's three actions are registered on the editor rather than written inline, so the
+   command palette and a keystroke reach exactly what the menu reaches. */
+function agentActions(){
+  const at=()=>{
+    const sel=mon.getSelection();
+    const text=sel&&!sel.isEmpty()?mon.getModel().getValueInRange(sel):'';
+    const line=mon.getPosition()?.lineNumber??1;
+    return {text,line,ref:active+(sel&&!sel.isEmpty()?':'+sel.startLineNumber+'-'+sel.endLineNumber:':'+line)};
+  };
+  const ask=prompt=>{ const box=el('prompt');
+    box.value=prompt; box.focus(); box.setSelectionRange(box.value.length,box.value.length); };
+
+  mon.addAction({id:'keel.explain', label:'Explain this',
+    // ⌘I rather than a letter Monaco already spends, and it is not a browser reservation.
+    keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyI],
+    run:()=>{ const {ref}=at(); ask('Explain @'+ref+' — what it does and why it is written this way.'); }});
+
+  mon.addAction({id:'keel.addcontext', label:'Add to prompt',
+    run:()=>{ const {ref}=at(); addToChat(ref); }});
+
+  mon.addAction({id:'keel.fix', label:'Ask the agent to fix this',
+    run:()=>{ const {ref}=at();
+      // Named, not described: a marker on the line is what the user is actually pointing at.
+      const marks=monaco.editor.getModelMarkers({resource:mon.getModel().uri})
+        .filter(m=>m.severity>=monaco.MarkerSeverity.Warning);
+      const here=marks.find(m=>m.startLineNumber===(mon.getPosition()?.lineNumber??0));
+      ask(here ? 'Fix this in @'+ref+': '+here.message
+               : 'Fix @'+ref+'. Run the gate afterwards and show me what it said.'); }});
+}
 
 function initMonaco(){
   return new Promise(res=>{
@@ -1038,6 +1136,8 @@ function initMonaco(){
         if(tab&&!tab.dirty){ tab.dirty=true; drawTabs(); drawStatus(); }
       });
       mon.onDidChangeCursorPosition(drawStatus);
+      agentActions();
+      el('surface').oncontextmenu=editorMenu;
       ready=true; res();
     });
   });
@@ -1059,9 +1159,52 @@ function drawTabs(){
     const n=frag('<div class="tab'+(t.path===active?' on':'')+'"><span>'+esc(t.path.split('/').pop())+
       '</span>'+(t.dirty?'<span class="dot" title="unsaved"></span>':'<span class="x">×</span>')+'</div>');
     n.onclick=e=>{ if(e.target.classList.contains('x')) closeTab(t.path); else { active=t.path; draw(); } };
+    // Middle-click closes, the way it does on every browser tab strip.
+    n.onauxclick=e=>{ if(e.button===1){ e.preventDefault(); closeTab(t.path); } };
+    n.oncontextmenu=e=>tabMenu(e,t.path);
     el('tabs').append(n);
   });
 }
+/* Close Others and Close to the Right are the two that save a real amount of clicking, and they
+   are only reachable from here — there is no keystroke left to give them in a browser. */
+function tabMenu(e,path){
+  e.preventDefault(); e.stopPropagation();
+  const i=tabs.findIndex(t=>t.path===path);
+  const closeMany=keep=>{ tabs.filter(t=>!keep(t)).map(t=>t.path).forEach(closeTab); };
+  contextMenu(e.clientX,e.clientY,[
+    {label:'Close',              run:()=>closeTab(path)},
+    {label:'Close others',       disabled:tabs.length<2, run:()=>closeMany(t=>t.path===path)},
+    {label:'Close to the right', disabled:i>=tabs.length-1,
+                                 run:()=>closeMany((t,n)=>tabs.indexOf(t)<=i)},
+    {label:'Close all',          run:()=>closeMany(()=>false)},
+    {sep:true},
+    {label:'Add to prompt',      run:()=>addToChat(path)},
+    {label:'Reveal in Finder',   run:()=>revealInFinder(path)},
+    {label:'Copy path',          run:()=>copyText(path)},
+    {sep:true},
+    {label:'Rename…',            run:()=>renameFromTab(path)},
+  ]);
+}
+
+/* Renaming from a tab still edits the tree row, so there is one rename interaction rather than two
+   that can disagree. If the row is not on screen the file is still renamable — through a prompt. */
+function renameFromTab(path){
+  const row=document.querySelector('.row[data-p="'+CSS.escape(path)+'"]');
+  if(row){ row.scrollIntoView({block:'nearest'}); startRename(row,path); return; }
+  modal('Rename '+base(path),
+    '<label>New name</label><input type="text" id="rn-name" spellcheck="false" value="'+esc(base(path))+'">',
+    'Rename',
+    async()=>{
+      const r=await fsCall('rename',{path,name:el('rn-name').value.trim()});
+      if(r.err) return r.err;
+      const wasActive=active===path;
+      closeTab(path);
+      if(wasActive) open(r.path);
+      await refresh();
+      return null;
+    });
+}
+
 function closeTab(p){
   const i=tabs.findIndex(t=>t.path===p); if(i<0) return;
   tabs.splice(i,1);
@@ -1386,13 +1529,18 @@ function node(n,depth){
   const pad=8+depth*INDENT;
   if(!n.dir){
     const e=frag('<div class="row" style="padding-left:'+(pad+14)+'px" data-p="'+esc(n.path)+
-      '"><span class="name">'+esc(n.name)+'</span></div>');
-    e.onclick=()=>open(n.path); return e;
+      '" tabindex="0"><span class="name">'+esc(n.name)+'</span></div>');
+    e.onclick=()=>open(n.path);
+    e.oncontextmenu=ev=>treeMenu(ev,n,e);
+    e.onkeydown=ev=>rowKeys(ev,n,e);
+    return e;
   }
   const wrap=document.createElement('div');
   const shut=depth>0;
-  const head=frag('<div class="row dir" style="padding-left:'+pad+'px"><span class="caret">'+
+  const head=frag('<div class="row dir" style="padding-left:'+pad+'px" tabindex="0"><span class="caret">'+
     (shut?'▸':'▾')+'</span><span class="name">'+esc(n.name)+'</span></div>');
+  head.oncontextmenu=ev=>treeMenu(ev,n,head);
+  head.onkeydown=ev=>rowKeys(ev,n,head);
   const kids=document.createElement('div');
   kids.className='kids'+(shut?' shut':'');
   kids.style.setProperty('--guide',(pad+5)+'px');
@@ -1402,6 +1550,192 @@ function node(n,depth){
   wrap.append(head,kids); return wrap;
 }
 const flatten=(ns,out=[])=>{ for(const n of ns) n.dir?flatten(n.children??[],out):out.push(n.path); return out; };
+
+/* ════ context menus ═════════════════════════════════════════════════════
+   The browser keeps right-click for itself, so a web IDE has to draw its own menu and then take
+   on what the native one gave away for free: edge flipping, keyboard access, and closing on
+   everything that should close it. */
+let ctxEl=null;
+function closeCtx(){ ctxEl?.remove(); ctxEl=null; }
+addEventListener('click',closeCtx);
+addEventListener('resize',closeCtx);
+addEventListener('scroll',closeCtx,true);
+addEventListener('blur',closeCtx);
+
+function contextMenu(x,y,items){
+  closeCtx();
+  const live=items.filter(Boolean);
+  const m=frag('<div class="cmenu" role="menu">'+live.map((i,n)=>
+    i.sep?'<div class="sep"></div>':
+    '<button role="menuitem" data-i="'+n+'"'+(i.danger?' class="danger"':'')+
+      (i.disabled?' disabled':'')+'>'+esc(i.label)+
+      (i.key?'<span class="k">'+esc(i.key)+'</span>':'')+'</button>').join('')+'</div>');
+  document.body.append(m);
+
+  // Flip rather than overflow. A menu opened near an edge otherwise puts its last items off
+  // screen, and the last items are where the destructive ones sit.
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.max(4,Math.min(x,innerWidth-r.width-6))+'px';
+  m.style.top=(y+r.height>innerHeight-4?Math.max(4,y-r.height):y)+'px';
+
+  const run=i=>{ closeCtx(); i.run?.(); };
+  m.querySelectorAll('[data-i]').forEach(b=>{
+    b.onclick=e=>{ e.stopPropagation(); run(live[+b.dataset.i]); };
+    b.onmouseenter=()=>b.focus();
+  });
+  m.onkeydown=e=>{
+    const bs=[...m.querySelectorAll('button:not([disabled])')];
+    const at=bs.indexOf(document.activeElement);
+    if(e.key==='Escape'){ closeCtx(); return; }
+    if(e.key==='ArrowDown'){ e.preventDefault(); bs[(at+1)%bs.length]?.focus(); }
+    if(e.key==='ArrowUp'){ e.preventDefault(); bs[(at-1+bs.length)%bs.length]?.focus(); }
+  };
+  m.onclick=e=>e.stopPropagation();
+  m.querySelector('button:not([disabled])')?.focus();
+  ctxEl=m;
+  return m;
+}
+
+/* ════ file operations ═══════════════════════════════════════════════════ */
+const base=p=>p.split('/').pop();
+const dirOf=p=>p.includes('/')?p.slice(0,p.lastIndexOf('/')):'';
+
+async function fsCall(op,body){
+  const r=await fetch('/api/fs/'+op,{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const text=await r.text();
+  if(!r.ok) return {err:text||'the operation failed'};
+  return JSON.parse(text||'{}');
+}
+
+function copyText(t){ navigator.clipboard?.writeText(t).then(()=>toast('Copied '+t),
+                       ()=>toast('Could not reach the clipboard')); }
+
+/** Put a path in the composer so the next prompt is about that file. */
+function addToChat(path){
+  const box=el('prompt');
+  const gap=box.value&&!box.value.endsWith(' ')?' ':'';
+  box.value+=gap+'@'+path+' ';
+  box.focus(); box.setSelectionRange(box.value.length,box.value.length);
+  toast('Added '+base(path)+' to the prompt');
+}
+
+/** Type a command into the real shell rather than running it behind the user's back. */
+function sendToTerm(line){
+  el('app').classList.remove('no-panel'); setPanelTab('terminal');
+  if(termSock?.readyState!==1){ toast('The terminal is not connected'); return; }
+  termSock.send(new TextEncoder().encode(line+'\n'));
+  term?.focus();
+}
+
+async function revealInFinder(path){
+  const r=await fsCall('reveal',{path});
+  if(r.err) toast(r.err);
+}
+
+function newEntryDialog(parent,kind){
+  modal(kind==='dir'?'New folder':'New file',
+    '<label>Name</label><input type="text" id="ne-name" spellcheck="false" placeholder="'+
+      (kind==='dir'?'components':'index.ts')+'">',
+    'Create',
+    async()=>{
+      const r=await fsCall('create',{parent,name:el('ne-name').value.trim(),kind});
+      if(r.err) return r.err;
+      await refresh();
+      if(kind!=='dir') open(r.path);
+      return null;
+    },
+    'In <code>'+esc(parent||'the project root')+'</code>.');
+}
+
+function confirmDelete(path,isDir){
+  modal('Move '+base(path)+' to the Trash?',
+    '<div class="why2">'+(isDir?'The folder and everything in it goes':'It goes')+
+    ' to the Trash, so you can put it back from Finder. Git history is untouched — a tracked file '+
+    'still exists in every commit that had it.</div>',
+    'Move to Trash',
+    async()=>{
+      const r=await fsCall('delete',{path});
+      if(r.err) return r.err;
+      closeTab(path);
+      await refresh();
+      return null;
+    });
+}
+
+/** Rename on the row itself: a modal hides the sibling names that tell you what to call this one. */
+function startRename(row,path){
+  const nameEl=row.querySelector('.name');
+  if(!nameEl||row.querySelector('input.rename')) return;
+  const old=base(path);
+  const inp=frag('<input class="rename" spellcheck="false">');
+  inp.value=old;
+  nameEl.replaceWith(inp);
+  inp.focus();
+  // Select the stem and not the extension — renaming a file almost never means changing its type.
+  const dot=old.lastIndexOf('.');
+  inp.setSelectionRange(0,dot>0?dot:old.length);
+
+  const restore=()=>{ if(inp.isConnected) inp.replaceWith(nameEl); };
+  inp.onclick=e=>e.stopPropagation();
+  inp.onblur=restore;
+  inp.onkeydown=async e=>{
+    e.stopPropagation();
+    if(e.key==='Escape'){ restore(); return; }
+    if(e.key!=='Enter') return;
+    e.preventDefault();
+    const name=inp.value.trim();
+    if(!name||name===old){ restore(); return; }
+    const r=await fsCall('rename',{path,name});
+    if(r.err){ toast(r.err); restore(); return; }
+    // The tab is keyed by path, so a renamed file has to be reopened under its new one.
+    if(tabs.some(t=>t.path===path)){
+      const wasActive=active===path;
+      closeTab(path);
+      if(wasActive) open(r.path);
+    }
+    await refresh();
+  };
+}
+
+/* The menu key and Shift+F10 open the same menu; without them it is mouse-only, and F2/Delete are
+   the two things people reach for without looking. */
+function rowKeys(e,n,row){
+  if(e.key==='ContextMenu'||(e.key==='F10'&&e.shiftKey)){
+    const r=row.getBoundingClientRect();
+    e.preventDefault();
+    contextMenuFor(n,row,r.left+12,r.bottom);
+    return;
+  }
+  if(e.key==='F2'){ e.preventDefault(); startRename(row,n.path); }
+  if(e.key==='Enter'&&!row.querySelector('input.rename')&&!n.dir){ e.preventDefault(); open(n.path); }
+  if(e.key==='Delete'||e.key==='Backspace'){ e.preventDefault(); confirmDelete(n.path,!!n.dir); }
+}
+
+function treeMenu(e,n,row){
+  e.preventDefault(); e.stopPropagation();
+  contextMenuFor(n,row,e.clientX,e.clientY);
+}
+
+function contextMenuFor(n,row,x,y){
+  const dir=!!n.dir, path=n.path;
+  contextMenu(x,y,[
+    dir&&{label:'New file…',   run:()=>newEntryDialog(path,'file')},
+    dir&&{label:'New folder…', run:()=>newEntryDialog(path,'dir')},
+    dir&&{sep:true},
+    !dir&&{label:'Open',       run:()=>open(path)},
+    {label:'Add to prompt',    key:'@',  run:()=>addToChat(path)},
+    {sep:true},
+    {label:'Open in terminal', run:()=>sendToTerm('cd '+JSON.stringify(dir?path:dirOf(path)||'.'))},
+    {label:'Reveal in Finder', run:()=>revealInFinder(path)},
+    {sep:true},
+    {label:'Copy path',        run:()=>copyText(path)},
+    {sep:true},
+    {label:'Rename…',          key:'F2', run:()=>startRename(row,path)},
+    {label:'Delete',           key:'⌫',  danger:true, run:()=>confirmDelete(path,dir)},
+  ]);
+}
+
 
 const H=(title,count,act)=>'<div class="ph"><h2>'+title+'</h2>'+
   (count!=null?'<span class="n">'+count+'</span>':'')+(act??'')+'</div>';
@@ -2361,8 +2695,10 @@ const SET_PANES={
       '<div class="pref"><div class="lbl"><b>Editor</b><span>Monaco, vendored and compiled into the binary.</span></div></div>'+
       '<div class="pref"><div class="lbl"><b>Server</b><span>Loopback only, and not configurable.</span></div></div>'+
       '<h2>Keyboard</h2>'+
-      ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  agent panel','⌘S  save',
-       '⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⇧⇥  Plan / Auto','esc  interrupt']
+      ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  terminal','⌘⇧A  agent panel',
+       '⌘S  save','⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⌘I  explain the selection',
+       'F2  rename','⌫  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
+       'right-click  files, tabs and the editor all have menus']
         .map(k=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);font-size:12px">'+
           esc(k)+'</b></div></div>').join('')+
       '</section>';
@@ -2567,6 +2903,10 @@ async function openPath(path){
   return null;
 }
 
+/** Where a new file goes when the menu bar asks rather than a folder's own menu: beside whatever
+    is open, which is where the next file usually belongs. */
+function folderContext(){ return active?dirOf(active):''; }
+
 /* ════ menu ══════════════════════════════════════════════════════════════ */
 let openMenu=null;
 function closeMenu(){ document.querySelector('.drop')?.remove();
@@ -2580,6 +2920,9 @@ const HEAD=t=>({head:t});
 function menuItems(which){
   const hasTab=!!active;
   if(which==='file') return [
+    item('New file…','',()=>newEntryDialog(folderContext(),'file')),
+    item('New folder…','',()=>newEntryDialog(folderContext(),'dir')),
+    SEP,
     item('New project…','',()=>newProjectDialog()),
     item('Open folder…','',()=>openFolderDialog()),
     item('Clone from GitHub…','',()=>{ setsTab='connections'; openSettings(); }),
