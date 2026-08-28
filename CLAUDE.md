@@ -32,6 +32,13 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
 
+## The editor
+
+Monaco is vendored in `ui/vendor` and embedded with `rust-embed`. It is the full `min/vs` bundle on
+purpose: the AMD graph in `editor/editor.main.js` depends on `language/*`, and trimming those
+modules makes the loader fail silently with a blank editor and nothing in the console. If you need
+to shrink it, drop files under `assets/*.worker.js` (language services) — never `language/`.
+
 ## Conventions
 
 - Rust 2024, `cargo fmt`, `clippy -D warnings`. `make check` is the gate.

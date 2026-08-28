@@ -5,837 +5,1091 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Keel</title>
 <style>
-  :root {
-    --bg:#0d1117; --panel:#0f151c; --panel-2:#161d26; --panel-3:#1b2430; --line:#222b37;
-    --text:#e3e8ef; --dim:#8b98a9; --faint:#5c6774;
-    --accent:#4cc2ff; --crit:#ff6b6b; --high:#ffa657; --med:#e3c565; --low:#7d8ba1; --ok:#56d364;
-    --add-bg:rgba(63,185,80,.13); --add-mark:#3fb950;
-    --del-bg:rgba(248,81,73,.13); --del-mark:#f85149;
-    --k:#c678dd; --s:#98c379; --c:#5c6774; --num:#d19a66; --fn:#61afef;
-    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
-  }
-  @media (prefers-color-scheme:light){:root:not([data-theme=dark]){
-    --bg:#fff; --panel:#f7f9fb; --panel-2:#eef2f6; --panel-3:#e4eaf1; --line:#d8dee6;
-    --text:#1c2128; --dim:#57606a; --faint:#8b949e;
-    --accent:#0969da; --crit:#cf222e; --high:#bc4c00; --med:#9a6700; --low:#6e7781; --ok:#1a7f37;
-    --add-bg:rgba(74,194,107,.16); --del-bg:rgba(255,129,130,.18);
-    --k:#a626a4; --s:#50a14f; --c:#a0a1a7; --num:#986801; --fn:#4078f2;
-  }}
-  *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.55 var(--sans);
-    -webkit-font-smoothing:antialiased;overflow:hidden}
-  .app{display:grid;grid-template-columns:52px var(--side,272px) 4px 1fr 4px var(--chat,430px);
-    height:100vh}
-  .rz{cursor:col-resize;background:transparent;position:relative;z-index:5}
-  .rz::after{content:"";position:absolute;inset:0 1px;background:var(--line)}
-  .rz:hover::after,.rz.on::after{background:var(--accent)}
+/* ════════════════════════════════════════════════════════════════════════════
+   Tokens.
 
-  /* activity bar */
-  .bar{background:var(--panel);border-right:1px solid var(--line);display:flex;
-    flex-direction:column;align-items:center;padding:12px 0;gap:2px}
-  .bar .logo{margin-bottom:12px;color:var(--text)}
-  .ic{all:unset;width:34px;height:34px;display:grid;place-items:center;border-radius:8px;
-    cursor:pointer;color:var(--faint);position:relative}
-  .ic:hover{background:var(--panel-2);color:var(--text)}
-  .ic[aria-current=true]{background:var(--panel-2);color:var(--accent)}
-  .ic .badge{position:absolute;top:0;right:0;min-width:15px;height:15px;border-radius:8px;
-    background:var(--crit);color:#fff;font:600 9.5px/15px var(--mono);text-align:center;padding:0 3px}
-  .ic .badge.mut{background:var(--faint)}
-  .bar .spacer{flex:1}
+   Structure follows Radix/Primer's 12-step model: bg 1–2, component rest/hover/
+   pressed 3/4/5, borders 6/7/8, muted text 11, default text 12. Hover is always
+   exactly one step past rest — never an opacity hack.
 
-  /* side panel */
-  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;min-width:0}
-  .ph{padding:12px 14px 8px;display:flex;align-items:center;gap:8px;position:sticky;top:0;
-    background:var(--panel);z-index:2}
-  .ph h3{margin:0;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
-    color:var(--faint);font-weight:600}
-  .ph .act{margin-left:auto;font:11px var(--mono);color:var(--faint);cursor:pointer}
-  .ph .act:hover{color:var(--accent)}
-  .repo{padding:0 14px 10px;font:11px var(--mono);color:var(--faint);word-break:break-all;
-    line-height:1.4}
-  .grp{border-top:1px solid var(--line)}
-  .tnode{display:flex;align-items:center;gap:6px;padding:3px 14px;cursor:pointer;font-size:12.5px;
-    color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
-  .tnode:hover{background:var(--panel-2);color:var(--text)}
-  .tnode.sel{background:var(--panel-2);color:var(--accent)}
-  .tnode .caret{width:9px;flex:none;color:var(--faint);font-size:9px}
-  .tnode .st{margin-left:auto;font-size:10px;font-weight:700;flex:none;padding-left:8px}
-  .st.modified{color:var(--med)} .st.added,.st.untracked{color:var(--ok)}
-  .st.deleted{color:var(--crit)} .st.renamed{color:var(--accent)}
-  .tkids.collapsed{display:none}
-  .side .empty{padding:14px;color:var(--faint);font-size:12px;text-align:left;line-height:1.5}
+   Elevation is INVERTED, following Zed: the editor is the DARKEST surface and the
+   chrome sits forward of it. The usual "elevation means lighter" advice is wrong
+   for a tool you read in — the work surface should recede, the frame should not.
 
-  /* generic list rows in the side panel */
-  .lrow{padding:8px 14px;border-bottom:1px solid var(--line);cursor:default}
-  .lrow.click{cursor:pointer}
-  .lrow.click:hover{background:var(--panel-2)}
-  .lrow .t{font-size:12.5px;font-weight:540;overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap}
-  .lrow .m{font:11px var(--mono);color:var(--faint);margin-top:2px;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap}
-  .lrow .d{font-size:11.5px;color:var(--dim);margin-top:3px;
-    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .pill{display:inline-block;font:9.5px var(--mono);padding:1.5px 6px;border-radius:4px;
-    background:var(--panel-2);color:var(--faint);margin-left:6px;vertical-align:1px}
-  .pill.project{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
-  .pill.crit{color:var(--crit);background:color-mix(in srgb,var(--crit) 14%,transparent)}
-  .pill.high{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
-  .pill.medium{color:var(--med);background:color-mix(in srgb,var(--med) 14%,transparent)}
-  .pill.low,.pill.info{color:var(--low);background:color-mix(in srgb,var(--low) 14%,transparent)}
-  .lrow.danger{border-left:2px solid var(--crit)}
+   The neutral ramp is warm rather than the blue-grey every editor ships, and every
+   value below was checked against WCAG: text ≥4.5:1, borders and focus ≥3:1.
+   ════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --n1:#131211; --n2:#191817; --n3:#1f1e1c; --n4:#252423; --n5:#2b2a28; --n6:#322f2d;
+  --n7:#3d3a37; --n8:#65605a; --n9:#736e68; --n10:#8f8a83; --n11:#b3ada5; --n12:#ece9e4;
 
-  .fld{padding:10px 14px;border-bottom:1px solid var(--line)}
-  .fld label{display:block;font-size:11px;color:var(--faint);margin-bottom:5px}
-  .fld input{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
-    border-radius:7px;padding:7px 9px;font:12px var(--mono);outline:none}
-  .fld input:focus{border-color:var(--accent)}
-  .fld .row2{display:flex;gap:7px;margin-top:7px;align-items:center}
-  .fld .err{color:var(--crit);font-size:11.5px;margin-top:6px}
-  .fld .ok{color:var(--ok);font-size:11.5px;margin-top:6px}
+  /* State. The only saturated colour in the interface. */
+  --ok:#4ec26a; --warn:#d9a441; --crit:#e5675f;
+  --add:#3fb950; --add-bg:rgba(63,185,80,.12);
+  --del:#f85149; --del-bg:rgba(248,81,73,.12);
 
-  /* editor */
-  .ed{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);min-width:0}
-  .tabs{display:flex;height:36px;border-bottom:1px solid var(--line);background:var(--panel);
-    flex:none;overflow-x:auto}
-  .tab{display:flex;align-items:center;gap:7px;padding:0 11px 0 13px;cursor:pointer;
-    border-right:1px solid var(--line);font:12px var(--mono);color:var(--dim);white-space:nowrap;
-    flex:none}
-  .tab:hover{background:var(--panel-2)}
-  .tab.on{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
-  .tab .x{opacity:.45;font-size:14px;line-height:1}
-  .tab .x:hover{opacity:1;color:var(--crit)}
-  .tab .dirty{width:6px;height:6px;border-radius:50%;background:var(--accent)}
-  .subbar{display:flex;align-items:center;gap:12px;padding:0 14px;height:32px;flex:none;
-    border-bottom:1px solid var(--line);background:var(--panel);font-size:11.5px;color:var(--faint)}
-  .seg{display:flex;background:var(--panel-2);border-radius:6px;padding:2px}
-  .seg button{all:unset;padding:2.5px 11px;border-radius:4px;cursor:pointer;font-size:11.5px;
-    color:var(--dim)}
-  .seg button[aria-current=true]{background:var(--panel-3);color:var(--text)}
-  .subbar .right{margin-left:auto;display:flex;gap:10px;align-items:center;overflow:hidden}
-  .subbar .right span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kbd{font:10.5px var(--mono);background:var(--panel-2);padding:1px 5px;border-radius:4px;
-    color:var(--faint);flex:none}
+  /* Interactive accent — deliberately not a state hue, so "clickable" never reads
+     as "warning". */
+  --accent:#6ea8fe; --accent-dim:rgba(110,168,254,.14);
 
-  .surface{flex:1;overflow:auto;position:relative;padding:12px 0}
-  .lines{display:table;width:100%;border-collapse:collapse;font:12.5px/1.62 var(--mono)}
-  .ln-row{display:table-row}
-  .ln-no,.ln-src{display:table-cell;vertical-align:top}
-  .ln-no{text-align:right;color:var(--faint);user-select:none;width:1%;white-space:nowrap;
-    padding:0 14px 0 16px}
-  .ln-src{white-space:pre-wrap;word-break:break-word;padding-right:24px}
-  .k{color:var(--k)}.s{color:var(--s)}.c{color:var(--c);font-style:italic}
-  .n{color:var(--num)}.f{color:var(--fn)}
-  .edit-wrap{position:relative}
-  .edit-wrap textarea,.edit-wrap .hl{font:12.5px/1.62 var(--mono);padding:0;margin:0;border:0;
-    white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
-  .edit-wrap .hl{pointer-events:none;min-height:1.62em}
-  .edit-wrap textarea{position:absolute;inset:0;width:100%;height:100%;background:transparent;
-    color:transparent;caret-color:var(--accent);resize:none;outline:none;overflow:hidden}
-  .edit-wrap textarea::selection{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+  /* Syntax. Hue separation is the whole game: the eye should parse token category
+     before it reads the word. */
+  --syn-key:#c678dd; --syn-str:#98c379; --syn-com:#837c6e; --syn-num:#d19a66;
+  --syn-fn:#61afef; --syn-type:#e5c07b; --syn-var:#e06c75;
 
-  /* diff — flex rows, not a CSS table: a one-cell table row cannot span the gutter columns,
-     which trapped every hunk header inside the narrow line-number column. */
-  .diff{font:12.5px/1.62 var(--mono)}
-  .dline{display:flex}
-  .dno{width:46px;flex:none;text-align:right;color:var(--faint);user-select:none;padding:0 8px;
-    font-size:11.5px}
-  .dsrc{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;padding:0 24px 0 20px;
-    position:relative}
-  .dline.add{background:var(--add-bg)} .dline.del{background:var(--del-bg)}
-  .dsrc .mk{position:absolute;left:6px;font-weight:700}
-  .dline.add .mk{color:var(--add-mark)} .dline.del .mk{color:var(--del-mark)}
-  .hunk{color:var(--accent);background:var(--panel-2);padding:5px 14px;font-size:11.5px;
-    border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:6px 0 0;
-    white-space:pre-wrap;word-break:break-word}
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
 
-  /* chat */
-  .chat{background:var(--panel);border-left:1px solid var(--line);display:flex;
-    flex-direction:column;overflow:hidden;min-width:0}
-  .chat-head{padding:9px 14px;border-bottom:1px solid var(--line);flex:none;display:flex;
-    align-items:center;gap:8px;font-size:12.5px;font-weight:600}
-  .chat-head .meta{margin-left:auto;font:11px var(--mono);color:var(--faint);font-weight:400}
-  .mode-note{font-size:11px;padding:6px 14px;flex:none;border-bottom:1px solid var(--line);
-    line-height:1.45}
-  .mode-note.plan{color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
-  .mode-note.auto{color:var(--high);background:color-mix(in srgb,var(--high) 10%,transparent)}
-  .log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:11px}
-  .msg .who{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);
-    font-weight:600;margin-bottom:4px}
-  .msg.user{background:var(--panel-2);border-radius:9px;padding:9px 12px}
-  .msg.user .who{color:var(--accent)}
-  .txt{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6}
-  .txt code{font:12px var(--mono);background:var(--panel-2);padding:1px 5px;border-radius:4px}
-  .txt strong{font-weight:640}
-  .think{font-size:12px;color:var(--faint);font-style:italic;border-left:2px solid var(--line);
-    padding-left:10px;white-space:pre-wrap}
-  /* Tool calls: the argument gets its own wrapping block. A shell command truncated to one line
-     is unreadable, and the command is the part you most need to see. */
-  .tool{background:var(--panel-2);border-radius:7px;border-left:2px solid var(--accent);
-    overflow:hidden}
-  .tool .th{display:flex;align-items:center;gap:8px;padding:5px 10px;font:11.5px var(--mono)}
-  .tool .tn{color:var(--accent);font-weight:600}
-  .tool .tsub{color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tool pre{margin:0;padding:0 10px 8px;font:11.5px/1.5 var(--mono);color:var(--dim);
-    white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto}
-  .composer{border-top:1px solid var(--line);padding:10px;flex:none}
-  .composer textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);
-    color:var(--text);border-radius:8px;padding:9px 11px;font:13px/1.5 var(--sans);resize:none;
-    min-height:58px;outline:none}
-  .composer textarea:focus{border-color:var(--accent)}
-  .foot{display:flex;align-items:center;gap:8px;margin-top:7px}
-  .foot .hint{font:11px var(--mono);color:var(--faint);margin-right:auto;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap}
-  .btn{all:unset;background:var(--accent);color:#fff;padding:5.5px 14px;border-radius:7px;
-    font-size:12.5px;font-weight:560;cursor:pointer;text-align:center}
-  .btn:hover{filter:brightness(1.1)} .btn[disabled]{opacity:.4;cursor:default}
-  .btn.ghost{background:var(--panel-2);color:var(--dim)}
-  .btn.sm{padding:4px 10px;font-size:11.5px}
+  /* The entire spacing vocabulary. No one-off values. */
+  --s1:2px; --s2:4px; --s3:8px; --s4:12px; --s5:16px; --s6:24px;
+  --r1:4px; --r2:6px; --r3:10px;
 
-  /* palette */
-  .pal{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(620px,88vw);
-    background:var(--panel);border:1px solid var(--line);border-radius:12px;z-index:40;
-    box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden}
-  .pal input{all:unset;display:block;width:100%;padding:14px 17px;font:14px var(--sans);
-    color:var(--text);border-bottom:1px solid var(--line);box-sizing:border-box}
-  .pal .res{max-height:44vh;overflow-y:auto}
-  .pal .r{padding:8px 17px;font:12.5px var(--mono);color:var(--dim);cursor:pointer;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .pal .r.on{background:var(--panel-2);color:var(--accent)}
-  .hidden{display:none!important}
-  .empty{padding:26px 16px;text-align:center;color:var(--faint);font-size:12.5px}
+  --t-hover:100ms cubic-bezier(.25,.1,.25,1);
+  --t-state:200ms cubic-bezier(.6,0,.2,1);
+  --t-enter:300ms cubic-bezier(.3,.8,.6,1);
+
+  --side:274px; --chat:412px;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]){
+  --n1:#ffffff; --n2:#faf9f7; --n3:#f4f2ef; --n4:#ece9e4; --n5:#e4e0da; --n6:#dbd6cf;
+  --n7:#cdc7be; --n8:#9a938b; --n9:#8b847a; --n10:#6f6961; --n11:#57524b; --n12:#1c1a18;
+  --ok:#157f3b; --warn:#9a6700; --crit:#cf222e;
+  --add:#1a7f37; --add-bg:rgba(74,194,107,.15);
+  --del:#cf222e; --del-bg:rgba(255,129,130,.17);
+  --accent:#0b62d6; --accent-dim:rgba(11,98,214,.10);
+  --syn-key:#a626a4; --syn-str:#428441; --syn-com:#7c756d; --syn-num:#986801;
+  --syn-fn:#4078f2; --syn-type:#9b6e00; --syn-var:#cf222e;
+}}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--n3);color:var(--n12);
+  font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+
+/* Focus is always visible, always instant. */
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:var(--r1)}
+
+/* Scrollbars stay nearly invisible until touched. */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--n7);border-radius:5px;
+  border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--n8);background-clip:content-box}
+
+/* ── shell ──────────────────────────────────────────────────────────────── */
+.app{display:grid;height:100vh;
+  grid-template-columns:48px var(--side) 1fr var(--chat);
+  grid-template-rows:1fr 26px}
+.app.no-side{grid-template-columns:48px 0 1fr var(--chat)}
+.app.no-chat{grid-template-columns:48px var(--side) 1fr 0}
+.app.no-side.no-chat{grid-template-columns:48px 0 1fr 0}
+
+/* Resize handles sit on the panel edge and never move the layout themselves. */
+.rz{position:absolute;top:0;bottom:0;width:7px;cursor:col-resize;z-index:6}
+.rz::after{content:"";position:absolute;inset:0 3px;background:transparent;
+  transition:background var(--t-hover)}
+.rz:hover::after,.rz.on::after{background:var(--accent)}
+.rz.left{right:-4px} .rz.right{left:-4px}
+
+/* ── activity rail ──────────────────────────────────────────────────────── */
+.rail{grid-row:1/3;background:var(--n3);border-right:1px solid var(--n6);
+  display:flex;flex-direction:column;align-items:center;padding:var(--s4) 0;gap:var(--s1)}
+.rail .mark{color:var(--n11);margin-bottom:var(--s4)}
+.ic{all:unset;width:32px;height:32px;display:grid;place-items:center;border-radius:var(--r2);
+  cursor:pointer;color:var(--n10);position:relative;transition:color var(--t-hover),
+  background var(--t-hover)}
+.ic:hover{background:var(--n4);color:var(--n12)}
+.ic[aria-current=true]{background:var(--n5);color:var(--n12)}
+.ic[aria-current=true]::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;
+  width:2px;background:var(--accent);border-radius:1px}
+.ic .badge{position:absolute;top:1px;right:1px;min-width:14px;height:14px;padding:0 3px;
+  border-radius:7px;background:var(--n7);color:var(--n12);
+  font:600 9px/14px var(--mono);font-variant-numeric:tabular-nums;text-align:center}
+.ic .badge.alert{background:var(--crit);color:#fff}
+.rail .grow{flex:1}
+
+/* ── side panel ─────────────────────────────────────────────────────────── */
+.side{grid-row:1/2;background:var(--n3);border-right:1px solid var(--n6);
+  overflow:hidden auto;position:relative;min-width:0}
+.app.no-side .side{border-right:0}
+.ph{display:flex;align-items:center;gap:var(--s3);padding:var(--s4) var(--s4) var(--s3);
+  position:sticky;top:0;background:var(--n3);z-index:2}
+.ph h2{margin:0;font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--n10)}
+.ph .n{font:10px/1 var(--mono);color:var(--n9);font-variant-numeric:tabular-nums}
+.ph .act{all:unset;margin-left:auto;font:10px var(--mono);color:var(--n9);cursor:pointer}
+.ph .act:hover{color:var(--accent)}
+.sub{padding:0 var(--s4) var(--s4);font:11px/1.45 var(--sans);color:var(--n10)}
+
+/* One row height, snapped to the scale: 24px. Dense but not cramped. */
+.row{display:flex;align-items:center;gap:var(--s3);height:24px;padding:0 var(--s4);
+  cursor:pointer;font:12px var(--mono);color:var(--n11);white-space:nowrap;
+  overflow:hidden;transition:background var(--t-hover),color var(--t-hover)}
+.row:hover{background:var(--n4);color:var(--n12)}
+.row.sel{background:var(--n5);color:var(--n12);box-shadow:inset 2px 0 0 var(--accent)}
+.row .name{overflow:hidden;text-overflow:ellipsis}
+.row .caret{width:8px;flex:none;color:var(--n9);font-size:8px}
+.row .flag{margin-left:auto;font:700 10px var(--mono);flex:none}
+.kids.shut{display:none}
+
+/* Multi-line rows for sessions, skills, findings. */
+.card{padding:var(--s3) var(--s4);border-bottom:1px solid var(--n6);cursor:default;
+  transition:background var(--t-hover)}
+.card.click{cursor:pointer}
+.card.click:hover{background:var(--n4)}
+.card .t{font:500 12px var(--sans);color:var(--n12);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.card .m{font:10.5px var(--mono);color:var(--n9);margin-top:var(--s1);
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .d{font:11.5px/1.45 var(--sans);color:var(--n11);margin-top:var(--s2)}
+.card.risk{box-shadow:inset 2px 0 0 var(--crit)}
+
+.chip{display:inline-block;font:9.5px var(--mono);padding:1px 5px;border-radius:var(--r1);
+  background:var(--n5);color:var(--n10);margin-left:var(--s2);vertical-align:1px}
+.chip.project{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.chip.critical{background:color-mix(in srgb,var(--crit) 16%,transparent);color:var(--crit)}
+.chip.high{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.chip.medium,.chip.low,.chip.info{background:var(--n5);color:var(--n10)}
+
+.empty{padding:var(--s6) var(--s5);color:var(--n9);font:12px/1.6 var(--sans);text-align:center}
+.empty kbd{margin:0 2px}
+
+.field{padding:var(--s4);border-bottom:1px solid var(--n6)}
+.field label{display:block;font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--n10);margin-bottom:var(--s3)}
+input[type=text],input[type=password]{width:100%;background:var(--n2);border:1px solid var(--n7);
+  color:var(--n12);border-radius:var(--r2);padding:6px var(--s3);font:12px var(--mono);
+  outline:none;transition:border-color var(--t-hover)}
+input:focus{border-color:var(--accent)}
+input::placeholder{color:var(--n9)}
+.field .line{display:flex;gap:var(--s2);margin-top:var(--s3);align-items:center}
+.note{font:11px/1.45 var(--sans);margin-top:var(--s3)}
+.note.good{color:var(--ok)} .note.bad{color:var(--crit)} .note.dim{color:var(--n10)}
+
+/* ── editor ─────────────────────────────────────────────────────────────── */
+.ed{grid-row:1/2;background:var(--n1);display:flex;flex-direction:column;
+  overflow:hidden;min-width:0;position:relative}
+.tabs{display:flex;height:32px;flex:none;background:var(--n3);
+  border-bottom:1px solid var(--n6);overflow-x:auto}
+.tabs::-webkit-scrollbar{height:0}
+.tab{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s3) 0 var(--s4);
+  cursor:pointer;border-right:1px solid var(--n6);font:11.5px var(--mono);color:var(--n10);
+  white-space:nowrap;flex:none;transition:background var(--t-hover),color var(--t-hover)}
+.tab:hover{background:var(--n4);color:var(--n11)}
+.tab.on{background:var(--n1);color:var(--n12);box-shadow:inset 0 -1px 0 var(--n1),
+  inset 0 2px 0 var(--accent)}
+.tab .x{opacity:0;font-size:13px;line-height:1;color:var(--n9)}
+.tab:hover .x,.tab.on .x{opacity:.6}
+.tab .x:hover{opacity:1;color:var(--crit)}
+.tab .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);flex:none}
+
+.crumb{display:flex;align-items:center;gap:var(--s4);height:28px;flex:none;padding:0 var(--s4);
+  background:var(--n2);border-bottom:1px solid var(--n6);
+  font:11px var(--mono);color:var(--n9);font-variant-numeric:tabular-nums}
+.crumb .path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb .right{margin-left:auto;display:flex;align-items:center;gap:var(--s4);flex:none}
+.seg{display:flex;background:var(--n4);border-radius:var(--r2);padding:1px}
+.seg button{all:unset;padding:2px var(--s3);border-radius:var(--r1);cursor:pointer;
+  font:11px var(--mono);color:var(--n10);transition:background var(--t-hover),color var(--t-hover)}
+.seg button:hover{color:var(--n12)}
+.seg button[aria-current=true]{background:var(--n6);color:var(--n12)}
+kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
+  border-bottom-width:2px;padding:1px 4px;border-radius:var(--r1);color:var(--n10)}
+
+.surface{flex:1;min-height:0;position:relative}
+#mon,#mondiff{position:absolute;inset:0}
+.surface .empty{position:absolute;inset:0;display:grid;place-content:center;align-content:center}
+
+/* Monaco paints its own chrome; these pull it onto our ramp. */
+.monaco-editor .scroll-decoration{box-shadow:none!important}
+.monaco-editor .minimap{opacity:.55}
+
+/* ── agent ──────────────────────────────────────────────────────────────── */
+.chat{grid-row:1/2;background:var(--n3);border-left:1px solid var(--n6);
+  display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
+.app.no-chat .chat{border-left:0}
+.chat .ph{padding-bottom:var(--s3)}
+.log{flex:1;overflow-y:auto;padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)}
+.who{font:600 9.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--n9);margin-bottom:var(--s2)}
+.said{background:var(--n4);border-radius:var(--r2);padding:var(--s3) var(--s4)}
+.said .who{color:var(--accent)}
+.txt{font:13px/1.6 var(--sans);white-space:pre-wrap;word-break:break-word;color:var(--n12)}
+.txt code{font:12px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1);
+  color:var(--n12)}
+.txt strong{font-weight:620}
+.think{font:12px/1.55 var(--sans);color:var(--n10);font-style:italic;
+  border-left:2px solid var(--n6);padding-left:var(--s4);white-space:pre-wrap}
+
+/* A tool's argument gets its own wrapping block. A shell command clipped to one line
+   is unreadable, and the command is exactly what you need to see. */
+.tool{background:var(--n2);border:1px solid var(--n6);border-left:2px solid var(--accent);
+  border-radius:var(--r2);overflow:hidden}
+.tool .th{display:flex;align-items:baseline;gap:var(--s3);padding:var(--s2) var(--s3);
+  font:11px var(--mono)}
+.tool .tn{color:var(--accent);font-weight:600}
+.tool .tw{color:var(--n9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool pre{margin:0;padding:0 var(--s3) var(--s3);font:11px/1.5 var(--mono);color:var(--n11);
+  white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto}
+
+.composer{flex:none;border-top:1px solid var(--n6);padding:var(--s3)}
+.composer textarea{width:100%;background:var(--n2);border:1px solid var(--n7);color:var(--n12);
+  border-radius:var(--r2);padding:var(--s3);font:13px/1.5 var(--sans);resize:none;
+  min-height:56px;outline:none;transition:border-color var(--t-hover)}
+.composer textarea:focus{border-color:var(--accent)}
+.composer textarea::placeholder{color:var(--n9)}
+.crow2{display:flex;align-items:center;gap:var(--s3);margin-top:var(--s3)}
+.crow2 .sp{flex:1}
+.btn{all:unset;background:var(--accent);color:#fff;padding:5px var(--s4);border-radius:var(--r2);
+  font:500 12px var(--sans);cursor:pointer;text-align:center;
+  transition:filter var(--t-hover)}
+.btn:hover{filter:brightness(1.12)}
+.btn[disabled]{opacity:.4;cursor:default;filter:none}
+.btn.quiet{background:var(--n4);color:var(--n11)}
+.btn.quiet:hover{background:var(--n5);filter:none}
+
+/* ── status rail — the instrument readout ───────────────────────────────── */
+.status{grid-column:2/5;grid-row:2/3;display:flex;align-items:center;gap:var(--s5);
+  padding:0 var(--s4);background:var(--n3);border-top:1px solid var(--n6);
+  font:11px var(--mono);color:var(--n10);font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden}
+.status .cell{display:flex;align-items:center;gap:var(--s2);flex:none}
+.status .cell b{font-weight:600;color:var(--n11)}
+.status .sp{flex:1}
+.status .live{color:var(--accent)}
+.status .score.ok{color:var(--ok)} .status .score.warn{color:var(--warn)}
+.status .score.crit{color:var(--crit)}
+.status button{all:unset;cursor:pointer;transition:color var(--t-hover)}
+.status button:hover{color:var(--n12)}
+
+/* ── palette — the one place that earns a transition ────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49}
+.pal{position:fixed;top:14vh;left:50%;transform:translateX(-50%);width:min(640px,90vw);
+  background:var(--n3);border:1px solid var(--n7);border-radius:var(--r3);z-index:50;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;
+  animation:rise var(--t-enter)}
+@keyframes rise{from{opacity:0;transform:translateX(-50%) translateY(-6px)}}
+.pal input{width:100%;background:transparent;border:0;border-bottom:1px solid var(--n6);
+  border-radius:0;padding:var(--s4) var(--s5);font:14px var(--sans);color:var(--n12)}
+.pal input:focus{border-color:var(--n6)}
+.pal .hits{max-height:46vh;overflow-y:auto}
+.pal .hit{display:flex;align-items:center;gap:var(--s3);padding:6px var(--s5);
+  font:12px var(--mono);color:var(--n11);cursor:pointer}
+.pal .hit .dim{color:var(--n9)}
+.pal .hit .sp{flex:1}
+.pal .hit.on{background:var(--n5);color:var(--n12);box-shadow:inset 2px 0 0 var(--accent)}
+.pal .hit em{font-style:normal;color:var(--accent)}
+.pal .foot{display:flex;gap:var(--s4);padding:var(--s3) var(--s5);border-top:1px solid var(--n6);
+  font:10px var(--mono);color:var(--n9)}
+.hidden{display:none!important}
 </style>
 </head>
 <body>
 <div class="app" id="app">
-  <div class="bar">
-    <svg class="logo" width="21" height="21" viewBox="0 0 20 20" fill="none">
-      <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
-        stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-    <button class="ic" data-p="files" title="Files" aria-current="true">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 011-1h3.6l1.2 1.5H13a1 1 0 011 1V13a1 1 0 01-1 1H3a1 1 0 01-1-1V3z"/></svg></button>
-    <button class="ic" data-p="changes" title="Changes">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2v8.2a2.8 2.8 0 105 1.8h3V2h-2v8H8.9A2.8 2.8 0 006 10.2V2H4z"/></svg>
-      <span class="badge mut hidden" data-b="changes">0</span></button>
-    <button class="ic" data-p="sessions" title="Sessions">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.8 3.5v3.9l3 1.8-.8 1.3-3.7-2.2V4.5h1.5z"/></svg>
-      <span class="badge mut hidden" data-b="sessions">0</span></button>
-    <button class="ic" data-p="skills" title="Skills &amp; extensions">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2 4.4 4.8.5-3.6 3.2 1 4.7L8 11.4 3.8 13.8l1-4.7L1.2 5.9 6 5.4 8 1z"/></svg></button>
-    <button class="ic" data-p="readiness" title="Readiness">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l6 2.6v4c0 3.6-2.5 6.6-6 7.4-3.5-.8-6-3.8-6-7.4v-4L8 1zm2.9 4.6l-3.6 3.6-1.9-1.9-1.1 1.1 3 3 4.7-4.7-1.1-1.1z"/></svg>
-      <span class="badge hidden" data-b="readiness">0</span></button>
-    <div class="spacer"></div>
-    <button class="ic" data-p="connections" title="Connections">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 2.5a3.5 3.5 0 014.9 4.9l-2 2a3.5 3.5 0 01-5 0l1.1-1.1a2 2 0 002.8 0l2-2a2 2 0 10-2.8-2.8l-.8.8-1.1-1.1.9-.7zM6.5 13.5a3.5 3.5 0 01-4.9-4.9l2-2a3.5 3.5 0 015 0L7.5 7.7a2 2 0 00-2.8 0l-2 2a2 2 0 102.8 2.8l.8-.8 1.1 1.1-.9.7z"/></svg>
-      <span class="badge hidden" data-b="conn">!</span></button>
-  </div>
 
-  <aside class="side" id="side"></aside>
-  <div class="rz" id="rz1"></div>
+  <nav class="rail">
+    <svg class="mark" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
+        stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    <button class="ic" data-p="files" title="Files" aria-current="true">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3.2a1 1 0 011-1h3.4l1.3 1.6H13a1 1 0 011 1v8.1a1 1 0 01-1 1H3a1 1 0 01-1-1V3.2z"/></svg></button>
+    <button class="ic" data-p="changes" title="Changes">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4.2 2v7.9a2.7 2.7 0 104.7 1.8h3V2h-1.9v7.8H8.8A2.7 2.7 0 006.1 9.9V2H4.2z"/></svg>
+      <span class="badge hidden" data-b="changes">0</span></button>
+    <button class="ic" data-p="sessions" title="Sessions">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.2a6.8 6.8 0 100 13.6A6.8 6.8 0 008 1.2zm.75 3.4v3.7l2.9 1.7-.75 1.25-3.6-2.1V4.6h1.45z"/></svg>
+      <span class="badge hidden" data-b="sessions">0</span></button>
+    <button class="ic" data-p="skills" title="Skills and extensions">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4l1.9 4.2 4.6.45-3.45 3.1.98 4.5L8 11.3l-4.03 2.35.98-4.5L1.5 6.05l4.6-.45L8 1.4z"/></svg></button>
+    <button class="ic" data-p="readiness" title="Readiness">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.2l5.8 2.5v3.9c0 3.5-2.4 6.4-5.8 7.2-3.4-.8-5.8-3.7-5.8-7.2V3.7L8 1.2zm2.8 4.4L7.35 9.05 5.5 7.2 4.45 8.25l2.9 2.9 4.5-4.5-1.05-1.05z"/></svg>
+      <span class="badge hidden" data-b="ready">0</span></button>
+    <div class="grow"></div>
+    <button class="ic" data-p="connections" title="Connections">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M9.4 2.6a3.4 3.4 0 014.8 4.8l-2 2a3.4 3.4 0 01-4.85 0l1.08-1.08a1.9 1.9 0 002.7 0l2-2a1.9 1.9 0 10-2.7-2.7l-.78.78-1.08-1.08.83-.72zM6.6 13.4a3.4 3.4 0 01-4.8-4.8l2-2a3.4 3.4 0 014.85 0L7.57 7.68a1.9 1.9 0 00-2.7 0l-2 2a1.9 1.9 0 102.7 2.7l.78-.78 1.08 1.08-.83.72z"/></svg>
+      <span class="badge hidden" data-b="conn">!</span></button>
+  </nav>
+
+  <aside class="side" id="side"><div class="rz left" id="rz1"></div></aside>
 
   <section class="ed">
     <div class="tabs" id="tabs"></div>
-    <div class="subbar">
-      <div class="seg">
-        <button id="m-src" aria-current="true">Source</button>
-        <button id="m-diff">Diff</button>
-      </div>
-      <div class="right"><span id="fmeta"></span>
-        <span class="kbd">&#8984;P</span><span class="kbd">&#8984;S</span></div>
+    <div class="crumb">
+      <span class="path" id="crumb">No file open</span>
+      <span class="right">
+        <span class="seg"><button id="v-src" aria-current="true">Source</button><button id="v-diff">Diff</button></span>
+      </span>
     </div>
-    <div class="surface" id="surface"><div class="empty">Open a file &mdash; press &#8984;P</div></div>
+    <div class="surface" id="surface"></div>
   </section>
-
-  <div class="rz" id="rz2"></div>
 
   <section class="chat">
-    <div class="chat-head">
-      <span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>
-      Claude Code<span class="meta" id="chat-meta"></span>
-    </div>
-    <div class="mode-note" id="mode-note"></div>
-    <div class="log" id="log"><div class="empty">Ask Claude Code to change this repository.</div></div>
+    <div class="rz right" id="rz2"></div>
+    <div class="ph"><h2>Agent</h2><span class="n" id="agent-model"></span>
+      <button class="act" id="a-clear">clear</button></div>
+    <div class="log" id="log"></div>
     <div class="composer">
-      <textarea id="prompt" placeholder="Describe a change…   &#8984;&#9166; to send"></textarea>
-      <div class="foot">
-        <div class="seg">
-          <button id="pm-plan">Plan</button>
-          <button id="pm-auto" aria-current="true">Auto</button>
-        </div>
-        <span class="hint" id="hint"></span>
-        <button class="btn ghost hidden" id="stop">Stop</button>
-        <button class="btn" id="send">Send</button>
+      <textarea id="prompt" rows="2" placeholder="Describe a change…"></textarea>
+      <div class="crow2">
+        <span class="seg"><button id="pm-plan">Plan</button><button id="pm-auto" aria-current="true">Auto</button></span>
+        <kbd id="mode-kbd">⇧⇥</kbd>
+        <span class="sp"></span>
+        <button class="btn quiet hidden" id="stop">Stop</button>
+        <button class="btn" id="send">Send <kbd style="background:transparent;border:0;color:rgba(255,255,255,.7)">⌘↵</kbd></button>
       </div>
     </div>
   </section>
+
+  <footer class="status" id="status"></footer>
 </div>
 
+<div class="scrim hidden" id="scrim"></div>
 <div class="pal hidden" id="pal">
-  <input id="pal-q" placeholder="Go to file…" spellcheck="false">
-  <div class="res" id="pal-res"></div>
+  <input id="pq" spellcheck="false" autocomplete="off" placeholder="Go to file…">
+  <div class="hits" id="hits"></div>
+  <div class="foot">
+    <span><b>&gt;</b> commands</span><span><b>:</b> line</span><span><b>?</b> help</span>
+    <span class="sp" style="flex:1"></span><span>↑↓ navigate · ↵ open · esc close</span>
+  </div>
 </div>
 
+<script src="/vendor/vs/loader.js"></script>
 <script>
-const $ = h => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+  // Monaco resolves its worker from this hook. Without it the editor silently falls back to
+  // running language work on the main thread, which is where the jank comes from.
+  require.config({ paths: { vs: '/vendor/vs' } });
+  window.MonacoEnvironment = { getWorkerUrl: () => {
+    const proxy = URL.createObjectURL(new Blob([`
+      self.MonacoEnvironment = { baseUrl: '${location.origin}/vendor/' };
+      importScripts('${location.origin}/vendor/vs/base/worker/workerMain.js');
+    `], { type: 'text/javascript' }));
+    return proxy;
+  }};
+</script>
+<script>
+'use strict';
 const el = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-const short = (s, n) => (s ?? '').length > n ? s.slice(0, n - 1) + '…' : (s ?? '');
+const md = s => esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+const frag = h => { const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstElementChild; };
+const MAC = navigator.platform.toUpperCase().includes('MAC');
 
-let state = null, git = null, conn = null, tree = null, flat = [], mode = 'src', panel = 'files';
-const tabs = []; let active = null;
+// Surface our own failures rather than dying silently in the console. An IDE that goes blank with
+// no explanation is worse than one that admits what broke.
+addEventListener('error', e => {
+  const c = el('crumb');
+  if (c) c.textContent = 'error: ' + (e.message || e.error) + '  @' + (e.filename||'').split('/').pop() + ':' + e.lineno;
+});
+addEventListener('unhandledrejection', e => {
+  const c = el('crumb');
+  if (c) c.textContent = 'error: ' + (e.reason?.message ?? e.reason);
+});
 
-// ── panel sizing ─────────────────────────────────────────────────────────────
-// Widths persist per browser so the layout someone settles on survives a reload.
-function initResize(handle, varName, key, min, max, invert) {
-  const stored = localStorage.getItem(key);
-  if (stored) document.documentElement.style.setProperty(varName, stored + 'px');
-  handle.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    handle.setPointerCapture(e.pointerId);
-    handle.classList.add('on');
-    const move = ev => {
-      const raw = invert ? window.innerWidth - ev.clientX : ev.clientX - 52;
-      const w = Math.max(min, Math.min(max, raw));
-      document.documentElement.style.setProperty(varName, w + 'px');
-      localStorage.setItem(key, String(w));
-    };
-    const up = () => {
-      handle.classList.remove('on');
-      removeEventListener('pointermove', move);
-      removeEventListener('pointerup', up);
-    };
-    addEventListener('pointermove', move);
-    addEventListener('pointerup', up);
+let state=null, git=null, conn=null, treeData=null, files=[], view='src', panel='files';
+const tabs=[]; let active=null;
+
+/* ════ editor — Monaco ═══════════════════════════════════════════════════
+   One editor instance, one model per open file. Models are the reason: they hold
+   undo history, cursor position, folds and selection per file, so switching tabs
+   restores exactly where you were rather than resetting to the top. */
+let mon=null, monDiff=null, ready=false;
+const models=new Map();   // path -> monaco.ITextModel
+const viewState=new Map();// path -> editor view state (cursor, scroll, folds)
+
+const LANG={rs:'rust',ts:'typescript',tsx:'typescript',js:'javascript',jsx:'javascript',
+  mjs:'javascript',py:'python',go:'go',rb:'ruby',php:'php',java:'java',json:'json',
+  jsonc:'json',yml:'yaml',yaml:'yaml',toml:'ini',ini:'ini',md:'markdown',sh:'shell',
+  bash:'shell',zsh:'shell',sql:'sql',css:'css',scss:'scss',html:'html',xml:'xml',
+  svg:'xml',tf:'hcl',hcl:'hcl',proto:'protobuf',graphql:'graphql',lock:'ini'};
+const langOf=p=>{
+  const base=p.split('/').pop().toLowerCase();
+  if(base==='dockerfile'||base.startsWith('dockerfile.')) return 'dockerfile';
+  if(base==='makefile') return 'shell';
+  return LANG[base.split('.').pop()]??'plaintext';
+};
+
+/** Read a CSS custom property so the editor theme stays derived from one palette. */
+const tok=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function defineTheme(){
+  const dark=matchMedia('(prefers-color-scheme: dark)').matches
+    && !document.documentElement.dataset.theme;
+  monaco.editor.defineTheme('keel',{
+    base: dark||document.documentElement.dataset.theme==='dark' ? 'vs-dark':'vs',
+    inherit:true,
+    rules:[
+      {token:'',                foreground:tok('--n12').slice(1)},
+      {token:'comment',         foreground:tok('--syn-com').slice(1),fontStyle:'italic'},
+      {token:'string',          foreground:tok('--syn-str').slice(1)},
+      {token:'keyword',         foreground:tok('--syn-key').slice(1)},
+      {token:'number',          foreground:tok('--syn-num').slice(1)},
+      {token:'type',            foreground:tok('--syn-type').slice(1)},
+      {token:'type.identifier', foreground:tok('--syn-type').slice(1)},
+      {token:'identifier',      foreground:tok('--n12').slice(1)},
+      {token:'function',        foreground:tok('--syn-fn').slice(1)},
+      {token:'variable',        foreground:tok('--syn-var').slice(1)},
+      {token:'operator',        foreground:tok('--n11').slice(1)},
+      {token:'delimiter',       foreground:tok('--n11').slice(1)},
+    ],
+    colors:{
+      'editor.background':tok('--n1'),
+      'editor.foreground':tok('--n12'),
+      'editorLineNumber.foreground':tok('--n9'),
+      'editorLineNumber.activeForeground':tok('--n11'),
+      'editorCursor.foreground':tok('--accent'),
+      'editor.selectionBackground':tok('--accent')+'44',
+      'editor.inactiveSelectionBackground':tok('--n5'),
+      'editor.lineHighlightBackground':tok('--n2'),
+      'editorIndentGuide.background1':tok('--n4'),
+      'editorIndentGuide.activeBackground1':tok('--n7'),
+      'editorWhitespace.foreground':tok('--n6'),
+      'editorGutter.background':tok('--n1'),
+      'editorWidget.background':tok('--n3'),
+      'editorWidget.border':tok('--n7'),
+      'editorSuggestWidget.background':tok('--n3'),
+      'editorSuggestWidget.border':tok('--n7'),
+      'input.background':tok('--n2'),
+      'input.border':tok('--n7'),
+      'scrollbarSlider.background':tok('--n7')+'99',
+      'scrollbarSlider.hoverBackground':tok('--n8'),
+      'scrollbarSlider.activeBackground':tok('--n8'),
+      'minimap.background':tok('--n1'),
+      'diffEditor.insertedTextBackground':tok('--add')+'22',
+      'diffEditor.removedTextBackground':tok('--del')+'22',
+      'editorOverviewRuler.border':tok('--n6'),
+      'editorBracketMatch.background':tok('--n5'),
+      'editorBracketMatch.border':tok('--n8'),
+    },
+  });
+  monaco.editor.setTheme('keel');
+}
+
+const EDITOR_OPTS={
+  theme:'keel',
+  fontFamily:'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace',
+  fontSize:12.5,
+  lineHeight:1.6,
+  fontLigatures:false,
+  minimap:{enabled:true,renderCharacters:false,maxColumn:90},
+  scrollBeyondLastLine:false,
+  renderLineHighlight:'line',
+  smoothScrolling:false,          // instant beats smooth in an editor
+  cursorBlinking:'solid',
+  cursorSmoothCaretAnimation:'off',
+  padding:{top:12,bottom:60},
+  bracketPairColorization:{enabled:false}, // one palette; rainbow brackets fight it
+  guides:{indentation:true,bracketPairs:false},
+  renderWhitespace:'selection',
+  scrollbar:{verticalScrollbarSize:10,horizontalScrollbarSize:10,useShadows:false},
+  overviewRulerBorder:false,
+  automaticLayout:true,
+  tabSize:2,
+  wordWrap:'off',
+  stickyScroll:{enabled:true},
+};
+
+function initMonaco(){
+  return new Promise(res=>{
+    require(['vs/editor/editor.main'],()=>{
+      defineTheme();
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change',defineTheme);
+      mon=monaco.editor.create(el('surface'),{...EDITOR_OPTS,value:'',language:'plaintext'});
+
+      // Keel owns save, so Monaco must not also try to handle it.
+      mon.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>save());
+      mon.onDidChangeModelContent(()=>{
+        const tab=tabs.find(t=>t.path===active);
+        if(tab&&!tab.dirty){ tab.dirty=true; drawTabs(); drawStatus(); }
+      });
+      mon.onDidChangeCursorPosition(drawStatus);
+      ready=true; res();
+    });
   });
 }
-initResize(el('rz1'), '--side', 'keel.side', 180, 520, false);
-initResize(el('rz2'), '--chat', 'keel.chat', 300, 760, true);
 
-// ── syntax highlighting ──────────────────────────────────────────────────────
-const KW = /\b(fn|let|mut|pub|use|mod|struct|enum|impl|trait|match|if|else|for|while|loop|return|const|static|async|await|move|where|as|dyn|self|Self|crate|super|type|ref|in|break|continue|unsafe|extern|function|var|class|export|import|from|default|new|try|catch|throw|typeof|instanceof|def|elif|except|lambda|with|yield|None|True|False|null|true|false|undefined)\b/g;
-
-function hl(src) {
-  let out = esc(src);
-  const stash = [];
-  // A digit-free sentinel. An index-based placeholder gets mangled by the number rule below
-  // before it can be restored, which rendered every comment line as a bare number.
-  const MARK = '';
-  const keep = h => { stash.push(h); return MARK; };
-  // One pass, so stash order matches the order the sentinels appear in. Two separate passes
-  // stashed every comment first and every string second while the sentinels stayed interleaved,
-  // which spliced doc comments into the middle of code lines. `#` starts a comment only when not
-  // followed by `[`, so Rust attributes survive.
-  out = out.replace(
-    /(\/\/[^\n]*|#(?!\[)[^\n]*|\/\*[\s\S]*?\*\/)|((&quot;|&#39;|`)(?:\\.|(?!\3)[^\\])*\3)/g,
-    (m, comment, string) => keep(comment
-      ? '<span class="c">' + comment + '</span>'
-      : '<span class="s">' + string + '</span>'));
-  out = out.replace(KW, '<span class="k">$&</span>');
-  out = out.replace(/\b\d[\d_.]*\b/g, '<span class="n">$&</span>');
-  out = out.replace(/\b([a-zA-Z_]\w*)(?=\()/g, '<span class="f">$1</span>');
-  let i = 0;
-  return out.replace(/\uE000/g, () => stash[i++]);
-}
-
-// ── editor ───────────────────────────────────────────────────────────────────
-function renderTabs() {
-  el('tabs').innerHTML = '';
-  for (const t of tabs) {
-    const node = $('<div class="tab ' + (t.path === active ? 'on' : '') + '"><span>' +
-      esc(t.path.split('/').pop()) + '</span>' +
-      (t.dirty ? '<span class="dirty" title="unsaved"></span>' : '<span class="x">&times;</span>') +
-      '</div>').firstElementChild;
-    node.onclick = e => {
-      if (e.target.classList.contains('x')) { closeTab(t.path); return; }
-      active = t.path; paint();
-    };
-    el('tabs').append(node);
+function modelFor(path,content){
+  let m=models.get(path);
+  if(!m){
+    m=monaco.editor.createModel(content,langOf(path),monaco.Uri.file('/'+path));
+    models.set(path,m);
   }
+  return m;
 }
-function closeTab(path) {
-  const i = tabs.findIndex(t => t.path === path);
-  if (i < 0) return;
-  tabs.splice(i, 1);
-  if (active === path) active = tabs.at(-1)?.path ?? null;
-  paint();
+
+/* ════ tabs ══════════════════════════════════════════════════════════════ */
+function drawTabs(){
+  el('tabs').innerHTML='';
+  tabs.forEach(t=>{
+    const n=frag('<div class="tab'+(t.path===active?' on':'')+'"><span>'+esc(t.path.split('/').pop())+
+      '</span>'+(t.dirty?'<span class="dot" title="unsaved"></span>':'<span class="x">×</span>')+'</div>');
+    n.onclick=e=>{ if(e.target.classList.contains('x')) closeTab(t.path); else { active=t.path; draw(); } };
+    el('tabs').append(n);
+  });
 }
-async function open(path) {
-  if (!tabs.some(t => t.path === path)) {
-    const r = await fetch('/api/file?path=' + encodeURIComponent(path));
-    if (!r.ok) { el('surface').innerHTML = '<div class="empty">' + esc(await r.text()) + '</div>'; return; }
-    const f = await r.json();
-    tabs.push({ path, content: f.content, dirty: false, truncated: f.truncated });
+function closeTab(p){
+  const i=tabs.findIndex(t=>t.path===p); if(i<0) return;
+  tabs.splice(i,1);
+  models.get(p)?.dispose(); models.delete(p); viewState.delete(p);
+  if(active===p) active=tabs.at(-1)?.path??null;
+  draw();
+}
+async function open(path,mode){
+  if(!tabs.some(t=>t.path===path)){
+    const r=await fetch('/api/file?path='+encodeURIComponent(path));
+    if(!r.ok){ toast(await r.text()); return; }
+    const f=await r.json();
+    tabs.push({path,content:f.content,dirty:false,truncated:f.truncated});
+    if(ready) modelFor(path,f.content);
   }
-  active = path; paint();
+  // Leaving a file preserves where you were in it.
+  if(active&&active!==path&&mon&&view==='src') viewState.set(active,mon.saveViewState());
+  active=path;
+  if(mode){ view=mode; syncView(); }
+  draw();
 }
+function syncView(){
+  el('v-src').setAttribute('aria-current',view==='src');
+  el('v-diff').setAttribute('aria-current',view==='diff');
+}
+el('v-src').onclick=()=>{ if(active&&mon&&view==='src') viewState.set(active,mon.saveViewState());
+  view='src'; syncView(); draw(); };
+el('v-diff').onclick=()=>{ if(active&&mon&&view==='src') viewState.set(active,mon.saveViewState());
+  view='diff'; syncView(); draw(); };
 
-function paint() {
-  renderTabs();
-  document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
-  const tab = tabs.find(t => t.path === active);
-  if (!tab) {
-    el('fmeta').textContent = '';
-    el('surface').innerHTML = '<div class="empty">Open a file &mdash; press &#8984;P</div>';
-    return;
+function showEmpty(html){
+  el('surface').innerHTML='<div class="empty">'+html+'</div>';
+  mon=null; monDiff=null; ready=false;
+}
+function toast(t){ el('crumb').textContent=t; }
+
+/* ════ rendering ═════════════════════════════════════════════════════════ */
+async function draw(){
+  drawTabs();
+  document.querySelectorAll('.row[data-p]').forEach(r=>r.classList.toggle('sel',r.dataset.p===active));
+  const tab=tabs.find(t=>t.path===active);
+
+  if(!tab){
+    el('crumb').textContent='No file open';
+    if(mon){ mon.dispose(); mon=null; ready=false; }
+    if(monDiff){ monDiff.dispose(); monDiff=null; }
+    el('surface').innerHTML='<div class="empty">Nothing open.<br><br>'+
+      '<kbd>'+(MAC?'⌘P':'Ctrl+P')+'</kbd> find a file · <kbd>'+(MAC?'⌘⇧P':'Ctrl+Shift+P')+'</kbd> commands</div>';
+    drawStatus(); return;
   }
-  if (mode === 'diff') { paintDiff(tab); return; }
 
-  const lines = tab.content.split('\n');
-  el('fmeta').textContent = tab.path + ' · ' + lines.length + ' lines' + (tab.truncated ? ' · truncated' : '');
-  el('surface').innerHTML =
-    '<div class="lines"><div class="ln-row"><div class="ln-no" id="gutter"></div>' +
-    '<div class="ln-src"><div class="edit-wrap"><div class="hl" id="hl"></div>' +
-    '<textarea id="ta" spellcheck="false"></textarea></div></div></div></div>';
+  if(view==='diff'){ await drawDiff(tab); return; }
 
-  const repaint = text => {
-    el('hl').innerHTML = hl(text) + '\n';
-    el('gutter').innerHTML = text.split('\n').map((_, i) => i + 1).join('<br>');
-  };
-  repaint(tab.content);
-  const ta = el('ta');
-  ta.value = tab.content;
-  ta.oninput = () => { tab.content = ta.value; tab.dirty = true; repaint(ta.value); renderTabs(); };
+  if(monDiff){ monDiff.dispose(); monDiff=null; el('surface').innerHTML=''; }
+  if(!mon||!ready){ el('surface').innerHTML=''; await initMonaco(); }
+
+  el('crumb').textContent=tab.path+(tab.truncated?'  ·  truncated':'');
+  mon.setModel(modelFor(tab.path,tab.content));
+  const vs=viewState.get(tab.path);
+  if(vs) mon.restoreViewState(vs);
+  mon.focus();
+  drawStatus();
 }
 
-async function paintDiff(tab) {
-  const d = await (await fetch('/api/git/diff?path=' + encodeURIComponent(tab.path))).json();
-  el('fmeta').textContent = tab.path + ' · ' + (d.untracked ? 'new file' : 'diff');
-  if (!d.hunks.length) {
-    el('surface').innerHTML = '<div class="empty">No uncommitted changes in this file.</div>';
-    return;
+async function drawDiff(tab){
+  if(mon){ mon.dispose(); mon=null; ready=false; }
+  el('surface').innerHTML='';
+  const orig=await (await fetch('/api/file/original?path='+encodeURIComponent(tab.path))).json();
+  await new Promise(res=>require(['vs/editor/editor.main'],res));
+  defineTheme();
+  if(monDiff){ monDiff.dispose(); monDiff=null; }
+  monDiff=monaco.editor.createDiffEditor(el('surface'),{
+    ...EDITOR_OPTS, readOnly:true, renderSideBySide:false, ignoreTrimWhitespace:false,
+    renderOverviewRuler:false, minimap:{enabled:false},
+  });
+  const lang=langOf(tab.path);
+  monDiff.setModel({
+    original: monaco.editor.createModel(orig.content,lang),
+    modified: modelFor(tab.path,tab.content),
+  });
+  el('crumb').textContent=tab.path+(orig.content?'  ·  vs HEAD':'  ·  new file');
+  drawStatus();
+}
+
+async function save(){
+  const tab=tabs.find(t=>t.path===active);
+  if(!tab||!tab.dirty) return;
+  const content=models.get(tab.path)?.getValue()??tab.content;
+  const r=await fetch('/api/save',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({path:tab.path,content})});
+  if(r.ok){ tab.content=content; tab.dirty=false; drawTabs(); refresh(); }
+}
+
+/* ════ side panels ═══════════════════════════════════════════════════════ */
+function node(n,depth){
+  const pad=`padding-left:${12+depth*10}px`;
+  if(!n.dir){
+    const e=frag('<div class="row" style="'+pad+'" data-p="'+esc(n.path)+'"><span class="name">'+esc(n.name)+'</span></div>');
+    e.onclick=()=>open(n.path); return e;
   }
-  const mk = k => k === 'add' ? '+' : k === 'del' ? '-' : ' ';
-  el('surface').innerHTML = '<div class="diff">' + d.hunks.map(h =>
-    '<div class="hunk">' + esc(h.header) + '</div>' + h.lines.map(l =>
-      '<div class="dline ' + l.kind + '"><div class="dno">' + (l.old ?? '') + '</div>' +
-      '<div class="dno">' + (l.new ?? '') + '</div><div class="dsrc"><span class="mk">' +
-      mk(l.kind) + '</span>' + (hl(l.text) || '&nbsp;') + '</div></div>').join('')).join('') + '</div>';
+  const wrap=document.createElement('div'), shut=depth>0;
+  const head=frag('<div class="row" style="'+pad+'"><span class="caret">'+(shut?'▸':'▾')+
+    '</span><span class="name">'+esc(n.name)+'</span></div>');
+  const kids=document.createElement('div'); kids.className='kids'+(shut?' shut':'');
+  (n.children??[]).forEach(c=>kids.append(node(c,depth+1)));
+  head.onclick=()=>{ kids.classList.toggle('shut');
+    head.querySelector('.caret').textContent=kids.classList.contains('shut')?'▸':'▾'; };
+  wrap.append(head,kids); return wrap;
 }
+const flatten=(ns,out=[])=>{ for(const n of ns) n.dir?flatten(n.children??[],out):out.push(n.path); return out; };
 
-async function save() {
-  const tab = tabs.find(t => t.path === active);
-  if (!tab || !tab.dirty) return;
-  const r = await fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: tab.path, content: tab.content }) });
-  if (r.ok) { tab.dirty = false; renderTabs(); refresh(); }
-}
-function syncMode() {
-  el('m-src').setAttribute('aria-current', mode === 'src');
-  el('m-diff').setAttribute('aria-current', mode === 'diff');
-}
-el('m-src').onclick = () => { mode = 'src'; syncMode(); paint(); };
-el('m-diff').onclick = () => { mode = 'diff'; syncMode(); paint(); };
+const H=(title,count,act)=>'<div class="ph"><h2>'+title+'</h2>'+
+  (count!=null?'<span class="n">'+count+'</span>':'')+(act??'')+'</div>';
 
-// ── side panels ──────────────────────────────────────────────────────────────
-function treeNode(n, depth) {
-  const pad = 14 + depth * 11;
-  if (!n.dir) {
-    const e = $('<div class="tnode" style="padding-left:' + (pad + 15) + 'px" data-p="' +
-      esc(n.path) + '">' + esc(n.name) + '</div>').firstElementChild;
-    e.onclick = () => open(n.path);
-    return e;
-  }
-  const wrap = document.createElement('div');
-  const collapsed = depth > 0;
-  const head = $('<div class="tnode" style="padding-left:' + pad + 'px"><span class="caret">' +
-    (collapsed ? '&#9656;' : '&#9662;') + '</span>' + esc(n.name) + '</div>').firstElementChild;
-  const kids = document.createElement('div');
-  kids.className = 'tkids' + (collapsed ? ' collapsed' : '');
-  for (const c of n.children ?? []) kids.append(treeNode(c, depth + 1));
-  head.onclick = () => {
-    kids.classList.toggle('collapsed');
-    head.querySelector('.caret').innerHTML = kids.classList.contains('collapsed') ? '&#9656;' : '&#9662;';
-  };
-  wrap.append(head, kids);
-  return wrap;
-}
-const flatten = (nodes, out = []) => {
-  for (const n of nodes) n.dir ? flatten(n.children ?? [], out) : out.push(n.path);
-  return out;
-};
-
-const head = (title, action) =>
-  '<div class="ph"><h3>' + title + '</h3>' + (action ?? '') + '</div>';
-
-const PANELS = {
-  files() {
-    el('side').innerHTML = head('Explorer', '<span class="act" id="a-refresh">refresh</span>') +
-      '<div class="repo">' + esc(state?.repo ?? '') + '</div><div id="tree-host"></div>';
-    el('a-refresh').onclick = refresh;
-    const host = el('tree-host');
-    for (const n of tree ?? []) host.append(treeNode(n, 0));
-    document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
+const PANELS={
+  files(){
+    el('side').innerHTML=H('Explorer')+'<div id="tree"></div>';
+    (treeData??[]).forEach(n=>el('tree').append(node(n,0)));
   },
-
-  changes() {
-    if (!git?.is_repo) {
-      el('side').innerHTML = head('Changes') + '<div class="empty">Not a git repository.</div>';
-      return;
-    }
-    el('side').innerHTML = head('Changes',
-      '<span class="act">' + esc(git.branch ?? '') + '</span>') + '<div id="ch-host"></div>';
-    const host = el('ch-host');
-    if (!git.changes.length) { host.innerHTML = '<div class="empty">Working tree clean.</div>'; return; }
-    for (const c of git.changes) {
-      const e = $('<div class="tnode" data-p="' + esc(c.path) + '" title="' + esc(c.path) + '">' +
-        esc(c.path.split('/').pop()) + '<span class="st ' + esc(c.label) + '">' +
-        esc(c.status.trim() || '?') + '</span></div>').firstElementChild;
-      // Opening from Changes goes to the diff — that is the question being asked.
-      e.onclick = () => { mode = 'diff'; syncMode(); open(c.path); };
-      host.append(e);
-    }
-  },
-
-  sessions() {
-    const list = state?.workspace.sessions ?? [];
-    el('side').innerHTML = head('Sessions') +
-      '<div class="empty" style="padding:10px 14px">Titles and counts only — message contents never leave the transcript.</div>' +
-      (list.length ? list.map(s =>
-        '<div class="lrow"><div class="t">' + esc(s.title ?? '(untitled)') + '</div>' +
-        '<div class="m">' + s.messages + ' msg · ' +
-        esc((s.last_active ?? '').slice(0, 16).replace('T', ' ')) + '</div>' +
-        '<div class="m" style="color:var(--accent)">claude --resume ' + esc(s.id.split('-')[0]) + '</div></div>'
-      ).join('') : '<div class="empty">No sessions recorded here yet.</div>');
-  },
-
-  skills() {
-    const w = state?.workspace;
-    if (!w) return;
-    const sec = (title, items, render) =>
-      head(title + ' (' + items.length + ')') +
-      (items.length ? items.map(render).join('') : '<div class="empty">None.</div>');
-    const named = x => '<div class="lrow"><div class="t">' + esc(x.name) +
-      '<span class="pill ' + x.scope + '">' + esc(x.scope) + '</span></div>' +
-      (x.description ? '<div class="d">' + esc(x.description) + '</div>' : '') + '</div>';
-    el('side').innerHTML =
-      sec('Skills', w.skills, named) +
-      sec('Plugins', w.plugins, p => '<div class="lrow"><div class="t">' + esc(p.name) +
-        '<span class="pill">' + esc(p.scope ?? '') + '</span></div><div class="m">' +
-        esc(p.marketplace ?? '') + '</div></div>') +
-      sec('Subagents', w.agents, named) +
-      sec('Commands', w.commands, named) +
-      sec('Hooks', w.hooks, h => '<div class="lrow ' + (h.scope === 'project' ? 'danger' : '') +
-        '"><div class="t">' + esc(h.event) + '<span class="pill ' + h.scope + '">' + esc(h.scope) +
-        '</span></div><div class="m">' + esc(h.command) + '</div></div>') +
-      sec('MCP servers', w.mcp_servers, m => '<div class="lrow ' + (m.scope === 'project' ? 'danger' : '') +
-        '"><div class="t">' + esc(m.name) + '<span class="pill ' + m.scope + '">' + esc(m.scope) +
-        '</span></div><div class="m">' + esc(m.endpoint ?? '') + '</div></div>');
-  },
-
-  readiness() {
-    const s = state?.scan;
-    if (!s) return;
-    const colour = s.score >= 90 ? 'var(--ok)' : s.score >= 70 ? 'var(--med)'
-      : s.score >= 40 ? 'var(--high)' : 'var(--crit)';
-    el('side').innerHTML = head('Readiness', '<span class="act" id="a-rescan">rescan</span>') +
-      '<div style="padding:6px 14px 12px"><span style="font:600 30px var(--mono);color:' + colour + '">' +
-      s.score + '</span><span style="color:var(--faint)">/100</span></div>' +
-      (s.findings.length ? s.findings.map((f, i) =>
-        '<div class="lrow ' + (f.path ? 'click' : '') + '" data-f="' + i + '">' +
-        '<div class="t">' + esc(f.title) + '<span class="pill ' + f.severity + '">' +
-        esc(f.severity) + '</span></div>' +
-        (f.path ? '<div class="m">' + esc(f.path) + '</div>' : '') +
-        '<div class="d">' + esc(f.fix.description) + '</div></div>').join('')
-        : '<div class="empty">Nothing to report.</div>');
-    el('a-rescan').onclick = refresh;
-    el('side').querySelectorAll('[data-f]').forEach(row => {
-      const f = s.findings[+row.dataset.f];
-      if (f.path) row.onclick = () => open(f.path);
+  changes(){
+    if(!git?.is_repo){ el('side').innerHTML=H('Changes')+'<div class="empty">Not a git repository.</div>'; return; }
+    el('side').innerHTML=H('Changes',git.changes.length,'<span class="act">'+esc(git.branch??'')+'</span>')+'<div id="ch"></div>';
+    if(!git.changes.length){ el('ch').innerHTML='<div class="empty">Working tree clean.</div>'; return; }
+    git.changes.forEach(c=>{
+      const e=frag('<div class="row" data-p="'+esc(c.path)+'" title="'+esc(c.path)+'">'+
+        '<span class="name">'+esc(c.path.split('/').pop())+'</span>'+
+        '<span class="flag" style="color:var(--'+(c.label==='untracked'||c.label==='added'?'add':c.label==='deleted'?'del':'warn')+')">'+
+        esc(c.status.trim()||'?')+'</span></div>');
+      // Opening from Changes goes straight to the diff — that is the question being asked.
+      e.onclick=()=>open(c.path,'diff');
+      el('ch').append(e);
     });
   },
-
-  connections() { renderConnections(); },
+  sessions(){
+    const list=state?.workspace.sessions??[];
+    el('side').innerHTML=H('Sessions',list.length)+
+      '<div class="sub">Titles and counts only. Message contents never leave the transcript.</div>'+
+      (list.length?list.map(s=>'<div class="card"><div class="t">'+esc(s.title??'(untitled)')+'</div>'+
+        '<div class="m">'+s.messages+' msg · '+esc((s.last_active??'').slice(0,16).replace('T',' '))+'</div>'+
+        '<div class="m" style="color:var(--accent)">--resume '+esc(s.id.split('-')[0])+'</div></div>').join('')
+        :'<div class="empty">No sessions recorded here yet.</div>');
+  },
+  skills(){
+    const w=state?.workspace; if(!w) return;
+    const grp=(t,items,fn)=>H(t,items.length)+(items.length?items.map(fn).join(''):'<div class="empty">None.</div>');
+    const named=x=>'<div class="card"><div class="t">'+esc(x.name)+'<span class="chip '+x.scope+'">'+esc(x.scope)+'</span></div>'+
+      (x.description?'<div class="d">'+esc(x.description)+'</div>':'')+'</div>';
+    el('side').innerHTML=
+      grp('Skills',w.skills,named)+
+      grp('Plugins',w.plugins,p=>'<div class="card"><div class="t">'+esc(p.name)+'<span class="chip">'+esc(p.scope??'')+
+        '</span></div><div class="m">'+esc(p.marketplace??'')+'</div></div>')+
+      grp('Subagents',w.agents,named)+grp('Commands',w.commands,named)+
+      grp('Hooks',w.hooks,h=>'<div class="card'+(h.scope==='project'?' risk':'')+'"><div class="t">'+esc(h.event)+
+        '<span class="chip '+h.scope+'">'+esc(h.scope)+'</span></div><div class="m">'+esc(h.command)+'</div></div>')+
+      grp('MCP servers',w.mcp_servers,m=>'<div class="card'+(m.scope==='project'?' risk':'')+'"><div class="t">'+esc(m.name)+
+        '<span class="chip '+m.scope+'">'+esc(m.scope)+'</span></div><div class="m">'+esc(m.endpoint??'')+'</div></div>');
+  },
+  readiness(){
+    const s=state?.scan; if(!s) return;
+    el('side').innerHTML=H('Readiness',s.score+'/100','<button class="act" id="a-rescan">rescan</button>')+
+      (s.findings.length?s.findings.map((f,i)=>'<div class="card'+(f.path?' click':'')+
+        (f.severity==='critical'?' risk':'')+'" data-f="'+i+'"><div class="t">'+esc(f.title)+
+        '<span class="chip '+f.severity+'">'+esc(f.severity)+'</span></div>'+
+        (f.path?'<div class="m">'+esc(f.path)+'</div>':'')+
+        '<div class="d">'+esc(f.fix.description)+'</div></div>').join('')
+        :'<div class="empty">Nothing to report.<br>This repository is ready.</div>');
+    el('a-rescan').onclick=refresh;
+    el('side').querySelectorAll('[data-f]').forEach(r=>{
+      const f=s.findings[+r.dataset.f]; if(f.path) r.onclick=()=>open(f.path);
+    });
+  },
+  connections(){ drawConnections(); },
 };
 
-function setPanel(p) {
-  panel = p;
-  document.querySelectorAll('.ic').forEach(b => b.setAttribute('aria-current', b.dataset.p === p));
+function setPanel(p){
+  if(panel===p && !el('app').classList.contains('no-side')){ toggleSide(); return; }
+  panel=p;
+  el('app').classList.remove('no-side');
+  document.querySelectorAll('.ic').forEach(b=>b.setAttribute('aria-current',b.dataset.p===p));
   PANELS[p]();
+  el('side').append(frag('<div class="rz left" id="rz1"></div>'));
+  wireResize(el('rz1'),'--side','keel.side',190,540,false);
 }
-document.querySelectorAll('.ic').forEach(b => b.onclick = () => setPanel(b.dataset.p));
+document.querySelectorAll('.ic').forEach(b=>b.onclick=()=>setPanel(b.dataset.p));
 
-// ── connections ──────────────────────────────────────────────────────────────
-let repos = null;
-
-function renderConnections() {
-  const gh = conn?.github, cf = conn?.cloudflare;
-  let html = head('Connections');
-
-  html += '<div class="fld"><label>Claude Code</label>' +
-    (conn?.claude
-      ? '<div class="ok">Installed — Keel drives your own `claude`, so your subscription covers it.</div>'
-      : '<div class="err">Not found on PATH. Install Claude Code to use the chat panel.</div>') +
-    '</div>';
-
-  html += '<div class="fld"><label>GitHub</label>' +
-    (gh
-      ? '<div class="ok">' + esc(gh.login) + (conn.github_via_gh ? ' — via your gh CLI' : '') + '</div>' +
-        '<div class="row2"><button class="btn ghost sm" id="gh-repos">Browse repos</button>' +
-        (conn.github_via_gh ? '' : '<button class="btn ghost sm" id="gh-out">Disconnect</button>') + '</div>'
-      : '<input id="gh-token" type="password" placeholder="ghp_… personal access token" ' +
-        'autocomplete="off"><div class="row2"><button class="btn sm" id="gh-in">Connect</button></div>' +
-        '<div class="d" style="margin-top:6px;color:var(--faint)">Needs <code>repo</code> scope. ' +
-        'If you use the <code>gh</code> CLI, Keel picks that up automatically.</div>') +
+/* ════ connections ═══════════════════════════════════════════════════════ */
+let repoList=null;
+function drawConnections(){
+  const gh=conn?.github, cf=conn?.cloudflare;
+  let h=H('Connections');
+  h+='<div class="field"><label>Claude Code</label>'+(conn?.claude
+    ? '<div class="note good">Installed. Keel drives your own <code>claude</code>, so your subscription covers it.</div>'
+    : '<div class="note bad">Not on PATH. The agent panel needs Claude Code installed.</div>')+'</div>';
+  h+='<div class="field"><label>GitHub</label>'+(gh
+    ? '<div class="note good">'+esc(gh.login)+(conn.github_via_gh?' — via your gh CLI':'')+'</div>'+
+      '<div class="line"><button class="btn quiet" id="gh-repos">Browse repos</button>'+
+      (conn.github_via_gh?'':'<button class="btn quiet" id="gh-out">Disconnect</button>')+'</div>'
+    : '<input type="password" id="gh-tok" placeholder="ghp_… token with repo scope">'+
+      '<div class="line"><button class="btn" id="gh-in">Connect</button></div>'+
+      '<div class="note dim">Using the <code>gh</code> CLI? Keel picks that up automatically.</div>')+
     '<div id="gh-msg"></div></div>';
-
-  html += '<div class="fld"><label>Cloudflare</label>' +
-    (cf
-      ? '<div class="ok">' + cf.map(a => esc(a.name)).join(', ') + '</div>' +
-        '<div class="row2"><button class="btn ghost sm" id="cf-out">Disconnect</button></div>'
-      : '<input id="cf-token" type="password" placeholder="API token" autocomplete="off">' +
-        '<div class="row2"><button class="btn sm" id="cf-in">Connect</button></div>' +
-        '<div class="d" style="margin-top:6px;color:var(--faint)">Cloudflare has no OIDC path, so a ' +
-        'scoped API token is the only option. It is stored in your OS keychain.</div>') +
+  h+='<div class="field"><label>Cloudflare</label>'+(cf
+    ? '<div class="note good">'+cf.map(a=>esc(a.name)).join(', ')+'</div>'+
+      '<div class="line"><button class="btn quiet" id="cf-out">Disconnect</button></div>'
+    : '<input type="password" id="cf-tok" placeholder="API token">'+
+      '<div class="line"><button class="btn" id="cf-in">Connect</button></div>'+
+      '<div class="note dim">Cloudflare has no OIDC path, so a scoped token is the only option. It stays in your keychain.</div>')+
     '<div id="cf-msg"></div></div>';
+  h+='<div class="field"><label>Open a repository</label>'+
+    '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
+    '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
+    '<div id="repos"></div>';
+  el('side').innerHTML=h;
 
-  html += '<div class="fld"><label>Open another repository</label>' +
-    '<input id="open-path" placeholder="~/Dev/my-project" spellcheck="false">' +
-    '<div class="row2"><button class="btn sm" id="open-go">Open</button></div>' +
-    '<div id="open-msg"></div></div><div id="repo-list"></div>';
+  const say=(id,t,ok)=>el(id).innerHTML='<div class="note '+(ok?'good':'bad')+'">'+esc(t)+'</div>';
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
 
-  el('side').innerHTML = html;
+  el('gh-in')&&(el('gh-in').onclick=async()=>{
+    const r=await post('/api/connect/github',{token:el('gh-tok').value});
+    r.ok?(await loadConn(),setPanel('connections')):say('gh-msg',await r.text(),false); });
+  el('cf-in')&&(el('cf-in').onclick=async()=>{
+    const r=await post('/api/connect/cloudflare',{token:el('cf-tok').value});
+    r.ok?(await loadConn(),setPanel('connections')):say('cf-msg',await r.text(),false); });
+  const drop=p=>async()=>{ await post('/api/disconnect',{provider:p}); await loadConn(); setPanel('connections'); };
+  el('gh-out')&&(el('gh-out').onclick=drop('github'));
+  el('cf-out')&&(el('cf-out').onclick=drop('cloudflare'));
 
-  const msg = (id, text, ok) => el(id).innerHTML =
-    '<div class="' + (ok ? 'ok' : 'err') + '">' + esc(text) + '</div>';
-
-  el('gh-in') && (el('gh-in').onclick = async () => {
-    const r = await fetch('/api/connect/github', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: el('gh-token').value }) });
-    r.ok ? (await loadConn(), setPanel('connections')) : msg('gh-msg', await r.text(), false);
-  });
-  el('cf-in') && (el('cf-in').onclick = async () => {
-    const r = await fetch('/api/connect/cloudflare', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: el('cf-token').value }) });
-    r.ok ? (await loadConn(), setPanel('connections')) : msg('cf-msg', await r.text(), false);
-  });
-  const out = provider => async () => {
-    await fetch('/api/disconnect', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider }) });
-    await loadConn(); setPanel('connections');
-  };
-  el('gh-out') && (el('gh-out').onclick = out('github'));
-  el('cf-out') && (el('cf-out').onclick = out('cloudflare'));
-
-  el('gh-repos') && (el('gh-repos').onclick = async () => {
-    el('repo-list').innerHTML = '<div class="empty">Loading…</div>';
-    const r = await fetch('/api/github/repos');
-    if (!r.ok) { el('repo-list').innerHTML = '<div class="empty">' + esc(await r.text()) + '</div>'; return; }
-    repos = await r.json();
-    el('repo-list').innerHTML = head('Repositories (' + repos.length + ')') +
-      repos.map((rp, i) => '<div class="lrow click" data-r="' + i + '"><div class="t">' +
-        esc(rp.name) + (rp.private ? '<span class="pill">private</span>' : '') + '</div>' +
-        '<div class="m">' + esc(rp.full_name) + '</div>' +
-        (rp.description ? '<div class="d">' + esc(rp.description) + '</div>' : '') + '</div>').join('');
-    el('repo-list').querySelectorAll('[data-r]').forEach(row => row.onclick = async () => {
-      const rp = repos[+row.dataset.r];
-      row.querySelector('.m').textContent = 'cloning…';
-      const res = await fetch('/api/github/clone', { method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clone_url: rp.clone_url, name: rp.name }) });
-      row.querySelector('.m').textContent = res.ok ? 'opened' : await res.text();
-      if (res.ok) { tabs.length = 0; active = null; await refresh(); setPanel('files'); }
+  el('gh-repos')&&(el('gh-repos').onclick=async()=>{
+    el('repos').innerHTML='<div class="empty">Loading…</div>';
+    const r=await fetch('/api/github/repos');
+    if(!r.ok){ el('repos').innerHTML='<div class="empty">'+esc(await r.text())+'</div>'; return; }
+    repoList=await r.json();
+    el('repos').innerHTML=H('Repositories',repoList.length)+repoList.map((x,i)=>
+      '<div class="card click" data-r="'+i+'"><div class="t">'+esc(x.name)+
+      (x.private?'<span class="chip">private</span>':'')+'</div><div class="m">'+esc(x.full_name)+'</div>'+
+      (x.description?'<div class="d">'+esc(x.description)+'</div>':'')+'</div>').join('');
+    el('repos').querySelectorAll('[data-r]').forEach(row=>row.onclick=async()=>{
+      const x=repoList[+row.dataset.r];
+      row.querySelector('.m').textContent='cloning…';
+      const res=await post('/api/github/clone',{clone_url:x.clone_url,name:x.name});
+      row.querySelector('.m').textContent=res.ok?'opened':await res.text();
+      if(res.ok){ tabs.length=0; active=null; await refresh(); setPanel('files'); }
     });
   });
-
-  el('open-go').onclick = async () => {
-    const r = await fetch('/api/open', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: el('open-path').value }) });
-    if (!r.ok) { msg('open-msg', await r.text(), false); return; }
-    tabs.length = 0; active = null;
-    await refresh(); setPanel('files');
+  el('op-go').onclick=async()=>{
+    const r=await post('/api/open',{path:el('op').value});
+    if(!r.ok){ say('op-msg',await r.text(),false); return; }
+    tabs.length=0; active=null; await refresh(); setPanel('files');
   };
 }
 
-// ── chat ─────────────────────────────────────────────────────────────────────
-let stream = null, sessionId = null, live = null, permMode = 'acceptEdits';
-const log = () => el('log');
+/* ════ agent ═════════════════════════════════════════════════════════════ */
+let stream=null, sessionId=null, live=null, cost=null, permMode='acceptEdits';
+const MODE_LABEL={plan:'Plan',acceptEdits:'Auto'};
 
-const MODES = {
-  plan: { note: 'Plan — Claude explores and proposes, and will not edit files or run commands.' },
-  acceptEdits: { note: 'Auto — Claude edits files and runs commands here without asking.' },
-};
-function setPermMode(m) {
-  permMode = m;
-  el('pm-plan').setAttribute('aria-current', m === 'plan');
-  el('pm-auto').setAttribute('aria-current', m === 'acceptEdits');
-  const note = el('mode-note');
-  note.className = 'mode-note ' + (m === 'plan' ? 'plan' : 'auto');
-  note.textContent = MODES[m].note;
+function setMode(m){
+  permMode=m;
+  el('pm-plan').setAttribute('aria-current',m==='plan');
+  el('pm-auto').setAttribute('aria-current',m==='acceptEdits');
+  drawStatus();
 }
-el('pm-plan').onclick = () => setPermMode('plan');
-el('pm-auto').onclick = () => setPermMode('acceptEdits');
+el('pm-plan').onclick=()=>setMode('plan');
+el('pm-auto').onclick=()=>setMode('acceptEdits');
 
-function push(html) {
-  const n = $(html).firstElementChild;
-  log().append(n);
-  log().scrollTop = log().scrollHeight;
-  return n;
+function say(html){ const n=frag(html); el('log').append(n); el('log').scrollTop=1e9; return n; }
+function busy(on){
+  el('send').disabled=on;
+  el('stop').classList.toggle('hidden',!on);
+  drawStatus();
 }
-function running(on) {
-  el('send').disabled = on;
-  el('stop').classList.toggle('hidden', !on);
-  el('chat-meta').textContent = on ? 'working…' : '';
+function emptyLog(){
+  el('log').innerHTML='<div class="empty">Ask the agent to change this repository.<br><br>'+
+    '<kbd>⇧⇥</kbd> switches Plan and Auto · <kbd>'+(MAC?'⌘↵':'Ctrl+↵')+'</kbd> sends</div>';
 }
+el('a-clear').onclick=()=>{ sessionId=null; cost=null; emptyLog(); drawStatus(); };
 
 /** Render one stream-json record. The browser interprets the shape, so there is one place to change. */
-function record(r) {
-  if (r.type === 'system' && r.subtype === 'init') {
-    sessionId = r.session_id ?? sessionId;
-    el('hint').textContent = (r.model ?? '') + ' · ' + (sessionId ?? '').split('-')[0];
-    return;
+function record(r){
+  if(r.type==='system'&&r.subtype==='init'){
+    sessionId=r.session_id??sessionId;
+    el('agent-model').textContent=r.model??'';
+    drawStatus(); return;
   }
-  const d = r.event?.delta;
-  if (r.type === 'stream_event' && d?.type === 'text_delta') {
-    if (!live || live.dataset.kind !== 'text') {
-      live = push('<div class="msg"><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>')
-        .querySelector('.txt');
-      live.dataset.raw = '';
+  const d=r.event?.delta;
+  if(r.type==='stream_event'&&d?.type==='text_delta'){
+    if(!live||live.dataset.kind!=='text'){
+      live=say('<div><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>').querySelector('.txt');
+      live.dataset.raw='';
     }
-    live.dataset.raw += d.text;
-    live.innerHTML = md(live.dataset.raw);
-    log().scrollTop = log().scrollHeight;
-    return;
+    live.dataset.raw+=d.text; live.innerHTML=md(live.dataset.raw); el('log').scrollTop=1e9; return;
   }
-  if (r.type === 'stream_event' && d?.type === 'thinking_delta') {
-    if (!live || live.dataset.kind !== 'think') live = push('<div class="think" data-kind="think"></div>');
-    live.textContent += d.thinking;
-    return;
+  if(r.type==='stream_event'&&d?.type==='thinking_delta'){
+    if(!live||live.dataset.kind!=='think') live=say('<div class="think" data-kind="think"></div>');
+    live.textContent+=d.thinking; el('log').scrollTop=1e9; return;
   }
-  if (r.type === 'assistant') {
-    for (const b of r.message?.content ?? []) {
-      if (b.type !== 'tool_use') continue;
-      live = null;
-      const i = b.input ?? {};
-      // The full argument gets its own wrapping block. A shell command clipped to one line is
-      // unreadable, and the command is exactly what you need to see.
-      const detail = i.command ?? i.file_path ?? i.path ?? i.pattern ?? i.prompt ?? '';
-      const subtitle = i.description ?? (i.file_path ? '' : i.pattern ? 'search' : '');
-      push('<div class="tool"><div class="th"><span class="tn">' + esc(b.name) + '</span>' +
-        '<span class="tsub">' + esc(subtitle) + '</span></div>' +
-        (detail ? '<pre>' + esc(String(detail)) + '</pre>' : '') + '</div>');
+  if(r.type==='assistant'){
+    for(const b of r.message?.content??[]){
+      if(b.type!=='tool_use') continue;
+      live=null;
+      const i=b.input??{};
+      const arg=i.command??i.file_path??i.path??i.pattern??i.prompt??'';
+      const wrapText=i.description??'';
+      say('<div class="tool"><div class="th"><span class="tn">'+esc(b.name)+'</span>'+
+        '<span class="tw">'+esc(wrapText)+'</span></div>'+
+        (arg?'<pre>'+esc(String(arg))+'</pre>':'')+'</div>');
     }
     return;
   }
-  if (r.type === 'result') {
-    live = null;
-    sessionId = r.session_id ?? sessionId;
-    el('hint').textContent = (r.total_cost_usd != null ? '$' + r.total_cost_usd.toFixed(4) : '') +
-      ' · ' + (sessionId ?? '').split('-')[0];
+  if(r.type==='result'){
+    live=null; sessionId=r.session_id??sessionId;
+    if(r.total_cost_usd!=null) cost=r.total_cost_usd;
     // The agent has just changed the tree, the open files and the score.
     refresh();
-    for (const t of tabs) if (!t.dirty) reload(t);
+    tabs.filter(t=>!t.dirty).forEach(reload);
   }
 }
-
-async function reload(tab) {
-  const r = await fetch('/api/file?path=' + encodeURIComponent(tab.path));
-  if (!r.ok) return;
-  tab.content = (await r.json()).content;
-  if (tab.path === active) paint();
+async function reload(tab){
+  const r=await fetch('/api/file?path='+encodeURIComponent(tab.path));
+  if(!r.ok) return;
+  const text=(await r.json()).content;
+  tab.content=text;
+  const m=models.get(tab.path);
+  // setValue would wipe undo history and jump the cursor. A full-range edit keeps both, so you can
+  // undo the agent's change like any other edit.
+  if(m&&m.getValue()!==text){
+    m.pushEditOperations([],[{range:m.getFullModelRange(),text}],()=>null);
+  }
+  if(tab.path===active&&view==='diff') draw();
 }
 
-function send() {
-  const box = el('prompt');
-  const prompt = box.value.trim();
-  if (!prompt || stream) return;
-  log().querySelector('.empty')?.remove();
-  push('<div class="msg user"><div class="who">You</div><div class="txt">' + esc(prompt) + '</div></div>');
-  box.value = ''; live = null; running(true);
-
-  stream = new EventSource('/api/chat?prompt=' + encodeURIComponent(prompt) +
-    '&mode=' + encodeURIComponent(permMode) +
-    (sessionId ? '&session=' + encodeURIComponent(sessionId) : ''));
-  stream.addEventListener('msg', e => { try { record(JSON.parse(e.data)); } catch (_) {} });
-  stream.addEventListener('fatal', e =>
-    push('<div class="msg"><div class="who">Error</div><div class="txt">' + esc(e.data) + '</div></div>'));
-  const end = () => { if (stream) { stream.close(); stream = null; running(false); } };
-  stream.addEventListener('done', end);
-  stream.onerror = end;
+function send(){
+  const box=el('prompt'), text=box.value.trim();
+  if(!text||stream) return;
+  el('log').querySelector('.empty')?.remove();
+  say('<div class="said"><div class="who">You</div><div class="txt">'+esc(text)+'</div></div>');
+  box.value=''; live=null; busy(true);
+  stream=new EventSource('/api/chat?prompt='+encodeURIComponent(text)+'&mode='+permMode+
+    (sessionId?'&session='+encodeURIComponent(sessionId):''));
+  stream.addEventListener('msg',e=>{ try{ record(JSON.parse(e.data)); }catch(_){} });
+  stream.addEventListener('fatal',e=>say('<div><div class="who">Error</div><div class="txt">'+esc(e.data)+'</div></div>'));
+  const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
+  stream.addEventListener('done',end); stream.onerror=end;
 }
-el('send').onclick = send;
-el('stop').onclick = () => { if (stream) { stream.close(); stream = null; running(false); } };
-el('prompt').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
+el('send').onclick=send;
+el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
+el('prompt').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); }
 });
 
-// ── palette ──────────────────────────────────────────────────────────────────
-let palIdx = 0, palHits = [];
-function openPal() { el('pal').classList.remove('hidden'); el('pal-q').value = ''; el('pal-q').focus(); palFilter(''); }
-function closePal() { el('pal').classList.add('hidden'); }
-function palFilter(q) {
-  const needle = q.toLowerCase();
-  // Subsequence match, the way an editor's file finder behaves: "khtr" finds keel-harness/trust.rs.
-  palHits = flat.filter(p => {
-    const s = p.toLowerCase();
-    let i = 0;
-    for (const ch of needle) { i = s.indexOf(ch, i) + 1; if (i === 0) return false; }
-    return true;
-  }).slice(0, 60);
-  palIdx = 0; renderPal();
+/* ════ status rail ═══════════════════════════════════════════════════════ */
+function drawStatus(){
+  const s=state?.scan, tab=tabs.find(t=>t.path===active);
+  const band=n=>n>=90?'ok':n>=60?'warn':'crit';
+  const cells=[];
+  if(git?.is_repo) cells.push('<button class="cell" data-go="changes"><b>⑂</b>'+esc(git.branch??'')+'</button>');
+  if(git?.changes?.length) cells.push('<button class="cell" data-go="changes">'+git.changes.length+' changed</button>');
+  if(s) cells.push('<button class="cell" data-go="readiness">ready <span class="score '+band(s.score)+'">'+s.score+'</span>/100</button>');
+  cells.push('<span class="sp"></span>');
+  if(mon&&view==='src'&&tab){
+    const p=mon.getPosition();
+    if(p) cells.push('<span class="cell">'+p.lineNumber+':'+p.column+'</span>');
+  }
+  if(tab?.dirty) cells.push('<span class="cell">unsaved</span>');
+  cells.push('<span class="cell">'+MODE_LABEL[permMode]+'</span>');
+  if(stream) cells.push('<span class="cell live">working…</span>');
+  if(cost!=null) cells.push('<span class="cell">$'+cost.toFixed(4)+'</span>');
+  if(sessionId) cells.push('<span class="cell">'+esc(sessionId.split('-')[0])+'</span>');
+  el('status').innerHTML=cells.join('');
+  el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
 }
-function renderPal() {
-  el('pal-res').innerHTML = palHits.map((p, i) =>
-    '<div class="r ' + (i === palIdx ? 'on' : '') + '" data-i="' + i + '">' + esc(p) + '</div>').join('');
-  el('pal-res').querySelectorAll('.r').forEach(r =>
-    r.onclick = () => { open(palHits[+r.dataset.i]); closePal(); });
-  el('pal-res').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+
+/* ════ command palette ═══════════════════════════════════════════════════
+   Scoring follows the fzf/VS Code consensus: hard bands so an exact or prefix
+   match always outranks a fuzzy one, then position bonuses (start of string >
+   after a separator > mid-word) and a contiguity bonus that is front-loaded so
+   long runs cannot dominate. Recency breaks ties, via a monotonic counter rather
+   than a clock. */
+const recent=new Map(); let useCount=0;
+
+function score(text,q){
+  if(!q) return 1;
+  const t=text.toLowerCase(), n=q.toLowerCase();
+  const idx=t.indexOf(n);
+  if(idx===0) return 1e6;                                    // prefix
+  if(idx>0) return 1e5 - idx;                                // substring
+  let i=0,pts=0,run=0;
+  for(const ch of n){
+    const at=t.indexOf(ch,i);
+    if(at<0) return 0;                                       // not a subsequence
+    const prev=at>0?t[at-1]:'';
+    if(at===0) pts+=8; else if(prev==='/'||prev==='-'||prev==='_'||prev==='.') pts+=5;
+    else if(prev===' ') pts+=4;
+    run = at===i ? run+1 : 0;
+    pts += run<3 ? run*2 : 3;                                // front-loaded contiguity
+    i=at+1;
+  }
+  return pts;
 }
-el('pal-q').oninput = e => palFilter(e.target.value);
-el('pal-q').onkeydown = e => {
-  if (e.key === 'ArrowDown') { palIdx = Math.min(palIdx + 1, palHits.length - 1); renderPal(); e.preventDefault(); }
-  if (e.key === 'ArrowUp') { palIdx = Math.max(palIdx - 1, 0); renderPal(); e.preventDefault(); }
-  if (e.key === 'Enter' && palHits[palIdx]) { open(palHits[palIdx]); closePal(); }
-  if (e.key === 'Escape') closePal();
+
+const COMMANDS=[
+  {id:'files',      label:'View: Files',        run:()=>setPanel('files'),      key:MAC?'⌘B':'Ctrl+B'},
+  {id:'changes',    label:'View: Changes',      run:()=>setPanel('changes')},
+  {id:'sessions',   label:'View: Sessions',     run:()=>setPanel('sessions')},
+  {id:'skills',     label:'View: Skills',       run:()=>setPanel('skills')},
+  {id:'readiness',  label:'View: Readiness',    run:()=>setPanel('readiness')},
+  {id:'connections',label:'View: Connections',  run:()=>setPanel('connections')},
+  {id:'save',       label:'File: Save',         run:save, key:MAC?'⌘S':'Ctrl+S'},
+  {id:'close',      label:'File: Close tab',    run:()=>active&&closeTab(active), key:MAC?'⌘K W':'Ctrl+K W'},
+  {id:'src',        label:'Editor: Show source', run:()=>{view='src';syncView();draw();}},
+  {id:'diff',       label:'Editor: Show diff',  run:()=>{view='diff';syncView();draw();}},
+  {id:'plan',       label:'Agent: Plan mode',   run:()=>setMode('plan'),        key:'⇧⇥'},
+  {id:'auto',       label:'Agent: Auto mode',   run:()=>setMode('acceptEdits'), key:'⇧⇥'},
+  {id:'clearchat',  label:'Agent: Clear conversation', run:()=>el('a-clear').click()},
+  {id:'togglechat', label:'View: Toggle agent panel',  run:toggleChat, key:MAC?'⌃`':'Ctrl+`'},
+  {id:'toggleside', label:'View: Toggle sidebar',      run:toggleSide, key:MAC?'⌘B':'Ctrl+B'},
+  {id:'refresh',    label:'Repository: Refresh',       run:refresh},
+];
+
+let hits=[], cursor=0;
+function openPal(prefix){
+  el('pal').classList.remove('hidden'); el('scrim').classList.remove('hidden');
+  el('pq').value=prefix??''; el('pq').focus(); filter();
+}
+function closePal(){ el('pal').classList.add('hidden'); el('scrim').classList.add('hidden'); }
+el('scrim').onclick=closePal;
+
+function filter(){
+  const raw=el('pq').value;
+  const mode=raw[0]==='>'?'cmd':raw[0]===':'?'line':raw[0]==='?'?'help':'file';
+  const q=mode==='file'?raw:raw.slice(1);
+  el('pq').placeholder=mode==='cmd'?'Run a command…':mode==='line'?'Go to line…':'Go to file…';
+
+  if(mode==='help'){
+    hits=[{label:'>  run a command'},{label:':  go to a line'},{label:'   type to find a file'}];
+  } else if(mode==='line'){
+    hits=[{label:'Go to line '+(q||'…'),line:parseInt(q,10)}];
+  } else if(mode==='cmd'){
+    hits=COMMANDS.map(c=>({...c,_s:score(c.label,q)})).filter(c=>c._s>0)
+      .sort((a,b)=>b._s-a._s||(recent.get(b.id)??0)-(recent.get(a.id)??0)).slice(0,50);
+  } else {
+    hits=files.map(p=>({label:p,path:p,_s:score(p,q)})).filter(x=>x._s>0)
+      .sort((a,b)=>b._s-a._s||(recent.get(b.path)??0)-(recent.get(a.path)??0)).slice(0,50);
+  }
+  cursor=0; drawHits();
+}
+function drawHits(){
+  el('hits').innerHTML=hits.map((h,i)=>{
+    const name=h.path?h.path.split('/').pop():h.label;
+    const dir=h.path?h.path.slice(0,-name.length):'';
+    return '<div class="hit'+(i===cursor?' on':'')+'" data-i="'+i+'">'+
+      '<span>'+esc(name)+'</span>'+(dir?'<span class="dim">'+esc(dir)+'</span>':'')+
+      '<span class="sp"></span>'+(h.key?'<kbd>'+esc(h.key)+'</kbd>':'')+'</div>';
+  }).join('');
+  el('hits').querySelectorAll('.hit').forEach(n=>n.onclick=()=>choose(+n.dataset.i));
+  el('hits').querySelector('.on')?.scrollIntoView({block:'nearest'});
+}
+function choose(i){
+  const h=hits[i]; if(!h) return;
+  closePal();
+  if(h.path){ recent.set(h.path,++useCount); open(h.path); }
+  else if(h.run){ recent.set(h.id,++useCount); h.run(); }
+  else if(h.line){ /* line jump lands in a future editor navigation pass */ }
+}
+el('pq').oninput=filter;
+el('pq').onkeydown=e=>{
+  if(e.key==='ArrowDown'){ cursor=Math.min(cursor+1,hits.length-1); drawHits(); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ cursor=Math.max(cursor-1,0); drawHits(); e.preventDefault(); }
+  else if(e.key==='Enter'){ choose(cursor); e.preventDefault(); }
+  else if(e.key==='Escape'){ closePal(); }
 };
-addEventListener('keydown', e => {
-  const cmd = e.metaKey || e.ctrlKey;
-  if (cmd && e.key === 'p') { e.preventDefault(); openPal(); }
-  if (cmd && e.key === 's') { e.preventDefault(); save(); }
-  if (e.key === 'Escape') closePal();
+
+/* ════ layout ════════════════════════════════════════════════════════════ */
+function toggleSide(){ el('app').classList.toggle('no-side'); }
+function toggleChat(){ el('app').classList.toggle('no-chat'); }
+
+function wireResize(handle,varName,key,min,max,fromRight){
+  if(!handle) return;
+  const saved=localStorage.getItem(key);
+  if(saved) document.documentElement.style.setProperty(varName,saved+'px');
+  handle.addEventListener('pointerdown',e=>{
+    e.preventDefault(); handle.setPointerCapture(e.pointerId); handle.classList.add('on');
+    const move=ev=>{
+      const raw=fromRight?innerWidth-ev.clientX:ev.clientX-48;
+      const w=Math.max(min,Math.min(max,raw));
+      document.documentElement.style.setProperty(varName,w+'px');
+      localStorage.setItem(key,String(w));
+    };
+    const up=()=>{ handle.classList.remove('on');
+      removeEventListener('pointermove',move); removeEventListener('pointerup',up); };
+    addEventListener('pointermove',move); addEventListener('pointerup',up);
+  });
+}
+
+/* Keybindings. ⌘W/⌘T/⌘N/⌘L and friends are reserved by the browser and cannot be
+   intercepted, so anything that would collide is routed through a ⌘K chord — the one
+   mechanism browsers structurally cannot reserve, and already familiar from VS Code. */
+let chord=false;
+addEventListener('keydown',e=>{
+  const cmd=MAC?e.metaKey:e.ctrlKey;
+  const typing=/^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+
+  if(chord){
+    chord=false;
+    if(e.key==='w'){ e.preventDefault(); active&&closeTab(active); return; }
+    if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+      e.preventDefault();
+      const i=tabs.findIndex(t=>t.path===active);
+      const j=e.key==='ArrowRight'?i+1:i-1;
+      if(tabs[j]){ active=tabs[j].path; draw(); }
+      return;
+    }
+  }
+  if(cmd&&e.key==='k'&&!e.shiftKey){ e.preventDefault(); chord=true; return; }
+  if(cmd&&e.shiftKey&&(e.key==='p'||e.key==='P')){ e.preventDefault(); openPal('>'); return; }
+  if(cmd&&e.key==='p'){ e.preventDefault(); openPal(); return; }
+  if(cmd&&e.key==='s'){ e.preventDefault(); save(); return; }
+  if(cmd&&e.key==='b'){ e.preventDefault(); toggleSide(); return; }
+  if(e.ctrlKey&&e.key==='`'){ e.preventDefault(); toggleChat(); return; }
+
+  // Shift+Tab cycles agent mode — the same gesture Claude Code and Cursor both use.
+  if(e.key==='Tab'&&e.shiftKey&&!typing){
+    e.preventDefault(); setMode(permMode==='plan'?'acceptEdits':'plan'); return;
+  }
+  if(e.key==='Escape'){
+    if(!el('pal').classList.contains('hidden')){ closePal(); return; }
+    if(stream){ el('stop').click(); return; }   // soft interrupt, matching Claude Code
+  }
 });
 
-// ── boot ─────────────────────────────────────────────────────────────────────
-function badge(name, n, show) {
-  const b = document.querySelector('[data-b="' + name + '"]');
-  if (!b) return;
-  b.textContent = n;
-  b.classList.toggle('hidden', !show);
+/* ════ boot ══════════════════════════════════════════════════════════════ */
+function badge(name,n,alert){
+  const b=document.querySelector('[data-b="'+name+'"]'); if(!b) return;
+  b.textContent=n; b.classList.toggle('hidden',!n);
+  b.classList.toggle('alert',!!alert);
 }
-
-async function loadConn() {
-  conn = await (await fetch('/api/connections')).json();
-  const missing = !conn.github || !conn.cloudflare || !conn.claude;
-  badge('conn', '!', missing);
+async function loadConn(){
+  conn=await (await fetch('/api/connections')).json();
+  badge('conn','!',!conn.github||!conn.cloudflare||!conn.claude);
 }
-
-async function refresh() {
-  [state, git, tree] = await Promise.all([
-    fetch('/api/state').then(r => r.json()),
-    fetch('/api/git/status').then(r => r.json()),
-    fetch('/api/tree').then(r => r.json()),
+async function refresh(){
+  [state,git,treeData]=await Promise.all([
+    fetch('/api/state').then(r=>r.json()),
+    fetch('/api/git/status').then(r=>r.json()),
+    fetch('/api/tree').then(r=>r.json()),
   ]);
-  flat = flatten(tree);
-  const blocking = state.scan.findings.filter(f => f.severity === 'critical' || f.severity === 'high').length;
-  badge('changes', git.changes?.length ?? 0, (git.changes?.length ?? 0) > 0);
-  badge('sessions', state.workspace.sessions.length, state.workspace.sessions.length > 0);
-  badge('readiness', blocking, blocking > 0);
+  files=flatten(treeData);
+  const blocking=state.scan.findings.filter(f=>f.severity==='critical'||f.severity==='high').length;
+  badge('changes',git.changes?.length??0,false);
+  badge('sessions',state.workspace.sessions.length,false);
+  badge('ready',blocking,blocking>0);
   PANELS[panel]();
+  el('side').append(frag('<div class="rz left" id="rz1"></div>'));
+  wireResize(el('rz1'),'--side','keel.side',190,540,false);
+  drawStatus();
 }
 
-setPermMode('acceptEdits');
-(async () => {
-  await loadConn();
-  await refresh();
-  const qs = new URLSearchParams(location.search);
-  if (qs.get('panel')) setPanel(qs.get('panel'));
-  if (qs.get('mode') === 'diff') { mode = 'diff'; syncMode(); }
-  if (qs.get('file')) open(qs.get('file'));
+emptyLog();
+wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
+(async()=>{
+  await loadConn(); await refresh(); draw();
+  const qs=new URLSearchParams(location.search);
+  if(qs.get('panel')) setPanel(qs.get('panel'));
+  if(qs.get('mode')==='diff'){ view='diff'; syncView(); }
+  if(qs.get('file')) open(qs.get('file'));
 })();
 </script>
 </body>

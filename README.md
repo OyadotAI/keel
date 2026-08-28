@@ -32,6 +32,21 @@ automatically rather than asking you to mint a token that already exists.
 From there you can browse your repositories, clone one, or open any local directory — Keel switches
 to it without restarting.
 
+## The editor
+
+Monaco — the engine VS Code runs on — vendored into `ui/vendor` and compiled into the binary. That
+buys multi-cursor, column selection, real find and replace, folding, bracket matching, a minimap,
+sticky scroll and a proper undo stack, none of which a textarea behind a highlighted div can fake.
+
+One model per open file, so switching tabs restores your cursor, scroll and folds rather than
+resetting to the top. When the agent rewrites a file underneath you, the new text is pushed as an
+edit rather than a `setValue`, so the change stays undoable like any other.
+
+Diffs use Monaco's own diff editor against `git show HEAD:<path>` rather than a hand-rolled hunk
+renderer — word-level highlighting and diff navigation come for free.
+
+The theme is derived from the same CSS variables as the rest of the UI, so there is one palette.
+
 ## The IDE
 
 `keel serve` opens a local interface at `http://127.0.0.1:7777`. Loopback only, and not
