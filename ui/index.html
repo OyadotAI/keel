@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Keel</title>
+<link rel="stylesheet" href="/vendor/xterm/xterm.css">
 <style>
 /* ════════════════════════════════════════════════════════════════════════════
    Tokens.
@@ -256,6 +257,28 @@ input::placeholder{color:var(--n9)}
 /* ── editor ─────────────────────────────────────────────────────────────── */
 .ed{grid-row:2/3;background:var(--n1);display:flex;flex-direction:column;
   overflow:hidden;min-width:0;position:relative}
+.ed .work-area{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
+
+/* The bottom panel is part of the layout, not an overlay: it always has a place, even collapsed. */
+.panel{flex:none;display:flex;flex-direction:column;border-top:1px solid var(--n6);
+  background:var(--n1);height:var(--panel-h,200px);min-height:26px}
+.app.no-panel .panel{height:26px}
+.panel-tabs{display:flex;align-items:center;gap:var(--s1);height:26px;flex:none;padding:0 var(--s2);
+  background:var(--n3);cursor:row-resize;-webkit-user-select:none;user-select:none}
+.panel-tabs button{all:unset;padding:2px var(--s3);border-radius:var(--r1);cursor:pointer;
+  font:10.5px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--n10);
+  transition:color var(--t-hover),background var(--t-hover)}
+.panel-tabs button:hover{color:var(--n12)}
+.panel-tabs button[aria-current=true]{background:var(--n5);color:var(--n12)}
+.panel-tabs .sp{flex:1}
+.panel-tabs .dot3{width:6px;height:6px;border-radius:50%;background:var(--ok);margin-left:var(--s2)}
+.panel-body{flex:1;min-height:0;position:relative;overflow:hidden}
+.panel-body>div{position:absolute;inset:0}
+#term-host{padding:var(--s2) 0 0 var(--s3)}
+#term-host .xterm{height:100%}
+#panel-server{overflow:auto;padding:var(--s3);font:10.5px/1.55 var(--mono);color:var(--n11);
+  white-space:pre-wrap;word-break:break-word}
+#panel-server .idle{color:var(--n9)}
 .tabs{display:flex;height:32px;flex:none;background:var(--n3);
   border-bottom:1px solid var(--n6);overflow-x:auto}
 .tabs::-webkit-scrollbar{height:0}
@@ -771,6 +794,9 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <button class="ic" data-p="mcp" title="MCP servers">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.2A1.2 1.2 0 013.2 3h9.6A1.2 1.2 0 0114 4.2v2.1A1.2 1.2 0 0112.8 7.5H3.2A1.2 1.2 0 012 6.3V4.2zm0 5.5A1.2 1.2 0 013.2 8.5h9.6A1.2 1.2 0 0114 9.7v2.1A1.2 1.2 0 0112.8 13H3.2A1.2 1.2 0 012 11.8V9.7zM4 5.25a.75.75 0 100 1.5.75.75 0 000-1.5zm0 5.5a.75.75 0 100 1.5.75.75 0 000-1.5z"/></svg>
       <span class="badge hidden" data-b="mcp">0</span></button>
+    <button class="ic" id="ic-browser" title="Preview">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3.6A1.6 1.6 0 013.6 2h8.8A1.6 1.6 0 0114 3.6v8.8a1.6 1.6 0 01-1.6 1.6H3.6A1.6 1.6 0 012 12.4V3.6zm1.4 0v1.6h9.2V3.6H3.4zm0 3v5.8h9.2V6.6H3.4z"/><circle cx="4.6" cy="4.4" r=".55"/><circle cx="6.3" cy="4.4" r=".55"/></svg>
+      <span class="badge hidden" data-b="preview">•</span></button>
     <button class="ic" data-p="problems" title="Problems">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4L15 14H1L8 1.4zm0 4.1a.85.85 0 00-.85.9l.2 3.4a.65.65 0 001.3 0l.2-3.4A.85.85 0 008 5.5zm0 5.6a.95.95 0 100 1.9.95.95 0 000-1.9z"/></svg>
       <span class="badge hidden" data-b="problems">0</span></button>
@@ -797,7 +823,20 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
         <span class="seg"><button id="v-src" aria-current="true">Source</button><button id="v-prev" class="hidden">Preview</button><button id="v-diff">Diff</button></span>
       </span>
     </div>
-    <div class="surface" id="surface"></div>
+    <div class="work-area"><div class="surface" id="surface"></div></div>
+    <div class="panel" id="panel">
+      <div class="panel-tabs" id="panel-grip">
+        <button data-pt="terminal" aria-current="true">Terminal</button>
+        <button data-pt="server">Server</button>
+        <span class="sp"></span>
+        <span id="panel-status"></span>
+        <button id="panel-toggle" title="Toggle panel  ⌃`">&#8964;</button>
+      </div>
+      <div class="panel-body">
+        <div id="term-host"></div>
+        <div id="panel-server" class="hidden"></div>
+      </div>
+    </div>
   </section>
 
   <section class="chat">
@@ -840,6 +879,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   </div>
 </div>
 
+<script src="/vendor/xterm/xterm.js"></script>
+<script src="/vendor/xterm/xterm-addon-fit.js"></script>
 <script src="/vendor/vs/loader.js"></script>
 <script>
   // Monaco resolves its worker from this hook. Without it the editor silently falls back to
@@ -1052,6 +1093,115 @@ function showEmpty(html){
   mon=null; monDiff=null; ready=false;
 }
 function toast(t){ el('crumb').textContent=t; }
+
+/* ════ terminal ══════════════════════════════════════════════════════════
+   A pty running your own shell, not a command runner. Anything less breaks on
+   the first interactive prompt, pager or progress bar — which is most of what a
+   terminal is for. */
+let term=null, termFit=null, termSock=null, panelTab='terminal';
+
+function termTheme(){
+  const v=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  return {
+    background:v('--n1'), foreground:v('--n12'), cursor:v('--accent'),
+    selectionBackground:v('--accent')+'44',
+    black:v('--n7'), red:v('--crit'), green:v('--ok'), yellow:v('--warn'),
+    blue:v('--accent'), magenta:v('--syn-key'), cyan:v('--syn-fn'), white:v('--n11'),
+    brightBlack:v('--n9'), brightRed:v('--crit'), brightGreen:v('--ok'),
+    brightYellow:v('--warn'), brightBlue:v('--accent'), brightMagenta:v('--syn-key'),
+    brightCyan:v('--syn-fn'), brightWhite:v('--n12'),
+  };
+}
+
+function openTerminal(){
+  if(term) return;
+  if(typeof Terminal==='undefined'||typeof FitAddon==='undefined'){
+    el('term-host').innerHTML='<div class="empty">Terminal unavailable — xterm failed to load.</div>';
+    return;
+  }
+  try{
+  term=new Terminal({
+    fontFamily:'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace',
+    fontSize:12, lineHeight:1.35, cursorBlink:true, scrollback:5000,
+    theme:termTheme(), allowProposedApi:true,
+  });
+  termFit=new FitAddon.FitAddon();
+  term.loadAddon(termFit);
+  term.open(el('term-host'));
+  fitTerm();
+
+  termSock=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/term/ws');
+  termSock.binaryType='arraybuffer';
+  termSock.onopen=()=>sendResize();
+  termSock.onmessage=e=>{
+    term.write(typeof e.data==='string' ? e.data : new Uint8Array(e.data));
+  };
+  termSock.onclose=()=>term?.write('\r\n\x1b[38;5;244m[session ended]\x1b[0m\r\n');
+  term.onData(d=>termSock?.readyState===1&&termSock.send(new TextEncoder().encode(d)));
+  }catch(e){
+    el('term-host').innerHTML='<div class="empty">Terminal failed to start: '+esc(String(e))+'</div>';
+    term=null;
+  }
+}
+
+function fitTerm(){
+  if(!term||!termFit) return;
+  try{ termFit.fit(); sendResize(); }catch(_){ /* the host has no size yet */ }
+}
+function sendResize(){
+  if(termSock?.readyState===1&&term)
+    // Out of band, prefixed with NUL: everything else on this socket is keystrokes.
+    termSock.send('\u0000'+term.cols+','+term.rows);
+}
+addEventListener('resize',()=>fitTerm());
+
+function setPanelTab(which){
+  panelTab=which;
+  document.querySelectorAll('[data-pt]').forEach(b=>b.setAttribute('aria-current',b.dataset.pt===which));
+  el('term-host').classList.toggle('hidden',which!=='terminal');
+  el('panel-server').classList.toggle('hidden',which!=='server');
+  if(which==='terminal'){ openTerminal(); setTimeout(fitTerm,0); }
+  else drawServerPanel();
+}
+
+function drawServerPanel(){
+  const box=el('panel-server'); if(!box) return;
+  box.innerHTML=devState.log.length
+    ? esc(devState.log.slice(-500).join('\n'))
+    : '<span class="idle">'+(devState.running?'Starting…':'No dev server running.')+'</span>';
+  box.scrollTop=box.scrollHeight;
+}
+
+function togglePanel(){
+  el('app').classList.toggle('no-panel');
+  setTimeout(fitTerm,0);
+}
+
+function wirePanel(){
+  document.querySelectorAll('[data-pt]').forEach(b=>b.onclick=e=>{
+    e.stopPropagation(); el('app').classList.remove('no-panel'); setPanelTab(b.dataset.pt);
+  });
+  el('panel-toggle').onclick=e=>{ e.stopPropagation(); togglePanel(); };
+
+  const grip=el('panel-grip');
+  const saved=localStorage.getItem('keel.panel');
+  if(saved) document.documentElement.style.setProperty('--panel-h',saved+'px');
+  grip.addEventListener('pointerdown',e=>{
+    if(e.target.tagName==='BUTTON') return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    el('app').classList.remove('no-panel');
+    const move=ev=>{
+      const rect=el('panel').parentElement.getBoundingClientRect();
+      const h=Math.max(26,Math.min(rect.height-120,rect.bottom-ev.clientY));
+      document.documentElement.style.setProperty('--panel-h',h+'px');
+      localStorage.setItem('keel.panel',String(Math.round(h)));
+      fitTerm();
+    };
+    const up=()=>{ removeEventListener('pointermove',move); removeEventListener('pointerup',up);
+      fitTerm(); };
+    addEventListener('pointermove',move); addEventListener('pointerup',up);
+  });
+}
 
 /* ════ preview ═══════════════════════════════════════════════════════════
    Some files are for reading, not editing. Markdown gets rendered; images get
@@ -1418,6 +1568,7 @@ function setPanel(p,fromClick){
 }
 document.querySelectorAll('.ic[data-p]').forEach(b=>b.onclick=()=>setPanel(b.dataset.p,true));
 el('ic-settings').onclick=openSettings;
+el('ic-browser').onclick=()=>openPreview();
 
 /* ════ CLI setup ═════════════════════════════════════════════════════════
    Keel drives the first-party CLIs rather than asking for long-lived tokens.
@@ -2448,7 +2599,8 @@ function menuItems(which){
     item('Readiness','',()=>setPanel('readiness')),
     SEP,
     item('Toggle sidebar',MAC?'⌘B':'Ctrl+B',toggleSide),
-    item('Toggle agent panel',MAC?'⌃`':'Ctrl+`',toggleChat),
+    item('Toggle agent panel',MAC?'⌘⇧A':'Ctrl+Shift+A',toggleChat),
+    item('Toggle terminal',MAC?'⌃`':'Ctrl+`',togglePanel),
     SEP,
     item('Command palette',MAC?'⌘⇧P':'Ctrl+Shift+P',()=>openPal('>')),
     item('Go to file',MAC?'⌘P':'Ctrl+P',()=>openPal()),
@@ -2715,21 +2867,9 @@ function drawPreview(){
           'or paste a URL above — a deploy URL works too.')+
       '</div></div>';
 
-  const term=
-    '<div class="pv-term" id="pv-term">'+
-      '<div class="th2" id="pv-grip"><span class="dot2'+(devState.running?' on':'')+'"></span>'+
-      '<h4>Server</h4><span class="cmd2">'+
-        esc(devState.command??devState.detected??'no dev command')+'</span>'+
-      '<span class="sp"></span>'+
-      (devState.running?'<button id="pv-stop2">stop</button>':'')+
-      '<button id="pv-clear">clear</button></div>'+
-      '<div class="out2" id="pv-out">'+
-        (devState.log.length?esc(devState.log.slice(-400).join('\n'))
-          :'<span class="idle">'+(devState.running?'Starting…':'Not running.')+'</span>')+
-      '</div></div>';
-
-  el('surface').innerHTML='<div class="pv">'+bar+stage+term+'</div>';
-  const out=el('pv-out'); if(out) out.scrollTop=out.scrollHeight;
+  // The server's output lives in the bottom panel now, with the terminal, rather than being
+  // duplicated inside the preview.
+  el('surface').innerHTML='<div class="pv">'+bar+stage+'</div>';
 
   const go=()=>{
     const typed=el('pv-url').value.trim();
@@ -2744,8 +2884,6 @@ function drawPreview(){
   el('pv-ext').onclick=()=>previewUrl&&window.open(previewUrl,'_blank','noopener');
   el('pv-start')&&(el('pv-start').onclick=devStart);
   el('pv-stop2')&&(el('pv-stop2').onclick=devStop);
-  el('pv-clear')&&(el('pv-clear').onclick=()=>{ devState.log=[]; drawPreview(); });
-  wireTermResize();
   el('pv-start2')&&(el('pv-start2').onclick=devStart);
   el('pv-stop')&&(el('pv-stop').onclick=devStop);
   el('surface').querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
@@ -2800,9 +2938,10 @@ function offerPreview(url){
 /* Poll while a server is up: the log grows, and a restart can move the port. Only while the
    preview is the open tab, so a background poll never runs for nothing. */
 setInterval(async()=>{
-  if(active!==PREVIEW) return;
+  if(active!==PREVIEW&&panelTab!=='server') return;
   const wasUrl=devState.url, wasLen=devState.log.length, wasRunning=devState.running;
   await loadDev();
+  if(panelTab==='server') drawServerPanel();
   if(devState.url!==wasUrl||devState.log.length!==wasLen||devState.running!==wasRunning){
     drawPreview();
     // A restart means the code changed; show the new output rather than the old page.
@@ -3087,7 +3226,10 @@ const COMMANDS=[
   {id:'plan',       label:'Agent: Plan mode',   run:()=>setMode('plan'),        key:'⇧⇥'},
   {id:'auto',       label:'Agent: Auto mode',   run:()=>setMode('acceptEdits'), key:'⇧⇥'},
   {id:'clearchat',  label:'Agent: Clear conversation', run:()=>el('a-clear').click()},
-  {id:'togglechat', label:'View: Toggle agent panel',  run:toggleChat, key:MAC?'⌃`':'Ctrl+`'},
+  {id:'togglechat', label:'View: Toggle agent panel',  run:toggleChat, key:MAC?'⌘⇧A':'Ctrl+Shift+A'},
+  {id:'toggleterm',label:'View: Toggle terminal',      run:togglePanel, key:MAC?'⌃`':'Ctrl+`'},
+  {id:'termfocus', label:'Terminal: Focus',            run:()=>{ el('app').classList.remove('no-panel');
+                                                                 setPanelTab('terminal'); term?.focus(); }},
   {id:'toggleside', label:'View: Toggle sidebar',      run:toggleSide, key:MAC?'⌘B':'Ctrl+B'},
   {id:'refresh',    label:'Repository: Refresh',       run:refresh},
   {id:'verify',     label:'Run project checks',        run:()=>{ setPanel('problems'); runVerify(); }},
@@ -3196,7 +3338,10 @@ addEventListener('keydown',e=>{
   if(cmd&&e.key==='p'){ e.preventDefault(); openPal(); return; }
   if(cmd&&e.key==='s'){ e.preventDefault(); save(); return; }
   if(cmd&&e.key==='b'){ e.preventDefault(); toggleSide(); return; }
-  if(e.ctrlKey&&e.key==='`'){ e.preventDefault(); toggleChat(); return; }
+  // ⌃` is the terminal everywhere else; the agent panel moves to ⌘⇧A rather than fight muscle
+  // memory. ⌘J is Chrome's downloads shelf on Windows and Linux, so it is not available.
+  if(e.ctrlKey&&e.key==='`'){ e.preventDefault(); togglePanel(); return; }
+  if(cmd&&e.shiftKey&&(e.key==='a'||e.key==='A')){ e.preventDefault(); toggleChat(); return; }
   // ⌘, is Chrome's own preferences on macOS and cannot be taken, so settings uses ⌘⇧,
   if(cmd&&e.key===','&&(!MAC||e.shiftKey)){ e.preventDefault(); openSettings(); return; }
 
@@ -3235,6 +3380,7 @@ async function refresh(){
   badge('agents',w.agents.length,false);
   badge('hooks',w.hooks.length,risky(w.hooks)>0);
   badge('mcp',w.mcp_servers.length,risky(w.mcp_servers)>0);
+  badge('preview','\u2022',devState.running);
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
   el('side').append(frag('<div class="rz left" id="rz1"></div>'));
@@ -3246,6 +3392,8 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev()]);
   await refresh();
+  try{ wirePanel(); setPanelTab('terminal'); }
+  catch(e){ console.error('panel',e); }
   PANELS._skillsCta?.();
   emptyLog();   // suggestions are drawn from the scan and git status, so it waits for them
   draw();
