@@ -23,6 +23,21 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## The agent panel
+
+Work is grouped into turns: what you asked, everything the agent did about it, and a footer with how
+long it took and what it cost. Tool calls are one dim line each, and consecutive calls to the same
+tool collapse into a count — a run that reads twenty files takes one line, not twenty. Thinking is
+folded away behind a summary rather than filling the panel.
+
+`@` in the composer opens a file picker using the same matcher as the command palette; picked files
+attach as chips and ride along as `@path` references. The empty state suggests moves drawn from the
+actual scan — blocking findings, untrusted hooks, uncommitted changes — so the first thing offered
+is never generic.
+
+Scrolling up releases autoscroll and shows a jump-to-latest pill, so reading back mid-run does not
+fight the stream.
+
 ## Saving
 
 `⌘S`, or the Save button that appears in the editor bar when the open file has unsaved edits. A dot
