@@ -315,7 +315,16 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .blk .bh:hover{background:var(--n4)}
 .blk .bh .cmd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   color:var(--n12)}
-.blk .bh .tool{flex:none;color:var(--n9);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase}
+/* Four groups, because four is what the eye sorts without a legend. The colour says how far the
+   command reaches — outside this machine, into your history, through the project's toolchain, or
+   nowhere — and the label says which program. */
+.blk .bh .tool,.doing .tool{flex:none;font-size:10px;letter-spacing:.05em;text-transform:uppercase;
+  padding:1px 5px;border-radius:3px;min-width:44px;text-align:center}
+.tool.remote{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.tool.vcs{color:var(--accent);background:var(--accent-dim)}
+.tool.build{color:var(--ok);background:color-mix(in srgb,var(--ok) 13%,transparent)}
+.tool.write{color:var(--crit);background:color-mix(in srgb,var(--crit) 13%,transparent)}
+.tool.read{color:var(--n9);background:var(--n5)}
 .blk .bh .ms{flex:none;font-size:10.5px;color:var(--n9);font-variant-numeric:tabular-nums}
 .blk .bh .car{flex:none;width:9px;font-size:9px;color:var(--n9)}
 .blk.fail .bh .cmd{color:var(--crit)}
@@ -328,6 +337,10 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .blk .out.err{color:var(--crit)}
 .blk .out .trunc{display:block;margin-top:var(--s2);color:var(--n9);font-style:italic}
 .blk.shut .out{display:none}
+.blk.gone{display:none}
+.avhead .act.filt{color:var(--accent)}
+.blk .bh .tool{cursor:pointer}
+.blk .bh .tool:hover{outline:1px solid currentColor}
 
 /* ── the add-a-thing form, shared by MCP and anything else that grows one ── */
 .addform{padding:var(--s3) var(--s4) var(--s4);border-bottom:1px solid var(--n6);
@@ -4181,7 +4194,8 @@ function drawDoing(){
   const act=[...agentActs].reverse().find(a=>!a.done);
   if(!act||!stream){ box.classList.add('hidden'); return; }
   box.className='doing';
-  box.innerHTML='<span class="mark"></span><span class="tool">'+esc(act.tool)+'</span>'+
+  const k=kindOf(act.tool,act.command);
+  box.innerHTML='<span class="mark"></span><span class="tool '+k.cls+'">'+esc(k.label)+'</span>'+
     '<span class="what">'+esc((act.command||'\u2014').split('\n')[0].slice(0,140))+'</span>';
   box.onclick=()=>{ if(paneHidden()) toggleAgentPane(true); agentView='console'; drawAgent(); };
 }
@@ -4228,6 +4242,84 @@ function finishAct(id,out,isError){
 }
 
 // A replayed session has no clock — its records carry no timing, so nothing is shown.
+/* What kind of thing is running.
+ *
+ * Every block used to read BASH, which is true of all of them and therefore says nothing. What you
+ * want at a glance is the difference between "it is reading a file" and "it is talking to a
+ * cluster", so the label names the program's world and the colour names how far the command
+ * reaches: your machine, your project's toolchain, or something outside both.
+ *
+ * The program is taken from the first real segment — the same way permission rules derive theirs —
+ * so `cd frontend && bun install` reads as node, not as a directory change.
+ */
+const KINDS=[
+  // Reaches outside this machine. The group worth noticing without reading the command.
+  ['remote', 'ssh',    ['ssh','scp','sftp','rsync','mosh']],
+  ['remote', 'k8s',    ['kubectl','helm','k9s','kustomize','minikube','kubectx','kubens']],
+  ['remote', 'docker', ['docker','podman','docker-compose','nerdctl']],
+  ['remote', 'aws',    ['aws','sam','eb']],
+  ['remote', 'gcp',    ['gcloud','gsutil','bq']],
+  ['remote', 'cloudflare', ['wrangler']],
+  ['remote', 'fly',    ['fly','flyctl']],
+  ['remote', 'vercel', ['vercel','netlify']],
+  ['remote', 'iac',    ['terraform','tofu','pulumi','ansible']],
+  ['remote', 'http',   ['curl','wget','http','httpie']],
+  ['remote', 'db',     ['psql','mysql','mongosh','redis-cli','sqlite3']],
+
+  // Your history and your forge.
+  ['vcs',    'git',    ['git']],
+  ['vcs',    'github', ['gh','glab']],
+
+  // Builds and checks: the toolchain this project already declares.
+  ['build',  'make',   ['make','just','task']],
+  ['build',  'node',   ['npm','npx','bun','bunx','pnpm','yarn','node','tsc','deno','vite','next']],
+  ['build',  'rust',   ['cargo','rustc','rustup','clippy']],
+  ['build',  'go',     ['go','gofmt']],
+  ['build',  'python', ['python','python3','pip','pip3','uv','poetry','pytest','ruff','mypy']],
+  ['build',  'test',   ['jest','vitest','playwright','cypress']],
+
+  // Changes something on disk, right here.
+  ['write',  'files',  ['rm','mv','cp','mkdir','touch','chmod','chown','ln','tar','unzip','zip']],
+];
+
+/* Two kinds of thing stand in front of the real command, and they are not the same.
+ * `sudo rm -rf /` wraps a command, so the answer is the next token. `cd frontend` takes a *path*,
+ * so the answer is in the next segment — reading the token after it gives you "frontend", which is
+ * a directory being labelled as a program. */
+const WRAPS_A_COMMAND=new Set(['sudo','doas','env','nohup','time','xargs','command','exec','nice']);
+const OWNS_ITS_SEGMENT=new Set(['cd','pushd','popd','export','source','.','set','umask','alias']);
+
+function firstProgram(command){
+  for(const seg of String(command).split(/\n|;|&&|\|\||\|/)){
+    for(const tok of seg.trim().split(/\s+/)){
+      if(!tok||/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue;
+      const name=tok.split('/').pop().replace(/^["']|["']$/g,'');
+      if(!name) continue;
+      if(WRAPS_A_COMMAND.has(name)) continue;
+      if(OWNS_ITS_SEGMENT.has(name)) break;
+      return name;
+    }
+  }
+  return '';
+}
+
+let kindFilter=null;
+
+/** Narrow the console to one kind, or back to all of them. */
+function setKindFilter(cls){
+  kindFilter=kindFilter===cls?null:cls;
+  drawAgent();
+}
+
+/** The label and group for a call. Non-Bash tools already say what they are. */
+function kindOf(tool,command){
+  if(tool!=='Bash') return {label:tool.toLowerCase(),cls:'read'};
+  const prog=firstProgram(command);
+  for(const [cls,label,progs] of KINDS) if(progs.includes(prog)) return {label,cls};
+  // Everything left is reading or inspecting: ls, cat, grep, find, wc, echo.
+  return {label:prog||'sh',cls:'read'};
+}
+
 const took=a=>a.t0&&a.t1?((a.t1-a.t0)/1000).toFixed(1)+'s':'';
 
 /* Output is capped for display, not truncated in the record. A build that prints ten thousand
@@ -4244,15 +4336,18 @@ function appendBlock(act){
   // The pane can be opened before anything runs, and then the first block arrives underneath
   // "nothing has run yet", which stays true-looking and is not.
   host.querySelector('.live-empty')?.remove();
-  const n=frag('<div class="blk run shut" data-a="'+esc(act.id)+'">'+
+  const k=kindOf(act.tool,act.command);
+  const n=frag('<div class="blk run shut" data-a="'+esc(act.id)+'" data-k="'+esc(k.cls)+'">'+
     '<div class="bh"><span class="car">\u25b8</span><span class="mark"></span>'+
-    '<span class="tool">'+esc(act.tool)+'</span>'+
+    '<span class="tool '+k.cls+'">'+esc(k.label)+'</span>'+
     '<span class="cmd">'+esc(act.command||'—')+'</span>'+
     '<span class="ms"></span></div></div>');
-  n.querySelector('.bh').onclick=()=>{
+  n.querySelector('.bh').onclick=e=>{
+    if(e.target.classList.contains('tool')){ setKindFilter(k.cls); return; }
     const shut=n.classList.toggle('shut');
     n.querySelector('.car').textContent=shut?'\u25b8':'\u25be';
   };
+  if(kindFilter&&k.cls!==kindFilter) n.classList.add('gone');
   host.append(n);
   consoleNodes.set(act.id,n);
   host.scrollTop=host.scrollHeight;
@@ -4291,13 +4386,18 @@ function drawAgent(){
         '<span class="c" id="av-nc"></span><span class="f" id="av-nf"></span></button>'+
       '<button data-av="changes" aria-current="'+(agentView==='changes')+'">Changes'+
         '<span class="c" id="av-nd"></span></button>'+
-    '</div><span class="sp"></span>'+
+    '</div>'+
+    (agentView==='console'&&kindFilter
+      ? '<button class="act filt" id="av-filt">'+esc(kindFilter)+' only \u00d7</button>'
+      : '')+
+    '<span class="sp"></span>'+
     '<button class="act" id="av-clear">clear</button>'+
     '<button class="act" id="av-hide" title="Hide  \u2318\u21e7E">\u00d7</button></div>'+
     '<div class="avbody" id="av-body"></div>';
   avCount();
 
   el('av-hide').onclick=()=>toggleAgentPane(false);
+  const filt=el('av-filt'); if(filt) filt.onclick=()=>setKindFilter(kindFilter);
   pane.querySelectorAll('[data-av]').forEach(b=>b.onclick=()=>{
     agentView=b.dataset.av; drawAgent();
   });
@@ -4318,6 +4418,9 @@ function drawAgent(){
       const n=appendBlock(act);
       if(act.done) fillBlock(n,act);
     }
+    if(kindFilter&&!agentActs.some(a=>kindOf(a.tool,a.command).cls===kindFilter))
+      el('av-body').insertAdjacentHTML('beforeend',
+        '<div class="live-empty">Nothing of that kind ran here.</div>');
     if(sessionTrimmed) el('av-body').insertAdjacentHTML('beforeend',
       '<div class="live-empty">Some of this session was trimmed to keep the pane readable.</div>');
     return;
