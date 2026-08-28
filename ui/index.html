@@ -1143,6 +1143,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
  * output, in 10.5px monospace, the same grey as everything around it. It is the only line you
  * have to act on and it read as log noise — so it is pulled out above the console, at a size you
  * can read across a desk, and the console keeps scrolling underneath. */
+/* Reserved width, so the bar does not shift as the column number gains a digit. */
+#st-pos{min-width:5.5ch;text-align:right}
 .handoff{margin-top:var(--s3);padding:var(--s4);border:1px solid var(--n7);border-radius:var(--r2);
   background:var(--n2);display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}
 .handoff .hl{font:11px var(--sans);color:var(--n10)}
@@ -1656,7 +1658,7 @@ function initMonaco(){
         const tab=tabs.find(t=>t.path===active);
         if(tab&&!tab.dirty){ tab.dirty=true; drawTabs(); drawStatus(); }
       });
-      mon.onDidChangeCursorPosition(drawStatus);
+      mon.onDidChangeCursorPosition(drawPos);
       agentActions();
       el('surface').oncontextmenu=editorMenu;
       ready=true; res();
@@ -5807,6 +5809,7 @@ function connectionTrouble(){
     : {label:bad.length+' connections need attention',id:bad[0].id};
 }
 
+let statusHtml='';
 function drawStatus(){
   syncSave();
   const s=state?.scan, tab=tabs.find(t=>t.path===active);
@@ -5827,10 +5830,7 @@ function drawStatus(){
   if(trouble) cells.push('<button class="cell warn" data-conn="'+esc(trouble.id)+'" '+
     'title="Open Connections">\u26a0 '+esc(trouble.label)+'</button>');
   cells.push('<span class="sp"></span>');
-  if(mon&&view==='src'&&tab){
-    const p=mon.getPosition();
-    if(p) cells.push('<span class="cell">'+p.lineNumber+':'+p.column+'</span>');
-  }
+  if(mon&&view==='src'&&tab) cells.push('<span class="cell" id="st-pos"></span>');
   if(tab?.dirty) cells.push('<span class="cell">unsaved</span>');
   // Trust is a standing grant, so it stays on screen. A permission you granted once and then
   // forgot about is the one that surprises you later.
@@ -5840,13 +5840,31 @@ function drawStatus(){
   if(stream) cells.push('<span class="cell live">working…</span>');
   if(cost!=null) cells.push('<span class="cell">$'+cost.toFixed(4)+'</span>');
   if(sessionId) cells.push('<span class="cell">'+esc(sessionId.split('-')[0])+'</span>');
-  el('status').innerHTML=cells.join('');
-  el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
-  el('status').querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>openPreview());
-  el('status').querySelectorAll('[data-trust]').forEach(b=>b.onclick=()=>reviewTrust());
-  el('status').querySelectorAll('[data-conn]').forEach(b=>b.onclick=()=>{
-    setsTab='connections'; focusTool=b.dataset.conn; openSettings();
-  });
+  // Rebuilding this on every cursor move was a per-keystroke layout loop: the line:col text
+  // changes width with every character, the status row is a grid track, so the grid re-laid out,
+  // and `automaticLayout` made Monaco re-measure itself in response — while you were typing into
+  // it. The cursor cell is written by `drawPos` through textContent now, and the rest of the bar
+  // only touches the DOM when what it says has actually changed.
+  const html=cells.join('');
+  if(html!==statusHtml){
+    statusHtml=html;
+    el('status').innerHTML=html;
+    el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
+    el('status').querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>openPreview());
+    el('status').querySelectorAll('[data-trust]').forEach(b=>b.onclick=()=>reviewTrust());
+    el('status').querySelectorAll('[data-conn]').forEach(b=>b.onclick=()=>{
+      setsTab='connections'; focusTool=b.dataset.conn; openSettings();
+    });
+  }
+  drawPos();
+}
+
+/** The cursor cell, and nothing else. Called on every keystroke, so it writes one string. */
+function drawPos(){
+  const cell=el('st-pos');
+  if(!cell||!mon) return;
+  const p=mon.getPosition();
+  if(p) cell.textContent=p.lineNumber+':'+p.column;
 }
 
 /** Withdrawing trust has to be as reachable as granting it, or granting it is a trap. */
