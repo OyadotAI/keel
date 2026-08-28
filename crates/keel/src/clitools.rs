@@ -37,6 +37,12 @@ struct Tool {
     identity: &'static [&'static str],
     /// Shown when Keel cannot install it here.
     manual: &'static str,
+    /// A command to hand the terminal when this tool cannot be connected from the UI.
+    ///
+    /// Keel owns a real shell, so an interactive flow it cannot *drive* it can still *host*. The
+    /// alternative is a sentence telling someone to go and run something somewhere else, which is
+    /// what the first version of this did for kubectl and docker.
+    setup: &'static str,
 }
 
 /// What Keel knows about the `claude` binary it drives.
@@ -112,6 +118,7 @@ const TOOLS: &[Tool] = &[
         ],
         identity: &["api", "user", "--jq", ".login"],
         manual: "https://github.com/cli/cli#installation",
+        setup: "",
     },
     Tool {
         id: "wrangler",
@@ -126,6 +133,7 @@ const TOOLS: &[Tool] = &[
         login: &["login"],
         identity: &["whoami"],
         manual: "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
+        setup: "",
     },
     Tool {
         id: "gcloud",
@@ -144,6 +152,7 @@ const TOOLS: &[Tool] = &[
             "--format=value(account)",
         ],
         manual: "https://cloud.google.com/sdk/docs/install",
+        setup: "",
     },
     Tool {
         id: "kubectl",
@@ -160,6 +169,9 @@ const TOOLS: &[Tool] = &[
         login: &[],
         identity: &["config", "current-context"],
         manual: "https://kubernetes.io/docs/tasks/tools/",
+        // Credentials come from the provider. Listing what is already configured is the honest
+        // first step, and it is safe to run unprompted — unlike a half-typed `get-credentials`.
+        setup: "kubectl config get-contexts",
     },
     Tool {
         id: "docker",
@@ -173,8 +185,57 @@ const TOOLS: &[Tool] = &[
         login: &[],
         identity: &["info", "--format", "{{.Name}} · {{.ServerVersion}}"],
         manual: "https://docs.docker.com/get-docker/",
+        setup: "open -a Docker",
+    },
+    Tool {
+        id: "aws",
+        label: "AWS",
+        binary: "aws",
+        version: &["--version"],
+        whoami: &["sts", "get-caller-identity"],
+        install: &[("brew", &["install", "awscli"])],
+        // Only works against a profile that already exists. Keel writes one for Identity Center
+        // (see `aws::configure_sso`) and detects one that was set up by hand; what it never does
+        // is ask for an access key, which is the only other way in and the wrong thing to type
+        // into an IDE.
+        login: &["sso", "login", "--profile", "{profile}"],
+        identity: &[
+            "sts",
+            "get-caller-identity",
+            "--query",
+            "Arn",
+            "--output",
+            "text",
+        ],
+        manual: "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html",
+        // `aws configure` prompts for a key and a secret. Keel cannot drive it and should not
+        // reimplement it — it hosts it, and the key goes to the CLI's stdin rather than through
+        // any part of Keel.
+        setup: "aws configure",
     },
 ];
+
+/// Profiles the AWS CLI can see, across both `~/.aws/config` and `~/.aws/credentials`.
+///
+/// `aws configure list-profiles` rather than parsing the INI: it sees SSO profiles in `config` and
+/// key-based ones in `credentials`, and it is the CLI's own answer to the question rather than
+/// Keel's guess at it.
+fn aws_profiles() -> Vec<String> {
+    std::process::Command::new("aws")
+        .args(["configure", "list-profiles"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn tool(id: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.id == id)
@@ -213,6 +274,8 @@ pub struct ToolStatus {
     pub profiles: Vec<String>,
     /// The command Keel would run, so the UI can name it before anything happens.
     pub install_cmd: Option<String>,
+    /// A command Keel will type into its own terminal, where an interactive flow works.
+    pub setup: Option<String>,
     /// Set when the tool is installed but cannot be logged in from here, with the reason.
     pub blocked: Option<String>,
     pub manual: &'static str,
@@ -306,21 +369,38 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             })
             .flatten();
 
-        // Tools with no `login` of their own get credentials from somewhere else, and saying so
-        // is more use than a button that runs nothing.
+        let profiles = if t.id == "aws" { aws_profiles() } else { Vec::new() };
+
+        // Why it is not connected, in its own words. A tool with no login of its own takes its
+        // credentials from somewhere else, and naming that is more use than a button that runs
+        // nothing — but better still is a command, which the UI can hand to the terminal.
         let blocked = match t.id {
             "kubectl" if version.is_some() && !authenticated => Some(
-                "No cluster is reachable. Point kubectl at one — `gcloud container clusters \
-                 get-credentials <name>`, or a kubeconfig someone gave you — then reload."
+                "No cluster is reachable. kubectl takes its credentials from your provider — \
+                 `gcloud container clusters get-credentials <name>`, or a kubeconfig you were \
+                 given."
                     .to_string(),
             ),
             "docker" if version.is_some() && !authenticated => Some(
-                "Docker is installed but its daemon is not running. Start Docker Desktop, or \
-                 `colima start`, then reload."
+                "Docker is installed but its daemon is not running.".to_string(),
+            ),
+            "aws" if version.is_some() && profiles.is_empty() => Some(
+                "No AWS profile exists yet. Set one up with Identity Center below, or run \
+                 `aws configure` for an access key — Keel never asks for one."
+                    .to_string(),
+            ),
+            "aws" if version.is_some() && !authenticated => Some(
+                "A profile exists but its credentials are not valid. If it uses Identity Center, \
+                 signing in again will refresh it."
                     .to_string(),
             ),
             _ => None,
         };
+
+        // Only offered when it is the thing to do: installed, not working, and with something
+        // interactive behind it.
+        let setup = (!t.setup.is_empty() && version.is_some() && !authenticated)
+            .then(|| t.setup.to_string());
 
         out.push(ToolStatus {
             id: t.id,
@@ -329,8 +409,9 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             version,
             authenticated,
             identity,
-            profiles: Vec::new(),
+            profiles,
             install_cmd,
+            setup,
             blocked,
             manual: t.manual,
         });
