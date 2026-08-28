@@ -674,6 +674,41 @@ mod ui_tests {
         );
     }
 
+    /// A grid item in the flexible row must be allowed to shrink, for the same reason a flex
+    /// child must.
+    ///
+    /// A grid item's automatic minimum size is its content, so a column whose content outgrows the
+    /// `1fr` row expands that row past its share. The app grid is `height: 100vh` and the body
+    /// clips, so what falls off the bottom is the status bar — reported, twice, as the footer
+    /// disappearing.
+    #[test]
+    fn grid_items_in_the_flexible_row_can_shrink() {
+        let html = include_str!("../../../ui/index.html");
+        let css = html
+            .split_once("<style>")
+            .and_then(|(_, tail)| tail.split_once("</style>"))
+            .map(|(body, _)| body)
+            .expect("the UI has a stylesheet");
+
+        let mut offenders = Vec::new();
+        for rule in css.split('}') {
+            let Some((selector, body)) = rule.split_once('{') else {
+                continue;
+            };
+            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            // The row between the menu bar and the status bar is the one that flexes.
+            if flat.contains("grid-row:2/3") && !flat.contains("min-height:0") {
+                offenders.push(selector.trim().to_string());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these sit in the 1fr row and will grow it past the viewport, pushing the status bar \
+             off the bottom, because a grid item's automatic minimum is its content: {offenders:?}"
+        );
+    }
+
     /// Markup has to precede the script that reaches for it.
     ///
     /// The welcome screen's markup was appended after the closing `</script>`, so the top-level

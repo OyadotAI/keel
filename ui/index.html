@@ -173,7 +173,7 @@ body{margin:0;background:var(--n3);color:var(--n12);
    clipped to a 3px sliver by that element's `overflow-x: hidden`, and it scrolled out of sight as
    soon as the tree was longer than the pane. Between them the sidebar read as fixed-width. */
 .side{grid-row:2/3;background:var(--n3);border-right:1px solid var(--n6);
-  position:relative;min-width:0;display:flex;flex-direction:column}
+  position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
 .side-body{flex:1;min-height:0;overflow:hidden auto}
 .app.no-side .side{border-right:0}
 /* Collapsed, the handle would be the only thing left of the sidebar — 4px of drag target hanging
@@ -496,7 +496,7 @@ input::placeholder{color:var(--n9)}
 
 /* ── editor ─────────────────────────────────────────────────────────────── */
 .ed{grid-row:2/3;background:var(--n1);display:flex;flex-direction:column;
-  overflow:hidden;min-width:0;position:relative}
+  overflow:hidden;min-width:0;min-height:0;position:relative}
 /* Two panes, side by side. The agent's console and its live diffs were a *tab*, which meant
    opening a file to read replaced the thing you were trying to watch — and you cannot follow work
    you have to keep switching back to. They are a pane now, and files keep the tab strip to
@@ -627,8 +627,12 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .prev .imgwrap img{max-height:80vh;box-shadow:0 8px 40px rgba(0,0,0,.3)}
 
 /* ── agent ──────────────────────────────────────────────────────────────── */
+/* `min-height:0` for the same reason `.log` needs it, one level up: a *grid* item's automatic
+   minimum is its content too, so a tall composer or a long log grows the `1fr` row past its share.
+   The grid is `height:100vh` and the body clips, so what falls off the bottom is the status bar —
+   reported as the footer disappearing. */
 .chat{grid-row:2/3;background:var(--n3);border-left:1px solid var(--n6);
-  display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
+  display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0;position:relative}
 .app.no-chat .chat{border-left:0}
 .chat .ph{padding-bottom:var(--s3)}
 
@@ -872,7 +876,14 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 /* What it is doing, right now, pinned above the composer. Scrolling away from the log should not
    cost you the answer to "is this still working, and on what" — that is the question, and it does
    not deserve to depend on where you happen to be scrolled. */
-.doing{position:absolute;left:var(--s4);right:var(--s4);bottom:calc(100% + 4px);
+/* Ordinary flow, not absolute. These sit between the log and the composer in the DOM, and that is
+   exactly where they belong on screen — so they simply are there. Positioned absolutely they were
+   measured against `.chat` rather than the composer they were meant to hug, which put them a full
+   panel-height above the top edge and behind `overflow:hidden`. Both were invisible, permanently:
+   the activity strip never appeared, and the offer to start a new session never appeared *while
+   send() had already cleared the box and returned* — so a prompt that tripped it was swallowed
+   without a trace. */
+.doing{flex:none;margin:0 var(--s4) 4px;
   display:flex;align-items:center;gap:var(--s3);
   padding:5px var(--s3);border:1px solid var(--n6);border-radius:var(--r2);
   background:var(--n4);font:11.5px var(--mono);color:var(--n11);cursor:pointer;
@@ -881,7 +892,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 
 /* The offer to split. Same place as the activity strip and the same weight, because it is the
    same kind of thing: something Keel noticed, sitting where you are already looking. */
-.shift{position:absolute;left:var(--s4);right:var(--s4);bottom:calc(100% + 4px);
+.shift{flex:none;margin:0 var(--s4) 4px;
   display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
   padding:var(--s3);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
   border-radius:var(--r2);background:var(--n4);
@@ -906,7 +917,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 
 /* ── composer ───────────────────────────────────────────────────────────── */
 /* Positions the live-activity strip that sits just above it. */
-.composer{position:relative;flex:none;border-top:1px solid var(--n6);padding:var(--s3);position:relative}
+.composer{flex:none;border-top:1px solid var(--n6);padding:var(--s3);position:relative}
 .composer .box{background:var(--n2);border:1px solid var(--n7);border-radius:var(--r2);
   transition:border-color var(--t-hover)}
 .composer .box:focus-within{border-color:var(--accent)}

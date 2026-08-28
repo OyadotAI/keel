@@ -50,7 +50,49 @@ fn read(repo: &Utf8Path) -> Stored {
 }
 
 fn load(repo: &Utf8Path) -> BTreeSet<String> {
-    read(repo).allow
+    read(repo).allow.into_iter().filter(|r| sane(r)).collect()
+}
+
+/// Whether a stored rule is one that could ever have been meant.
+///
+/// Filtered on read rather than migrated, so a file written by the version that shredded scripts
+/// into rules heals itself the first time it is used, without Keel rewriting somebody's config
+/// behind their back. What it removes is `Bash(assert *)`, `Bash(def *)`, `Bash(} *)` and the
+/// hundred and ninety others that came from treating each line of a heredoc as a command.
+fn sane(rule: &str) -> bool {
+    if !valid_rule(rule) {
+        return false;
+    }
+    let Some(inner) = rule.strip_prefix("Bash(").and_then(|r| r.strip_suffix(')')) else {
+        // A bare tool name — `Edit`, `Write`, `Bash`. Nothing to check.
+        return true;
+    };
+    let program = inner.trim_end_matches(" *").trim();
+
+    // Shape alone cannot separate `Payments` and `PYEOF` — both lifted from the body of a heredoc —
+    // from a real binary, because they are shaped exactly like one. What separates them is that a
+    // real one is on the PATH. A rule for a tool that is not installed is doing nothing anyway, and
+    // gets asked for again the first time it is genuinely used.
+    //
+    // `git status` and friends carry an argument, so the first word is what is checked.
+    let binary = program.split_whitespace().next().unwrap_or_default();
+    !binary.is_empty() && on_path(binary)
+}
+
+/// Whether a name resolves to an executable on the PATH.
+///
+/// Reads the directories rather than spawning the program: this runs over every stored rule, and
+/// two hundred process spawns to answer a question about filenames would be its own problem.
+fn on_path(name: &str) -> bool {
+    let Ok(path) = std::env::var("PATH") else {
+        return false;
+    };
+    path.split(':').any(|dir| {
+        !dir.is_empty() && {
+            let candidate = std::path::Path::new(dir).join(name);
+            candidate.is_file()
+        }
+    })
 }
 
 /// Whether this project has been trusted. Never true unless somebody said so.
@@ -109,6 +151,13 @@ pub fn defaults(repo: &Utf8Path) -> Vec<String> {
 pub fn effective(repo: &Utf8Path) -> Vec<String> {
     let mut all: BTreeSet<String> = load(repo);
     all.extend(session_rules().lock().expect("rules lock").iter().cloned());
+    // The project's own build and test commands, applied rather than merely suggested.
+    //
+    // Running what a repository declares about itself is the reason the agent is here, and asking
+    // permission to run `make check` in a project whose Makefile defines `check` is a question
+    // with one answer. Every approval spent on those is one not spent on the command that actually
+    // deserved a look.
+    all.extend(defaults(repo));
     all.into_iter().collect()
 }
 
@@ -187,10 +236,9 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<PermissionsView> {
         .iter()
         .cloned()
         .collect();
-    let suggested = defaults(&repo)
-        .into_iter()
-        .filter(|d| !project.contains(d) && !session.contains(d))
-        .collect();
+    // These are applied now, not suggested — the panel shows them so it is visible *why* the
+    // agent can run `make` without ever having asked, rather than leaving that unexplained.
+    let suggested = defaults(&repo);
 
     Json(PermissionsView {
         trusted: trusted(&repo),
@@ -322,6 +370,49 @@ mod tests {
         assert!(!valid_rule("bun install")); // a shell command, not a rule
         assert!(!valid_rule(""));
         assert!(!valid_rule("Bash(x)\nBash(y)"));
+    }
+
+    /// A file written by the version that shredded scripts into rules heals when it is read.
+    #[test]
+    fn nonsense_rules_are_dropped_on_read() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        std::fs::create_dir_all(root.join(".keel")).unwrap();
+        std::fs::write(
+            root.join(".keel/permissions.json"),
+            r#"{"allow":["Bash(git status *)","Bash(assert *)","Bash(} *)","Bash(1\")) *)",
+                         "Bash(# *)","Bash(-flag *)","Edit","Bash(PYEOF *)","Bash(Payments *)"]}"#,
+        )
+        .unwrap();
+
+        let kept = load(&root);
+        assert!(kept.contains("Bash(git status *)"), "git is real and on the PATH");
+        assert!(kept.contains("Edit"), "a bare tool name is not a program");
+
+        // Malformed, and — the harder half — shaped exactly like a binary but not one.
+        for junk in [
+            "Bash(} *)",
+            "Bash(# *)",
+            "Bash(-flag *)",
+            "Bash(assert *)",
+            "Bash(PYEOF *)",
+            "Bash(Payments *)",
+        ] {
+            assert!(!kept.contains(junk), "{junk} survived");
+        }
+    }
+
+    /// The project's own commands are allowed, not merely offered. Asking permission to run
+    /// `make check` in a repository whose Makefile defines `check` is a question with one answer.
+    #[test]
+    fn the_projects_own_commands_need_no_approval() {
+        let (_d, root) = repo(&["Cargo.toml", "Makefile"]);
+        let effective = effective(&root);
+        for rule in ["Bash(cargo *)", "Bash(make *)", "Bash(git status *)"] {
+            assert!(
+                effective.contains(&rule.to_string()),
+                "{rule} is declared by this project and still asks"
+            );
+        }
     }
 
     /// Trust is a standing grant to run anything in one project, so the only acceptable default is
