@@ -170,7 +170,11 @@ const TOOLS: &[Tool] = &[
         binary: "wrangler",
         version: &["--version"],
         whoami: &["whoami"],
+        // brew first, and its formula declares node as a dependency, so a bare machine gets both
+        // from one command. bun and npm stay as fallbacks for anyone who has a runtime but not
+        // Homebrew.
         install: &[
+            ("brew", &["install", "cloudflare-wrangler"]),
             ("bun", &["add", "--global", "wrangler"]),
             ("npm", &["install", "--global", "wrangler"]),
         ],
@@ -422,19 +426,9 @@ pub async fn install_all() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
 
         let mut failed = 0;
         for t in missing {
-            // wrangler comes from a JavaScript package registry, not from brew, so it needs a
-            // runtime that may itself be missing. Installing node first is the difference between
-            // this working on a bare machine and reporting one confusing failure.
-            if t.id == "wrangler" && !exists("bun") && !exists("npm") {
-                say("$ brew install node".into()).await;
-                let code = run_install(Command::new("brew").args(["install", "node"]), &tx).await;
-                if code != 0 {
-                    say("node failed, so wrangler cannot be installed.".into()).await;
-                    failed += 1;
-                    continue;
-                }
-            }
-
+            // No special cases. wrangler used to need node installed first, because it came from
+            // a JavaScript registry; the brew formula declares node as a dependency, so brew does
+            // that itself and the step here was code that only looked like it was doing something.
             let Some((mgr, args)) = t.install.iter().find(|(mgr, _)| exists(mgr)) else {
                 say(format!("{} has no installer here — see {}", t.label, t.manual)).await;
                 failed += 1;
@@ -728,6 +722,21 @@ mod tests {
         let raw = "Kubernetes control plane is running at https://10.0.0.1\n\
                    CoreDNS is running at https://10.0.0.1/api/v1/namespaces/kube-system";
         assert_eq!(condense("kubectl", raw), "https://10.0.0.1");
+    }
+
+    /// Homebrew is the one prerequisite Keel asks for beyond Claude Code, so every tool has to be
+    /// reachable through it. A formula that only installs through bun or npm puts a JavaScript
+    /// runtime back in front of somebody on a bare machine, which is the thing that line exists to
+    /// remove.
+    #[test]
+    fn every_tool_installs_with_homebrew() {
+        for t in TOOLS {
+            assert!(
+                t.install.iter().any(|(mgr, _)| *mgr == "brew"),
+                "{} has no brew formula, so a machine with only brew cannot install it",
+                t.id
+            );
+        }
     }
 
     /// Every tool is installable and documented. Not every tool is *loggable into*: `kubectl` and

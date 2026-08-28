@@ -305,6 +305,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/aws/sso",
             axum::routing::post(crate::aws::configure_sso),
         )
+        .route("/api/gcp", get(crate::gcp::state))
+        .route("/api/gcp/regions", get(crate::gcp::regions))
+        .route("/api/gcp/connect", get(crate::gcp::connect))
+        .route("/api/gcp/create", get(crate::gcp::create))
         .route("/api/k8s", get(crate::infra::cluster))
         .route("/api/k8s/workload", get(crate::infra::workload))
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))

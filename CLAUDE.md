@@ -2,7 +2,14 @@
 
 Keel is a local IDE that takes an existing repository, reports how ready it is for agent work and
 production deployment, fixes what's missing, provisions Cloudflare, and owns the ship-and-observe
-loop. Cloudflare only. No Kubernetes.
+loop.
+
+**On "Cloudflare only".** That was the original line and it is no longer true. Keel reads a
+Kubernetes cluster, lists GKE clusters and can create one, and shows GitHub Actions runs. What
+survives of the original decision is the part that mattered: Keel does not *require* a cluster,
+does not put one in the golden path, and scaffolds new projects onto Cloudflare with no Kubernetes
+anywhere. The cluster surfaces are for repositories that already have one — read-mostly, and
+honest about cost where they are not.
 
 ## Non-negotiables
 

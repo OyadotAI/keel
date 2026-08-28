@@ -253,6 +253,16 @@ body{margin:0;background:var(--n3);color:var(--n12);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rec .btn{font-size:11px;padding:3px var(--s3);flex:none}
 .rec .why3{font:11.5px/1.5 var(--sans);color:var(--n10);margin-top:var(--s2)}
+/* Install output, in a panel that is 274px wide. It has to wrap and it has to scroll, or an error
+   is technically on screen and unreadable, which is the same as not being there. */
+.rec .console{margin-top:var(--s3);max-height:220px;overflow:auto;white-space:pre-wrap;
+  word-break:break-word;font:10.5px/1.5 var(--mono);color:var(--n11);
+  background:var(--n1);border:1px solid var(--n6);border-radius:var(--r1);padding:var(--s2)}
+.rec .line{margin-top:var(--s2)}
+#gke .console,#gke-out .console{margin-top:var(--s3);max-height:240px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;font:10.5px/1.5 var(--mono);color:var(--n11);
+  background:var(--n1);border:1px solid var(--n6);border-radius:var(--r1);padding:var(--s2)}
+#gke .prow .btn{font-size:10.5px;padding:2px var(--s2);flex:none}
 
 /* Pods, under the deployment they belong to. Indented rather than in a second pane: the reason you
    opened one is the row above it, and losing that to read this is a bad trade. */
@@ -2548,8 +2558,12 @@ const PANELS={
     if(c.problem){
       el('side').innerHTML=head+
         (c.context?'<div class="sub"><code>'+esc(c.context)+'</code></div>':'')+
-        '<div class="empty">'+esc(c.problem)+'</div>';
+        '<div class="empty">'+esc(c.problem)+'</div>'+
+        '<div id="gke"></div>';
       el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
+      // kubectl not reaching a cluster is where "so where is my cluster" starts. Google Cloud can
+      // answer it, so the panel asks rather than leaving a dead end.
+      drawGke();
       return;
     }
 
@@ -2812,6 +2826,90 @@ async function openExternal(url){
   if(!r.ok) toast(await r.text());
 }
 
+/* Google Cloud, from the Cluster panel.
+ *
+ * Two very different actions behind one question. Connecting is free, instant and reversible — it
+ * writes a context into kubeconfig and nothing else — so it is a click. Creating a cluster bills
+ * by the hour from the moment it exists, before anything is deployed to it, and takes minutes to
+ * make and minutes to remove. So it names the cost and asks for the cluster's name typed back,
+ * the same shape as deleting a repository.
+ */
+async function drawGke(){
+  const host=el('gke'); if(!host) return;
+  let g;
+  try{ g=await (await fetch('/api/gcp')).json(); }catch(_){ return; }
+
+  if(!g.installed||!g.authenticated){
+    host.innerHTML='<div class="sub">'+esc(g.problem??'')+'</div>';
+    return;
+  }
+
+  if(g.clusters.length){
+    host.innerHTML=sec2('On Google Cloud',g.clusters.length)+
+      g.clusters.map((c,i)=>'<div class="prow'+(c.context===g.current_context?' on':'')+'">'+
+        '<span class="dot3 '+(c.status==='RUNNING'?'on':'warn')+'"></span>'+
+        '<span class="nm">'+esc(c.name)+'</span>'+
+        '<span class="meta">'+esc(c.location)+(c.nodes?' · '+esc(c.nodes)+' nodes':'')+'</span>'+
+        (c.context===g.current_context
+          ? '<span class="meta">current</span>'
+          : '<button class="btn quiet" data-conn="'+i+'">Connect</button>')+'</div>').join('')+
+      '<div id="gke-out"></div>';
+    host.querySelectorAll('[data-conn]').forEach(b=>b.onclick=()=>{
+      const c=g.clusters[+b.dataset.conn];
+      gkeRun('/api/gcp/connect?name='+encodeURIComponent(c.name)+
+             '&location='+encodeURIComponent(c.location));
+    });
+    return;
+  }
+
+  // Nothing exists yet, which is the case this was asked for.
+  const regions=await fetch('/api/gcp/regions').then(r=>r.json()).catch(()=>['us-central1']);
+  host.innerHTML=sec2('On Google Cloud',0)+
+    '<div class="addform">'+
+    '<div class="hint">No clusters in <code>'+esc(g.project??'')+'</code>. Keel can make one — '+
+    'Autopilot, so Google manages the nodes and you are billed for what your workloads request. '+
+    '<b>A cluster bills from the moment it exists</b>, before anything is deployed to it, and '+
+    'takes several minutes to create.</div>'+
+    '<label>Name</label><input id="gk-name" spellcheck="false" placeholder="my-cluster">'+
+    '<label>Region</label><div class="segs" id="gk-region">'+
+      regions.slice(0,4).map((r,i)=>'<button data-r="'+esc(r)+'" aria-current="'+(i===0)+'">'+
+        esc(r)+'</button>').join('')+'</div>'+
+    '<label>Type the name again to confirm</label>'+
+    '<input id="gk-confirm" spellcheck="false" autocomplete="off">'+
+    '<div class="acts"><button class="btn" id="gk-go">Create cluster</button></div>'+
+    '<div id="gke-out"></div></div>';
+
+  el('gk-region').querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>
+    el('gk-region').querySelectorAll('[data-r]').forEach(x=>
+      x.setAttribute('aria-current',String(x===b))));
+
+  el('gk-go').onclick=()=>{
+    const name=el('gk-name').value.trim();
+    const region=el('gk-region').querySelector('[aria-current=true]')?.dataset.r??'us-central1';
+    gkeRun('/api/gcp/create?name='+encodeURIComponent(name)+
+           '&region='+encodeURIComponent(region)+
+           '&confirm='+encodeURIComponent(el('gk-confirm').value.trim()));
+  };
+}
+
+/** Stream a gcloud command into the panel, and re-read the cluster when it finishes. */
+function gkeRun(url){
+  const out=el('gke-out'); if(!out) return;
+  out.innerHTML='<pre class="console" id="gke-log"></pre>';
+  const log=el('gke-log');
+  const write=t=>{ log.textContent+=t+'\n'; log.scrollTop=1e9; };
+  const es=new EventSource(url);
+  es.addEventListener('line',e=>write(e.data));
+  es.addEventListener('done',async e=>{
+    es.close();
+    if(e.data!=='0'){ write('\nExited '+e.data+'. Nothing changed.'); return; }
+    write('\nDone.');
+    clusterState=null;
+    await loadCluster();
+  });
+  es.onerror=()=>{ es.close(); write('\nThe connection dropped.'); };
+}
+
 /* Both refresh while you are looking at them, and only while you are looking at them.
  *
  * A cluster and a pipeline are the two things in this application that change without you: a
@@ -2894,6 +2992,7 @@ function runCli(kind,id,host,profile){
   const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
   es.addEventListener('line',e=>write(e.data));
   es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
+  es.onerror=()=>{ es.close(); write('\nThe connection dropped before it finished.'); };
   es.addEventListener('done',async e=>{
     es.close();
     write(e.data==='0' ? '\n✓ done' : '\nexited '+e.data);
@@ -4042,9 +4141,24 @@ function installPlugin(name,marketplace,host){
   const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
   es.addEventListener('line',e=>write(e.data));
   es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
+  es.onerror=()=>{ es.close(); write('\nThe connection dropped before it finished.'); };
   es.addEventListener('done',async e=>{
     es.close();
-    write(e.data==='0'?'\n✓ installed — restart the agent session to pick it up':'\nexited '+e.data);
+    if(e.data!=='0'){
+      // Stop here. Refreshing re-renders the panel this console lives in, which deleted the only
+      // record of what went wrong — the box vanished a fraction of a second after the error
+      // arrived, which is why a failing install looked like nothing happening at all.
+      write('\nExited '+e.data+'. Nothing was installed; the output above says why.');
+      host.insertAdjacentHTML('beforeend',
+        '<div class="line"><button class="btn quiet" data-dismiss>Dismiss</button></div>');
+      host.querySelector('[data-dismiss]').onclick=async()=>{
+        host.innerHTML='';
+        catalog=null; await refresh(); loadCatalog().catch(()=>{});
+        if(setsTab==='plugins') SET_PANES.plugins();
+      };
+      return;
+    }
+    write('\n\u2713 installed — restart the agent session to pick it up');
     catalog=null; await refresh();
     loadCatalog().catch(()=>{});
     if(setsTab==='plugins') SET_PANES.plugins();
@@ -4149,6 +4263,7 @@ function pluginAction(action,plugin){
   const es=new EventSource(url);
   es.addEventListener('line',e=>write(e.data));
   es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
+  es.onerror=()=>{ es.close(); write('\nThe connection dropped before it finished.'); };
   es.addEventListener('done',async e=>{
     es.close();
     write(e.data==='0'?'\n✓ done':'\nexited '+e.data);

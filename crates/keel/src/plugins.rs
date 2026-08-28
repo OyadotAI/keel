@@ -56,7 +56,7 @@ const SUGGESTED: &[Suggestion] = &[
     Suggestion {
         name: "cloudflare",
         marketplace: "claude-plugins-official",
-        add_source: None,
+        add_source: Some("anthropics/claude-plugins-official"),
         reason: "Workers, Durable Objects and the Agents SDK — the platform this repository \
                  deploys to.",
         when: &["wrangler.jsonc", "wrangler.toml", "wrangler.json"],
@@ -64,14 +64,14 @@ const SUGGESTED: &[Suggestion] = &[
     Suggestion {
         name: "rust-analyzer-lsp",
         marketplace: "claude-plugins-official",
-        add_source: None,
+        add_source: Some("anthropics/claude-plugins-official"),
         reason: "Real symbol navigation for Rust, so the agent stops grepping for definitions.",
         when: &["Cargo.toml"],
     },
     Suggestion {
         name: "code-review",
         marketplace: "claude-plugins-official",
-        add_source: None,
+        add_source: Some("anthropics/claude-plugins-official"),
         reason: "An independent reviewer is the highest-ROI verification gate there is — an agent \
                  grading its own work is close to worthless.",
         when: &[],
@@ -79,7 +79,7 @@ const SUGGESTED: &[Suggestion] = &[
     Suggestion {
         name: "security-guidance",
         marketplace: "claude-plugins-official",
-        add_source: None,
+        add_source: Some("anthropics/claude-plugins-official"),
         reason: "Pattern warnings on edits. 45% of AI-generated code samples carry an OWASP Top-10 \
                  flaw, so this is not optional hygiene.",
         when: &[],
@@ -87,7 +87,7 @@ const SUGGESTED: &[Suggestion] = &[
     Suggestion {
         name: "github",
         marketplace: "claude-plugins-official",
-        add_source: None,
+        add_source: Some("anthropics/claude-plugins-official"),
         reason: "Issues and pull requests without leaving the session.",
         when: &[".github"],
     },
@@ -508,8 +508,13 @@ pub async fn install(
             }
         };
 
-        // Adding a marketplace that is already configured is a no-op that prints a notice, so it is
-        // safe to run every time rather than checking first.
+        // Every suggestion names the marketplace it comes from, including the official one.
+        // Assuming that one was already configured worked on a machine where it had been added at
+        // some point and failed on a fresh one, with `claude` reporting a marketplace it had never
+        // heard of — an error nobody could act on from inside Keel.
+        //
+        // Adding one that is already configured is a no-op that prints a notice, so it is safe to
+        // run every time rather than checking first.
         if let Some(source) = add_source {
             send(format!("$ claude plugin marketplace add {source}")).await;
             let _ = pipe(
