@@ -87,8 +87,37 @@ pub fn effective(repo: &Utf8Path) -> Vec<String> {
 }
 
 /// The `--settings` payload carrying those rules.
-pub fn settings_json(repo: &Utf8Path) -> String {
-    serde_json::json!({ "permissions": { "allow": effective(repo) } }).to_string()
+/// The settings Keel hands `claude`: the allowlist, and the hook that makes the agent wait.
+///
+/// Note whose hook this is. Keel quarantines a *repository's* `.claude/settings.json` because a
+/// hook there is a shell command that runs on the machine of whoever opens the repo. This one is
+/// Keel's own, points at Keel's own binary, and is passed on the command line rather than read
+/// from the working tree — the thing that made repo hooks dangerous is exactly the thing this
+/// does not do.
+pub fn settings_json(repo: &Utf8Path, port: u16) -> String {
+    let mut settings = serde_json::json!({ "permissions": { "allow": effective(repo) } });
+
+    // Without an executable there is nothing to point the hook at, and a hook that cannot run
+    // would stall every tool call until Claude Code's own timeout. Better to ship no hook and fall
+    // back to the behaviour that at least does not hang.
+    if let Ok(exe) = std::env::current_exe() {
+        settings["hooks"] = serde_json::json!({
+            // Bash only. Edits are already covered by `acceptEdits`, and asking about every Read
+            // would turn the loop into a clicking exercise.
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} approve --port {port}", exe.display()),
+                    // Must exceed the wait Keel itself enforces, or Claude Code gives up first and
+                    // the person's answer arrives too late to be applied.
+                    "timeout": crate::approve::WAIT.as_secs() + 30,
+                }]
+            }]
+        });
+    }
+
+    settings.to_string()
 }
 
 #[derive(Serialize)]
@@ -138,32 +167,38 @@ fn valid_rule(rule: &str) -> bool {
         && rule.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Store a rule. Shared by the HTTP handler and by an approval answered while the agent waits.
+pub fn remember(repo: &Utf8Path, rule: &str, scope: &str) -> Result<(), String> {
+    if !valid_rule(rule) {
+        return Err("That does not look like a permission rule, e.g. `Bash(bun *)`.".into());
+    }
+    match scope {
+        // The default is the narrower one. A rule that outlives the session is a decision worth
+        // asking for, not one to fall into by leaving a field blank.
+        "project" => {
+            let mut rules = load(repo);
+            rules.insert(rule.to_string());
+            save(repo, &rules)
+        }
+        _ => {
+            session_rules()
+                .lock()
+                .expect("rules lock")
+                .insert(rule.to_string());
+            Ok(())
+        }
+    }
+}
+
 pub async fn add(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RuleBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     let bad = |m: &str| (axum::http::StatusCode::BAD_REQUEST, m.to_string());
-    if !valid_rule(&body.rule) {
-        return Err(bad(
-            "That does not look like a permission rule, e.g. `Bash(bun *)`.",
-        ));
+    if !matches!(body.scope.as_str(), "project" | "session") {
+        return Err(bad("scope must be `project` or `session`"));
     }
-
-    match body.scope.as_str() {
-        "session" => {
-            session_rules()
-                .lock()
-                .expect("rules lock")
-                .insert(body.rule);
-        }
-        "project" => {
-            let repo = state.repo();
-            let mut rules = load(&repo);
-            rules.insert(body.rule);
-            save(&repo, &rules).map_err(|e| bad(&e))?;
-        }
-        _ => return Err(bad("scope must be `project` or `session`")),
-    }
+    remember(&state.repo(), &body.rule, &body.scope).map_err(|e| bad(&e))?;
     Ok(Json(true))
 }
 
@@ -242,7 +277,34 @@ mod tests {
     fn settings_payload_is_shaped_the_way_the_cli_expects() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root)).expect("valid json");
+            serde_json::from_str(&settings_json(&root, 7777)).expect("valid json");
         assert!(json["permissions"]["allow"].is_array());
+    }
+
+    /// The hook is what makes the agent wait, so its shape is not incidental: the wrong event
+    /// name, matcher or key and Claude Code silently ignores it, the tool runs unapproved, and
+    /// nothing anywhere says so.
+    #[test]
+    fn the_settings_carry_the_hook_that_blocks_the_agent() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        let json: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7788)).expect("valid json");
+
+        let hook = &json["hooks"]["PreToolUse"][0];
+        assert_eq!(hook["matcher"], "Bash");
+
+        let entry = &hook["hooks"][0];
+        assert_eq!(entry["type"], "command");
+        let command = entry["command"].as_str().expect("a command");
+        assert!(command.contains("approve --port 7788"), "got {command}");
+
+        // Claude Code has to wait longer than Keel does, or it gives up first and the answer
+        // arrives after the tool call has already been decided without it.
+        let timeout = entry["timeout"].as_u64().expect("a timeout");
+        assert!(
+            timeout > crate::approve::WAIT.as_secs(),
+            "the CLI's timeout ({timeout}s) must exceed Keel's wait ({}s)",
+            crate::approve::WAIT.as_secs()
+        );
     }
 }

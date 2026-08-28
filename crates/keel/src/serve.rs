@@ -36,6 +36,9 @@ pub struct AppState {
     repo: std::sync::RwLock<Utf8PathBuf>,
     /// Whether `repo` is a project someone chose, or the empty stand-in used before one is open.
     open: std::sync::atomic::AtomicBool,
+    /// The port this Keel is serving on. The approval hook is spawned by `claude`, in a separate
+    /// process, and this is how it finds its way back.
+    port: std::sync::atomic::AtomicU16,
 }
 
 impl AppState {
@@ -43,6 +46,7 @@ impl AppState {
         Self {
             repo: std::sync::RwLock::new(repo),
             open: std::sync::atomic::AtomicBool::new(true),
+            port: std::sync::atomic::AtomicU16::new(7777),
         }
     }
 
@@ -52,11 +56,16 @@ impl AppState {
         Self {
             repo: std::sync::RwLock::new(crate::prefs::no_project()),
             open: std::sync::atomic::AtomicBool::new(false),
+            port: std::sync::atomic::AtomicU16::new(7777),
         }
     }
 
     pub fn project_open(&self) -> bool {
         self.open.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The repository currently open. Cloned rather than borrowed so no handler holds the lock
@@ -191,6 +200,9 @@ pub enum Launch {
 }
 
 async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
+    state
+        .port
+        .store(port, std::sync::atomic::Ordering::Relaxed);
     let url = format!("http://127.0.0.1:{port}");
 
     // Launching a second time from the Dock must raise the window that is already open, not fail
@@ -262,6 +274,9 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/plugins/refresh",
             get(crate::plugins::refresh_marketplaces),
         )
+        .route("/api/approve/ask", axum::routing::post(crate::approve::ask))
+        .route("/api/approve/poll", get(crate::approve::poll))
+        .route("/api/approve/answer", axum::routing::post(crate::approve::answer))
         .route("/api/agents/create", axum::routing::post(crate::agents::create))
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))

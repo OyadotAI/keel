@@ -23,6 +23,27 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
    session the user asked for by name, and it rejects any id that could climb out of the project
    directory. Both asserted by test.
 
+## The one hook Keel ships
+
+`keel-harness::trust` quarantines a repository's `.claude/settings.json` and the scanner rates it
+Critical, because a hook there is a shell command that runs on the machine of whoever opens the
+repo. Keel then passes a `PreToolUse` hook of its own in `--settings`, and the two are not in
+tension:
+
+- Keel's hook is in the settings Keel writes and passes on the command line. It is never read from
+  the working tree, so nothing a repository contains can change it.
+- It points at Keel's own binary and does one thing: ask the running Keel whether the person
+  approves this call, and block until they answer.
+- It fails open. Keel unreachable, socket dropped, nobody at the keyboard — every path prints
+  nothing and exits 0, which defers to the allowlist. A guardrail that can wedge the agent is one
+  people turn off.
+
+This is what makes an approval a *question* rather than a notification. Before it, a refused
+command came back as an error, the turn carried on without it, and the person's click added a rule
+and asked the agent to retry — by which point it had usually worked around the gap. Verified end to
+end: the call blocks, approving lets that same call proceed, denying returns a reason and the agent
+stops rather than substituting.
+
 ## Layout
 
 - `keel-scanner` — checks. Depends on nothing else in the workspace, touches no network. Keep it
