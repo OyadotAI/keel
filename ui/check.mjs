@@ -66,7 +66,8 @@ const strip = s => s
 
 let failed = 0;
 
-for (const name of ['readiness', 'skills', 'mcp', 'agents', 'hooks', 'changes', 'problems']) {
+for (const name of ['readiness', 'skills', 'mcp', 'agents', 'hooks', 'changes', 'problems',
+                    'cluster', 'pipelines']) {
   console.log('\n=== ' + name.toUpperCase() + ' ' + '='.repeat(40));
   try {
     w.__t.PANELS[name]();

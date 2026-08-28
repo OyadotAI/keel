@@ -1144,6 +1144,12 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <button class="ic" data-p="mcp" title="MCP servers">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.2A1.2 1.2 0 013.2 3h9.6A1.2 1.2 0 0114 4.2v2.1A1.2 1.2 0 0112.8 7.5H3.2A1.2 1.2 0 012 6.3V4.2zm0 5.5A1.2 1.2 0 013.2 8.5h9.6A1.2 1.2 0 0114 9.7v2.1A1.2 1.2 0 0112.8 13H3.2A1.2 1.2 0 012 11.8V9.7zM4 5.25a.75.75 0 100 1.5.75.75 0 000-1.5zm0 5.5a.75.75 0 100 1.5.75.75 0 000-1.5z"/></svg>
       <span class="badge hidden" data-b="mcp">0</span></button>
+    <button class="ic" data-p="cluster" title="Kubernetes">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.6l5.2 2.6v4.3c0 2.6-2.1 4.6-5.2 5.9-3.1-1.3-5.2-3.3-5.2-5.9V4.2L8 1.6z" stroke-linejoin="round"/><circle cx="8" cy="7.3" r="1.5"/><path d="M8 3.1v2.6M8 8.9v2.7M6.6 6.5L4.4 5.4M11.6 5.4L9.4 6.5M6.7 8.3l-2.1 1.4M11.4 9.7L9.3 8.3"/></svg>
+      <span class="badge hidden" data-b="cluster">0</span></button>
+    <button class="ic" data-p="pipelines" title="Pipelines">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="4" cy="3.4" r="1.6"/><circle cx="4" cy="12.6" r="1.6"/><circle cx="12" cy="8" r="1.6"/><path d="M4 5v6M5.6 3.4h3.2a1.6 1.6 0 011.6 1.6v1.4M5.6 12.6h3.2a1.6 1.6 0 001.6-1.6V9.6"/></svg>
+      <span class="badge hidden" data-b="pipelines">0</span></button>
     <button class="ic" id="ic-browser" title="Preview">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3.6A1.6 1.6 0 013.6 2h8.8A1.6 1.6 0 0114 3.6v8.8a1.6 1.6 0 01-1.6 1.6H3.6A1.6 1.6 0 012 12.4V3.6zm1.4 0v1.6h9.2V3.6H3.4zm0 3v5.8h9.2V6.6H3.4z"/><circle cx="4.6" cy="4.4" r=".55"/><circle cx="6.3" cy="4.4" r=".55"/></svg>
       <span class="badge hidden" data-b="preview">•</span></button>
@@ -1261,7 +1267,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
       </div>
     </section>
 
-    <p class="wfoot">Cloudflare, AWS, skills and plugins are in Settings when you want them. None
+    <p class="wfoot">Cloudflare, Google Cloud, Kubernetes, Docker, skills and plugins are in
+      Settings when you want them. None
       of them are needed to start.</p>
   </div>
 </div>
@@ -2473,6 +2480,72 @@ const PANELS={
       b.onclick=e=>{ e.stopPropagation(); askFix(all[+b.dataset.fix]); });
   },
 
+  /* What is running, and what built it. Both are read-only views over a CLI you already have —
+     Keel is not a cluster manager and not a CI dashboard, it answers the two questions you
+     otherwise leave the editor to answer: is the thing up, and did the build that put it there
+     pass. */
+  cluster(){
+    const c=clusterState;
+    const head=H('Cluster',c?.workloads?.length??null,
+      '<button class="act" id="a-k8s">refresh</button>');
+
+    if(!c){ el('side').innerHTML=head+'<div class="empty">Reading the cluster…</div>';
+            loadCluster(); return; }
+
+    if(c.problem){
+      el('side').innerHTML=head+
+        (c.context?'<div class="sub"><code>'+esc(c.context)+'</code></div>':'')+
+        '<div class="empty">'+esc(c.problem)+'</div>';
+      el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
+      return;
+    }
+
+    const bad=c.workloads.filter(x=>x.state!=='up').length;
+    el('side').innerHTML=head+
+      '<div class="sub"><code>'+esc(c.context??'')+'</code> · '+c.namespaces+
+      ' namespace'+(c.namespaces===1?'':'s')+
+      (bad?' · <b style="color:var(--crit)">'+bad+' not ready</b>':' · all ready')+'</div>'+
+      (c.workloads.length
+        ? c.workloads.map(x=>'<div class="prow">'+
+            '<span class="dot3 '+(x.state==='up'?'on':x.state==='partial'?'warn':'bad')+'"></span>'+
+            '<span class="nm">'+esc(x.name)+'</span>'+
+            '<span class="meta">'+esc(x.namespace)+' · '+x.ready+'/'+x.wanted+'</span></div>').join('')
+        : '<div class="prow off">No deployments</div>');
+    el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
+  },
+
+  pipelines(){
+    const p=pipelineState;
+    const head=H('Pipelines',p?.runs?.length??null,
+      '<button class="act" id="a-ci">refresh</button>');
+
+    if(!p){ el('side').innerHTML=head+'<div class="empty">Reading recent runs…</div>';
+            loadPipelines(); return; }
+
+    if(!p.available){
+      el('side').innerHTML=head+'<div class="empty">'+esc(p.problem??'No runs.')+'</div>';
+      el('a-ci').onclick=()=>{ pipelineState=null; loadPipelines(); };
+      return;
+    }
+
+    const dot=r=>r.status!=='completed'?'warn'
+      :r.conclusion==='success'?'on'
+      :r.conclusion==='cancelled'||r.conclusion==='skipped'?'mute':'bad';
+    el('side').innerHTML=head+
+      (p.runs.length
+        ? p.runs.map((r,i)=>'<div class="prow click" data-run="'+i+'" title="'+esc(r.url)+'">'+
+            '<span class="dot3 '+dot(r)+'"></span>'+
+            '<span class="nm">'+esc(r.name)+'</span>'+
+            '<span class="meta">'+esc(r.branch)+' · '+esc(ago(r.started))+'</span></div>').join('')
+        : '<div class="prow off">No runs yet</div>');
+    el('a-ci').onclick=()=>{ pipelineState=null; loadPipelines(); };
+    // Opened in a real browser: a run page is GitHub's, and it wants a session Keel does not have.
+    el('side').querySelectorAll('[data-run]').forEach(n=>n.onclick=()=>{
+      const url=p.runs[+n.dataset.run]?.url;
+      if(url) window.open(url,'_blank','noopener');
+    });
+  },
+
   connections(){ drawConnections(); },
 };
 
@@ -2651,6 +2724,27 @@ document.querySelectorAll('.ic[data-p]').forEach(b=>b.onclick=()=>setPanel(b.dat
 el('ic-settings').onclick=openSettings;
 el('ic-browser').onclick=()=>openPreview();
 
+/* Both are slow enough to be worth loading once and refreshing on request: a cluster on the other
+   side of a VPN takes seconds, and neither answer changes between two glances at a panel. */
+let clusterState=null, pipelineState=null;
+
+async function loadCluster(){
+  try{ clusterState=await (await fetch('/api/k8s')).json(); }
+  catch(_){ clusterState={problem:'Keel could not run kubectl.'}; }
+  const bad=(clusterState.workloads??[]).filter(x=>x.state!=='up').length;
+  badge('cluster',bad,bad>0);
+  if(panel==='cluster') PANELS.cluster();
+}
+
+async function loadPipelines(){
+  try{ pipelineState=await (await fetch('/api/pipelines')).json(); }
+  catch(_){ pipelineState={available:false,problem:'Keel could not run gh.'}; }
+  const failed=(pipelineState.runs??[])
+    .filter(r=>r.status==='completed'&&r.conclusion!=='success'&&r.conclusion!=='skipped').length;
+  badge('pipelines',failed,failed>0);
+  if(panel==='pipelines') PANELS.pipelines();
+}
+
 /* ════ CLI setup ═════════════════════════════════════════════════════════
    Keel drives the first-party CLIs rather than asking for long-lived tokens.
    Install and login both stream their output, because these commands print
@@ -2728,8 +2822,13 @@ function drawConnections(){
       'only needed for the account and resource views, and stays in your keychain.</div>')+
     '<div id="cf-msg"></div></div>';
 
-  const a=byId('aws');
-  if(a) h+=cliBlock(a);
+  // Everything Keel can actually reach: the cloud, the cluster, and the thing that builds images
+  // for both. AWS is gone — nothing in Keel deploys to it, and a connection that leads nowhere is
+  // a row people spend time on for no return.
+  for(const id of ['gcloud','kubectl','docker']){
+    const t=byId(id);
+    if(t) h+=cliBlock(t);
+  }
 
   h+='<div class="field"><label>Open a repository</label>'+
     '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
@@ -3486,7 +3585,7 @@ const SET_PANES={
                    : 'Not on PATH. The agent panel needs it.',
       '', null, null);
 
-    for(const id of ['gh','wrangler','aws']){
+    for(const id of ['gh','wrangler','gcloud','kubectl','docker']){
       const t=byId(id); if(!t) continue;
       const pip=!t.installed?'off':t.authenticated?'on':'warn';
       let sub, acts='';
@@ -5181,6 +5280,7 @@ async function refresh(){
   badge('hooks',w.hooks.length,risky(w.hooks)>0);
   badge('mcp',w.mcp_servers.length,risky(w.mcp_servers)>0);
   badge('preview','\u2022',devState.running);
+  loadCluster(); loadPipelines();
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
   drawStatus();
