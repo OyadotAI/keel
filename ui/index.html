@@ -2877,7 +2877,7 @@ function send(text){
 
   turn=newTurn(full); started=Date.now();
   agentEdits=new Set(); collapsedDiffs.clear();
-  agentActs=[]; consoleNodes.clear();
+  agentActs=[]; consoleNodes.clear(); sessionTrimmed=false;
   pendingCalls.clear(); actNodes.clear(); askedFor.clear();
   box.value=''; autoGrow(); attached.clear(); drawCtx();
   pinned=true; follow(); busy(true);
@@ -3050,7 +3050,32 @@ async function openSession(id){
   turn=null;
   pinned=true; el('log').scrollTop=el('log').scrollHeight;
   drawStatus();
+  loadSessionWork(id);
 }
+
+/* Opening a session should show what it did, not only what was said about it. The transcript holds
+   both — the files it wrote and every command it ran with its output — so the pane is filled from
+   the same read, and the session lands where a live turn would. */
+async function loadSessionWork(id){
+  let work;
+  try{ work=await (await fetch('/api/session/work?id='+encodeURIComponent(id))).json(); }
+  catch(_){ return; }
+
+  agentEdits=new Set(work.files??[]);
+  consoleNodes.clear();
+  agentActs=(work.calls??[]).map((c,i)=>({
+    id:'s'+i, tool:c.tool, command:c.subject, out:c.output,
+    err:!!c.error, done:true, t0:0, t1:0,
+  }));
+  sessionTrimmed=!!work.truncated;
+
+  if(!agentActs.length&&!agentEdits.size) return;
+  // Changes first: "what did this session do to my repository" is the question, and the console is
+  // the evidence behind the answer.
+  agentView=agentEdits.size?'changes':'console';
+  if(paneHidden()) toggleAgentPane(true); else drawAgent();
+}
+let sessionTrimmed=false;
 
 /* ════ preferences ═══════════════════════════════════════════════════════
    Kept in localStorage and applied to Monaco on change, so the editor obeys
@@ -4146,7 +4171,8 @@ function finishAct(id,out,isError){
   avCount();
 }
 
-const took=a=>a.t1?((a.t1-a.t0)/1000).toFixed(1)+'s':'';
+// A replayed session has no clock — its records carry no timing, so nothing is shown.
+const took=a=>a.t0&&a.t1?((a.t1-a.t0)/1000).toFixed(1)+'s':'';
 
 /* Output is capped for display, not truncated in the record. A build that prints ten thousand
    lines should not cost a reflow of ten thousand lines, and the tail is the part anyone reads. */
@@ -4236,6 +4262,8 @@ function drawAgent(){
       const n=appendBlock(act);
       if(act.done) fillBlock(n,act);
     }
+    if(sessionTrimmed) el('av-body').insertAdjacentHTML('beforeend',
+      '<div class="live-empty">Some of this session was trimmed to keep the pane readable.</div>');
     return;
   }
   drawChanges(el('av-body'));
@@ -4298,7 +4326,8 @@ async function drawChanges(host){
             '<div class="no">'+(l.new??'')+'</div>'+
             '<div class="tx"><span class="m2">'+mk(l.kind)+'</span>'+esc(l.text||' ')+'</div></div>'
           ).join('')).join('')
-        : '<div class="live-empty">No diff — the file matches HEAD.</div>')+'</div></div>';
+        : '<div class="live-empty">No diff — this file matches HEAD now, '+
+          'so the change either landed in a commit or was undone.</div>')+'</div></div>';
   }).join('');
 
   const totalPlus=parts.reduce((n,{d})=>n+(d?.hunks??[]).reduce((m,h)=>

@@ -223,6 +223,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/file", get(api_file))
         .route("/api/file/original", get(api_original))
         .route("/api/session", get(api_session))
+        .route("/api/session/work", get(api_session_work))
         .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::api::chat))
         .route("/api/git/status", get(api_git_status))
@@ -358,6 +359,15 @@ async fn api_session(
 ) -> Json<Vec<keel_workspace::Turn>> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
     Json(keel_workspace::transcript(&state.repo(), &home, &query.id))
+}
+
+/// What one session changed and ran. Explicit, on a click — see `keel_workspace::session_work`.
+async fn api_session_work(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SessionQuery>,
+) -> Json<keel_workspace::SessionWork> {
+    let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+    Json(keel_workspace::session_work(&state.repo(), &home, &query.id))
 }
 
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
