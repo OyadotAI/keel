@@ -4,6 +4,7 @@
 //! useful with nothing connected, so it ships and is trusted before Keel is ever handed a cloud
 //! credential.
 
+mod agents;
 mod api;
 mod clitools;
 mod connect;

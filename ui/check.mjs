@@ -55,7 +55,9 @@ try {
 // `state` and `git` are `let` bindings inside the script, not window properties, so they are
 // assigned in the same context rather than set on the Window.
 const state = await (await fetch(BASE + '/api/state')).json();
-vm.runInContext('state = ' + JSON.stringify(state) + '; git = { changes: [] };', ctx);
+const gitStatus = await (await fetch(BASE + '/api/git/status')).json();
+vm.runInContext('state = ' + JSON.stringify(state) +
+  '; git = ' + JSON.stringify(gitStatus) + ';', ctx);
 
 const strip = s => s
   .replace(/<[^>]+>/g, m => (m.startsWith('</') ? '' : ''))
