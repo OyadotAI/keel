@@ -266,6 +266,25 @@ body{margin:0;background:var(--n3);color:var(--n12);
 
 /* Pods, under the deployment they belong to. Indented rather than in a second pane: the reason you
    opened one is the row above it, and losing that to read this is a bad trade. */
+/* Namespaces. A header you can fold, a count that leads with what is wrong, and a way to point
+   kubectl somewhere without leaving for a terminal. */
+.ns{border-bottom:1px solid var(--n6)}
+.ns:last-child{border-bottom:0}
+.nshead{display:flex;align-items:center;gap:var(--s2);padding:5px var(--s4);cursor:pointer;
+  background:var(--n2);font:11.5px var(--mono);color:var(--n11)}
+.nshead:hover{background:var(--n4)}
+.nshead .caret{width:10px;flex:none;color:var(--n9);font-size:9px}
+.nshead .nsname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--n12)}
+.nshead .nsn{flex:none;color:var(--n9);font-variant-numeric:tabular-nums}
+.nshead .nsn b{color:var(--crit);font-weight:600}
+.nshead .cur{flex:none;font-size:10px;color:var(--accent)}
+.nshead .use{all:unset;cursor:pointer;flex:none;font-size:10px;color:var(--n9);
+  padding:1px 5px;border:1px solid var(--n6);border-radius:3px;opacity:0}
+.nshead:hover .use{opacity:1}
+.nshead .use:hover{border-color:var(--accent);color:var(--accent)}
+.ns.shut .nsbody{display:none}
+
 .wl .pods{padding:2px 0 var(--s3) 26px;background:var(--n2)}
 .pod{display:flex;align-items:center;gap:var(--s2);padding:2px var(--s4) 2px 0;
   font:11px var(--mono);color:var(--n10)}
@@ -2568,23 +2587,76 @@ const PANELS={
     }
 
     const bad=c.workloads.filter(x=>x.state!=='up').length;
+
+    // Grouped, because thirty-four rows with the namespace as trailing grey text is a list you
+    // read linearly to answer a question that is about groups: which namespace is unhealthy.
+    const byNs=new Map();
+    for(const x of c.workloads){
+      if(!byNs.has(x.namespace)) byNs.set(x.namespace,[]);
+      byNs.get(x.namespace).push(x);
+    }
+    // Broken namespaces first, then the one kubectl is pointed at, then the rest by name.
+    const order=[...byNs.keys()].sort((a,b)=>{
+      const ba=byNs.get(a).filter(x=>x.state!=='up').length;
+      const bb=byNs.get(b).filter(x=>x.state!=='up').length;
+      if(!!ba!==!!bb) return ba?-1:1;
+      if(a===c.namespace) return -1;
+      if(b===c.namespace) return 1;
+      return a.localeCompare(b);
+    });
+
+    const group=ns=>{
+      const items=byNs.get(ns);
+      const unwell=items.filter(x=>x.state!=='up').length;
+      const here=ns===c.namespace;
+      // Open what needs attention and where you are working. Twelve namespaces expanded is the
+      // flat list again with extra steps.
+      const shut=!unwell&&!here;
+      return '<div class="ns'+(shut?' shut':'')+'" data-ns="'+esc(ns)+'">'+
+        '<div class="nshead"><span class="caret">'+(shut?'\u25b8':'\u25be')+'</span>'+
+        '<span class="nsname">'+esc(ns)+'</span>'+
+        (here?'<span class="cur">current</span>'
+             :'<button class="use" data-use="'+esc(ns)+'" title="Point kubectl here">use</button>')+
+        '<span class="nsn">'+(unwell?'<b>'+unwell+'</b> of ':'')+items.length+'</span></div>'+
+        '<div class="nsbody">'+
+        items.map(x=>'<div class="wl" data-w="'+c.workloads.indexOf(x)+'">'+
+          '<div class="prow click">'+
+          '<span class="dot3 '+(x.state==='up'?'on':x.state==='partial'?'warn':'bad')+'"></span>'+
+          '<span class="nm">'+esc(x.name)+'</span>'+
+          '<span class="meta">'+x.ready+'/'+x.wanted+'</span></div></div>').join('')+
+        '</div></div>';
+    };
+
     el('side').innerHTML=head+
+      // The current namespace belongs here, not only on its group: it is what every unqualified
+      // kubectl command hits, and the namespace you are pointed at often has nothing deployed in
+      // it — `default` usually does — so its group may not exist to carry the marker.
       '<div class="sub"><span class="livedot"></span>every 10s · <code>'+esc(c.context??'')+
-      '</code> · '+c.namespaces+' namespace'+(c.namespaces===1?'':'s')+
+      '</code> · ns <code>'+esc(c.namespace??'default')+'</code> · '+
+      c.namespaces+' namespace'+(c.namespaces===1?'':'s')+
       (bad?' · <b style="color:var(--crit)">'+bad+' not ready</b>':' · all ready')+'</div>'+
       '<div id="gke"></div>'+
-      (c.workloads.length
-        ? c.workloads.map((x,i)=>'<div class="wl" data-w="'+i+'">'+
-            '<div class="prow click">'+
-            '<span class="dot3 '+(x.state==='up'?'on':x.state==='partial'?'warn':'bad')+'"></span>'+
-            '<span class="nm">'+esc(x.name)+'</span>'+
-            '<span class="meta">'+esc(x.namespace)+' · '+x.ready+'/'+x.wanted+'</span></div></div>').join('')
-        : '<div class="prow off">No deployments</div>');
+      (c.workloads.length?order.map(group).join(''):'<div class="prow off">No deployments</div>');
+
     el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
-    // Shown whether or not kubectl is currently connected. Only rendering it when nothing is
-    // reachable meant that once you were on a cluster there was no way to see the others, let
-    // alone move between them.
     drawGke();
+
+    el('side').querySelectorAll('.nshead').forEach(h=>h.onclick=e=>{
+      if(e.target.dataset.use) return;
+      const box=h.parentElement;
+      const shut=box.classList.toggle('shut');
+      h.querySelector('.caret').textContent=shut?'\u25b8':'\u25be';
+    });
+    // Not a filter: kubectl defaults to this, so it changes what every unqualified command does,
+    // including the ones the agent runs.
+    el('side').querySelectorAll('[data-use]').forEach(b=>b.onclick=async e=>{
+      e.stopPropagation();
+      const r=await fetch('/api/k8s/namespace?name='+encodeURIComponent(b.dataset.use))
+        .then(x=>x.json()).catch(()=>({ok:false}));
+      if(!r.ok){ toast(r.error??'kubectl refused'); return; }
+      toast('kubectl now defaults to '+b.dataset.use);
+      clusterState=null; await loadCluster();
+    });
 
     // "2/3 ready" is where the question starts. The answer is in the pods — their phase, their
     // restarts, and whichever of ImagePullBackOff or CrashLoopBackOff is on them.

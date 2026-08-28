@@ -311,6 +311,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/gcp/create", get(crate::gcp::create))
         .route("/api/k8s", get(crate::infra::cluster))
         .route("/api/k8s/workload", get(crate::infra::workload))
+        .route("/api/k8s/namespace", get(crate::infra::set_namespace))
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))
         .route("/api/pipelines", get(crate::infra::pipelines))
         .route("/api/claude", get(crate::clitools::claude_status))
