@@ -644,7 +644,13 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .srow .ren:focus-visible{opacity:1;outline:2px solid var(--accent)}
 .sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
 
-.log{flex:1;overflow-y:auto;padding:var(--s4) var(--s4) var(--s6);scroll-behavior:auto}
+/* `min-height:0` is not decoration. A flex item defaults to `min-height:auto`, which resolves to
+   its own content — so as the agent wrote, this grew instead of scrolling, pushed the composer
+   past the bottom of a container with `overflow:hidden`, and stopped scrolling because it was
+   never overflowing. Footer gone and scroll dead, from one missing line, and only once the
+   conversation got long enough to notice. */
+.log{flex:1;min-height:0;overflow-y:auto;padding:var(--s4) var(--s4) var(--s6);
+  scroll-behavior:auto}
 
 /* A turn is one exchange: what you asked, and everything the agent did about it. Grouping by turn
    is what stops a long run reading as an undifferentiated log. */
@@ -960,7 +966,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .pv-term .th2 button{all:unset;cursor:pointer;font:10.5px var(--mono);color:var(--n9);
   padding:2px var(--s2);border-radius:var(--r1)}
 .pv-term .th2 button:hover{color:var(--n12);background:var(--n4)}
-.pv-term .out2{flex:1;overflow:auto;padding:var(--s3);font:10.5px/1.55 var(--mono);
+.pv-term .out2{flex:1;min-height:0;overflow:auto;padding:var(--s3);font:10.5px/1.55 var(--mono);
   color:var(--n11);white-space:pre-wrap;word-break:break-word}
 .pv-term .out2 .idle{color:var(--n9)}
 .dot2{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
