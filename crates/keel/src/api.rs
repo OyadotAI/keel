@@ -305,6 +305,143 @@ pub struct ChatQuery {
 /// that surface depends on Keel's MCP server, which is a tool catalog with no implementation behind
 /// it yet. Until it exists, an agent restricted to Keel tools would have no tools at all and could
 /// do nothing. The UI states this plainly rather than implying a containment that is not there.
+/// What Keel tells the agent about where it is.
+///
+/// Appended to Claude Code's own system prompt rather than replacing it: everything the CLI already
+/// knows about editing code is worth keeping, and none of it covers being driven by an IDE.
+///
+/// The whole file is about things the agent cannot observe from inside the session. It cannot see
+/// that someone is watching its diffs, that a gate runs after every turn whether it runs one or
+/// not, that a refusal is a question being asked rather than a wall, or what the scan already
+/// found. Everything it *can* work out by reading the repository is deliberately absent — a system
+/// prompt restating what `ls` would show is tokens spent on every turn to say nothing.
+fn system_prompt(repo: &Utf8Path) -> String {
+    let mut out = String::from(
+        "You are running inside Keel, a local IDE that drives you. This is what that changes.\n\n\
+         ## What the person can see\n\n\
+         Every file you write appears as a diff in the pane beside this conversation, live. They \
+         also have the terminal, the project's check output, and the readiness report. So do not \
+         paste back the code you just wrote, do not narrate a rename, and do not summarise a diff \
+         they are already looking at. Tell them what you did and what it means for them. The diff \
+         carries the rest.\n\n\
+         ## Evidence, not assertion\n\n",
+    );
+
+    match crate::verify::detect(repo) {
+        Some(check) => out.push_str(&format!(
+            "`{}` is this project's gate, from {}. Keel runs it after every turn you take and \
+             shows the person the result, so a claim that something works gets checked whether \
+             you check it or not. Run it yourself first — finding out from your own run is \
+             cheaper for everyone than finding out from theirs.\n\n",
+            check.command, check.source
+        )),
+        None => out.push_str(
+            "This project has no check command, so nothing contradicts you automatically. That \
+             makes it more important, not less, that you run what you can and say what you \
+             actually observed.\n\n",
+        ),
+    }
+
+    out.push_str(
+        "Never report a result you have not seen. \"The tests pass\" means you ran them and read \
+         the output. If something could not be run, name it and say why rather than working \
+         around the gap quietly.\n\n\
+         ## Permissions\n\n\
+         This session is non-interactive: nothing can prompt the person mid-turn. A command \
+         outside the allowed set comes back refused, and Keel shows them that refusal with a \
+         button to allow it. That is the loop working, not a failure. Say plainly what you needed \
+         and stop. Do not reach for a different command that happens to be permitted — a \
+         substitute they did not approve is worse than a request they can answer in one click.\n\n\
+         ## Scope\n\n\
+         Do the thing that was asked. If you notice something else wrong, say so in a sentence \
+         and carry on; do not fix it uninvited. Read the repository rather than asking about it — \
+         ask only when two readings of the request would lead to materially different work, and \
+         then ask once, at the point it matters.\n",
+    );
+
+    // The scan is Keel's own reading of this repository, and it is on screen next to the
+    // conversation. An agent that has to rediscover "there are no tests" wastes a turn on
+    // something the person is already looking at.
+    if let Ok(ctx) = keel_scanner::RepoContext::load(repo) {
+        let report = keel_scanner::scan(&ctx);
+        let blocking: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.severity,
+                    keel_scanner::Severity::Critical | keel_scanner::Severity::High
+                )
+            })
+            .collect();
+        if !blocking.is_empty() {
+            out.push_str("\n## What Keel's scan already found\n\nUnfixed, and known:\n\n");
+            for f in blocking {
+                out.push_str(&format!("- {}\n", f.title));
+            }
+            out.push_str(
+                "\nDo not re-diagnose these. If your task is one of them, fix it; if it is not, \
+                 leave them alone and do not mention them again.\n",
+            );
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    /// A system prompt costs tokens on every single turn, so it earns its place by carrying only
+    /// what the agent cannot see for itself: that its diffs are on screen, that a gate runs
+    /// whether it runs one or not, that a refusal is a question rather than a wall.
+    #[test]
+    fn the_prompt_names_this_project_s_gate() {
+        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let prompt = system_prompt(repo);
+
+        assert!(prompt.contains("make check"), "the gate is named, not implied");
+        assert!(prompt.contains("Keel runs it after every turn"));
+        assert!(prompt.contains("non-interactive"));
+
+        // Short enough to send every turn. Past a page it stops being read as instruction and
+        // starts competing with the actual request.
+        assert!(
+            prompt.len() < 4_000,
+            "the system prompt is {} bytes and is sent on every turn",
+            prompt.len()
+        );
+    }
+
+    /// Without a gate the advice inverts: nothing contradicts the agent automatically, so saying
+    /// what was actually observed matters more rather than less.
+    #[test]
+    #[ignore = "prints the prompt for review"]
+    fn show() {
+        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap();
+        let target = std::env::var("KEEL_PROMPT_REPO")
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|_| repo.to_owned());
+        println!("{}", system_prompt(&target));
+    }
+
+    #[test]
+    fn a_project_with_no_gate_is_told_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let prompt = system_prompt(&root);
+        assert!(prompt.contains("no check command"));
+        assert!(!prompt.contains("make check"));
+    }
+}
+
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ChatQuery>,
@@ -331,11 +468,13 @@ pub async fn chat(
             // ask. These are the rules the user approved in the IDE.
             .arg("--settings")
             .arg(crate::permissions::settings_json(&repo))
-            // No `--append-system-prompt` telling the agent to avoid shell expansion. It was tried:
-            // with and without the instruction, the first command out was `wc -l < a.txt; echo
-            // "exit: $?"` both times. The agent self-corrects from the refusal text either way, so
-            // the instruction bought nothing and cost tokens on every turn. The fix that works is
-            // in the UI, which now says what an expansion refusal is instead of showing nothing.
+            .arg("--append-system-prompt")
+            .arg(system_prompt(&repo))
+            // Note what is deliberately *not* in that prompt: an instruction to avoid shell
+            // expansion. It was tried, and with and without it the first command out was
+            // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
+            // refusal text either way, so it bought nothing and cost tokens every turn. The fix
+            // that works is in the UI, which says what an expansion refusal is.
 
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
