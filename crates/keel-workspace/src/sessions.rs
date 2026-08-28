@@ -278,9 +278,12 @@ mod tests {
     #[test]
     fn reads_a_transcript_for_display() {
         let transcript = concat!(
-            r#"{"type":"user","message":{"content":"fix the build"}}"#, "\n",
-            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"On it."},{"type":"tool_use","name":"Read"}]}}"#, "\n",
-            r#"{"type":"user","isSidechain":true,"message":{"content":"subagent noise"}}"#, "\n",
+            r#"{"type":"user","message":{"content":"fix the build"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"On it."},{"type":"tool_use","name":"Read"}]}}"#,
+            "\n",
+            r#"{"type":"user","isSidechain":true,"message":{"content":"subagent noise"}}"#,
+            "\n",
         );
         let (_d, home) = home_with("-repo", "abc-1.jsonl", transcript);
 

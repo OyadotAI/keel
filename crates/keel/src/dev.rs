@@ -42,7 +42,11 @@ pub fn detect(root: &Utf8Path) -> Option<String> {
         && json.get("scripts").and_then(|s| s.get("dev")).is_some()
     {
         let bun = root.join("bun.lock").exists() || root.join("bun.lockb").exists();
-        return Some(if bun { "bun run dev".into() } else { "npm run dev".into() });
+        return Some(if bun {
+            "bun run dev".into()
+        } else {
+            "npm run dev".into()
+        });
     }
     if root.join("wrangler.jsonc").exists()
         || root.join("wrangler.json").exists()
@@ -66,7 +70,14 @@ pub fn find_url(line: &str) -> Option<String> {
     let url = rest[..end].trim_end_matches(['.', ':', ']']).to_string();
 
     // Ignore documentation and dashboard links that deploy output is full of.
-    let noise = ["docs.", "developers.", "dash.", "github.com", "npmjs.com", "schemastore"];
+    let noise = [
+        "docs.",
+        "developers.",
+        "dash.",
+        "github.com",
+        "npmjs.com",
+        "schemastore",
+    ];
     if noise.iter().any(|n| url.contains(n)) {
         return None;
     }
@@ -130,9 +141,7 @@ pub async fn start(
         .command
         .filter(|c| !c.trim().is_empty())
         .or_else(|| detect(&repo))
-        .ok_or_else(|| {
-            bad("No dev command found. Add a `dev` script to package.json.".into())
-        })?;
+        .ok_or_else(|| bad("No dev command found. Add a `dev` script to package.json.".into()))?;
 
     let mut child = Command::new("sh")
         .arg("-c")

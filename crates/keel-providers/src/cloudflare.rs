@@ -58,7 +58,9 @@ struct ApiError {
 
 impl<T> Envelope<T> {
     fn into_result(self) -> Result<T, String> {
-        if self.success && let Some(result) = self.result {
+        if self.success
+            && let Some(result) = self.result
+        {
             return Ok(result);
         }
         Err(self

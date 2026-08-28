@@ -1,6 +1,10 @@
 //! Connection management: GitHub, Cloudflare, and switching repositories.
 
-use axum::{Json, extract::{Query, State}, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use camino::Utf8PathBuf;
 use keel_providers::{cloudflare, credentials, github};
 use serde::{Deserialize, Serialize};
@@ -56,7 +60,9 @@ pub async fn connect_github(Json(body): Json<TokenBody>) -> ApiResult<github::Ac
     Ok(Json(account))
 }
 
-pub async fn connect_cloudflare(Json(body): Json<TokenBody>) -> ApiResult<Vec<cloudflare::Account>> {
+pub async fn connect_cloudflare(
+    Json(body): Json<TokenBody>,
+) -> ApiResult<Vec<cloudflare::Account>> {
     let accounts = cloudflare::verify(body.token.trim()).await.map_err(bad)?;
     credentials::store(credentials::Kind::Cloudflare, body.token.trim()).map_err(bad)?;
     Ok(Json(accounts))
@@ -78,8 +84,7 @@ pub async fn disconnect(Json(body): Json<ProviderBody>) -> ApiResult<bool> {
 }
 
 pub async fn repos() -> ApiResult<Vec<github::Repo>> {
-    let token = credentials::github_token()
-        .ok_or_else(|| bad("connect GitHub first"))?;
+    let token = credentials::github_token().ok_or_else(|| bad("connect GitHub first"))?;
     github::repos(&token).await.map(Json).map_err(bad)
 }
 
@@ -250,7 +255,9 @@ pub async fn browse_files(
         allowed.push(c);
     }
     if !allowed.iter().any(|r| dir.starts_with(r)) {
-        return Err(bad("that directory is outside the repository and your Claude config"));
+        return Err(bad(
+            "that directory is outside the repository and your Claude config",
+        ));
     }
 
     let mut files: Vec<FileEntry> = std::fs::read_dir(&dir)

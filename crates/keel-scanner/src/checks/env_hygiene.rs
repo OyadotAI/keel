@@ -84,7 +84,8 @@ impl SharedBindings {
         let Some(raw) = ctx.read(path.as_str()) else {
             return Vec::new();
         };
-        let Ok(config) = serde_json::from_str::<Value>(&wrangler::strip_jsonc_comments(&raw)) else {
+        let Ok(config) = serde_json::from_str::<Value>(&wrangler::strip_jsonc_comments(&raw))
+        else {
             return vec![
                 Finding::new(
                     "env/unparseable-wrangler-config",

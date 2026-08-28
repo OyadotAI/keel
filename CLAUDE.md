@@ -34,6 +34,30 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
 
+## What a new project looks like
+
+Three folders, because the halves have genuinely different constraints:
+
+- `frontend/` — Next.js + React, compiled to a Worker by OpenNext.
+- `backend/` — Go, in a Cloudflare Container behind a Worker that owns the Durable Object.
+- `infra/` — the deploy script and the environment map.
+
+The frontend reaches the backend through a **service binding**, so the call never leaves
+Cloudflare and the backend needs no public route.
+
+**Go is not a Workers language.** Workers run JS, TS, Python and Rust; the WASM shim for Go calls
+itself experimental. So a Go backend is either a Container or a second cloud, and a second cloud
+is a second account, token, dashboard and tracing backend — the four things dropping Kubernetes
+was meant to delete. The Container wins on that, and the bill is stated in the generated
+`infra/README.md` rather than buried: no autoscaling, ephemeral disk, cold start on wake. When a
+service outgrows those, the honest answer is Cloud Run and a second credential, not a bigger
+`max_instances`.
+
+Generated projects are verified by generating one and running its own gate, not by asserting on
+strings alone. Two bugs that only that catches: `NextConfig` dropped `eslint` in Next 16, and
+`@cloudflare/containers` is on 0.3.x. Both would have shipped a project that fails its first
+`make check`.
+
 ## The editor
 
 Monaco is vendored in `ui/vendor` and embedded with `rust-embed`. It is the full `min/vs` bundle on

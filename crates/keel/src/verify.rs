@@ -107,7 +107,11 @@ pub fn parse_problem(line: &str) -> Option<Problem> {
         && let Some((l, c)) = pos.split_once(',')
         && let (Ok(line_no), Ok(col)) = (l.trim().parse(), c.trim().parse())
     {
-        let severity = if tail.starts_with("warning") { "warning" } else { "error" };
+        let severity = if tail.starts_with("warning") {
+            "warning"
+        } else {
+            "error"
+        };
         return Some(Problem {
             file: path.trim().to_string(),
             line: line_no,
@@ -141,13 +145,21 @@ pub fn parse_problem(line: &str) -> Option<Problem> {
         && path.contains('/')
     {
         let rest = rest.trim();
-        let severity = if rest.starts_with("warning") { "warning" } else { "error" };
+        let severity = if rest.starts_with("warning") {
+            "warning"
+        } else {
+            "error"
+        };
         return Some(Problem {
             file: path.trim().to_string(),
             line: line_no,
             col,
             severity,
-            message: rest.trim_start_matches("error:").trim_start_matches("warning:").trim().to_string(),
+            message: rest
+                .trim_start_matches("error:")
+                .trim_start_matches("warning:")
+                .trim()
+                .to_string(),
         });
     }
 
@@ -160,7 +172,9 @@ pub async fn plan(State(state): State<Arc<AppState>>) -> axum::Json<Option<Check
 }
 
 /// Run the check and stream its output.
-pub async fn run(State(state): State<Arc<AppState>>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+pub async fn run(
+    State(state): State<Arc<AppState>>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
     let repo = state.repo();
 
@@ -200,12 +214,13 @@ pub async fn run(State(state): State<Arc<AppState>>) -> Sse<ReceiverStream<Resul
         };
 
         let (out, err) = (child.stdout.take(), child.stderr.take());
-        tokio::join!(
-            scan_pipe(out, tx.clone()),
-            scan_pipe(err, tx.clone())
-        );
+        tokio::join!(scan_pipe(out, tx.clone()), scan_pipe(err, tx.clone()));
 
-        let code = child.wait().await.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        let code = child
+            .wait()
+            .await
+            .map(|s| s.code().unwrap_or(-1))
+            .unwrap_or(-1);
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
@@ -239,13 +254,20 @@ async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
                 p.message = std::mem::take(&mut last_message);
             }
             if let Ok(json) = serde_json::to_string(&p)
-                && tx.send(Ok(Event::default().event("problem").data(json))).await.is_err()
+                && tx
+                    .send(Ok(Event::default().event("problem").data(json)))
+                    .await
+                    .is_err()
             {
                 return;
             }
         }
 
-        if tx.send(Ok(Event::default().event("line").data(line))).await.is_err() {
+        if tx
+            .send(Ok(Event::default().event("line").data(line)))
+            .await
+            .is_err()
+        {
             return;
         }
     }
@@ -268,8 +290,9 @@ mod tests {
 
     #[test]
     fn reads_a_typescript_diagnostic() {
-        let p = parse_problem("src/index.test.ts(1,30): error TS2307: Cannot find module 'bun:test'.")
-            .expect("parsed");
+        let p =
+            parse_problem("src/index.test.ts(1,30): error TS2307: Cannot find module 'bun:test'.")
+                .expect("parsed");
         assert_eq!(p.file, "src/index.test.ts");
         assert_eq!((p.line, p.col), (1, 30));
         assert_eq!(p.severity, "error");

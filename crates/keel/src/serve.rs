@@ -82,8 +82,14 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/save", axum::routing::post(api_save))
         .route("/api/permissions", get(crate::permissions::list))
-        .route("/api/permissions/add", axum::routing::post(crate::permissions::add))
-        .route("/api/permissions/remove", axum::routing::post(crate::permissions::remove))
+        .route(
+            "/api/permissions/add",
+            axum::routing::post(crate::permissions::add),
+        )
+        .route(
+            "/api/permissions/remove",
+            axum::routing::post(crate::permissions::remove),
+        )
         .route("/api/term/ws", get(crate::term::ws))
         .route("/api/dev", get(crate::dev::status))
         .route("/api/dev/start", axum::routing::post(crate::dev::start))
@@ -91,24 +97,45 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/verify", get(crate::verify::run))
         .route("/api/verify/plan", get(crate::verify::plan))
         .route("/api/connections", get(crate::connect::status))
-        .route("/api/connect/github", axum::routing::post(crate::connect::connect_github))
-        .route("/api/connect/cloudflare", axum::routing::post(crate::connect::connect_cloudflare))
-        .route("/api/disconnect", axum::routing::post(crate::connect::disconnect))
+        .route(
+            "/api/connect/github",
+            axum::routing::post(crate::connect::connect_github),
+        )
+        .route(
+            "/api/connect/cloudflare",
+            axum::routing::post(crate::connect::connect_cloudflare),
+        )
+        .route(
+            "/api/disconnect",
+            axum::routing::post(crate::connect::disconnect),
+        )
         .route("/api/github/repos", get(crate::connect::repos))
         .route("/api/plugins", get(crate::plugins::list))
         .route("/api/plugins/install", get(crate::plugins::install))
         .route("/api/plugins/action", get(crate::plugins::action))
         .route("/api/plugins/details", get(crate::plugins::details))
-        .route("/api/plugins/marketplaces", get(crate::plugins::marketplaces))
-        .route("/api/plugins/refresh", get(crate::plugins::refresh_marketplaces))
+        .route(
+            "/api/plugins/marketplaces",
+            get(crate::plugins::marketplaces),
+        )
+        .route(
+            "/api/plugins/refresh",
+            get(crate::plugins::refresh_marketplaces),
+        )
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
         .route("/api/cli/login", get(crate::clitools::login))
-        .route("/api/github/clone", axum::routing::post(crate::connect::clone))
+        .route(
+            "/api/github/clone",
+            axum::routing::post(crate::connect::clone),
+        )
         .route("/api/open", axum::routing::post(crate::connect::open_repo))
         .route("/api/browse", get(crate::connect::browse))
         .route("/api/browse-files", get(crate::connect::browse_files))
-        .route("/api/project/new", axum::routing::post(crate::project::create))
+        .route(
+            "/api/project/new",
+            axum::routing::post(crate::project::create),
+        )
         .with_state(state);
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -229,7 +256,10 @@ fn mime_for(path: &str) -> &'static str {
 }
 
 async fn index() -> impl axum::response::IntoResponse {
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], Html(INDEX))
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        Html(INDEX),
+    )
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
@@ -252,4 +282,3 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         workspace,
     })
 }
-
