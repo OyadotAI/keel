@@ -9,6 +9,7 @@
 //! act on: `gh auth login --web` shows a one-time code to type into the browser. Swallowing that
 //! would leave someone staring at a spinner with no idea what is being asked of them.
 
+use axum::Json;
 use axum::extract::Query;
 use axum::response::sse::{Event, Sse};
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,59 @@ struct Tool {
     identity: &'static [&'static str],
     /// Shown when Keel cannot install it here.
     manual: &'static str,
+}
+
+/// What Keel knows about the `claude` binary it drives.
+///
+/// Not one of [`TOOLS`]: those all answer "who am I" by being run, and `claude` has no such
+/// subcommand — asking it would cost a real request against the user's own subscription just to
+/// draw a checkmark. Its authentication state is on disk instead, so it is read.
+#[derive(Serialize, Default)]
+pub struct ClaudeStatus {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub authenticated: bool,
+    /// The account signed in, for display. Never a token.
+    pub account: Option<String>,
+    pub plan: Option<String>,
+}
+
+pub async fn claude_status() -> Json<ClaudeStatus> {
+    let mut out = ClaudeStatus::default();
+
+    if let Ok(v) = std::process::Command::new("claude").arg("--version").output()
+        && v.status.success()
+    {
+        out.installed = true;
+        out.version = Some(String::from_utf8_lossy(&v.stdout).trim().to_string());
+    }
+
+    // `~/.claude.json` holds the signed-in account. Reading it is free and changes nothing; the
+    // credential itself lives in the keychain and Keel never touches it — asking would raise a
+    // system prompt for a secret it has no use for.
+    let Some(home) = std::env::var("HOME").ok() else {
+        return Json(out);
+    };
+    let Ok(body) = std::fs::read_to_string(format!("{home}/.claude.json")) else {
+        return Json(out);
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return Json(out);
+    };
+
+    if let Some(account) = json.get("oauthAccount") {
+        out.authenticated = account.get("emailAddress").and_then(|v| v.as_str()).is_some();
+        out.account = account
+            .get("emailAddress")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        out.plan = account
+            .get("organizationName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+
+    Json(out)
 }
 
 const TOOLS: &[Tool] = &[

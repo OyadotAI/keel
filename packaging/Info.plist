@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Keel</string>
+  <key>CFBundleDisplayName</key><string>Keel</string>
+  <key>CFBundleIdentifier</key><string>ai.oya.keel</string>
+  <key>CFBundleExecutable</key><string>keel</string>
+  <key>CFBundleIconFile</key><string>Keel</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <!-- App Transport Security does not have to be loosened for the whole app to reach one loopback
+       port. This key covers local addresses and nothing else; NSAllowsArbitraryLoads would have
+       worked too, and would also have permitted every insecure request the webview could ever
+       make. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key><true/>
+  </dict>
+  <key>NSHumanReadableCopyright</key><string>Keel</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
