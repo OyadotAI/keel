@@ -404,7 +404,10 @@ mod prompt_tests {
             .expect("workspace root");
         let prompt = system_prompt(repo);
 
-        assert!(prompt.contains("make check"), "the gate is named, not implied");
+        assert!(
+            prompt.contains("make check"),
+            "the gate is named, not implied"
+        );
         assert!(prompt.contains("Keel runs it after every turn"));
         assert!(prompt.contains("non-interactive"));
 
@@ -476,7 +479,6 @@ pub async fn chat(
             // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
             // refusal text either way, so it bought nothing and cost tokens every turn. The fix
             // that works is in the UI, which says what an expansion refusal is.
-
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -628,7 +630,8 @@ mod git_tests {
         let paths: Vec<_> = status.changes.iter().map(|c| c.path.as_str()).collect();
 
         assert!(
-            paths.contains(&".github/workflows/a.yml") && paths.contains(&".github/workflows/b.yml"),
+            paths.contains(&".github/workflows/a.yml")
+                && paths.contains(&".github/workflows/b.yml"),
             "expected the files, got {paths:?}"
         );
         for path in &paths {

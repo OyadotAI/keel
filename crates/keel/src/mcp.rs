@@ -66,7 +66,9 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let message = message.to_string();
     tokio::spawn(async move {
-        let _ = tx.send(Ok(Event::default().event("line").data(message))).await;
+        let _ = tx
+            .send(Ok(Event::default().event("line").data(message)))
+            .await;
         let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
     });
     Sse::new(ReceiverStream::new(rx))
@@ -100,12 +102,7 @@ async fn pipe(
             else => break,
         }
     }
-    child
-        .wait()
-        .await
-        .ok()
-        .and_then(|s| s.code())
-        .unwrap_or(1)
+    child.wait().await.ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
 pub async fn add(Query(q): Query<AddQuery>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {

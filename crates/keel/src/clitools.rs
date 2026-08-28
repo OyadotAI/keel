@@ -63,7 +63,9 @@ pub struct ClaudeStatus {
 pub async fn claude_status() -> Json<ClaudeStatus> {
     let mut out = ClaudeStatus::default();
 
-    if let Ok(v) = std::process::Command::new("claude").arg("--version").output()
+    if let Ok(v) = std::process::Command::new("claude")
+        .arg("--version")
+        .output()
         && v.status.success()
     {
         out.installed = true;
@@ -84,7 +86,10 @@ pub async fn claude_status() -> Json<ClaudeStatus> {
     };
 
     if let Some(account) = json.get("oauthAccount") {
-        out.authenticated = account.get("emailAddress").and_then(|v| v.as_str()).is_some();
+        out.authenticated = account
+            .get("emailAddress")
+            .and_then(|v| v.as_str())
+            .is_some();
         out.account = account
             .get("emailAddress")
             .and_then(|v| v.as_str())
@@ -140,7 +145,12 @@ const TOOLS: &[Tool] = &[
         label: "Google Cloud",
         binary: "gcloud",
         version: &["--version"],
-        whoami: &["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+        whoami: &[
+            "auth",
+            "list",
+            "--filter=status:ACTIVE",
+            "--format=value(account)",
+        ],
         install: &[("brew", &["install", "--cask", "google-cloud-sdk"])],
         // Opens a browser and waits. That is fine here: it is the user's own machine and their own
         // Google account, and there is no paste-a-key alternative worth offering instead.
@@ -369,7 +379,11 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             })
             .flatten();
 
-        let profiles = if t.id == "aws" { aws_profiles() } else { Vec::new() };
+        let profiles = if t.id == "aws" {
+            aws_profiles()
+        } else {
+            Vec::new()
+        };
 
         // Why it is not connected, in its own words. A tool with no login of its own takes its
         // credentials from somewhere else, and naming that is more use than a button that runs
@@ -381,9 +395,9 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
                  given."
                     .to_string(),
             ),
-            "docker" if version.is_some() && !authenticated => Some(
-                "Docker is installed but its daemon is not running.".to_string(),
-            ),
+            "docker" if version.is_some() && !authenticated => {
+                Some("Docker is installed but its daemon is not running.".to_string())
+            }
             "aws" if version.is_some() && profiles.is_empty() => Some(
                 "No AWS profile exists yet. Set one up with Identity Center below, or run \
                  `aws configure` for an access key — Keel never asks for one."

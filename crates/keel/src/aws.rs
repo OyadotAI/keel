@@ -67,7 +67,9 @@ pub async fn configure_sso(
     Json(req): Json<SsoSetup>,
 ) -> Result<Json<Configured>, (StatusCode, String)> {
     if !req.start_url.starts_with("https://") {
-        return Err(bad("The start URL is the https:// address your organisation gave you."));
+        return Err(bad(
+            "The start URL is the https:// address your organisation gave you.",
+        ));
     }
     for (label, value) in [
         ("start URL", &req.start_url),
@@ -92,7 +94,9 @@ pub async fn configure_sso(
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err(bad("A profile name is letters, digits, hyphens and underscores."));
+        return Err(bad(
+            "A profile name is letters, digits, hyphens and underscores.",
+        ));
     }
 
     // The session block first: a profile pointing at a session that does not exist is refused by
@@ -206,6 +210,9 @@ mod tests {
         assert!(out.contains("https://a.awsapps.com/start"), "the new url");
         assert!(!out.contains("old.awsapps.com"), "and not the old one");
         assert!(out.contains("[profile mine]"), "other sections survive");
-        assert!(out.contains("[profile other]"), "including the one after it");
+        assert!(
+            out.contains("[profile other]"),
+            "including the one after it"
+        );
     }
 }

@@ -25,3 +25,14 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   Overview, Readiness, Sessions, Skills and Trust views, deep-linkable by URL hash.
 - Untrusted marking: project-scoped hooks and MCP servers are flagged because they arrived with the
   repository rather than from the user's own configuration.
+
+### Fixed
+- CI could not build the workspace on its Linux runner. `wry`/`tao` resolve GTK and WebKit through
+  pkg-config on Linux, which `ubuntu-latest` does not ship, so `glib-sys` failed its build script
+  before any check ran. Both jobs now install `libwebkit2gtk-4.1-dev`,
+  `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev` and `libgtk-3-dev` (the 4.1/libsoup3 line, which
+  is what `webkit2gtk-sys` 2.0 requires).
+- `cargo fmt --all -- --check` failed on 43 hunks across 14 files, the backlog from before CI
+  existed. Reformatted `crates/keel/src/{api,approve,aws,clitools,fsops,infra,main,mcp,names,
+  permissions,prefs,project,serve}.rs` and `crates/keel-workspace/src/sessions.rs`. No behaviour
+  change.

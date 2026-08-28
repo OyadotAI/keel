@@ -26,7 +26,10 @@ async fn run(program: &str, args: &[&str], cwd: Option<&camino::Utf8Path>) -> Op
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    let output = tokio::time::timeout(DEADLINE, command.output()).await.ok()?.ok()?;
+    let output = tokio::time::timeout(DEADLINE, command.output())
+        .await
+        .ok()?
+        .ok()?;
     output
         .status
         .success()
@@ -101,7 +104,11 @@ pub async fn cluster() -> Json<Cluster> {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Json(out);
     };
-    let items = json.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+    let items = json
+        .get("items")
+        .and_then(|i| i.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut namespaces = std::collections::BTreeSet::new();
     for item in items {
@@ -170,7 +177,9 @@ pub async fn cluster() -> Json<Cluster> {
 /// creates a second web view, so every "open on GitHub" in the application silently did nothing.
 /// It is also the wrong behaviour: a run page is GitHub's, and it wants a session and an extension
 /// set that Keel's window does not have.
-pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+pub async fn open_url(
+    Json(body): Json<OpenUrl>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     let bad = |m: &str| (axum::http::StatusCode::BAD_REQUEST, m.to_string());
 
     // These URLs come from `gh`, so they are not hostile — but this handler hands a string to the
@@ -258,7 +267,12 @@ pub async fn workload(
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Json(out);
     };
-    for item in json.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default() {
+    for item in json
+        .get("items")
+        .and_then(|i| i.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
         let status = item.get("status");
         let containers = status
             .and_then(|s| s.get("containerStatuses"))
@@ -266,9 +280,10 @@ pub async fn workload(
             .cloned()
             .unwrap_or_default();
 
-        let ready_count = containers.iter().filter(|c| {
-            c.get("ready").and_then(|r| r.as_bool()).unwrap_or(false)
-        }).count();
+        let ready_count = containers
+            .iter()
+            .filter(|c| c.get("ready").and_then(|r| r.as_bool()).unwrap_or(false))
+            .count();
         let restarts = containers
             .iter()
             .filter_map(|c| c.get("restartCount").and_then(|r| r.as_i64()))

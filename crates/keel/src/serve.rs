@@ -98,7 +98,11 @@ struct StateResponse {
 }
 
 pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()> {
-    let launch = if open_browser { Launch::Tab } else { Launch::None };
+    let launch = if open_browser {
+        Launch::Tab
+    } else {
+        Launch::None
+    };
     serve(AppState::new(repo), port, launch).await
 }
 
@@ -111,7 +115,11 @@ pub async fn run_app(port: u16, open_browser: bool) -> Result<()> {
         Some(project) => AppState::new(project),
         None => AppState::empty(),
     };
-    let launch = if open_browser { Launch::Window } else { Launch::None };
+    let launch = if open_browser {
+        Launch::Window
+    } else {
+        Launch::None
+    };
     serve(state, port, launch).await
 }
 
@@ -200,9 +208,7 @@ pub enum Launch {
 }
 
 async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
-    state
-        .port
-        .store(port, std::sync::atomic::Ordering::Relaxed);
+    state.port.store(port, std::sync::atomic::Ordering::Relaxed);
     let url = format!("http://127.0.0.1:{port}");
 
     // Launching a second time from the Dock must raise the window that is already open, not fail
@@ -285,11 +291,20 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route("/api/approve/ask", axum::routing::post(crate::approve::ask))
         .route("/api/approve/poll", get(crate::approve::poll))
-        .route("/api/approve/answer", axum::routing::post(crate::approve::answer))
-        .route("/api/agents/create", axum::routing::post(crate::agents::create))
+        .route(
+            "/api/approve/answer",
+            axum::routing::post(crate::approve::answer),
+        )
+        .route(
+            "/api/agents/create",
+            axum::routing::post(crate::agents::create),
+        )
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
-        .route("/api/aws/sso", axum::routing::post(crate::aws::configure_sso))
+        .route(
+            "/api/aws/sso",
+            axum::routing::post(crate::aws::configure_sso),
+        )
         .route("/api/k8s", get(crate::infra::cluster))
         .route("/api/k8s/workload", get(crate::infra::workload))
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))
@@ -376,7 +391,11 @@ async fn api_session_work(
     Query(query): Query<SessionQuery>,
 ) -> Json<keel_workspace::SessionWork> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    Json(keel_workspace::session_work(&state.repo(), &home, &query.id))
+    Json(keel_workspace::session_work(
+        &state.repo(),
+        &home,
+        &query.id,
+    ))
 }
 
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
