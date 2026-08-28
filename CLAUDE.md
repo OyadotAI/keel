@@ -38,6 +38,23 @@ tension:
   nothing and exits 0, which defers to the allowlist. A guardrail that can wedge the agent is one
   people turn off.
 
+## Trusting a project
+
+Per-command approval on a repository somebody already owns is not a safety property, it is a toll —
+`docker`, then `wc`, then `grep`, then `sed` — and the way people pay a toll is
+`--dangerously-skip-permissions`, which turns permissions off everywhere and permanently. So there
+is one decision that removes the whole class: **Trust this project**.
+
+- Scoped to one project, stored in its own `.keel/permissions.json`, and never the default. Every
+  path that could set it by accident — an older store with no such field, a file that will not
+  parse — reads as untrusted, and there is a test for each.
+- Withdrawable, from the status bar, keeping the rules already approved. Granting something you
+  cannot easily take back is a trap.
+- Visible while it holds. A permission granted once and then forgotten is the one that surprises
+  you later, so a trusted project says so in the status bar for as long as it is true.
+
+The dialog names what it grants rather than asking "are you sure", which tells nobody anything.
+
 This is what makes an approval a *question* rather than a notification. Before it, a refused
 command came back as an error, the turn carried on without it, and the person's click added a rule
 and asked the agent to retry — by which point it had usually worked around the gap. Verified end to

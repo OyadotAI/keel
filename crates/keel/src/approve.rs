@@ -64,7 +64,7 @@ pub struct Answer {
     /// Rules to remember, so the same command is not asked about twice.
     #[serde(default)]
     pub rules: Vec<String>,
-    /// `project` or `session`.
+    /// `project`, `session`, or `trust` — the last meaning "stop asking about this project".
     #[serde(default)]
     pub scope: String,
 }
@@ -181,9 +181,19 @@ pub async fn ask(
     State(state): State<Arc<AppState>>,
     Json(hook): Json<HookInput>,
 ) -> Result<Json<Decision>, (StatusCode, String)> {
+    let repo = state.repo();
+
+    // One decision, already made. Nothing is queued and nobody is asked.
+    if crate::permissions::trusted(&repo) {
+        return Ok(Json(Decision {
+            decision: "defer".into(),
+            reason: String::new(),
+        }));
+    }
+
     let rules = rules_for(&hook.tool_name, &hook.tool_input);
 
-    if already_allowed(&rules, &crate::permissions::effective(&state.repo())) {
+    if already_allowed(&rules, &crate::permissions::effective(&repo)) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -245,9 +255,13 @@ pub async fn answer(
     let allow = body.decision == "allow";
 
     if allow {
-        // Remembered before the agent is released, so the retry that follows does not ask again.
-        for rule in &body.rules {
-            let _ = crate::permissions::remember(&state.repo(), rule, &body.scope);
+        // Remembered before the agent is released, so the call that follows does not ask again.
+        if body.scope == "trust" {
+            let _ = crate::permissions::set_trusted(&state.repo(), true);
+        } else {
+            for rule in &body.rules {
+                let _ = crate::permissions::remember(&state.repo(), rule, &body.scope);
+            }
         }
     }
 

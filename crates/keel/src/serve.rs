@@ -230,6 +230,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/save", axum::routing::post(api_save))
         .route("/api/permissions", get(crate::permissions::list))
         .route(
+            "/api/permissions/trust",
+            axum::routing::post(crate::permissions::trust),
+        )
+        .route(
             "/api/permissions/add",
             axum::routing::post(crate::permissions::add),
         )

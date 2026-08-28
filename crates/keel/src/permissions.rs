@@ -31,24 +31,50 @@ fn store_path(repo: &Utf8Path) -> camino::Utf8PathBuf {
 #[derive(Serialize, Deserialize, Default)]
 struct Stored {
     allow: BTreeSet<String>,
+    /// The project has been trusted: the agent runs commands here without asking each time.
+    ///
+    /// One decision instead of one per program. Approving `docker`, then `wc`, then `grep`, then
+    /// `sed` on a repository somebody already owns is not a safety property — it is a toll, and a
+    /// toll people pay by reaching for `--dangerously-skip-permissions`, which turns it off
+    /// everywhere and for good. Scoped to one project, revocable, and never the default is a
+    /// better trade than a guardrail people route around.
+    #[serde(default)]
+    trusted: bool,
 }
 
-fn load(repo: &Utf8Path) -> BTreeSet<String> {
+fn read(repo: &Utf8Path) -> Stored {
     std::fs::read_to_string(store_path(repo))
         .ok()
         .and_then(|t| serde_json::from_str::<Stored>(&t).ok())
-        .map(|s| s.allow)
         .unwrap_or_default()
 }
 
-fn save(repo: &Utf8Path, allow: &BTreeSet<String>) -> Result<(), String> {
+fn load(repo: &Utf8Path) -> BTreeSet<String> {
+    read(repo).allow
+}
+
+/// Whether this project has been trusted. Never true unless somebody said so.
+pub fn trusted(repo: &Utf8Path) -> bool {
+    read(repo).trusted
+}
+
+fn write(repo: &Utf8Path, stored: &Stored) -> Result<(), String> {
     let path = store_path(repo);
     std::fs::create_dir_all(path.parent().ok_or("bad path")?).map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(&Stored {
-        allow: allow.clone(),
-    })
-    .map_err(|e| e.to_string())?;
+    let body = serde_json::to_string_pretty(stored).map_err(|e| e.to_string())?;
     std::fs::write(path, body).map_err(|e| e.to_string())
+}
+
+fn save(repo: &Utf8Path, allow: &BTreeSet<String>) -> Result<(), String> {
+    let mut stored = read(repo);
+    stored.allow = allow.clone();
+    write(repo, &stored)
+}
+
+pub fn set_trusted(repo: &Utf8Path, on: bool) -> Result<(), String> {
+    let mut stored = read(repo);
+    stored.trusted = on;
+    write(repo, &stored)
 }
 
 /// Rules the project already declares by its own toolchain.
@@ -95,7 +121,14 @@ pub fn effective(repo: &Utf8Path) -> Vec<String> {
 /// from the working tree — the thing that made repo hooks dangerous is exactly the thing this
 /// does not do.
 pub fn settings_json(repo: &Utf8Path, port: u16) -> String {
-    let mut settings = serde_json::json!({ "permissions": { "allow": effective(repo) } });
+    let mut allow = effective(repo);
+    if trusted(repo) {
+        // A bare tool name allows every use of it. With the project trusted the hook answers
+        // instantly anyway; this is here so the two paths agree, and so a session that somehow
+        // runs without the hook behaves the same rather than differently.
+        allow.push("Bash".into());
+    }
+    let mut settings = serde_json::json!({ "permissions": { "allow": allow } });
 
     // Without an executable there is nothing to point the hook at, and a hook that cannot run
     // would stall every tool call until Claude Code's own timeout. Better to ship no hook and fall
@@ -126,6 +159,23 @@ pub struct PermissionsView {
     pub session: Vec<String>,
     /// Rules the project's own toolchain justifies, not yet approved.
     pub suggested: Vec<String>,
+    /// The whole project is trusted, so none of the above is being consulted.
+    pub trusted: bool,
+}
+
+#[derive(Deserialize)]
+pub struct TrustBody {
+    pub trusted: bool,
+}
+
+/// Grant or withdraw trust for the open project.
+pub async fn trust(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TrustBody>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    set_trusted(&state.repo(), body.trusted)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(body.trusted))
 }
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<PermissionsView> {
@@ -143,6 +193,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<PermissionsView> {
         .collect();
 
     Json(PermissionsView {
+        trusted: trusted(&repo),
         project: project.into_iter().collect(),
         session,
         suggested,
@@ -271,6 +322,61 @@ mod tests {
         assert!(!valid_rule("bun install")); // a shell command, not a rule
         assert!(!valid_rule(""));
         assert!(!valid_rule("Bash(x)\nBash(y)"));
+    }
+
+    /// Trust is a standing grant to run anything in one project, so the only acceptable default is
+    /// off — including for a store written before the field existed, and for a file that will not
+    /// parse at all.
+    #[test]
+    fn trust_is_never_on_by_accident() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        assert!(!trusted(&root), "a project nobody has trusted");
+
+        // A store from before the field existed.
+        std::fs::create_dir_all(root.join(".keel")).unwrap();
+        std::fs::write(
+            root.join(".keel/permissions.json"),
+            r#"{"allow":["Bash(make *)"]}"#,
+        )
+        .unwrap();
+        assert!(!trusted(&root), "an older store is not trusted");
+        assert!(load(&root).contains("Bash(make *)"), "and keeps its rules");
+
+        // Unparseable.
+        std::fs::write(root.join(".keel/permissions.json"), "{ not json").unwrap();
+        assert!(!trusted(&root), "an unreadable store is not trusted");
+    }
+
+    /// Granting trust must not quietly discard the rules already approved, or withdrawing it drops
+    /// someone back to being asked about everything they had already answered.
+    #[test]
+    fn trust_and_the_allowlist_are_independent() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        remember(&root, "Bash(docker *)", "project").unwrap();
+        set_trusted(&root, true).unwrap();
+
+        assert!(trusted(&root));
+        assert!(load(&root).contains("Bash(docker *)"));
+
+        set_trusted(&root, false).unwrap();
+        assert!(!trusted(&root));
+        assert!(load(&root).contains("Bash(docker *)"), "rules survive withdrawal");
+    }
+
+    /// A trusted project passes a blanket rule too, so the hook path and the plain permission path
+    /// cannot disagree about what is allowed.
+    #[test]
+    fn a_trusted_project_says_so_in_its_settings() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        let before: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7777)).unwrap();
+        let allow = before["permissions"]["allow"].as_array().unwrap();
+        assert!(!allow.iter().any(|r| r == "Bash"));
+
+        set_trusted(&root, true).unwrap();
+        let after: serde_json::Value = serde_json::from_str(&settings_json(&root, 7777)).unwrap();
+        let allow = after["permissions"]["allow"].as_array().unwrap();
+        assert!(allow.iter().any(|r| r == "Bash"));
     }
 
     #[test]
