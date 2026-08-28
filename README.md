@@ -13,14 +13,13 @@ It is not an editor. Keep using yours — Keel works on the same directory.
 Keel is a macOS application: a real window, a Dock icon, a menu bar. It drives the `claude` you
 already have, so your Claude subscription covers the agent and Keel never sees an API key.
 
-**From a release.** Download `Keel.dmg`, open it, drag Keel to Applications.
+**From a release.** Download `Keel.dmg`, open it, drag Keel to Applications. That is all — it is
+signed with a Developer ID and notarised, so it opens with no warning and no Privacy & Security
+detour.
 
-If macOS says *"Keel is damaged and can't be opened"*, the build was signed but not notarised —
-that is Gatekeeper's message for it, and the file is fine. Either use a notarised release, or:
-
-```
-xattr -dr com.apple.quarantine /Applications/Keel.app
-```
+Both the image and the app inside it are stapled, which means it also opens on a machine with no
+network. Notarising only the image leaves the app passing by an online check, which works
+everywhere you would test it and fails on a laptop on a plane.
 
 **From source.** Needs Rust and about three minutes. Sidesteps Gatekeeper entirely, because you
 built it.

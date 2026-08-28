@@ -34,24 +34,49 @@ remembered between launches.
 or named by `KEEL_SIGN_IDENTITY`. Both use the hardened runtime and a secure timestamp, which
 notarisation requires and does not explain the absence of.
 
-Signed is not enough. Gatekeeper's assessment says so exactly:
+Signed is not enough — Gatekeeper says so exactly:
 
     dist/Keel.app: rejected
     source=Unnotarized Developer ID
 
 Notarisation closes it, and needs credentials in the keychain. `notarytool store-credentials` asks
 for them interactively — an Apple ID, a team id, an app-specific password — so it cannot be driven
-from a script. Once, then every `make dmg` notarises and staples on its own:
+from a script. Once, and every `make dmg` notarises and staples on its own:
 
     xcrun notarytool store-credentials keel \
       --apple-id <apple-id> --team-id <team> --password <app-specific-password>
 
 Use `KEEL_NOTARY_PROFILE` for a different profile name.
 
-Without any of that the image still builds and still works — on the machine that built it. Anyone
-else gets "Keel is damaged and can't be opened", which is what Gatekeeper says instead of the
-truth, and the fix they need is:
+## Order matters
+
+The app is notarised and stapled **before** the image is built from it, and the image is notarised
+after. Doing only the image leaves the app inside without a ticket — Gatekeeper still accepts it,
+by asking Apple, so it passes on every machine you would test on and fails on one with no network.
+
+That is not hypothetical. An app copied out of an image notarised on its own reported this, in the
+same breath:
+
+    accepted
+    source=Notarized Developer ID
+    Keel.app does not have a ticket stapled to it.
+
+## If notarisation is not set up
+
+The image still builds and is signed, and works on the machine that built it. Anyone else gets
+"Keel is damaged and can't be opened", which is what Gatekeeper says instead of the truth, and the
+fix they need is:
 
     xattr -dr com.apple.quarantine /Applications/Keel.app
 
 Saying that plainly in a release note is better than shipping something that appears corrupt.
+
+## A 403 about agreements
+
+    HTTP status code: 403. A required agreement is missing or has expired.
+
+Two separate places, and accepting one does not clear the other. `notarytool` authenticates against
+the App Store Connect API, so **appstoreconnect.apple.com → Business** is the one usually
+outstanding — not the developer portal, which is where everyone looks first. Only the Account
+Holder can accept either. Nothing about the certificate or the build is involved; signing keeps
+working throughout.
