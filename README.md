@@ -23,11 +23,22 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Saving
+
+`⌘S`, or the Save button that appears in the editor bar when the open file has unsaved edits. A dot
+replaces the close × on a dirty tab, and the status rail says `unsaved`. Nothing autosaves — the
+agent writes to disk directly, so an autosave racing it would overwrite work you did not make.
+
 ## Connections
 
-`keel serve` connects to GitHub and Cloudflare from the Connections panel. Tokens go in the OS
-keychain and are sent only to their own APIs. If you use the `gh` CLI, Keel picks that credential up
-automatically rather than asking you to mint a token that already exists.
+Keel drives the first-party CLIs rather than asking for long-lived tokens: it detects whether `gh`,
+`wrangler` and `aws` are installed, offers to install them with whichever package manager you
+actually have, and runs their own login flows. Install and sign-in both stream their output live,
+because those commands print things you have to act on — `gh auth login --web` shows a one-time code
+for the browser.
+
+A stored token still works where one is genuinely needed. Tokens go in the OS keychain and are sent
+only to their own APIs.
 
 From there you can browse your repositories, clone one, or open any local directory — Keel switches
 to it without restarting.

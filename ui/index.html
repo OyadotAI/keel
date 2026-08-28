@@ -128,7 +128,13 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .row:hover{background:var(--n4);color:var(--n12)}
 .row.sel{background:var(--n5);color:var(--n12);box-shadow:inset 2px 0 0 var(--accent)}
 .row .name{overflow:hidden;text-overflow:ellipsis}
-.row .caret{width:8px;flex:none;color:var(--n9);font-size:8px}
+.row .caret{width:10px;flex:none;color:var(--n9);font-size:9px;text-align:center}
+.row.dir{color:var(--n12)}
+.row.dir .name{font-weight:550}
+/* Indent guides: a hairline per nesting level, so depth is legible without counting pixels. */
+.kids{position:relative}
+.kids::before{content:"";position:absolute;top:0;bottom:0;left:var(--guide,12px);
+  width:1px;background:var(--n6)}
 .row .flag{margin-left:auto;font:700 10px var(--mono);flex:none}
 .kids.shut{display:none}
 
@@ -164,6 +170,9 @@ input:focus{border-color:var(--accent)}
 input::placeholder{color:var(--n9)}
 .field .line{display:flex;gap:var(--s2);margin-top:var(--s3);align-items:center}
 .note{font:11px/1.45 var(--sans);margin-top:var(--s3)}
+.cli-out{margin:var(--s3) 0 0;padding:var(--s3);background:var(--n2);border:1px solid var(--n6);
+  border-radius:var(--r2);font:10.5px/1.5 var(--mono);color:var(--n11);white-space:pre-wrap;
+  word-break:break-word;max-height:220px;overflow:auto}
 .note.good{color:var(--ok)} .note.bad{color:var(--crit)} .note.dim{color:var(--n10)}
 
 /* ── editor ─────────────────────────────────────────────────────────────── */
@@ -193,6 +202,9 @@ input::placeholder{color:var(--n9)}
   font:11px var(--mono);color:var(--n10);transition:background var(--t-hover),color var(--t-hover)}
 .seg button:hover{color:var(--n12)}
 .seg button[aria-current=true]{background:var(--n6);color:var(--n12)}
+.btn.save{padding:2px var(--s3);font-size:11px}
+.btn.save kbd{background:rgba(255,255,255,.16);border:0;color:rgba(255,255,255,.85);
+  margin-left:var(--s2)}
 kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   border-bottom-width:2px;padding:1px 4px;border-radius:var(--r1);color:var(--n10)}
 
@@ -203,6 +215,44 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 /* Monaco paints its own chrome; these pull it onto our ramp. */
 .monaco-editor .scroll-decoration{box-shadow:none!important}
 .monaco-editor .minimap{opacity:.55}
+
+/* Session switcher */
+.picker{all:unset;display:flex;align-items:center;gap:var(--s2);cursor:pointer;
+  font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--n10);
+  max-width:60%;transition:color var(--t-hover)}
+.picker:hover{color:var(--n12)}
+.picker #sess-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-transform:none;letter-spacing:0;font-weight:500;font-size:11.5px}
+.picker .cv{font-size:8px;flex:none}
+.sesslist{max-height:44%;overflow-y:auto;border-bottom:1px solid var(--n6);background:var(--n2)}
+.sesslist .card{border-color:var(--n6)}
+.sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
+
+/* Rendered preview for files worth reading rather than editing. */
+.prev{position:absolute;inset:0;overflow:auto;padding:var(--s6) 40px 80px;
+  font:14px/1.65 var(--sans);color:var(--n12);max-width:none}
+.prev>*{max-width:76ch}
+.prev h1,.prev h2,.prev h3{font-weight:620;letter-spacing:-.01em;line-height:1.3;
+  margin:var(--s6) 0 var(--s4)}
+.prev h1{font-size:26px} .prev h2{font-size:19px} .prev h3{font-size:15px}
+.prev h1:first-child,.prev h2:first-child{margin-top:0}
+.prev p{margin:0 0 var(--s4)}
+.prev ul,.prev ol{margin:0 0 var(--s4);padding-left:var(--s6)}
+.prev li{margin-bottom:var(--s2)}
+.prev code{font:12px var(--mono);background:var(--n4);padding:1px 5px;border-radius:var(--r1)}
+.prev pre{background:var(--n2);border:1px solid var(--n6);border-radius:var(--r2);
+  padding:var(--s4);overflow-x:auto;margin:0 0 var(--s4)}
+.prev pre code{background:none;padding:0;font-size:12px;line-height:1.6}
+.prev blockquote{margin:0 0 var(--s4);padding-left:var(--s4);
+  border-left:2px solid var(--n7);color:var(--n11)}
+.prev a{color:var(--accent)}
+.prev hr{border:0;border-top:1px solid var(--n6);margin:var(--s6) 0}
+.prev table{border-collapse:collapse;margin:0 0 var(--s4);font-size:13px}
+.prev th,.prev td{border:1px solid var(--n6);padding:var(--s2) var(--s3);text-align:left}
+.prev th{background:var(--n2);font-weight:600}
+.prev img{max-width:100%;border-radius:var(--r2)}
+.prev .imgwrap{display:grid;place-items:center;height:100%}
+.prev .imgwrap img{max-height:80vh;box-shadow:0 8px 40px rgba(0,0,0,.3)}
 
 /* ── agent ──────────────────────────────────────────────────────────────── */
 .chat{grid-row:1/2;background:var(--n3);border-left:1px solid var(--n6);
@@ -296,9 +346,6 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <button class="ic" data-p="changes" title="Changes">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4.2 2v7.9a2.7 2.7 0 104.7 1.8h3V2h-1.9v7.8H8.8A2.7 2.7 0 006.1 9.9V2H4.2z"/></svg>
       <span class="badge hidden" data-b="changes">0</span></button>
-    <button class="ic" data-p="sessions" title="Sessions">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.2a6.8 6.8 0 100 13.6A6.8 6.8 0 008 1.2zm.75 3.4v3.7l2.9 1.7-.75 1.25-3.6-2.1V4.6h1.45z"/></svg>
-      <span class="badge hidden" data-b="sessions">0</span></button>
     <button class="ic" data-p="skills" title="Skills and extensions">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4l1.9 4.2 4.6.45-3.45 3.1.98 4.5L8 11.3l-4.03 2.35.98-4.5L1.5 6.05l4.6-.45L8 1.4z"/></svg></button>
     <button class="ic" data-p="readiness" title="Readiness">
@@ -317,7 +364,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <div class="crumb">
       <span class="path" id="crumb">No file open</span>
       <span class="right">
-        <span class="seg"><button id="v-src" aria-current="true">Source</button><button id="v-diff">Diff</button></span>
+        <button class="btn save hidden" id="do-save">Save <kbd>⌘S</kbd></button>
+        <span class="seg"><button id="v-src" aria-current="true">Source</button><button id="v-prev" class="hidden">Preview</button><button id="v-diff">Diff</button></span>
       </span>
     </div>
     <div class="surface" id="surface"></div>
@@ -325,8 +373,12 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 
   <section class="chat">
     <div class="rz right" id="rz2"></div>
-    <div class="ph"><h2>Agent</h2><span class="n" id="agent-model"></span>
-      <button class="act" id="a-clear">clear</button></div>
+    <div class="ph">
+      <button class="picker" id="sess-btn"><span id="sess-name">New session</span><span class="cv">▾</span></button>
+      <span class="n" id="agent-model"></span>
+      <button class="act" id="a-new">new</button>
+    </div>
+    <div class="sesslist hidden" id="sess-list"></div>
     <div class="log" id="log"></div>
     <div class="composer">
       <textarea id="prompt" rows="2" placeholder="Describe a change…"></textarea>
@@ -544,13 +596,17 @@ async function open(path,mode){
   // Leaving a file preserves where you were in it.
   if(active&&active!==path&&mon&&view==='src') viewState.set(active,mon.saveViewState());
   active=path;
-  if(mode){ view=mode; syncView(); }
+  view = mode ?? (previewable(path) ? 'prev' : 'src');
+  syncView();
   draw();
 }
 function syncView(){
   el('v-src').setAttribute('aria-current',view==='src');
+  el('v-prev').setAttribute('aria-current',view==='prev');
   el('v-diff').setAttribute('aria-current',view==='diff');
 }
+el('v-prev').onclick=()=>{ if(active&&mon&&view==='src') viewState.set(active,mon.saveViewState());
+  view='prev'; syncView(); draw(); };
 el('v-src').onclick=()=>{ if(active&&mon&&view==='src') viewState.set(active,mon.saveViewState());
   view='src'; syncView(); draw(); };
 el('v-diff').onclick=()=>{ if(active&&mon&&view==='src') viewState.set(active,mon.saveViewState());
@@ -561,6 +617,89 @@ function showEmpty(html){
   mon=null; monDiff=null; ready=false;
 }
 function toast(t){ el('crumb').textContent=t; }
+
+/* ════ preview ═══════════════════════════════════════════════════════════
+   Some files are for reading, not editing. Markdown gets rendered; images get
+   shown. Everything else has no preview and the toggle stays hidden. */
+const IMG=/\.(png|jpe?g|gif|webp|avif|ico)$/i;
+const previewable=p=>/\.mde?$|\.markdown$/i.test(p)||IMG.test(p);
+
+/** A deliberately small Markdown subset: headings, lists, code, quotes, tables, inline marks.
+    Everything is escaped first — this is repository content nobody has reviewed. */
+function markdown(src){
+  const blocks=[];
+  // Fenced code is extracted before anything else so its contents are never parsed as markup.
+  src=src.replace(/```(\w*)\n([\s\S]*?)```/g,(m,lang,code)=>
+    '\u0000'+(blocks.push('<pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre>')-1)+'\u0000');
+
+  const inline=t=>esc(t)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g,(m,a,u)=>'<img alt="'+a+'" src="'+imgSrc(u)+'">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
+
+  const out=[]; let list=null, table=null;
+  const shutList=()=>{ if(list){ out.push('</'+list+'>'); list=null; } };
+  const shutTable=()=>{ if(table){ out.push('</tbody></table>'); table=null; } };
+
+  for(const raw of src.split('\n')){
+    const line=raw.trimEnd();
+    if(/^\u0000\d+\u0000$/.test(line.trim())){ shutList(); shutTable(); out.push(line.trim()); continue; }
+    if(!line.trim()){ shutList(); shutTable(); continue; }
+
+    const h=line.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ shutList(); shutTable(); out.push('<h'+Math.min(h[1].length,3)+'>'+inline(h[2])+
+      '</h'+Math.min(h[1].length,3)+'>'); continue; }
+    if(/^(-{3,}|\*{3,})$/.test(line.trim())){ shutList(); shutTable(); out.push('<hr>'); continue; }
+
+    // A table needs its separator row to be recognised, so peek by shape rather than lookahead.
+    if(/^\|.*\|$/.test(line.trim())){
+      const cells=line.trim().slice(1,-1).split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;   // separator
+      if(!table){ shutList(); out.push('<table><thead><tr>'+cells.map(c=>'<th>'+inline(c)+'</th>').join('')+
+        '</tr></thead><tbody>'); table=1; continue; }
+      out.push('<tr>'+cells.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>'); continue;
+    }
+    shutTable();
+
+    const q=line.match(/^>\s?(.*)$/);
+    if(q){ shutList(); out.push('<blockquote>'+inline(q[1])+'</blockquote>'); continue; }
+
+    const ul=line.match(/^\s*[-*+]\s+(.*)$/), ol=line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if(ul||ol){
+      const want=ul?'ul':'ol';
+      if(list!==want){ shutList(); out.push('<'+want+'>'); list=want; }
+      out.push('<li>'+inline((ul??ol)[1])+'</li>'); continue;
+    }
+    shutList();
+    out.push('<p>'+inline(line)+'</p>');
+  }
+  shutList(); shutTable();
+  return out.join('\n').replace(/\u0000(\d+)\u0000/g,(m,i)=>blocks[+i]);
+}
+
+/** Resolve a relative image reference against the open file, through the raw endpoint. */
+function imgSrc(u){
+  if(/^(https?:)?\/\//.test(u)||u.startsWith('data:')) return esc(u);
+  const dir=(active??'').split('/').slice(0,-1).join('/');
+  const rel=u.replace(/^\.\//,'');
+  return '/api/raw?path='+encodeURIComponent(dir?dir+'/'+rel:rel);
+}
+
+function drawPreview(tab){
+  if(mon){ mon.dispose(); mon=null; ready=false; }
+  if(monDiff){ monDiff.dispose(); monDiff=null; }
+  el('crumb').textContent=tab.path+'  ·  preview';
+  el('surface').innerHTML='<div class="prev" id="prev"></div>';
+  if(IMG.test(tab.path)){
+    el('prev').innerHTML='<div class="imgwrap"><img alt="'+esc(tab.path)+'" src="/api/raw?path='+
+      encodeURIComponent(tab.path)+'"></div>';
+  } else {
+    el('prev').innerHTML=markdown(tab.content);
+  }
+  drawStatus();
+}
 
 /* ════ rendering ═════════════════════════════════════════════════════════ */
 async function draw(){
@@ -577,6 +716,9 @@ async function draw(){
     drawStatus(); return;
   }
 
+  el('v-prev').classList.toggle('hidden',!previewable(tab.path));
+  if(view==='prev'&&!previewable(tab.path)) view='src';
+  if(view==='prev'){ syncView(); drawPreview(tab); return; }
   if(view==='diff'){ await drawDiff(tab); return; }
 
   if(monDiff){ monDiff.dispose(); monDiff=null; el('surface').innerHTML=''; }
@@ -620,16 +762,23 @@ async function save(){
 }
 
 /* ════ side panels ═══════════════════════════════════════════════════════ */
+const INDENT=13;
 function node(n,depth){
-  const pad=`padding-left:${12+depth*10}px`;
+  // Files sit where a folder's chevron would be, so names in the same folder line up whether or
+  // not their siblings are expandable.
+  const pad=8+depth*INDENT;
   if(!n.dir){
-    const e=frag('<div class="row" style="'+pad+'" data-p="'+esc(n.path)+'"><span class="name">'+esc(n.name)+'</span></div>');
+    const e=frag('<div class="row" style="padding-left:'+(pad+14)+'px" data-p="'+esc(n.path)+
+      '"><span class="name">'+esc(n.name)+'</span></div>');
     e.onclick=()=>open(n.path); return e;
   }
-  const wrap=document.createElement('div'), shut=depth>0;
-  const head=frag('<div class="row" style="'+pad+'"><span class="caret">'+(shut?'▸':'▾')+
-    '</span><span class="name">'+esc(n.name)+'</span></div>');
-  const kids=document.createElement('div'); kids.className='kids'+(shut?' shut':'');
+  const wrap=document.createElement('div');
+  const shut=depth>0;
+  const head=frag('<div class="row dir" style="padding-left:'+pad+'px"><span class="caret">'+
+    (shut?'▸':'▾')+'</span><span class="name">'+esc(n.name)+'</span></div>');
+  const kids=document.createElement('div');
+  kids.className='kids'+(shut?' shut':'');
+  kids.style.setProperty('--guide',(pad+5)+'px');
   (n.children??[]).forEach(c=>kids.append(node(c,depth+1)));
   head.onclick=()=>{ kids.classList.toggle('shut');
     head.querySelector('.caret').textContent=kids.classList.contains('shut')?'▸':'▾'; };
@@ -658,15 +807,6 @@ const PANELS={
       e.onclick=()=>open(c.path,'diff');
       el('ch').append(e);
     });
-  },
-  sessions(){
-    const list=state?.workspace.sessions??[];
-    el('side').innerHTML=H('Sessions',list.length)+
-      '<div class="sub">Titles and counts only. Message contents never leave the transcript.</div>'+
-      (list.length?list.map(s=>'<div class="card"><div class="t">'+esc(s.title??'(untitled)')+'</div>'+
-        '<div class="m">'+s.messages+' msg · '+esc((s.last_active??'').slice(0,16).replace('T',' '))+'</div>'+
-        '<div class="m" style="color:var(--accent)">--resume '+esc(s.id.split('-')[0])+'</div></div>').join('')
-        :'<div class="empty">No sessions recorded here yet.</div>');
   },
   skills(){
     const w=state?.workspace; if(!w) return;
@@ -700,8 +840,11 @@ const PANELS={
   connections(){ drawConnections(); },
 };
 
-function setPanel(p){
-  if(panel===p && !el('app').classList.contains('no-side')){ toggleSide(); return; }
+/// Clicking the active icon collapses the panel, the way every editor behaves. That must only
+/// happen on a real click — a deep link or a refresh calling setPanel would otherwise collapse the
+/// sidebar the moment you asked for it.
+function setPanel(p,fromClick){
+  if(fromClick && panel===p && !el('app').classList.contains('no-side')){ toggleSide(); return; }
   panel=p;
   el('app').classList.remove('no-side');
   document.querySelectorAll('.ic').forEach(b=>b.setAttribute('aria-current',b.dataset.p===p));
@@ -709,36 +852,89 @@ function setPanel(p){
   el('side').append(frag('<div class="rz left" id="rz1"></div>'));
   wireResize(el('rz1'),'--side','keel.side',190,540,false);
 }
-document.querySelectorAll('.ic').forEach(b=>b.onclick=()=>setPanel(b.dataset.p));
+document.querySelectorAll('.ic').forEach(b=>b.onclick=()=>setPanel(b.dataset.p,true));
+
+/* ════ CLI setup ═════════════════════════════════════════════════════════
+   Keel drives the first-party CLIs rather than asking for long-lived tokens.
+   Install and login both stream their output, because these commands print
+   things you have to act on — gh shows a one-time code for the browser. */
+let clis=null;
+
+async function loadClis(){ clis=await (await fetch('/api/cli')).json(); }
+
+/** Run an install or login, streaming its output into a live console block. */
+function runCli(kind,id,host){
+  host.innerHTML='<pre class="cli-out" id="cli-out"></pre>';
+  const out=el('cli-out');
+  const es=new EventSource('/api/cli/'+kind+'?id='+encodeURIComponent(id));
+  const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
+  es.addEventListener('line',e=>write(e.data));
+  es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
+  es.addEventListener('done',async e=>{
+    es.close();
+    write(e.data==='0' ? '\n✓ done' : '\nexited '+e.data);
+    await loadClis(); await loadConn();
+    if(panel==='connections') setPanel('connections');
+  });
+}
 
 /* ════ connections ═══════════════════════════════════════════════════════ */
 let repoList=null;
+function cliBlock(t,extra){
+  const state = !t.installed ? 'missing' : t.authenticated ? 'ready' : 'unauth';
+  const note =
+    state==='ready'  ? '<div class="note good">'+esc(t.version??'')+'</div>' :
+    state==='unauth' ? '<div class="note dim">Installed but not signed in.</div>' :
+    t.install_cmd    ? '<div class="note dim">Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.</div>'
+                     : '<div class="note bad">Not installed, and no supported package manager found. '+
+                       '<a href="'+esc(t.manual)+'" target="_blank" rel="noopener">Install instructions</a></div>';
+  const actions = [];
+  if(state==='missing'&&t.install_cmd) actions.push('<button class="btn" data-cli="install" data-id="'+t.id+'">Install</button>');
+  if(state==='unauth') actions.push('<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>');
+  if(state==='ready') actions.push('<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>');
+  return '<div class="field"><label>'+esc(t.label)+'</label>'+note+
+    '<div class="line">'+actions.join('')+(extra??'')+'</div>'+
+    '<div id="cli-'+t.id+'"></div></div>';
+}
+
 function drawConnections(){
   const gh=conn?.github, cf=conn?.cloudflare;
+  const byId=id=>(clis??[]).find(c=>c.id===id);
   let h=H('Connections');
+
   h+='<div class="field"><label>Claude Code</label>'+(conn?.claude
     ? '<div class="note good">Installed. Keel drives your own <code>claude</code>, so your subscription covers it.</div>'
     : '<div class="note bad">Not on PATH. The agent panel needs Claude Code installed.</div>')+'</div>';
-  h+='<div class="field"><label>GitHub</label>'+(gh
-    ? '<div class="note good">'+esc(gh.login)+(conn.github_via_gh?' — via your gh CLI':'')+'</div>'+
-      '<div class="line"><button class="btn quiet" id="gh-repos">Browse repos</button>'+
-      (conn.github_via_gh?'':'<button class="btn quiet" id="gh-out">Disconnect</button>')+'</div>'
-    : '<input type="password" id="gh-tok" placeholder="ghp_… token with repo scope">'+
-      '<div class="line"><button class="btn" id="gh-in">Connect</button></div>'+
-      '<div class="note dim">Using the <code>gh</code> CLI? Keel picks that up automatically.</div>')+
-    '<div id="gh-msg"></div></div>';
-  h+='<div class="field"><label>Cloudflare</label>'+(cf
+
+  const g=byId('gh');
+  if(g) h+=cliBlock(g, gh?'<button class="btn quiet" id="gh-repos">Browse repos</button>':'');
+  if(gh) h+='<div class="field"><label>GitHub account</label><div class="note good">'+esc(gh.login)+
+    (conn.github_via_gh?' — via the gh CLI':' — via a stored token')+'</div>'+
+    (conn.github_via_gh?'':'<div class="line"><button class="btn quiet" id="gh-out">Forget token</button></div>')+
+    '</div>';
+
+  const w=byId('wrangler');
+  if(w) h+=cliBlock(w);
+  h+='<div class="field"><label>Cloudflare account</label>'+(cf
     ? '<div class="note good">'+cf.map(a=>esc(a.name)).join(', ')+'</div>'+
-      '<div class="line"><button class="btn quiet" id="cf-out">Disconnect</button></div>'
-    : '<input type="password" id="cf-tok" placeholder="API token">'+
-      '<div class="line"><button class="btn" id="cf-in">Connect</button></div>'+
-      '<div class="note dim">Cloudflare has no OIDC path, so a scoped token is the only option. It stays in your keychain.</div>')+
+      '<div class="line"><button class="btn quiet" id="cf-out">Forget token</button></div>'
+    : '<input type="password" id="cf-tok" placeholder="API token (optional)">'+
+      '<div class="line"><button class="btn quiet" id="cf-in">Use a token</button></div>'+
+      '<div class="note dim">Signing in with Wrangler above is enough for deploys. A scoped token is '+
+      'only needed for the account and resource views, and stays in your keychain.</div>')+
     '<div id="cf-msg"></div></div>';
+
+  const a=byId('aws');
+  if(a) h+=cliBlock(a);
+
   h+='<div class="field"><label>Open a repository</label>'+
     '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
     '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
     '<div id="repos"></div>';
   el('side').innerHTML=h;
+
+  el('side').querySelectorAll('[data-cli]').forEach(b=>b.onclick=()=>
+    runCli(b.dataset.cli,b.dataset.id,el('cli-'+b.dataset.id)));
 
   const say=(id,t,ok)=>el(id).innerHTML='<div class="note '+(ok?'good':'bad')+'">'+esc(t)+'</div>';
   const post=(url,body)=>fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -800,12 +996,57 @@ function emptyLog(){
   el('log').innerHTML='<div class="empty">Ask the agent to change this repository.<br><br>'+
     '<kbd>⇧⇥</kbd> switches Plan and Auto · <kbd>'+(MAC?'⌘↵':'Ctrl+↵')+'</kbd> sends</div>';
 }
-el('a-clear').onclick=()=>{ sessionId=null; cost=null; emptyLog(); drawStatus(); };
+function setSessionName(t){ el('sess-name').textContent=t; }
+
+el('a-new').onclick=()=>{
+  sessionId=null; cost=null; setSessionName('New session');
+  el('sess-list').classList.add('hidden'); emptyLog(); drawStatus();
+};
+
+el('sess-btn').onclick=()=>{
+  const box=el('sess-list');
+  if(!box.classList.contains('hidden')){ box.classList.add('hidden'); return; }
+  const list=state?.workspace.sessions??[];
+  box.innerHTML=list.length
+    ? list.map(s=>'<div class="card click'+(s.id===sessionId?' on':'')+'" data-s="'+esc(s.id)+'">'+
+        '<div class="t">'+esc(s.title??'(untitled)')+'</div>'+
+        '<div class="m">'+s.messages+' msg · '+esc((s.last_active??'').slice(0,16).replace('T',' '))+
+        (s.branch?' · '+esc(s.branch):'')+'</div></div>').join('')
+    : '<div class="empty">No sessions recorded in this project yet.</div>';
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-s]').forEach(n=>n.onclick=()=>openSession(n.dataset.s));
+};
+
+/** Load a past conversation and continue it. The next message resumes this session id. */
+async function openSession(id){
+  el('sess-list').classList.add('hidden');
+  const meta=(state?.workspace.sessions??[]).find(s=>s.id===id);
+  sessionId=id; cost=null;
+  setSessionName(meta?.title??id.split('-')[0]);
+  el('log').innerHTML='<div class="empty">Loading…</div>';
+
+  const turns=await (await fetch('/api/session?id='+encodeURIComponent(id))).json();
+  el('log').innerHTML='';
+  if(!turns.length){ el('log').innerHTML='<div class="empty">This transcript could not be read.</div>'; }
+  for(const t of turns){
+    if(t.role==='user'){
+      say('<div class="said"><div class="who">You</div><div class="txt">'+esc(t.text)+'</div></div>');
+    } else {
+      if(t.text) say('<div><div class="who">Claude</div><div class="txt">'+md(t.text)+'</div></div>');
+      for(const name of t.tools)
+        say('<div class="tool"><div class="th"><span class="tn">'+esc(name)+'</span></div></div>');
+    }
+  }
+  el('log').scrollTop=1e9;
+  drawStatus();
+}
 
 /** Render one stream-json record. The browser interprets the shape, so there is one place to change. */
 function record(r){
   if(r.type==='system'&&r.subtype==='init'){
+    const fresh=!sessionId;
     sessionId=r.session_id??sessionId;
+    if(fresh&&sessionId) setSessionName('Session '+sessionId.split('-')[0]);
     el('agent-model').textContent=r.model??'';
     drawStatus(); return;
   }
@@ -869,6 +1110,7 @@ function send(){
   const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
   stream.addEventListener('done',end); stream.onerror=end;
 }
+el('do-save').onclick=save;
 el('send').onclick=send;
 el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
 el('prompt').addEventListener('keydown',e=>{
@@ -876,7 +1118,13 @@ el('prompt').addEventListener('keydown',e=>{
 });
 
 /* ════ status rail ═══════════════════════════════════════════════════════ */
+function syncSave(){
+  const tab=tabs.find(t=>t.path===active);
+  el('do-save').classList.toggle('hidden',!tab?.dirty||view!=='src');
+}
+
 function drawStatus(){
+  syncSave();
   const s=state?.scan, tab=tabs.find(t=>t.path===active);
   const band=n=>n>=90?'ok':n>=60?'warn':'crit';
   const cells=[];
@@ -928,7 +1176,6 @@ function score(text,q){
 const COMMANDS=[
   {id:'files',      label:'View: Files',        run:()=>setPanel('files'),      key:MAC?'⌘B':'Ctrl+B'},
   {id:'changes',    label:'View: Changes',      run:()=>setPanel('changes')},
-  {id:'sessions',   label:'View: Sessions',     run:()=>setPanel('sessions')},
   {id:'skills',     label:'View: Skills',       run:()=>setPanel('skills')},
   {id:'readiness',  label:'View: Readiness',    run:()=>setPanel('readiness')},
   {id:'connections',label:'View: Connections',  run:()=>setPanel('connections')},
@@ -1074,7 +1321,6 @@ async function refresh(){
   files=flatten(treeData);
   const blocking=state.scan.findings.filter(f=>f.severity==='critical'||f.severity==='high').length;
   badge('changes',git.changes?.length??0,false);
-  badge('sessions',state.workspace.sessions.length,false);
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
   el('side').append(frag('<div class="rz left" id="rz1"></div>'));
@@ -1085,7 +1331,8 @@ async function refresh(){
 emptyLog();
 wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
-  await loadConn(); await refresh(); draw();
+  await Promise.all([loadConn(), loadClis()]);
+  await refresh(); draw();
   const qs=new URLSearchParams(location.search);
   if(qs.get('panel')) setPanel(qs.get('panel'));
   if(qs.get('mode')==='diff'){ view='diff'; syncView(); }
