@@ -12,6 +12,7 @@ mod clitools;
 mod connect;
 mod dev;
 mod fsops;
+mod gcp;
 mod gui;
 mod infra;
 mod mcp;
