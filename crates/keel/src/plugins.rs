@@ -239,6 +239,113 @@ pub struct InstallQuery {
     pub marketplace: String,
 }
 
+#[derive(Deserialize)]
+pub struct ActionQuery {
+    /// One of `uninstall`, `enable`, `disable`, `update`.
+    pub action: String,
+    pub name: String,
+    pub marketplace: Option<String>,
+}
+
+/// A configured marketplace.
+#[derive(Serialize)]
+pub struct Marketplace {
+    pub name: String,
+    pub source: String,
+}
+
+/// Marketplaces Claude Code has configured, parsed from `claude plugin marketplace list`.
+///
+/// Shelling out rather than reading a file: the on-disk layout is not a contract, and the CLI is.
+pub async fn marketplaces() -> axum::Json<Vec<Marketplace>> {
+    let out = std::process::Command::new("claude")
+        .args(["plugin", "marketplace", "list"])
+        .output();
+    let Ok(out) = out else {
+        return axum::Json(Vec::new());
+    };
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut list = Vec::new();
+    let mut name: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix('❯') {
+            name = Some(rest.trim().to_string());
+        } else if let Some(src) = t.strip_prefix("Source:")
+            && let Some(n) = name.take()
+        {
+            list.push(Marketplace {
+                name: n,
+                source: src.trim().to_string(),
+            });
+        }
+    }
+    axum::Json(list)
+}
+
+/// Run one plugin lifecycle action.
+///
+/// The action set is closed rather than passed through, so a crafted request cannot reach an
+/// arbitrary `claude plugin` subcommand.
+pub async fn action(Query(q): Query<ActionQuery>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let verb = match q.action.as_str() {
+        "uninstall" => "uninstall",
+        "enable" => "enable",
+        "disable" => "disable",
+        "update" => "update",
+        _ => return refuse("unknown action"),
+    };
+    if !valid(&q.name) {
+        return refuse("invalid plugin name");
+    }
+
+    // enable/disable take a bare name; install/uninstall/update accept name@marketplace.
+    let target = match (&q.marketplace, verb) {
+        (Some(m), "uninstall" | "update") if valid(m) => format!("{}@{m}", q.name),
+        _ => q.name.clone(),
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+    tokio::spawn(async move {
+        let _ = tx
+            .send(Ok(Event::default()
+                .event("line")
+                .data(format!("$ claude plugin {verb} {target}"))))
+            .await;
+        let code = pipe(
+            Command::new("claude").args(["plugin", verb, &target]),
+            &tx,
+        )
+        .await;
+        let _ = tx
+            .send(Ok(Event::default().event("done").data(code.to_string())))
+            .await;
+    });
+    Sse::new(ReceiverStream::new(rx))
+}
+
+/// Refresh every marketplace, which is how updates become visible.
+pub async fn refresh_marketplaces() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+    tokio::spawn(async move {
+        let _ = tx
+            .send(Ok(Event::default()
+                .event("line")
+                .data("$ claude plugin marketplace update")))
+            .await;
+        let code = pipe(
+            Command::new("claude").args(["plugin", "marketplace", "update"]),
+            &tx,
+        )
+        .await;
+        let _ = tx
+            .send(Ok(Event::default().event("done").data(code.to_string())))
+            .await;
+    });
+    Sse::new(ReceiverStream::new(rx))
+}
+
 fn valid(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -292,6 +399,15 @@ pub async fn install(Query(q): Query<InstallQuery>) -> Sse<ReceiverStream<Result
             .await;
     });
 
+    Sse::new(ReceiverStream::new(rx))
+}
+
+fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let message = message.to_string();
+    tokio::spawn(async move {
+        let _ = tx.send(Ok(Event::default().event("fatal").data(message))).await;
+    });
     Sse::new(ReceiverStream::new(rx))
 }
 

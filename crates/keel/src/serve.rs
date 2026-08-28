@@ -88,11 +88,15 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/github/repos", get(crate::connect::repos))
         .route("/api/plugins", get(crate::plugins::list))
         .route("/api/plugins/install", get(crate::plugins::install))
+        .route("/api/plugins/action", get(crate::plugins::action))
+        .route("/api/plugins/marketplaces", get(crate::plugins::marketplaces))
+        .route("/api/plugins/refresh", get(crate::plugins::refresh_marketplaces))
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
         .route("/api/cli/login", get(crate::clitools::login))
         .route("/api/github/clone", axum::routing::post(crate::connect::clone))
         .route("/api/open", axum::routing::post(crate::connect::open_repo))
+        .route("/api/project/new", axum::routing::post(crate::project::create))
         .with_state(state);
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));

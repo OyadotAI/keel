@@ -10,6 +10,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
+    /// Whether Claude Code currently loads it. Disabled plugins stay installed.
+    pub enabled: bool,
     /// The marketplace it came from, parsed out of the `name@marketplace` key.
     pub marketplace: Option<String>,
     pub version: Option<String>,
@@ -23,6 +25,14 @@ pub struct Plugin {
 /// The index is keyed `"<name>@<marketplace>"` and maps to an array of installations, one per
 /// scope. A malformed or absent file yields an empty list: not having plugins is normal.
 pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
+    // Enablement lives in settings.json, separately from the install index — a disabled plugin is
+    // still installed, and the UI needs to tell those apart to offer the right action.
+    let enabled_map: Value = std::fs::read_to_string(claude_home.join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("enabledPlugins").cloned())
+        .unwrap_or(Value::Null);
+
     let path = claude_home.join("plugins").join("installed_plugins.json");
     let Ok(contents) = std::fs::read_to_string(&path) else {
         return Vec::new();
@@ -50,6 +60,11 @@ pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
                 .map(|install| {
                     let field = |k: &str| install.get(k).and_then(Value::as_str).map(str::to_owned);
                     Plugin {
+                        // Absent from enabledPlugins means enabled: the file records overrides.
+                        enabled: enabled_map
+                            .get(key)
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true),
                         name: name.clone(),
                         marketplace: marketplace.clone(),
                         version: field("version"),
@@ -78,6 +93,25 @@ mod tests {
         std::fs::create_dir_all(home.join("plugins")).unwrap();
         std::fs::write(home.join("plugins/installed_plugins.json"), index).unwrap();
         (dir, home)
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_still_listed() {
+        let dir = TempDir::new().expect("tempdir");
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        std::fs::create_dir_all(home.join("plugins")).unwrap();
+        std::fs::write(
+            home.join("plugins/installed_plugins.json"),
+            r#"{"plugins":{"a@m":[{"scope":"user"}],"b@m":[{"scope":"user"}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(home.join("settings.json"), r#"{"enabledPlugins":{"a@m":false}}"#).unwrap();
+
+        let plugins = discover_plugins(&home);
+        let a = plugins.iter().find(|p| p.name == "a").expect("a");
+        let b = plugins.iter().find(|p| p.name == "b").expect("b");
+        assert!(!a.enabled, "explicitly disabled");
+        assert!(b.enabled, "absent means enabled");
     }
 
     #[test]
