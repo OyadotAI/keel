@@ -48,8 +48,9 @@ w.globalThis = w;
 
 const ctx = vm.createContext(w);
 try {
-  vm.runInContext(script + '\n;globalThis.__t = { PANELS, askFix, mcpAddForm };', ctx,
-    { filename: 'ui/index.html' });
+  vm.runInContext(script +
+    '\n;globalThis.__t = { PANELS, askFix, mcpAddForm, topicShift, learnTopic, resetTopic };',
+    ctx, { filename: 'ui/index.html' });
 } catch (e) { console.log('RUN ERROR: ' + e.message); }
 
 // `state` and `git` are `let` bindings inside the script, not window properties, so they are
@@ -91,7 +92,62 @@ try {
     .map(b => b.textContent).join(', '));
 } catch (e) { console.log('THREW: ' + e.message); failed++; }
 
-console.log(failed ? '\n' + failed + ' panel(s) threw' : '\nAll panels rendered.');
+// ── the topic-shift detector ────────────────────────────────────────────────────────────────
+// Its whole job is to stay quiet. A false positive interrupts someone mid-thought; a false
+// negative is only what happens today. So the quiet cases are the ones that matter here, and they
+// are asserted rather than eyeballed.
+console.log('\n=== TOPIC SHIFT ' + '='.repeat(34));
+{
+  const now = new Date().toISOString();
+  const s = { id: 's1', title: 'redesign the readiness panel', messages: 40, last_active: now };
+  vm.runInContext('state={workspace:{sessions:[' + JSON.stringify(s) + ']}}; sessionId="s1";', ctx);
+  vm.runInContext('resetTopic();', ctx);
+  for (const t of [
+    'redesign the readiness panel, it is busy and the priority is not obvious',
+    'the blocking findings should get more room than the medium ones',
+    'use a dot instead of a chip for severity',
+    'the score needs a verdict sentence beside it',
+    'crates/keel/src/serve.rs readiness scan findings severity',
+  ]) w.__t.learnTopic(t);
+
+  const quiet = [
+    'make the blocking section stand out more',
+    'also add a count to the section header',
+    'the severity dot colour is wrong for medium',
+    'fix it',
+    'now do the same for the skills panel',
+    'that looks better, tighten the spacing',
+    'undo that',
+  ];
+  const ask = [
+    'deploy the worker to cloudflare and check the wrangler bindings',
+    'write a github actions workflow that runs terraform plan on pull requests',
+    'the docker container for postgres keeps restarting, look at the compose file',
+  ];
+
+  let bad = 0;
+  for (const p of quiet) if (w.__t.topicShift(p)) { console.log('  FALSE POSITIVE: ' + p); bad++; }
+  for (const p of ask) if (!w.__t.topicShift(p)) { console.log('  MISSED: ' + p); bad++; }
+
+  // A stale session is not on its own a reason to ask; the subject has to have moved too.
+  const stale = { ...s, last_active: new Date(Date.now() - 12 * 3.6e6).toISOString() };
+  vm.runInContext('state={workspace:{sessions:[' + JSON.stringify(stale) + ']}};', ctx);
+  if (w.__t.topicShift('the severity dot colour is wrong for medium')) {
+    console.log('  FALSE POSITIVE: a related prompt in a stale session'); bad++;
+  }
+
+  // And a session with barely any history has nothing to judge against.
+  vm.runInContext('state={workspace:{sessions:[' + JSON.stringify(s) + ']}}; resetTopic();', ctx);
+  w.__t.learnTopic('readiness panel');
+  if (w.__t.topicShift('deploy the worker to cloudflare and check the wrangler bindings')) {
+    console.log('  FALSE POSITIVE: judged a session with almost no history'); bad++;
+  }
+
+  failed += bad;
+  console.log(bad ? bad + ' wrong' : '  ' + quiet.length + ' quiet, ' + ask.length + ' asked, correctly');
+}
+
+console.log(failed ? '\n' + failed + ' check(s) failed' : '\nAll panels rendered.');
 
 // The page leaves timers and sockets open; nothing here is waiting on them.
 process.exit(failed ? 1 : 0);
