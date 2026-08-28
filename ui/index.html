@@ -514,7 +514,9 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
    Dock whose remembered project has moved. One screen rather than a wizard —
    there are exactly two things to know and one decision to make, and clicking
    Next three times to reach it is not respect for anybody's time. */
-.welcome{position:fixed;inset:0;z-index:80;background:var(--n1);
+/* Above the application it replaces, below the modals it opens. The first version sat at 80 and
+   every dialog it raised — open a folder, new project — rendered behind it, invisible. */
+.welcome{position:fixed;inset:0;z-index:55;background:var(--n1);
   overflow-y:auto;display:grid;align-items:start;justify-items:center}
 .welcome.hidden{display:none}
 .wsheet{width:min(680px,calc(100% - 48px));padding:14vh 0 80px}
@@ -969,6 +971,32 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   </div>
 </div>
 
+<div class="welcome hidden" id="welcome">
+  <div class="wsheet">
+    <div class="wmark">&#9095; KEEL</div>
+    <h1>Make a repository shippable.</h1>
+    <p class="wlede">Keel drives the Claude Code already installed on this machine, against a
+      repository already on this disk. Your subscription, your files, your terminal — nothing is
+      uploaded and there is no account to make.</p>
+
+    <section class="wstep" id="w-claude"></section>
+
+    <section class="wstep">
+      <div class="wh"><h2>Open something</h2></div>
+      <div class="wgrid">
+        <button data-w="open"><b>Open a folder</b><span>A repository you already have. Keel scans
+          it and tells you what is missing.</span></button>
+        <button data-w="clone"><b>Clone from GitHub</b><span>Pick a repository from your account
+          and Keel clones it locally.</span></button>
+        <button data-w="new"><b>New project</b><span>Next.js and Hono on Cloudflare, two
+          environments, green from the first commit.</span></button>
+      </div>
+    </section>
+
+    <p class="wfoot">Cloudflare, AWS, skills and plugins are in Settings when you want them. None
+      of them are needed to start.</p>
+  </div>
+</div>
 <script src="/vendor/xterm/xterm.js"></script>
 <script src="/vendor/xterm/xterm-addon-fit.js"></script>
 <script src="/vendor/vs/loader.js"></script>
@@ -3911,6 +3939,15 @@ async function drawWelcome(){
   el('welcome').classList.remove('hidden');
   el('app').setAttribute('aria-hidden','true');
 
+  // Wired here rather than at parse time. The first version bound these at the top level, the
+  // markup happened to sit after the script, and every button on the first screen anyone sees did
+  // nothing at all. Binding where the screen is drawn cannot be broken by moving markup.
+  document.querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.w==='open') openFolderDialog();
+    if(b.dataset.w==='new') newProjectDialog();
+    if(b.dataset.w==='clone') welcomeClone();
+  });
+
   const c=await fetch('/api/claude').then(r=>r.json()).catch(()=>({}));
   const row=(ok,label,detail)=>'<div class="wrow"><span class="dot2 '+(ok?'on':'off')+'"></span>'+
     '<b>'+esc(label)+'</b><span>'+detail+'</span></div>';
@@ -4003,12 +4040,6 @@ async function welcomeClone(){
   });
 }
 
-document.querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
-  if(b.dataset.w==='open') openFolderDialog();
-  if(b.dataset.w==='new') newProjectDialog();
-  if(b.dataset.w==='clone') welcomeClone();
-});
-
 wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   // One cheap request decides which of the two screens this is, before anything expensive runs:
@@ -4029,31 +4060,5 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
   if(qs.get('preview')) openPreview(qs.get('preview')==='1'?null:qs.get('preview'));
 })();
 </script>
-<div class="welcome hidden" id="welcome">
-  <div class="wsheet">
-    <div class="wmark">&#9095; KEEL</div>
-    <h1>Make a repository shippable.</h1>
-    <p class="wlede">Keel drives the Claude Code already installed on this machine, against a
-      repository already on this disk. Your subscription, your files, your terminal — nothing is
-      uploaded and there is no account to make.</p>
-
-    <section class="wstep" id="w-claude"></section>
-
-    <section class="wstep">
-      <div class="wh"><h2>Open something</h2></div>
-      <div class="wgrid">
-        <button data-w="open"><b>Open a folder</b><span>A repository you already have. Keel scans
-          it and tells you what is missing.</span></button>
-        <button data-w="clone"><b>Clone from GitHub</b><span>Pick a repository from your account
-          and Keel clones it locally.</span></button>
-        <button data-w="new"><b>New project</b><span>Next.js and Hono on Cloudflare, two
-          environments, green from the first commit.</span></button>
-      </div>
-    </section>
-
-    <p class="wfoot">Cloudflare, AWS, skills and plugins are in Settings when you want them. None
-      of them are needed to start.</p>
-  </div>
-</div>
 </body>
 </html>
