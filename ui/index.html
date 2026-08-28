@@ -308,6 +308,16 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .avhead .n2{font:11px var(--mono);color:var(--n9);font-variant-numeric:tabular-nums}
 .avhead button.act{all:unset;cursor:pointer;font:10px var(--mono);color:var(--n9)}
 .avhead button.act:hover{color:var(--accent)}
+/* Close and expand look like buttons at rest, not only under the pointer. A bare glyph in the
+   panel's own muted grey reads as decoration — you have to already know it is a control to find
+   it, which is the opposite of what a close button is for. */
+.avhead .ic2{all:unset;cursor:pointer;flex:none;width:22px;height:22px;border-radius:var(--r1);
+  display:grid;place-items:center;font:13px/1 var(--mono);
+  color:var(--n11);background:var(--n4);border:1px solid var(--n6)}
+.avhead .ic2:hover{background:var(--n6);color:var(--n12);border-color:var(--n8)}
+.avhead .ic2:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.avhead .ic2.close:hover{background:color-mix(in srgb,var(--crit) 22%,transparent);
+  border-color:var(--crit);color:var(--crit)}
 
 .blk{border-bottom:1px solid var(--n6)}
 .blk .bh{display:flex;align-items:center;gap:var(--s3);padding:5px var(--s4);cursor:pointer;
@@ -442,6 +452,10 @@ input::placeholder{color:var(--n9)}
   border-left:1px solid var(--n6);background:var(--n2);
   display:flex;flex-direction:column;overflow:hidden}
 .agent-pane.hidden{display:none}
+/* Expanded: the editor steps aside rather than being squeezed to nothing. */
+.work-area.agent-full .surface{display:none}
+.work-area.agent-full .agent-rz{display:none}
+.work-area.agent-full .agent-pane{width:100%;max-width:none;border-left:0}
 .agent-pane .avbody{flex:1;min-height:0;overflow-y:auto}
 .agent-rz{position:relative;width:5px;flex:none;cursor:col-resize;margin:0 -2px;z-index:4}
 .agent-rz:hover,.agent-rz.drag{background:var(--accent)}
@@ -3572,7 +3586,7 @@ const SET_PANES={
       '<h2>Keyboard</h2>'+
       ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  terminal','⌘⇧A  agent panel',
        '⌘S  save','⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⌘I  explain the selection',
-       '⌘⇧E  agent pane','F7  next change','F2  rename',(MAC?'⌘⌫':'Del')+'  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
+       '⌘⇧E  agent pane','⌘⇧F  expand it','F7  next change','F2  rename',(MAC?'⌘⌫':'Del')+'  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
        'right-click  files, tabs and the editor all have menus']
         .map(k=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);font-size:12px">'+
           esc(k)+'</b></div></div>').join('')+
@@ -3838,6 +3852,10 @@ function menuItems(which){
     item('MCP servers','',()=>setPanel('mcp')),
     item('Preview','',()=>openPreview()),
     item('Agent pane',MAC?'⌘⇧E':'Ctrl+Shift+E',()=>toggleAgentPane()),
+    item('Expand agent pane',MAC?'⌘⇧F':'Ctrl+Shift+F',()=>{
+      if(paneHidden()) toggleAgentPane(true);
+      setAgentFull(!agentFull); drawAgent();
+    }),
     item('Problems','',()=>setPanel('problems')),
     item('Readiness','',()=>setPanel('readiness')),
     SEP,
@@ -4565,11 +4583,16 @@ function drawAgent(){
       : '')+
     '<span class="sp"></span>'+
     '<button class="act" id="av-clear">clear</button>'+
-    '<button class="act" id="av-hide" title="Hide  \u2318\u21e7E">\u00d7</button></div>'+
+    '<button class="ic2" id="av-full" aria-label="'+(agentFull?'Restore':'Expand')+'" '+
+      'title="'+(agentFull?'Restore':'Expand')+'  \u2318\u21e7F">'+
+      (agentFull?'\u21f2':'\u21f1')+'</button>'+
+    '<button class="ic2 close" id="av-hide" title="Close  \u2318\u21e7E" '+
+      'aria-label="Close the agent pane">\u2715</button></div>'+
     '<div class="avbody" id="av-body"></div>';
   avCount();
 
   el('av-hide').onclick=()=>toggleAgentPane(false);
+  el('av-full').onclick=()=>toggleAgentFull();
   const filt=el('av-filt'); if(filt) filt.onclick=()=>setKindFilter(kindFilter);
   pane.querySelectorAll('[data-av]').forEach(b=>b.onclick=()=>{
     agentView=b.dataset.av; drawAgent();
@@ -4608,9 +4631,29 @@ function toggleAgentPane(on){
   const want=on??pane.classList.contains('hidden');
   pane.classList.toggle('hidden',!want);
   el('rz-agent').classList.toggle('hidden',!want);
+  // Closing it should not leave the editor hidden behind a pane that is no longer there.
+  if(!want) setAgentFull(false);
   if(want) drawAgent();
-  if(mon) setTimeout(()=>mon.layout(),0);
-  if(monDiff) setTimeout(()=>monDiff.layout(),0);
+  relayoutEditors();
+}
+
+/* Expanded, the pane takes the whole column. Reading a 300-line build failure in a 460px strip is
+   the case this exists for — and it is a mode you leave, not a size you have to drag back. */
+let agentFull=false;
+
+function setAgentFull(on){
+  agentFull=on;
+  document.querySelector('.work-area').classList.toggle('agent-full',on);
+  relayoutEditors();
+}
+function toggleAgentFull(){
+  setAgentFull(!agentFull);
+  drawAgent();
+}
+
+/** Monaco measures its container itself and has to be told the container moved. */
+function relayoutEditors(){
+  setTimeout(()=>{ mon?.layout(); monDiff?.layout(); },0);
 }
 
 /** Record a write and make sure the change view is in front of you. */
@@ -5164,6 +5207,7 @@ async function welcomeClone(){
   const grip=el('rz-agent'), pane=el('agent-pane');
   const saved=localStorage.getItem('keel.agent');
   if(saved) document.documentElement.style.setProperty('--agent',saved+'px');
+  grip.ondblclick=()=>{ setAgentFull(!agentFull); drawAgent(); };
   grip.onmousedown=e=>{
     e.preventDefault();
     grip.classList.add('drag');
@@ -5184,6 +5228,13 @@ async function welcomeClone(){
 addEventListener('keydown',e=>{
   const cmd=MAC?e.metaKey:e.ctrlKey;
   if(cmd&&e.shiftKey&&(e.key==='e'||e.key==='E')){ e.preventDefault(); toggleAgentPane(); }
+  if(cmd&&e.shiftKey&&(e.key==='f'||e.key==='F')){
+    e.preventDefault();
+    // Expanding a pane that is not open should open it, not toggle a hidden thing.
+    if(paneHidden()) toggleAgentPane(true);
+    setAgentFull(!agentFull);
+    drawAgent();
+  }
 });
 
 wireResize(el('rz1'),'--side','keel.side',190,540,false);
