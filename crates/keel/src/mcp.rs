@@ -8,11 +8,12 @@
 //! Note what this does *not* touch: a server that arrived with the repository. Those are quarantined
 //! and shown as such, and the way to accept one is to review it, not to press a button next to it.
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::sse::{Event, Sse};
 use serde::Deserialize;
 use std::convert::Infallible;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
@@ -105,7 +106,10 @@ async fn pipe(
     child.wait().await.ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
-pub async fn add(Query(q): Query<AddQuery>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+pub async fn add(
+    State(state): State<Arc<crate::serve::AppState>>,
+    Query(q): Query<AddQuery>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     if !valid_name(&q.name) {
         return refuse("A name can hold letters, digits, hyphens and underscores.");
     }
@@ -149,6 +153,12 @@ pub async fn add(Query(q): Query<AddQuery>) -> Sse<ReceiverStream<Result<Event, 
         args.extend(q.target.split_whitespace().map(str::to_string));
     }
 
+    // `--scope local` means "this project", and Claude Code decides which project that is from the
+    // working directory — not from any argument. Keel launched from the Dock inherits launchd's
+    // cwd, which is `/`, so every server added through the UI was filed under a project called `/`
+    // and then never appeared: the panel reads the servers for the repository, and `/` is not it.
+    // Running the CLI in the repository is the whole fix.
+    let here = state.repo();
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
         let _ = tx
@@ -156,7 +166,7 @@ pub async fn add(Query(q): Query<AddQuery>) -> Sse<ReceiverStream<Result<Event, 
                 .event("line")
                 .data(format!("$ claude {}", args.join(" ")))))
             .await;
-        let code = pipe(Command::new("claude").args(&args), &tx).await;
+        let code = pipe(Command::new("claude").current_dir(&here).args(&args), &tx).await;
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
@@ -165,6 +175,7 @@ pub async fn add(Query(q): Query<AddQuery>) -> Sse<ReceiverStream<Result<Event, 
 }
 
 pub async fn remove(
+    State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<RemoveQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     if !valid_name(&q.name) {
@@ -173,6 +184,7 @@ pub async fn remove(
     let scope = scope_of(&q.scope).to_string();
     let name = q.name.clone();
 
+    let here = state.repo();
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
         let _ = tx
@@ -181,7 +193,9 @@ pub async fn remove(
                 .data(format!("$ claude mcp remove --scope {scope} {name}"))))
             .await;
         let code = pipe(
-            Command::new("claude").args(["mcp", "remove", "--scope", &scope, &name]),
+            Command::new("claude")
+                .current_dir(&here)
+                .args(["mcp", "remove", "--scope", &scope, &name]),
             &tx,
         )
         .await;

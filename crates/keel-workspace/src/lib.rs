@@ -41,6 +41,9 @@ use serde::Serialize;
 pub enum Scope {
     /// `~/.claude` — the user's own configuration.
     User,
+    /// `~/.claude.json` under this repository's own key — Claude Code's `local` scope. Private to
+    /// this machine and this project, which is why it is the scope Keel writes to.
+    Local,
     /// `<repo>/.claude` — travels with the repository.
     Project,
     /// Installed from a plugin marketplace.
@@ -51,6 +54,7 @@ impl Scope {
     pub fn label(self) -> &'static str {
         match self {
             Scope::User => "user",
+            Scope::Local => "local",
             Scope::Project => "project",
             Scope::Plugin => "plugin",
         }
