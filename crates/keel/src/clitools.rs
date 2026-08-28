@@ -58,10 +58,49 @@ pub struct ClaudeStatus {
     /// The account signed in, for display. Never a token.
     pub account: Option<String>,
     pub plan: Option<String>,
+    /// Whether Homebrew exists, which every other install path depends on.
+    pub brew: bool,
+    /// The command that installs it, for the terminal.
+    pub brew_install: &'static str,
 }
 
+/// Install Claude Code.
+///
+/// The vendor's own installer, which is native: it needs no npm and no Node, and it refuses to run
+/// under sudo because everything it writes goes under `$HOME`. Both of those are why this can be
+/// streamed like any other command rather than handed to the terminal — there is no password
+/// prompt to get stuck behind.
+///
+/// A fresh machine has none of brew, npm or claude, and telling somebody to go and install three
+/// things before the application will do anything is not an onboarding flow. This is the one that
+/// matters: without `claude` there is no agent, and Keel is a window over a scanner.
+pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // Echoed before it runs. Piping a downloaded script into a shell is a reasonable thing to do
+    // with a vendor's own installer and an unreasonable thing to do invisibly.
+    const COMMAND: &str = "echo '$ curl -fsSL https://claude.ai/install.sh | bash'; \
+                           curl -fsSL https://claude.ai/install.sh | bash";
+
+    let mut command = Command::new("bash");
+    // A login shell, so the PATH the installer writes into is the one a terminal would read.
+    command.arg("-lc").arg(COMMAND);
+    stream(command)
+}
+
+/// Whether Homebrew is here, and how to get it.
+///
+/// Every `install_cmd` in [`TOOLS`] except wrangler's goes through brew, so on a fresh Mac the
+/// first missing thing is brew itself and every install button is dead until it exists. Its
+/// installer wants sudo, so Keel hosts it in the terminal rather than streaming it into a console
+/// with no way to answer a password prompt.
+pub const BREW_INSTALL: &str =
+    "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
+
 pub async fn claude_status() -> Json<ClaudeStatus> {
-    let mut out = ClaudeStatus::default();
+    let mut out = ClaudeStatus {
+        brew: exists("brew"),
+        brew_install: BREW_INSTALL,
+        ..Default::default()
+    };
 
     if let Ok(v) = std::process::Command::new("claude")
         .arg("--version")

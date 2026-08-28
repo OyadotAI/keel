@@ -310,6 +310,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))
         .route("/api/pipelines", get(crate::infra::pipelines))
         .route("/api/claude", get(crate::clitools::claude_status))
+        .route(
+            "/api/claude/install",
+            get(crate::clitools::install_claude),
+        )
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
         .route("/api/cli/login", get(crate::clitools::login))
