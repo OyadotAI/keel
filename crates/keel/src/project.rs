@@ -149,6 +149,9 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         // ── infra ────────────────────────────────────────────────────────────────────────────
         ("infra/README.md", f(INFRA_README)),
         ("infra/deploy.sh", DEPLOY_SH.to_string()),
+        // ── the agent's own setup ────────────────────────────────────────────────────────────
+        (".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()),
+        (".claude/agents/platform-limits.md", LIMITS_AGENT.to_string()),
         // ── frontend ─────────────────────────────────────────────────────────────────────────
         ("frontend/package.json", f(FRONT_PACKAGE_JSON)),
         ("frontend/wrangler.jsonc", f(FRONT_WRANGLER)),
@@ -172,6 +175,88 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
 
     files
 }
+
+// ═══ the agent's own setup ═══════════════════════════════════════════════════════════════════
+//
+// Two subagents, not five. Each earns its place by doing something a fresh context does better
+// than the agent that just wrote the code, which is the only reason to spend a delegation on it.
+//
+// What is deliberately absent: `.claude/settings.json` and `.mcp.json`. Both are repository-
+// supplied agent configuration, both are quarantined by `keel-harness::trust` before any agent
+// runs, and a scaffold that ships one would hand every new project a Critical finding on its first
+// scan. Hooks are the same story and worse — a shell command that runs on somebody else's machine
+// when they open the repo.
+
+const REVIEWER_AGENT: &str = r#"---
+name: reviewer
+description: "Use before reporting a change as done, after the gate is green. Reads the diff against what was asked and reports only what is actually wrong."
+tools: Read, Grep, Glob, Bash
+---
+
+You review a change you did not write.
+
+That is the entire reason you exist: an author checking their own work confirms it rather than
+verifies it, and the measurements on this are not close. You have a fresh context, so read the code
+rather than a description of it.
+
+## What to do
+
+1. Read the diff — `git diff` for unstaged work, `git diff HEAD` to include staged.
+2. Read enough of the surrounding files to know what the changed code is called by and what it
+   calls. A diff alone hides every caller it broke.
+3. Run the gate yourself. Green is a fact, not a claim, and you can check it in one command.
+
+## What to report
+
+Only things that are wrong. For each: the file and line, what breaks, and the input or state that
+makes it break. If you cannot name the case that fails, you have found a preference, not a bug, and
+it does not go in the list.
+
+An empty list is a valid and common result. Say so plainly and stop. You are not scored on how much
+you find, and a reviewer that always finds something is a reviewer nobody reads twice.
+
+## What not to report
+
+Style, naming, formatting, or how you would have written it. Anything the gate already checks.
+Anything outside the diff — if the change is correct and the file around it was already wrong, that
+is a different piece of work and saying so buries the answer to the question you were asked.
+"#;
+
+const LIMITS_AGENT: &str = r#"---
+name: platform-limits
+description: "Use when adding storage, a queue, a binding, or anything that holds state. Checks the design against Cloudflare's real ceilings before it is built on."
+tools: Read, Grep, Glob
+---
+
+You check where state is about to live against what the platform actually does.
+
+These limits are not obscure. They are the ones that are fine in development, fine at launch, and
+then are not — which is the worst time to find them.
+
+## The ceilings
+
+- **D1** is single-writer at roughly 50 writes/second, 10 GB. Fine for application data with human
+  write rates. Not fine for per-request logging, event ingestion, counters, or anything a queue
+  feeds. Past that the answer is Hyperdrive to a managed Postgres, not a bigger D1.
+- **KV** is eventually consistent, up to 60 seconds. Fine for config, flags and cached reads. Never
+  for anything read back immediately after writing — a session you write then read on the next
+  request will not be there.
+- **Durable Objects** are single-writer per object and strongly consistent, 10 GB each. This is the
+  answer for per-tenant state, and the wrong answer for anything global, because every request for
+  that object queues behind the last one.
+- **R2** for objects and files, with no egress cost. Anything over a few hundred KB belongs here
+  rather than in a database row.
+- **Workers** get 128 MB of memory. Reading a large file into a buffer is the usual way to find out.
+- **Queues** for anything that does not have to finish inside the request.
+
+## What to report
+
+Name the specific thing being stored, the write rate or size you expect, and whether the chosen
+target holds. If it does, say so in one line and stop. If it does not, say which ceiling it hits
+first and what to use instead.
+
+Do not repeat the list above back. The person asking has it.
+"#;
 
 // ═══ root ════════════════════════════════════════════════════════════════════════════════════
 
@@ -206,12 +291,34 @@ time. There is no generated client to regenerate.
 
 ## Verification
 
-`make check` is the gate: it typechecks both halves and runs the API's tests. Every change keeps
-it green.
+`make check` is the gate. It typechecks both halves and runs the API's tests, and it is the whole
+definition of "done" here — a change that has not been through it is not finished, whoever or
+whatever wrote it.
+
+Run it before saying a change works. Never report a result you have not seen: "the tests pass"
+means you ran them and read the output.
+
+## Subagents
+
+Two, in `.claude/agents/`, and both exist because a fresh context does something the author of a
+change cannot:
+
+- **reviewer** — run before reporting work as done, after the gate is green. It reads the diff
+  against what was asked. Self-review confirms rather than verifies; this is the mitigation.
+- **platform-limits** — run before building on any new place state will live. Cloudflare's real
+  ceilings (D1's write rate, KV's 60-second propagation, a Durable Object's single writer) are all
+  fine right up until they are not.
 
 ## Running it
 
 `make dev` runs the Next.js dev server. `cd backend && bun run dev` runs the API on its own.
+
+## What not to add here
+
+`.claude/settings.json`, `.claude/hooks/` and `.mcp.json` are repository-supplied agent
+configuration: they execute on the machine of whoever opens this repo. Keel quarantines them before
+any agent runs and the scan rates them Critical. If this project needs an MCP server or a
+permission rule, it belongs in the user scope, not committed here.
 "#;
 
 const README_MD: &str = r#"# {{NAME}}
@@ -882,6 +989,34 @@ mod tests {
         // Recipes are tab-indented or make refuses to parse them at all.
         assert!(makefile.contains("\n\tcd frontend"));
         assert!(makefile.contains("\n\tcd backend"));
+    }
+
+    /// A repository that is good to work on with an agent is not one that merely runs. It says
+    /// what the gate is, ships the reviewers worth delegating to, and does not carry the two files
+    /// that would fail its own first scan.
+    #[test]
+    fn a_new_project_is_ready_for_an_agent() {
+        let files = files(Template::App);
+
+        let claude = get(&files, "CLAUDE.md");
+        assert!(claude.contains("make check"), "the gate is named");
+        assert!(claude.contains("Never report a result you have not seen"));
+
+        for agent in [".claude/agents/reviewer.md", ".claude/agents/platform-limits.md"] {
+            let body = get(&files, agent);
+            assert!(body.starts_with("---\nname: "), "{agent} needs frontmatter");
+            assert!(body.contains("description: \""), "{agent}: a description with a colon in it \
+                    must be quoted or YAML swallows it");
+        }
+
+        // Shipping either of these would hand every new project a Critical finding on its first
+        // scan, from the scaffold that is supposed to start it at 100.
+        for forbidden in [".claude/settings.json", ".mcp.json"] {
+            assert!(
+                !files.iter().any(|(p, _)| *p == forbidden),
+                "{forbidden} is quarantined by trust and rated Critical by the scanner"
+            );
+        }
     }
 
     #[test]
