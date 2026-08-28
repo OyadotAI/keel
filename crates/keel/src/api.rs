@@ -342,6 +342,29 @@ fn system_prompt(repo: &Utf8Path) -> String {
         ),
     }
 
+    // What is installed, which the agent finds out by running something that fails.
+    let (manager, present, absent) = crate::clitools::toolchain();
+    out.push_str("## What is on this machine\n\n");
+    match manager {
+        Some(mgr) => out.push_str(&format!(
+            "`{mgr}` is installed, so a missing tool is one command away. Install what you need \
+             rather than working around its absence — a workaround is a worse answer that also \
+             takes longer.\n\n"
+        )),
+        None => out.push_str(
+            "There is no package manager here, so a missing tool cannot be installed. Say what \
+             is missing rather than working around it.\n\n",
+        ),
+    }
+    out.push_str(&format!("Present: {}\n", present.join(", ")));
+    if !absent.is_empty() {
+        out.push_str(&format!("Not installed: {}\n", absent.join(", ")));
+    }
+    out.push_str(
+        "\nInstalling something needs approval the first time, like any other command. That is \
+         the loop working — ask once and it is remembered.\n\n",
+    );
+
     out.push_str(
         "Never report a result you have not seen. \"The tests pass\" means you ran them and read \
          the output. If something could not be run, name it and say why rather than working \
@@ -418,6 +441,34 @@ mod prompt_tests {
             "the system prompt is {} bytes and is sent on every turn",
             prompt.len()
         );
+    }
+
+    /// The agent finds out a tool is missing by running something that fails, and then works
+    /// around the gap or gives up — neither of which is installing it, which it will not think to
+    /// do if it does not know there is a package manager. Reported from a fresh machine as "the
+    /// chat failed to install bun".
+    #[test]
+    fn the_prompt_says_what_is_installed() {
+        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let prompt = system_prompt(repo);
+
+        assert!(prompt.contains("What is on this machine"));
+        assert!(prompt.contains("Present: "), "it lists what is there");
+
+        let (manager, present, _) = crate::clitools::toolchain();
+        if let Some(mgr) = manager {
+            assert!(prompt.contains(mgr), "the package manager is named, not implied");
+            assert!(
+                prompt.contains("rather than working around"),
+                "and what to do with it"
+            );
+        }
+        for tool in present.iter().take(3) {
+            assert!(prompt.contains(tool), "{tool} is installed but not listed");
+        }
     }
 
     /// Without a gate the advice inverts: nothing contradicts the agent automatically, so saying
