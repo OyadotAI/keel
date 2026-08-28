@@ -224,6 +224,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/file/original", get(api_original))
         .route("/api/session", get(api_session))
         .route("/api/session/work", get(api_session_work))
+        .route(
+            "/api/session/rename",
+            axum::routing::post(crate::names::rename),
+        )
         .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::api::chat))
         .route("/api/git/status", get(api_git_status))
@@ -452,10 +456,13 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         .map(|ctx| keel_scanner::scan(&ctx))
         .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()));
 
-    let workspace = match keel_workspace::claude_home() {
+    let mut workspace = match keel_workspace::claude_home() {
         Some(home) => keel_workspace::Workspace::discover(&repo, &home),
         None => keel_workspace::Workspace::discover(&repo, "/nonexistent".into()),
     };
+    // A session someone renamed in Keel keeps that name, without Claude Code's transcript being
+    // touched to achieve it.
+    crate::names::apply(&mut workspace.sessions);
 
     Json(StateResponse {
         repo: repo.to_string(),

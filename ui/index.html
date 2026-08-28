@@ -245,6 +245,15 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .prow:hover .kebab,.prow .kebab:focus-visible{color:var(--n12)}
 .prow.off .nm{color:var(--n9)}
 
+/* A recommendation is a row that has to argue for itself, so it gets the two lines the argument
+   takes. An installed plugin does not need to — it is already here. */
+.rec{padding:var(--s3) var(--s4);border-bottom:1px solid var(--n6)}
+.rec .rtop{display:flex;align-items:center;gap:var(--s3)}
+.rec .nm{flex:1;min-width:0;font:500 12.5px var(--sans);color:var(--n12);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec .btn{font-size:11px;padding:3px var(--s3);flex:none}
+.rec .why3{font:11.5px/1.5 var(--sans);color:var(--n10);margin-top:var(--s2)}
+
 /* State, as a dot. A word costs a chip, a chip costs a colour, and at this
    density a row of chips reads as texture rather than as information. */
 .dot3{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
@@ -577,12 +586,21 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .app.no-chat .chat{border-left:0}
 .chat .ph{padding-bottom:var(--s3)}
 
+/* It was a line of text with a small chevron after it, in the same colour as the label beside it,
+   so nothing said it could be pressed. It is a control now: a border, a background, a hover, and a
+   standing "session" label so the name reads as a value rather than as a heading. */
 .picker{all:unset;display:flex;align-items:center;gap:var(--s2);cursor:pointer;
-  color:var(--n11);max-width:62%;transition:color var(--t-hover)}
-.picker:hover{color:var(--n12)}
+  color:var(--n11);max-width:60%;padding:3px var(--s3);
+  border:1px solid var(--n7);border-radius:var(--r1);background:var(--n4);
+  transition:border-color var(--t-hover),background var(--t-hover)}
+.picker:hover{color:var(--n12);border-color:var(--accent);background:var(--n5)}
+.picker[aria-expanded=true]{border-color:var(--accent);background:var(--n5)}
+.picker:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.picker .pk{font:9.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--n9);flex:none}
 .picker #sess-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font:500 11.5px var(--sans)}
-.picker .cv{font-size:8px;flex:none;color:var(--n9)}
+.picker .cv{font-size:8px;flex:none;color:var(--n10)}
 #sess-meta{font:10px var(--mono);color:var(--n9);white-space:nowrap;flex:none}
 
 /* A word in the corner reading "new" was not a control anybody found. Starting fresh is one of
@@ -592,6 +610,21 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   font:11px var(--mono);color:var(--n10);transition:all var(--t-hover)}
 .newsess:hover{border-color:var(--accent);color:var(--accent)}
 .sesslist{max-height:46%;overflow-y:auto;border-bottom:1px solid var(--n6);background:var(--n2)}
+/* A row you can click, and a rename you can reach without one hiding the other. */
+.srow{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);
+  border-bottom:1px solid var(--n6);cursor:pointer}
+.srow:last-child{border-bottom:0}
+.srow:hover{background:var(--n4)}
+.srow.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
+.srow .c1{flex:1;min-width:0}
+.srow .t{font:500 12px var(--sans);color:var(--n12);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .m{font:10.5px var(--mono);color:var(--n9);margin-top:2px}
+.srow .ren{all:unset;cursor:pointer;flex:none;padding:2px var(--s2);border-radius:3px;
+  font:10px var(--mono);color:var(--n9);opacity:0;transition:opacity var(--t-hover)}
+.srow:hover .ren{opacity:1}
+.srow .ren:hover{background:var(--n6);color:var(--n12)}
+.srow .ren:focus-visible{opacity:1;outline:2px solid var(--accent)}
 .sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
 
 .log{flex:1;overflow-y:auto;padding:var(--s4) var(--s4) var(--s6);scroll-behavior:auto}
@@ -1166,7 +1199,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   <section class="chat">
     <div class="rz right" id="rz2"></div>
     <div class="ph">
-      <button class="picker" id="sess-btn"><span id="sess-name">New session</span><span class="cv">▾</span></button>
+      <button class="picker" id="sess-btn" title="Switch session" aria-haspopup="listbox"><span class="pk">session</span><span id="sess-name">New session</span><span class="cv">&#9662;</span></button>
       <span class="n" id="sess-meta"></span>
       <span class="n" id="agent-model"></span>
       <button class="newsess" id="a-new" title="Start a fresh conversation">+ New</button>
@@ -2235,16 +2268,37 @@ const PANELS={
       '<span class="nm">'+esc(x.name)+'</span>'+
       (x.scope==='project'?'<span class="meta">repo</span>':'')+'</div>';
 
+    // What is *not* installed is the half a list of installed things cannot tell you, and it is
+    // the half that changes what the agent can do. The catalog already carries it, with the reason
+    // each one was suggested for this repository.
+    const missing=(catalog?.suggested??[]).filter(p=>!p.installed);
+    const recRow=p=>'<div class="rec" data-rec="'+esc(p.name)+'">'+
+      '<div class="rtop"><span class="nm">'+esc(p.name)+'</span>'+
+      '<button class="btn quiet" data-inst="'+esc(p.name)+'" '+
+        'data-mk="'+esc(p.marketplace??'')+'">Install</button></div>'+
+      (p.reason?'<div class="why3">'+esc(p.reason)+'</div>':'')+
+      '<div id="rin-'+esc(p.name)+'"></div></div>';
+
     el('side').innerHTML=
       H('Extensions',plugins.length+w.skills.length+w.commands.length,
-        '<button class="act" id="a-browse">browse…</button>')+
-      sec2('Plugins',plugins.length)+
+        '<button class="act" id="a-browse">browse all…</button>')+
+      sec2('Installed',plugins.length)+
       (plugins.length?plugins.map(pluginRow).join(''):'<div class="prow off">None installed</div>')+
+      (missing.length
+        ? sec2('Recommended for this repository',missing.length)+missing.map(recRow).join('')
+        : catalog?'':'<div class="sec">Recommended <span class="c">…</span></div>')+
       sec2('Skills',w.skills.length)+
       (w.skills.length?w.skills.map(fileRow).join(''):'<div class="prow off">None</div>')+
       (w.commands.length?sec2('Commands',w.commands.length)+w.commands.map(fileRow).join(''):'');
 
     el('a-browse').onclick=()=>{ setsTab='plugins'; openSettings(); };
+    el('side').querySelectorAll('[data-inst]').forEach(b=>b.onclick=e=>{
+      e.stopPropagation();
+      installPlugin(b.dataset.inst,b.dataset.mk,el('rin-'+b.dataset.inst));
+    });
+    // Fetched once, lazily: it reads every marketplace on disk, which is not worth doing before
+    // anybody has opened this panel.
+    if(!catalog) loadCatalog().then(()=>{ if(panel==='skills') PANELS.skills(); }).catch(()=>{});
     wireOpeners();
 
     el('side').querySelectorAll('[data-menu-for]').forEach(b=>b.onclick=e=>{
@@ -3219,21 +3273,63 @@ el('a-new').onclick=()=>{
 
 el('sess-btn').onclick=()=>{
   const box=el('sess-list');
-  if(!box.classList.contains('hidden')){ box.classList.add('hidden'); return; }
+  if(!box.classList.contains('hidden')){
+    box.classList.add('hidden');
+    el('sess-btn').setAttribute('aria-expanded','false');
+    return;
+  }
   const list=state?.workspace.sessions??[];
   box.innerHTML=list.length
-    ? list.map(s=>'<div class="card click'+(s.id===sessionId?' on':'')+'" data-s="'+esc(s.id)+'">'+
-        '<div class="t">'+esc(s.title??'(untitled)')+'</div>'+
-        '<div class="m">'+s.messages+' msg · '+esc((s.last_active??'').slice(0,16).replace('T',' '))+
-        (s.branch?' · '+esc(s.branch):'')+'</div></div>').join('')
+    ? list.map(s=>'<div class="srow'+(s.id===sessionId?' on':'')+'" data-s="'+esc(s.id)+'">'+
+        '<div class="c1"><div class="t">'+esc(s.title??'(untitled)')+'</div>'+
+        '<div class="m">'+s.messages+' msg · '+esc(ago(s.last_active))+
+        (s.branch?' · '+esc(s.branch):'')+'</div></div>'+
+        '<button class="ren" data-ren="'+esc(s.id)+'" title="Rename">rename</button></div>').join('')
     : '<div class="empty">No sessions recorded in this project yet.</div>';
   box.classList.remove('hidden');
-  box.querySelectorAll('[data-s]').forEach(n=>n.onclick=()=>openSession(n.dataset.s));
+  el('sess-btn').setAttribute('aria-expanded','true');
+  box.querySelectorAll('[data-s]').forEach(n=>n.onclick=e=>{
+    if(e.target.dataset.ren) return;
+    openSession(n.dataset.s);
+  });
+  box.querySelectorAll('[data-ren]').forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    renameSession(b.dataset.ren);
+  });
 };
+
+/* Claude Code writes a session's title into its own transcript. Keel does not edit that file, so a
+   rename is an override stored beside it — and clearing the box restores what Claude Code called
+   it, which is why the dialog says so rather than leaving you to guess. */
+function renameSession(id){
+  const s=(state?.workspace.sessions??[]).find(x=>x.id===id);
+  modal('Rename session',
+    '<label>Name</label><input type="text" id="sr-name" spellcheck="false" maxlength="80" value="'+
+      esc(s?.title??'')+'">',
+    'Rename',
+    async()=>{
+      const r=await fetch('/api/session/rename',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({id,name:el('sr-name').value.trim()})});
+      if(!r.ok) return await r.text();
+      await refresh();
+      if(sessionId===id){
+        const now=(state?.workspace.sessions??[]).find(x=>x.id===id);
+        setSessionName(now?.title??'Session',
+          now ? now.messages+' msgs · '+ago(now.last_active) : '');
+      }
+      el('sess-list').classList.add('hidden');
+      el('sess-btn').setAttribute('aria-expanded','false');
+      return null;
+    },
+    'Empty restores the name Claude Code gave it. This is stored by Keel — the transcript is not '+
+    'touched.');
+}
 
 /** Load a past conversation and continue it. The next message resumes this session id. */
 async function openSession(id){
   el('sess-list').classList.add('hidden');
+  el('sess-btn').setAttribute('aria-expanded','false');
   const meta=(state?.workspace.sessions??[]).find(s=>s.id===id);
   sessionId=id; cost=null; turn=null;
   resetTopic();
