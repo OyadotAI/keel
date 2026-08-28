@@ -259,44 +259,117 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
 .app.no-chat .chat{border-left:0}
 .chat .ph{padding-bottom:var(--s3)}
-.log{flex:1;overflow-y:auto;padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)}
-.who{font:600 9.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  color:var(--n9);margin-bottom:var(--s2)}
-.said{background:var(--n4);border-radius:var(--r2);padding:var(--s3) var(--s4)}
-.said .who{color:var(--accent)}
-.txt{font:13px/1.6 var(--sans);white-space:pre-wrap;word-break:break-word;color:var(--n12)}
-.txt code{font:12px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1);
-  color:var(--n12)}
+
+.picker{all:unset;display:flex;align-items:center;gap:var(--s2);cursor:pointer;
+  color:var(--n11);max-width:62%;transition:color var(--t-hover)}
+.picker:hover{color:var(--n12)}
+.picker #sess-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:500 11.5px var(--sans)}
+.picker .cv{font-size:8px;flex:none;color:var(--n9)}
+.sesslist{max-height:46%;overflow-y:auto;border-bottom:1px solid var(--n6);background:var(--n2)}
+.sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
+
+.log{flex:1;overflow-y:auto;padding:var(--s4) var(--s4) var(--s6);scroll-behavior:auto}
+
+/* A turn is one exchange: what you asked, and everything the agent did about it. Grouping by turn
+   is what stops a long run reading as an undifferentiated log. */
+.turn{margin-bottom:var(--s5)}
+.turn+.turn{border-top:1px solid var(--n6);padding-top:var(--s5)}
+
+.said{position:relative;background:var(--n4);border-radius:var(--r2);
+  padding:var(--s3) var(--s4);font:13px/1.55 var(--sans);color:var(--n12);
+  white-space:pre-wrap;word-break:break-word}
+.said .mention{color:var(--accent)}
+
+.work{margin-top:var(--s4);display:flex;flex-direction:column;gap:var(--s3)}
+.txt{font:13.5px/1.65 var(--sans);white-space:pre-wrap;word-break:break-word;color:var(--n12)}
+.txt code{font:12px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1)}
 .txt strong{font-weight:620}
-.think{font:12px/1.55 var(--sans);color:var(--n10);font-style:italic;
-  border-left:2px solid var(--n6);padding-left:var(--s4);white-space:pre-wrap}
+/* The caret marks live output. It is the only thing in the panel that moves. */
+.txt.live::after{content:"";display:inline-block;width:7px;height:14px;margin-left:2px;
+  background:var(--accent);vertical-align:-2px;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
 
-/* A tool's argument gets its own wrapping block. A shell command clipped to one line
-   is unreadable, and the command is exactly what you need to see. */
-.tool{background:var(--n2);border:1px solid var(--n6);border-left:2px solid var(--accent);
-  border-radius:var(--r2);overflow:hidden}
-.tool .th{display:flex;align-items:baseline;gap:var(--s3);padding:var(--s2) var(--s3);
-  font:11px var(--mono)}
-.tool .tn{color:var(--accent);font-weight:600}
-.tool .tw{color:var(--n9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tool pre{margin:0;padding:0 var(--s3) var(--s3);font:11px/1.5 var(--mono);color:var(--n11);
-  white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto}
+/* Activity: one line per tool call, dim, so twenty file reads do not shout. */
+.acts{display:flex;flex-direction:column;gap:1px}
+.act{display:flex;align-items:baseline;gap:var(--s3);padding:2px 0;
+  font:11.5px var(--mono);color:var(--n10);cursor:default}
+.act .dot{width:5px;height:5px;border-radius:50%;background:var(--n8);flex:none;
+  transform:translateY(-1px)}
+.act.run .dot{background:var(--accent);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.act .nm{color:var(--n11);flex:none}
+.act .ar{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n9)}
+.act.more{cursor:pointer}
+.act.more:hover{color:var(--n12)}
+.act .cnt{color:var(--n9);flex:none}
 
-.composer{flex:none;border-top:1px solid var(--n6);padding:var(--s3)}
-.composer textarea{width:100%;background:var(--n2);border:1px solid var(--n7);color:var(--n12);
-  border-radius:var(--r2);padding:var(--s3);font:13px/1.5 var(--sans);resize:none;
-  min-height:56px;outline:none;transition:border-color var(--t-hover)}
-.composer textarea:focus{border-color:var(--accent)}
+/* Thinking is folded away. It is available, not in the way. */
+.think{font:11.5px var(--mono);color:var(--n10)}
+.think summary{cursor:pointer;list-style:none;color:var(--n9);padding:1px 0}
+.think summary::-webkit-details-marker{display:none}
+.think summary:hover{color:var(--n11)}
+.think .body{font:12px/1.6 var(--sans);color:var(--n10);font-style:italic;
+  border-left:2px solid var(--n6);padding-left:var(--s4);margin-top:var(--s2);
+  white-space:pre-wrap;max-height:280px;overflow:auto}
+
+/* Turn footer: what it cost, how long it took. Aider's readout is the clearest of any tool. */
+.tfoot{display:flex;gap:var(--s4);margin-top:var(--s3);font:10.5px var(--mono);
+  color:var(--n9);font-variant-numeric:tabular-nums;align-items:center}
+.tfoot .act-btn{all:unset;cursor:pointer;color:var(--n9);transition:color var(--t-hover)}
+.tfoot .act-btn:hover{color:var(--accent)}
+.tfoot .sp{flex:1}
+
+.err{font:12px/1.55 var(--sans);color:var(--crit);background:color-mix(in srgb,var(--crit) 8%,transparent);
+  border:1px solid color-mix(in srgb,var(--crit) 26%,transparent);border-radius:var(--r2);
+  padding:var(--s3) var(--s4)}
+
+/* Empty state offers the next move rather than describing the panel. */
+.start{padding:var(--s6) var(--s4);color:var(--n10)}
+.start h3{margin:0 0 var(--s2);font:600 13px var(--sans);color:var(--n12)}
+.start p{margin:0 0 var(--s5);font:12.5px/1.55 var(--sans)}
+.sugg{display:flex;flex-direction:column;gap:var(--s2)}
+.sugg button{all:unset;cursor:pointer;padding:var(--s3) var(--s4);border-radius:var(--r2);
+  background:var(--n4);border:1px solid transparent;font:12.5px/1.4 var(--sans);color:var(--n11);
+  transition:background var(--t-hover),color var(--t-hover),border-color var(--t-hover)}
+.sugg button:hover{background:var(--n5);color:var(--n12);border-color:var(--n7)}
+.sugg button b{display:block;font-weight:560;color:var(--n12);margin-bottom:1px}
+.sugg button span{font-size:11.5px;color:var(--n10)}
+
+/* Jump-to-latest, shown only once you have scrolled away from the tail. */
+.jump{position:absolute;left:50%;transform:translateX(-50%);bottom:112px;z-index:4;
+  background:var(--n5);border:1px solid var(--n7);color:var(--n11);border-radius:20px;
+  padding:3px var(--s4);font:11px var(--mono);cursor:pointer;
+  box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.jump:hover{color:var(--n12)}
+
+/* ── composer ───────────────────────────────────────────────────────────── */
+.composer{flex:none;border-top:1px solid var(--n6);padding:var(--s3);position:relative}
+.composer .box{background:var(--n2);border:1px solid var(--n7);border-radius:var(--r2);
+  transition:border-color var(--t-hover)}
+.composer .box:focus-within{border-color:var(--accent)}
+.composer textarea{width:100%;background:transparent;border:0;color:var(--n12);
+  padding:var(--s3);font:13px/1.5 var(--sans);resize:none;min-height:52px;max-height:40vh;
+  outline:none;display:block}
 .composer textarea::placeholder{color:var(--n9)}
+.ctx{display:flex;flex-wrap:wrap;gap:var(--s2);padding:0 var(--s3) var(--s3)}
+.ctx .tag{display:flex;align-items:center;gap:var(--s2);background:var(--n4);border-radius:var(--r1);
+  padding:1px 5px;font:10.5px var(--mono);color:var(--n11)}
+.ctx .tag button{all:unset;cursor:pointer;color:var(--n9);font-size:12px;line-height:1}
+.ctx .tag button:hover{color:var(--crit)}
 .crow2{display:flex;align-items:center;gap:var(--s3);margin-top:var(--s3)}
 .crow2 .sp{flex:1}
-.btn{all:unset;background:var(--accent);color:#fff;padding:5px var(--s4);border-radius:var(--r2);
-  font:500 12px var(--sans);cursor:pointer;text-align:center;
-  transition:filter var(--t-hover)}
-.btn:hover{filter:brightness(1.12)}
-.btn[disabled]{opacity:.4;cursor:default;filter:none}
-.btn.quiet{background:var(--n4);color:var(--n11)}
-.btn.quiet:hover{background:var(--n5);filter:none}
+.hintline{font:10.5px var(--mono);color:var(--n9);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+
+/* @-mention picker, anchored above the composer. */
+.ment{position:absolute;left:var(--s3);right:var(--s3);bottom:100%;margin-bottom:var(--s2);
+  background:var(--n3);border:1px solid var(--n7);border-radius:var(--r2);z-index:8;
+  box-shadow:0 12px 40px rgba(0,0,0,.45);max-height:230px;overflow-y:auto}
+.ment .m{padding:5px var(--s4);font:11.5px var(--mono);color:var(--n11);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ment .m .dim{color:var(--n9)}
+.ment .m.on{background:var(--n5);color:var(--n12);box-shadow:inset 2px 0 0 var(--accent)}
 
 /* ── status rail — the instrument readout ───────────────────────────────── */
 .status{grid-column:2/5;grid-row:2/3;display:flex;align-items:center;gap:var(--s5);
@@ -380,14 +453,20 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     </div>
     <div class="sesslist hidden" id="sess-list"></div>
     <div class="log" id="log"></div>
+    <button class="jump hidden" id="jump">↓ latest</button>
     <div class="composer">
-      <textarea id="prompt" rows="2" placeholder="Describe a change…"></textarea>
+      <div class="ment hidden" id="ment"></div>
+      <div class="box">
+        <textarea id="prompt" rows="2" placeholder="Describe a change…   @ for a file"></textarea>
+        <div class="ctx hidden" id="ctx"></div>
+      </div>
       <div class="crow2">
         <span class="seg"><button id="pm-plan">Plan</button><button id="pm-auto" aria-current="true">Auto</button></span>
-        <kbd id="mode-kbd">⇧⇥</kbd>
+        <kbd>⇧⇥</kbd>
         <span class="sp"></span>
+        <span class="hintline" id="hint"></span>
         <button class="btn quiet hidden" id="stop">Stop</button>
-        <button class="btn" id="send">Send <kbd style="background:transparent;border:0;color:rgba(255,255,255,.7)">⌘↵</kbd></button>
+        <button class="btn" id="send">Send <kbd style="background:rgba(255,255,255,.16);border:0;color:rgba(255,255,255,.85)">⌘↵</kbd></button>
       </div>
     </div>
   </section>
@@ -974,32 +1053,311 @@ function drawConnections(){
 }
 
 /* ════ agent ═════════════════════════════════════════════════════════════ */
-let stream=null, sessionId=null, live=null, cost=null, permMode='acceptEdits';
+let stream=null, sessionId=null, permMode='acceptEdits';
+let turn=null;          // the DOM of the exchange in flight
+let started=0;          // wall clock for the turn footer
+let cost=null;
 const MODE_LABEL={plan:'Plan',acceptEdits:'Auto'};
 
 function setMode(m){
   permMode=m;
   el('pm-plan').setAttribute('aria-current',m==='plan');
   el('pm-auto').setAttribute('aria-current',m==='acceptEdits');
+  el('prompt').placeholder = m==='plan'
+    ? 'Ask for a plan…   @ for a file'
+    : 'Describe a change…   @ for a file';
   drawStatus();
 }
 el('pm-plan').onclick=()=>setMode('plan');
 el('pm-auto').onclick=()=>setMode('acceptEdits');
 
-function say(html){ const n=frag(html); el('log').append(n); el('log').scrollTop=1e9; return n; }
+/* ── autoscroll that yields to the reader ───────────────────────────────── */
+let pinned=true;
+const atBottom=()=>{ const l=el('log'); return l.scrollHeight-l.scrollTop-l.clientHeight<40; };
+el('log').addEventListener('scroll',()=>{
+  pinned=atBottom();
+  el('jump').classList.toggle('hidden',pinned);
+});
+function follow(){ if(pinned) el('log').scrollTop=el('log').scrollHeight; }
+el('jump').onclick=()=>{ pinned=true; el('jump').classList.add('hidden'); follow(); };
+
+/* ── turn construction ─────────────────────────────────────────────────── */
+function newTurn(promptText){
+  const t=frag('<div class="turn"><div class="said"></div><div class="work"></div>'+
+    '<div class="tfoot hidden"></div></div>');
+  t.querySelector('.said').innerHTML=mentionise(promptText);
+  el('log').append(t);
+  return {
+    root:t, work:t.querySelector('.work'), foot:t.querySelector('.tfoot'),
+    text:null, think:null, acts:null, lastTool:null, lastCount:0,
+  };
+}
+
+/** Absolute paths inside the open repo are noise — the panel already tells you which repo. */
+function trimRepo(t){
+  const root=state?.repo;
+  return root ? t.split(root+'/').join('').split(root).join('.') : t;
+}
+
+/** Highlight @paths in what you typed, so the context you attached is visible afterwards. */
+function mentionise(t){
+  return esc(t).replace(/(^|\s)(@[\w./\-]+)/g,'$1<span class="mention">$2</span>');
+}
+
+function textNode(){
+  if(!turn.text){
+    turn.text=frag('<div class="txt live"></div>');
+    turn.text.dataset.raw='';
+    turn.work.append(turn.text);
+  }
+  return turn.text;
+}
+
+function actLine(name,arg,running){
+  if(!turn.acts){ turn.acts=frag('<div class="acts"></div>'); turn.work.append(turn.acts); }
+  // Consecutive calls to the same tool collapse into a count. A run that reads twenty files should
+  // occupy one line, not twenty.
+  if(turn.lastTool===name && turn.acts.lastElementChild){
+    turn.lastCount++;
+    const last=turn.acts.lastElementChild;
+    last.querySelector('.ar').textContent=arg||'';
+    let c=last.querySelector('.cnt');
+    if(!c){ c=frag('<span class="cnt"></span>'); last.append(c); }
+    c.textContent='×'+turn.lastCount;
+    return last;
+  }
+  turn.lastTool=name; turn.lastCount=1;
+  const n=frag('<div class="act'+(running?' run':'')+'"><span class="dot"></span>'+
+    '<span class="nm">'+esc(name)+'</span><span class="ar">'+esc(arg||'')+'</span></div>');
+  turn.acts.append(n);
+  return n;
+}
+
+function thinkNode(){
+  if(!turn.think){
+    turn.think=frag('<details class="think"><summary>thinking…</summary><div class="body"></div></details>');
+    turn.work.append(turn.think);
+  }
+  return turn.think;
+}
+
+function finishTurn(result){
+  if(turn?.text) turn.text.classList.remove('live');
+  turn?.acts?.querySelectorAll('.act.run').forEach(a=>a.classList.remove('run'));
+  if(!turn) return;
+
+  const secs=((Date.now()-started)/1000).toFixed(1);
+  const bits=[secs+'s'];
+  if(result?.total_cost_usd!=null) bits.push('$'+result.total_cost_usd.toFixed(4));
+  const u=result?.usage;
+  if(u) bits.push(((u.input_tokens??0)+(u.output_tokens??0)).toLocaleString()+' tok');
+
+  turn.foot.innerHTML=bits.map(b=>'<span>'+esc(b)+'</span>').join('')+
+    '<span class="sp"></span><button class="act-btn" data-copy>copy</button>';
+  turn.foot.classList.remove('hidden');
+  const raw=turn.text?.dataset.raw??'';
+  turn.foot.querySelector('[data-copy]').onclick=e=>{
+    navigator.clipboard.writeText(raw);
+    e.target.textContent='copied';
+    setTimeout(()=>{ e.target.textContent='copy'; },1200);
+  };
+
+  if(turn.think) turn.think.querySelector('summary').textContent='thought for '+secs+'s';
+}
+
+/* ── stream handling ───────────────────────────────────────────────────── */
+/** Render one stream-json record. The browser interprets the shape, so there is one place to change. */
+function record(r){
+  if(r.type==='system'&&r.subtype==='init'){
+    const fresh=!sessionId;
+    sessionId=r.session_id??sessionId;
+    if(fresh&&sessionId) setSessionName('Session '+sessionId.split('-')[0]);
+    el('agent-model').textContent=r.model??'';
+    drawStatus(); return;
+  }
+  const d=r.event?.delta;
+
+  if(r.type==='stream_event'&&d?.type==='text_delta'){
+    const n=textNode();
+    n.dataset.raw+=d.text;
+    n.innerHTML=md(n.dataset.raw);
+    n.classList.add('live');
+    follow(); return;
+  }
+  if(r.type==='stream_event'&&d?.type==='thinking_delta'){
+    thinkNode().querySelector('.body').textContent+=d.thinking;
+    follow(); return;
+  }
+  if(r.type==='assistant'){
+    for(const b of r.message?.content??[]){
+      if(b.type!=='tool_use') continue;
+      // A new tool means the prose before it is finished.
+      if(turn.text){ turn.text.classList.remove('live'); turn.text=null; }
+      const i=b.input??{};
+      const arg=i.command??i.file_path??i.path??i.pattern??i.description??'';
+      actLine(b.name,trimRepo(String(arg)).split('\n')[0].slice(0,120),true);
+      follow();
+    }
+    return;
+  }
+  if(r.type==='result'){
+    if(r.total_cost_usd!=null) cost=r.total_cost_usd;
+    sessionId=r.session_id??sessionId;
+    finishTurn(r);
+    refresh();
+    tabs.filter(t=>!t.dirty).forEach(reload);
+    follow();
+  }
+}
+
+async function reload(tab){
+  const r=await fetch('/api/file?path='+encodeURIComponent(tab.path));
+  if(!r.ok) return;
+  const text=(await r.json()).content;
+  tab.content=text;
+  const m=models.get(tab.path);
+  // setValue would wipe undo history and jump the cursor. A full-range edit keeps both, so the
+  // agent's change is undoable like any other.
+  if(m&&m.getValue()!==text) m.pushEditOperations([],[{range:m.getFullModelRange(),text}],()=>null);
+  if(tab.path===active&&view!=='src') draw();
+}
+
 function busy(on){
   el('send').disabled=on;
   el('stop').classList.toggle('hidden',!on);
   drawStatus();
 }
-function emptyLog(){
-  el('log').innerHTML='<div class="empty">Ask the agent to change this repository.<br><br>'+
-    '<kbd>⇧⇥</kbd> switches Plan and Auto · <kbd>'+(MAC?'⌘↵':'Ctrl+↵')+'</kbd> sends</div>';
+
+function send(text){
+  const box=el('prompt');
+  const prompt=(text??box.value).trim();
+  if(!prompt||stream) return;
+  el('log').querySelector('.start')?.remove();
+
+  // Attached files ride along as @paths, which is the convention Claude Code already uses.
+  const withCtx=[...attached].map(p=>'@'+p).join(' ');
+  const full=withCtx?withCtx+'\n\n'+prompt:prompt;
+
+  turn=newTurn(full); started=Date.now();
+  box.value=''; autoGrow(); attached.clear(); drawCtx();
+  pinned=true; follow(); busy(true);
+
+  stream=new EventSource('/api/chat?prompt='+encodeURIComponent(full)+'&mode='+permMode+
+    (sessionId?'&session='+encodeURIComponent(sessionId):''));
+  stream.addEventListener('msg',e=>{ try{ record(JSON.parse(e.data)); }catch(_){} });
+  stream.addEventListener('fatal',e=>{
+    turn.work.append(frag('<div class="err">'+esc(e.data)+'</div>'));
+  });
+  const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); finishTurn(null); } };
+  stream.addEventListener('done',end);
+  stream.onerror=end;
 }
+el('send').onclick=()=>send();
+el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); finishTurn(null); } };
+
+/* ── composer ──────────────────────────────────────────────────────────── */
+const attached=new Set();
+
+function autoGrow(){
+  const t=el('prompt');
+  t.style.height='auto';
+  t.style.height=Math.min(t.scrollHeight,window.innerHeight*0.4)+'px';
+}
+function drawCtx(){
+  const box=el('ctx');
+  box.classList.toggle('hidden',attached.size===0);
+  box.innerHTML=[...attached].map(p=>'<span class="tag">'+esc(p.split('/').pop())+
+    '<button data-x="'+esc(p)+'">×</button></span>').join('');
+  box.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{ attached.delete(b.dataset.x); drawCtx(); });
+}
+
+/* @-mention: type @ then filter the tree. Uses the same scorer as the command palette. */
+let mentOpen=false, mentHits=[], mentIdx=0, mentAt=-1;
+function closeMent(){ mentOpen=false; el('ment').classList.add('hidden'); }
+function mentFilter(){
+  const t=el('prompt'), pos=t.selectionStart;
+  const upto=t.value.slice(0,pos);
+  const m=upto.match(/@([\w./\-]*)$/);
+  if(!m){ closeMent(); return; }
+  mentAt=pos-m[0].length;
+  const q=m[1];
+  mentHits=files.map(p=>({p,_s:score(p,q)})).filter(x=>x._s>0)
+    .sort((a,b)=>b._s-a._s).slice(0,30).map(x=>x.p);
+  if(!mentHits.length){ closeMent(); return; }
+  mentIdx=0; mentOpen=true; drawMent();
+}
+function drawMent(){
+  el('ment').classList.remove('hidden');
+  el('ment').innerHTML=mentHits.map((p,i)=>{
+    const name=p.split('/').pop(), dir=p.slice(0,-name.length);
+    return '<div class="m'+(i===mentIdx?' on':'')+'" data-i="'+i+'">'+esc(name)+
+      (dir?' <span class="dim">'+esc(dir)+'</span>':'')+'</div>';
+  }).join('');
+  el('ment').querySelectorAll('.m').forEach(n=>n.onclick=()=>pickMent(+n.dataset.i));
+  el('ment').querySelector('.on')?.scrollIntoView({block:'nearest'});
+}
+function pickMent(i){
+  const p=mentHits[i]; if(!p) return;
+  const t=el('prompt');
+  t.value=t.value.slice(0,mentAt)+t.value.slice(t.selectionStart);
+  t.selectionStart=t.selectionEnd=mentAt;
+  attached.add(p); drawCtx(); closeMent(); t.focus(); autoGrow();
+}
+
+el('prompt').addEventListener('input',()=>{ autoGrow(); mentFilter(); });
+el('prompt').addEventListener('keydown',e=>{
+  if(mentOpen){
+    if(e.key==='ArrowDown'){ mentIdx=Math.min(mentIdx+1,mentHits.length-1); drawMent(); e.preventDefault(); return; }
+    if(e.key==='ArrowUp'){ mentIdx=Math.max(mentIdx-1,0); drawMent(); e.preventDefault(); return; }
+    if(e.key==='Enter'||e.key==='Tab'){ pickMent(mentIdx); e.preventDefault(); return; }
+    if(e.key==='Escape'){ closeMent(); e.preventDefault(); return; }
+  }
+  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); }
+});
+
+/* ── empty state ───────────────────────────────────────────────────────── */
+/** Suggestions come from what the scan actually found, so the first move is never generic. */
+function emptyLog(){
+  const s=state?.scan, w=state?.workspace;
+  const items=[];
+  const blocking=(s?.findings??[]).filter(f=>f.severity==='critical'||f.severity==='high');
+  if(blocking.length) items.push({
+    t:'Fix the '+blocking.length+' blocking finding'+(blocking.length>1?'s':''),
+    d:blocking[0].title,
+    p:'Fix the blocking readiness findings in this repository, starting with: '+blocking[0].title,
+  });
+  const untrusted=(w?.hooks??[]).filter(h=>h.scope==='project').length+
+                  (w?.mcp_servers??[]).filter(m=>m.scope==='project').length;
+  if(untrusted) items.push({
+    t:'Review what this repo will execute',
+    d:untrusted+' hook or MCP server came with the checkout',
+    p:'Review the hooks and MCP servers this repository ships and tell me whether they are safe.',
+  });
+  if(git?.changes?.length) items.push({
+    t:'Explain the '+git.changes.length+' uncommitted change'+(git.changes.length>1?'s':''),
+    d:'on '+(git.branch??'this branch'),
+    p:'Summarise the uncommitted changes in this repository and flag anything that looks unfinished.',
+  });
+  items.push({
+    t:'Explain this codebase',
+    d:'structure, entry points, how to run it',
+    p:'Explain how this codebase is structured: the entry points, the main modules, and how to run it.',
+  });
+
+  el('log').innerHTML='<div class="start"><h3>What should the agent do?</h3>'+
+    '<p>It works in this repository, on your machine, with your Claude subscription.</p>'+
+    '<div class="sugg">'+items.slice(0,4).map((i,n)=>
+      '<button data-s="'+n+'"><b>'+esc(i.t)+'</b><span>'+esc(i.d)+'</span></button>').join('')+
+    '</div></div>';
+  el('log').querySelectorAll('[data-s]').forEach(b=>
+    b.onclick=()=>send(items[+b.dataset.s].p));
+}
+
+/* ── sessions ──────────────────────────────────────────────────────────── */
 function setSessionName(t){ el('sess-name').textContent=t; }
 
 el('a-new').onclick=()=>{
-  sessionId=null; cost=null; setSessionName('New session');
+  sessionId=null; cost=null; turn=null; setSessionName('New session');
   el('sess-list').classList.add('hidden'); emptyLog(); drawStatus();
 };
 
@@ -1021,101 +1379,34 @@ el('sess-btn').onclick=()=>{
 async function openSession(id){
   el('sess-list').classList.add('hidden');
   const meta=(state?.workspace.sessions??[]).find(s=>s.id===id);
-  sessionId=id; cost=null;
+  sessionId=id; cost=null; turn=null;
   setSessionName(meta?.title??id.split('-')[0]);
-  el('log').innerHTML='<div class="empty">Loading…</div>';
+  el('log').innerHTML='<div class="start"><p>Loading…</p></div>';
 
   const turns=await (await fetch('/api/session?id='+encodeURIComponent(id))).json();
   el('log').innerHTML='';
-  if(!turns.length){ el('log').innerHTML='<div class="empty">This transcript could not be read.</div>'; }
-  for(const t of turns){
-    if(t.role==='user'){
-      say('<div class="said"><div class="who">You</div><div class="txt">'+esc(t.text)+'</div></div>');
-    } else {
-      if(t.text) say('<div><div class="who">Claude</div><div class="txt">'+md(t.text)+'</div></div>');
-      for(const name of t.tools)
-        say('<div class="tool"><div class="th"><span class="tn">'+esc(name)+'</span></div></div>');
-    }
-  }
-  el('log').scrollTop=1e9;
-  drawStatus();
-}
-
-/** Render one stream-json record. The browser interprets the shape, so there is one place to change. */
-function record(r){
-  if(r.type==='system'&&r.subtype==='init'){
-    const fresh=!sessionId;
-    sessionId=r.session_id??sessionId;
-    if(fresh&&sessionId) setSessionName('Session '+sessionId.split('-')[0]);
-    el('agent-model').textContent=r.model??'';
-    drawStatus(); return;
-  }
-  const d=r.event?.delta;
-  if(r.type==='stream_event'&&d?.type==='text_delta'){
-    if(!live||live.dataset.kind!=='text'){
-      live=say('<div><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>').querySelector('.txt');
-      live.dataset.raw='';
-    }
-    live.dataset.raw+=d.text; live.innerHTML=md(live.dataset.raw); el('log').scrollTop=1e9; return;
-  }
-  if(r.type==='stream_event'&&d?.type==='thinking_delta'){
-    if(!live||live.dataset.kind!=='think') live=say('<div class="think" data-kind="think"></div>');
-    live.textContent+=d.thinking; el('log').scrollTop=1e9; return;
-  }
-  if(r.type==='assistant'){
-    for(const b of r.message?.content??[]){
-      if(b.type!=='tool_use') continue;
-      live=null;
-      const i=b.input??{};
-      const arg=i.command??i.file_path??i.path??i.pattern??i.prompt??'';
-      const wrapText=i.description??'';
-      say('<div class="tool"><div class="th"><span class="tn">'+esc(b.name)+'</span>'+
-        '<span class="tw">'+esc(wrapText)+'</span></div>'+
-        (arg?'<pre>'+esc(String(arg))+'</pre>':'')+'</div>');
-    }
+  if(!turns.length){
+    el('log').innerHTML='<div class="start"><p>This transcript could not be read.</p></div>';
     return;
   }
-  if(r.type==='result'){
-    live=null; sessionId=r.session_id??sessionId;
-    if(r.total_cost_usd!=null) cost=r.total_cost_usd;
-    // The agent has just changed the tree, the open files and the score.
-    refresh();
-    tabs.filter(t=>!t.dirty).forEach(reload);
+  // Replay as turns so an opened session looks exactly like a live one.
+  let cur=null;
+  for(const t of turns){
+    if(t.role==='user'){ cur=newTurn(t.text); continue; }
+    if(!cur) cur=newTurn('');
+    if(t.text){
+      const n=frag('<div class="txt"></div>');
+      n.innerHTML=md(t.text); n.dataset.raw=t.text;
+      cur.work.append(n);
+    }
+    for(const name of t.tools){
+      turn=cur; actLine(name,'',false);
+    }
   }
+  turn=null;
+  pinned=true; el('log').scrollTop=el('log').scrollHeight;
+  drawStatus();
 }
-async function reload(tab){
-  const r=await fetch('/api/file?path='+encodeURIComponent(tab.path));
-  if(!r.ok) return;
-  const text=(await r.json()).content;
-  tab.content=text;
-  const m=models.get(tab.path);
-  // setValue would wipe undo history and jump the cursor. A full-range edit keeps both, so you can
-  // undo the agent's change like any other edit.
-  if(m&&m.getValue()!==text){
-    m.pushEditOperations([],[{range:m.getFullModelRange(),text}],()=>null);
-  }
-  if(tab.path===active&&view==='diff') draw();
-}
-
-function send(){
-  const box=el('prompt'), text=box.value.trim();
-  if(!text||stream) return;
-  el('log').querySelector('.empty')?.remove();
-  say('<div class="said"><div class="who">You</div><div class="txt">'+esc(text)+'</div></div>');
-  box.value=''; live=null; busy(true);
-  stream=new EventSource('/api/chat?prompt='+encodeURIComponent(text)+'&mode='+permMode+
-    (sessionId?'&session='+encodeURIComponent(sessionId):''));
-  stream.addEventListener('msg',e=>{ try{ record(JSON.parse(e.data)); }catch(_){} });
-  stream.addEventListener('fatal',e=>say('<div><div class="who">Error</div><div class="txt">'+esc(e.data)+'</div></div>'));
-  const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
-  stream.addEventListener('done',end); stream.onerror=end;
-}
-el('do-save').onclick=save;
-el('send').onclick=send;
-el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); } };
-el('prompt').addEventListener('keydown',e=>{
-  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); }
-});
 
 /* ════ status rail ═══════════════════════════════════════════════════════ */
 function syncSave(){
@@ -1328,15 +1619,18 @@ async function refresh(){
   drawStatus();
 }
 
-emptyLog();
 wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   await Promise.all([loadConn(), loadClis()]);
-  await refresh(); draw();
+  await refresh();
+  emptyLog();   // suggestions are drawn from the scan and git status, so it waits for them
+  draw();
   const qs=new URLSearchParams(location.search);
   if(qs.get('panel')) setPanel(qs.get('panel'));
   if(qs.get('mode')==='diff'){ view='diff'; syncView(); }
   if(qs.get('file')) open(qs.get('file'));
+  // ?ask= sends a prompt on load, so a finding or a review link can open straight into a question.
+  if(qs.get('ask')) send(qs.get('ask'));
 })();
 </script>
 </body>
