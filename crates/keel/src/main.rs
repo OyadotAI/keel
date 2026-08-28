@@ -6,6 +6,7 @@
 
 mod api;
 mod connect;
+mod dev;
 mod clitools;
 mod permissions;
 mod plugins;
