@@ -1142,7 +1142,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4.2 2v7.9a2.7 2.7 0 104.7 1.8h3V2h-1.9v7.8H8.8A2.7 2.7 0 006.1 9.9V2H4.2z"/></svg>
       <span class="badge hidden" data-b="changes">0</span></button>
     <button class="ic" data-p="skills" title="Skills and extensions">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4l1.9 4.2 4.6.45-3.45 3.1.98 4.5L8 11.3l-4.03 2.35.98-4.5L1.5 6.05l4.6-.45L8 1.4z"/></svg></button>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4l1.9 4.2 4.6.45-3.45 3.1.98 4.5L8 11.3l-4.03 2.35.98-4.5L1.5 6.05l4.6-.45L8 1.4z"/></svg>
+      <span class="badge hidden" data-b="skills">0</span></button>
     <button class="ic" data-p="agents" title="Subagents">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.2 2.4a2.6 2.6 0 112.6 2.6H5.2V2.4zm-2.8 6a2.6 2.6 0 112.6 2.6H2.4V8.4zm8 0a2.6 2.6 0 112.6 2.6h-2.6V8.4z"/><path d="M7.3 5h1.4v3.4H7.3z"/><path d="M4.6 8.4h6.8v1.3H4.6z"/></svg>
       <span class="badge mut hidden" data-b="agents">0</span></button>
@@ -3837,6 +3838,15 @@ async function showDetails(name,host){
 async function loadCatalog(){
   const r=await fetch('/api/plugins?repo='+encodeURIComponent(state?.repo??''));
   catalog=await r.json();
+  badgeRecommended();
+}
+
+/** How many things this repository is judged to want and does not have. */
+function badgeRecommended(){
+  const missing=(catalog?.suggested??[]).filter(p=>!p.installed).length;
+  // Amber rather than plain: it is not a count of what you have, it is a count of what is
+  // suggested and absent — the same weight as an unread problem, which is what it is.
+  badge('skills',missing,missing>0);
 }
 
 function installPlugin(name,marketplace,host){
@@ -3851,6 +3861,7 @@ function installPlugin(name,marketplace,host){
     es.close();
     write(e.data==='0'?'\n✓ installed — restart the agent session to pick it up':'\nexited '+e.data);
     catalog=null; await refresh();
+    loadCatalog().catch(()=>{});
     if(setsTab==='plugins') SET_PANES.plugins();
   });
 }
@@ -5336,7 +5347,12 @@ async function refresh(){
   badge('hooks',w.hooks.length,risky(w.hooks)>0);
   badge('mcp',w.mcp_servers.length,risky(w.mcp_servers)>0);
   badge('preview','\u2022',devState.running);
+  badgeRecommended();
   loadCluster(); loadPipelines();
+  // Reading every marketplace on disk takes a moment, so it happens behind the first paint rather
+  // than in front of it — but it does happen, because a badge nobody sees until they open the
+  // panel is not a badge.
+  if(!catalog) loadCatalog().catch(()=>{});
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
   drawStatus();
