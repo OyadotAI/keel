@@ -1973,16 +1973,61 @@ const PANELS={
     if(!git?.is_repo){ el('side').innerHTML=H('Changes')+'<div class="empty">Not a git repository.</div>'; return; }
     el('side').innerHTML=H('Changes',git.changes.length,'<span class="act">'+esc(git.branch??'')+'</span>')+'<div id="ch"></div>';
     if(!git.changes.length){ el('ch').innerHTML='<div class="empty">Working tree clean.</div>'; return; }
-    git.changes.forEach(c=>{
-      const e=frag('<div class="row" data-p="'+esc(c.path)+'" title="'+esc(c.path)+'">'+
-        '<span class="name">'+esc(c.path.split('/').pop())+'</span>'+
-        '<span class="flag" style="color:var(--'+(c.label==='untracked'||c.label==='added'?'add':c.label==='deleted'?'del':'warn')+')">'+
-        esc(c.status.trim()||'?')+'</span></div>');
-      // Opening from Changes goes straight to the diff — that is the question being asked.
-      e.onclick=()=>open(c.path,'diff');
-      el('ch').append(e);
-    });
+
+    // A flat list of basenames is unreadable the moment two directories both hold an `index.ts`,
+    // and this repository has four `mod.rs`. So: a tree, with single-child directories folded into
+    // one row — `crates/keel/src` rather than three rows that each hold nothing but the next.
+    const root={dirs:new Map(),files:[]};
+    for(const c of git.changes){
+      const parts=c.path.split('/');
+      let node=root;
+      for(const seg of parts.slice(0,-1)){
+        if(!node.dirs.has(seg)) node.dirs.set(seg,{dirs:new Map(),files:[]});
+        node=node.dirs.get(seg);
+      }
+      node.files.push(c);
+    }
+    const collapse=(node,name)=>{
+      while(node.files.length===0&&node.dirs.size===1){
+        const [seg,only]=[...node.dirs][0];
+        name=name+'/'+seg; node=only;
+      }
+      return [name,node];
+    };
+
+    const colour=c=>c.label==='untracked'||c.label==='added'?'add'
+                   :c.label==='deleted'?'del':'warn';
+
+    const render=(node,depth,into)=>{
+      // Iterate names and look each one up. Destructuring `[name, child]` from a *string* — which
+      // is what .keys() yields — silently binds its first two characters instead.
+      for(const key of [...node.dirs.keys()].sort()){
+        let [name,child]=collapse(node.dirs.get(key),key);
+        const head=frag('<div class="row dir" style="padding-left:'+(8+depth*13)+'px">'+
+          '<span class="caret">\u25be</span><span class="name">'+esc(name)+'</span></div>');
+        const kids=document.createElement('div');
+        kids.className='kids';
+        kids.style.setProperty('--guide',(8+depth*13+5)+'px');
+        head.onclick=()=>{ kids.classList.toggle('shut');
+          head.querySelector('.caret').textContent=kids.classList.contains('shut')?'\u25b8':'\u25be'; };
+        into.append(head,kids);
+        render(child,depth+1,kids);
+      }
+      for(const c of node.files.sort((a,b)=>a.path.localeCompare(b.path))){
+        const e=frag('<div class="row" style="padding-left:'+(8+depth*13+14)+'px" '+
+          'data-p="'+esc(c.path)+'" title="'+esc(c.path)+'">'+
+          '<span class="name">'+esc(c.path.split('/').pop())+'</span>'+
+          '<span class="flag" style="color:var(--'+colour(c)+')">'+
+          esc(c.status.trim()||'?')+'</span></div>');
+        // Opening from Changes goes straight to the diff — that is the question being asked.
+        e.onclick=()=>open(c.path,'diff');
+        e.oncontextmenu=ev=>treeMenu(ev,{path:c.path,dir:false},e);
+        into.append(e);
+      }
+    };
+    render(root,0,el('ch'));
   },
+
   skills(){
     const w=state?.workspace; if(!w) return;
     const plugins=w.plugins??[];
@@ -2026,15 +2071,19 @@ const PANELS={
 
   agents(){
     const list=state?.workspace.agents??[];
-    el('side').innerHTML=H('Subagents',list.length)+
-      '<div class="sub">Specialised agents the main one can delegate to. Each is a Markdown file '+
-      'with its own tools and prompt.</div>'+
-      (list.length?list.map(a=>'<div class="card click" data-open="'+esc(a.path??'')+'">'+
-        '<div class="rowtop"><div class="t">'+esc(a.name)+
-        '<span class="chip '+a.scope+'">'+esc(a.scope)+'</span></div></div>'+
-        (a.description?'<div class="d">'+esc(a.description)+'</div>':'')+'</div>').join('')
-        :'<div class="empty">No subagents.<br>Add one at <code>.claude/agents/&lt;name&gt;.md</code>, '+
-         'or install a plugin that brings some.</div>');
+    el('side').innerHTML=
+      H('Subagents',list.length,'<button class="act" id="a-newagent">new…</button>')+
+      '<div class="sub">Specialised agents the main one delegates to, each with its own tools and '+
+      'prompt. A subagent runs in a fresh context, which is the point: an independent reader finds '+
+      'what the author of a change cannot.</div>'+
+      '<div id="ag-form"></div>'+
+      (list.length?list.map(a=>'<div class="prow click" data-open="'+esc(a.path??'')+'"'+
+        (a.description?' title="'+esc(a.description)+'"':'')+'>'+
+        '<span class="dot3 '+(a.scope==='project'?'warn':'mute')+'"></span>'+
+        '<span class="nm">'+esc(a.name)+'</span>'+
+        (a.scope==='project'?'<span class="meta">repo</span>':'')+'</div>').join('')
+        :'<div class="prow off">None yet</div>');
+    el('a-newagent').onclick=newAgentForm;
     wireOpeners();
   },
 
@@ -2202,6 +2251,60 @@ function askFix(f){
   send('Fix this readiness finding in '+where+'.\n\n'+
        f.title+'\n'+f.detail+'\n\nSuggested fix: '+f.fix.description+'\n\n'+
        'Make the change, then run the project gate and show me what it said.');
+}
+
+/* ════ subagents ═════════════════════════════════════════════════════════
+   A subagent is a Markdown file with frontmatter, so this could have been "create a file and good
+   luck". The form exists because the frontmatter has keys that mean something — `description` is
+   the only thing the main agent reads when deciding whether to delegate at all — and those are
+   exactly what a blank file gets wrong quietly. */
+function newAgentForm(){
+  const host=el('ag-form');
+  if(host.dataset.open){ host.innerHTML=''; delete host.dataset.open; return; }
+  host.dataset.open='1';
+
+  host.innerHTML='<div class="addform">'+
+    '<label>Name</label>'+
+    '<input id="ag-name" spellcheck="false" placeholder="code-reviewer">'+
+    '<label>When to use it</label>'+
+    '<textarea id="ag-desc" spellcheck="false" '+
+      'placeholder="Use after any change to source files, before saying the work is done."></textarea>'+
+    '<label>Tools <span style="text-transform:none;letter-spacing:0">— blank inherits all</span></label>'+
+    '<input id="ag-tools" spellcheck="false" placeholder="Read, Grep, Glob, Bash">'+
+    '<label>Scope</label><div class="segs" id="ag-scope">'+
+      '<button data-s="project" aria-current="true">This project</button>'+
+      '<button data-s="user">Every project</button></div>'+
+    '<div class="acts"><button class="btn" id="ag-add">Create</button>'+
+      '<button class="btn quiet" id="ag-cancel">Cancel</button></div>'+
+    '<div class="hint">The description is read by the model, not by you — write it as the '+
+      'condition under which delegating is the right move.</div>'+
+    '<div class="note bad hidden" id="ag-err"></div></div>';
+
+  el('ag-scope').querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>
+    el('ag-scope').querySelectorAll('[data-s]').forEach(x=>
+      x.setAttribute('aria-current',String(x===b))));
+  el('ag-cancel').onclick=()=>{ host.innerHTML=''; delete host.dataset.open; };
+
+  el('ag-add').onclick=async()=>{
+    const r=await fetch('/api/agents/create',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({
+        name:el('ag-name').value.trim(),
+        description:el('ag-desc').value.trim(),
+        tools:el('ag-tools').value.trim(),
+        scope:el('ag-scope').querySelector('[aria-current=true]')?.dataset.s??'project',
+      })});
+    if(!r.ok){
+      el('ag-err').textContent=await r.text();
+      el('ag-err').classList.remove('hidden');
+      return;
+    }
+    const {path}=await r.json();
+    await refresh();
+    setPanel('agents');
+    // Straight into the file: the form collects the frontmatter, the prompt is the actual work.
+    open(path);
+  };
 }
 
 /* ════ MCP servers ═══════════════════════════════════════════════════════

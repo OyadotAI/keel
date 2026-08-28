@@ -262,6 +262,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/plugins/refresh",
             get(crate::plugins::refresh_marketplaces),
         )
+        .route("/api/agents/create", axum::routing::post(crate::agents::create))
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
         .route("/api/claude", get(crate::clitools::claude_status))
