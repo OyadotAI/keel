@@ -96,14 +96,58 @@ pub fn discover_hooks(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Hook> {
     hooks
 }
 
+/// Claude Code's own `~/.claude.json` — user settings, and per-project `local` scope.
+///
+/// It is *next to* `~/.claude`, not inside it. Keel read `<claude_home>/.claude.json` for two
+/// releases and found nothing, because a 672-byte cache file happens to live at that path, parses
+/// as JSON, and has no `mcpServers` key — so every lookup failed by returning an empty list rather
+/// than by erroring. With `CLAUDE_CONFIG_DIR` set, the file *is* inside the configured directory.
+fn config_file(claude_home: &Utf8Path) -> Utf8PathBuf {
+    if claude_home.file_name() == Some(".claude")
+        && let Some(parent) = claude_home.parent()
+    {
+        return parent.join(".claude.json");
+    }
+    claude_home.join(".claude.json")
+}
+
 /// Every MCP server configured for this repository.
 pub fn discover_mcp_servers(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<McpServer> {
     let sources = [
         (repo.join(".mcp.json"), Scope::Project),
-        (claude_home.join(".claude.json"), Scope::User),
+        (config_file(claude_home), Scope::User),
     ];
 
     let mut servers = Vec::new();
+
+    // Claude Code's `local` scope, which is the one Keel's own "add server" writes to and the only
+    // one it offers — `user` is machine-wide and `project` is the quarantined file. It lives in the
+    // same `~/.claude.json` as user scope but under `projects["<repo>"].mcpServers`, so reading the
+    // top level alone found every scope except the one Keel writes. A server added through the
+    // panel appeared for as long as the console output was on screen and was gone by the next
+    // redraw.
+    let home_config = config_file(claude_home);
+    if let Ok(contents) = std::fs::read_to_string(&home_config)
+        && let Ok(config) = serde_json::from_str::<Value>(&contents)
+        && let Some(entries) = config
+            .get("projects")
+            .and_then(|p| p.get(repo.as_str()))
+            .and_then(|p| p.get("mcpServers"))
+            .and_then(Value::as_object)
+    {
+        for (name, server) in entries {
+            servers.push(McpServer {
+                name: name.clone(),
+                endpoint: server
+                    .get("url")
+                    .or_else(|| server.get("command"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                scope: Scope::Local,
+                source: home_config.clone(),
+            });
+        }
+    }
     for (path, scope) in sources {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
@@ -155,6 +199,56 @@ mod tests {
         assert_eq!(hooks[0].event, "SessionStart");
         assert_eq!(hooks[0].command, "curl x | sh");
         assert!(hooks[0].is_untrusted(), "it arrived with the repository");
+    }
+
+    #[test]
+    fn the_config_file_sits_beside_the_config_directory_not_inside_it() {
+        assert_eq!(
+            config_file(Utf8Path::new("/Users/x/.claude")),
+            Utf8PathBuf::from("/Users/x/.claude.json")
+        );
+        // CLAUDE_CONFIG_DIR names a directory that holds the file.
+        assert_eq!(
+            config_file(Utf8Path::new("/opt/cfg")),
+            Utf8PathBuf::from("/opt/cfg/.claude.json")
+        );
+    }
+
+    #[test]
+    fn finds_a_server_added_at_local_scope() {
+        // What `claude mcp add --scope local` writes, and therefore what Keel's own add button
+        // produces. Read from the wrong file or the wrong nesting and it is silently invisible.
+        let dir = TempDir::new().expect("tempdir");
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        let repo = home.join("work").join("app");
+        std::fs::create_dir_all(&repo).expect("repo");
+        std::fs::write(
+            home.join(".claude.json"),
+            format!(
+                r#"{{"projects":{{"{}":{{"mcpServers":{{"sentry":{{"url":"https://mcp.sentry.dev"}}}}}}}}}}"#,
+                repo.as_str()
+            ),
+        )
+        .expect("write");
+
+        let servers = discover_mcp_servers(&repo, &home.join(".claude"));
+        assert_eq!(
+            servers.len(),
+            1,
+            "the server added at local scope is listed"
+        );
+        assert_eq!(servers[0].name, "sentry");
+        assert_eq!(servers[0].scope, Scope::Local);
+        // Local scope is Keel's own writable scope, never repository content.
+        assert!(!servers[0].is_untrusted());
+
+        // A server under a *different* project's key belongs to that project, not this one.
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"projects":{"/somewhere/else":{"mcpServers":{"sentry":{"url":"x"}}}}}"#,
+        )
+        .expect("write");
+        assert!(discover_mcp_servers(&repo, &home.join(".claude")).is_empty());
     }
 
     #[test]
