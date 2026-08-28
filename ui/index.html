@@ -795,6 +795,10 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   background:color-mix(in srgb,var(--warn) 8%,transparent);
   font:12.5px/1.6 var(--sans);color:var(--n11)}
 .wfix code{background:var(--n1)}
+.wfix .wact{margin-top:var(--s3);display:flex;gap:var(--s2)}
+.wfix .console{margin-top:var(--s3);max-height:200px;overflow:auto;
+  font:11px/1.5 var(--mono);color:var(--n11);background:var(--n1);
+  border-radius:var(--r1);padding:var(--s3);white-space:pre-wrap}
 
 .wgrid{display:grid;gap:var(--s3)}
 .wgrid button{all:unset;cursor:pointer;display:block;padding:var(--s4) var(--s5);
@@ -2067,10 +2071,22 @@ function addToChat(path){
 
 /** Type a command into the real shell rather than running it behind the user's back. */
 function sendToTerm(line){
-  el('app').classList.remove('no-panel'); setPanelTab('terminal');
-  if(termSock?.readyState!==1){ toast('The terminal is not connected'); return; }
-  termSock.send(new TextEncoder().encode(line+'\n'));
-  term?.focus();
+  el('app').classList.remove('no-panel');
+  setPanelTab('terminal');
+  // The first call opens the terminal, and a socket takes a moment. Refusing because it is not
+  // ready yet would make the button fail exactly once — on the first press, which is the one that
+  // matters on a machine where nothing is set up.
+  let waited=0;
+  const send=()=>{
+    if(termSock?.readyState===1){
+      termSock.send(new TextEncoder().encode(line+'\n'));
+      term?.focus();
+      return;
+    }
+    if((waited+=100)>4000){ toast('The terminal did not connect.'); return; }
+    setTimeout(send,100);
+  };
+  send();
 }
 
 async function revealInFinder(path){
@@ -5527,6 +5543,33 @@ async function drawWelcome(){
   el('welcome').classList.remove('hidden');
   el('app').setAttribute('aria-hidden','true');
 
+  const install=el('w-install');
+  if(install) install.onclick=()=>{
+    install.disabled=true;
+    const out=el('w-out');
+    out.innerHTML='<pre class="console" id="w-log"></pre>';
+    const log=el('w-log');
+    const es=new EventSource('/api/claude/install');
+    const write=t=>{ log.textContent+=t+'\n'; log.scrollTop=1e9; };
+    es.addEventListener('line',e=>write(e.data));
+    es.addEventListener('fatal',e=>{ write(e.data); es.close(); install.disabled=false; });
+    es.addEventListener('done',e=>{
+      es.close();
+      install.disabled=false;
+      // Re-read rather than assume: the installer can succeed and still leave `claude` off PATH
+      // for this process, and claiming otherwise is the failure people would find later.
+      if(e.data==='0') drawWelcome();
+      else write('\nExited '+e.data+'.');
+    });
+  };
+
+  // Both of these are interactive — a browser handshake, and a password prompt. Keel owns a real
+  // shell, so it hosts them rather than describing them.
+  const signin=el('w-signin');
+  if(signin) signin.onclick=()=>{ leaveWelcome(); sendToTerm('claude'); };
+  const brew=el('w-brew');
+  if(brew) brew.onclick=()=>{ leaveWelcome(); sendToTerm(c.brew_install); };
+
   // Wired here rather than at parse time. The first version bound these at the top level, the
   // markup happened to sit after the script, and every button on the first screen anyone sees did
   // nothing at all. Binding where the screen is drawn cannot be broken by moving markup.
@@ -5540,16 +5583,30 @@ async function drawWelcome(){
   const row=(ok,label,detail)=>'<div class="wrow"><span class="dot2 '+(ok?'on':'off')+'"></span>'+
     '<b>'+esc(label)+'</b><span>'+detail+'</span></div>';
 
+  // A fresh Mac has no brew, no npm and no claude. Telling somebody to go and install three
+  // things before the application will do anything is not an onboarding flow — so Keel installs
+  // the one that matters, with the vendor's own native installer, which needs neither of the
+  // other two and refuses to run under sudo.
   let fix='';
   if(!c.installed){
-    fix='<div class="wfix">Keel runs your own <code>claude</code> and has nothing to run without '+
-        'it. Install it with <code>npm i -g @anthropic-ai/claude-code</code>, then reload this '+
-        'page.</div>';
+    fix='<div class="wfix">Keel drives your own <code>claude</code> and has nothing to run '+
+        'without it. It needs no Node and no Homebrew.'+
+        '<div class="wact"><button class="btn" id="w-install">Install Claude Code</button></div>'+
+        '<div id="w-out"></div></div>';
   } else if(!c.authenticated){
     // The sign-in is a browser handshake the CLI drives itself. Keel cannot do it on your behalf,
     // and pretending otherwise would just fail later inside a chat.
-    fix='<div class="wfix">Run <code>claude</code> once in a terminal and sign in — it opens a '+
-        'browser and Keel cannot drive that for you. Then reload this page.</div>';
+    fix='<div class="wfix">Run <code>claude</code> once and sign in — it opens a browser, which '+
+        'Keel cannot drive for you.'+
+        '<div class="wact"><button class="btn" id="w-signin">Open a terminal here</button></div>'+
+        '</div>';
+  } else if(!c.brew){
+    // Not blocking: nothing on the welcome screen needs brew. But every install button in
+    // Settings is dead without it, and finding that out one at a time is worse than being told.
+    fix='<div class="wfix">Homebrew is not installed. Nothing here needs it, but the GitHub, '+
+        'Google Cloud and Kubernetes installers in Settings all do.'+
+        '<div class="wact"><button class="btn quiet" id="w-brew">Install Homebrew in a terminal'+
+        '</button></div></div>';
   }
 
   el('w-claude').innerHTML=
