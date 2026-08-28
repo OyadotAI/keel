@@ -503,26 +503,30 @@ pub fn toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str
 }
 
 /// Status of every CLI Keel knows about.
+/// Status of every CLI Keel knows about.
+///
+/// Concurrently, and with the async process API. Sequentially, with the blocking one, this took
+/// 7.4 seconds — six tools, three commands each, several of them round-tripping to a cloud API to
+/// answer "who am I". It also blocked the executor for the whole time, so nothing else Keel served
+/// could respond either. The connections panel appearing to hang was that, exactly.
 pub async fn status() -> axum::Json<Vec<ToolStatus>> {
-    let mut out = Vec::new();
-    for t in TOOLS {
-        let version = std::process::Command::new(t.binary)
-            .args(t.version)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .map(|l| l.trim().to_owned())
-            });
+    let checks = TOOLS.iter().map(|t| async move {
+        // Within one tool the calls are ordered — asking a missing binary who it is wastes a
+        // process spawn, and asking an unauthenticated one wastes a network round trip.
+        let version = run(t.binary, t.version)
+            .await
+            .and_then(|o| o.lines().next().map(|l| l.trim().to_owned()));
 
-        let authenticated = version.is_some()
-            && std::process::Command::new(t.binary)
-                .args(t.whoami)
-                .output()
-                .is_ok_and(|o| o.status.success());
+        let authenticated = version.is_some() && run(t.binary, t.whoami).await.is_some();
+
+        let identity = if authenticated {
+            run(t.binary, t.identity)
+                .await
+                .map(|o| condense(t.id, &o))
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
 
         // Only offer an installer that actually exists here. Guessing between apt, dnf, pacman and
         // winget is not worth the blast radius of running a package manager on someone's machine.
@@ -532,37 +536,19 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             .find(|(mgr, _)| exists(mgr))
             .map(|(mgr, args)| format!("{mgr} {}", args.join(" ")));
 
-        let identity = authenticated
-            .then(|| {
-                std::process::Command::new(t.binary)
-                    .args(t.identity)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| condense(t.id, &String::from_utf8_lossy(&o.stdout)))
-                    .filter(|s| !s.is_empty())
-            })
-            .flatten();
-
-        let profiles = if t.id == "aws" {
-            aws_profiles()
-        } else {
-            Vec::new()
-        };
+        let profiles = if t.id == "aws" { aws_profiles() } else { Vec::new() };
 
         // Why it is not connected, in its own words. A tool with no login of its own takes its
         // credentials from somewhere else, and naming that is more use than a button that runs
         // nothing — but better still is a command, which the UI can hand to the terminal.
         let blocked = match t.id {
             "kubectl" if version.is_some() && !authenticated => Some(
-                "No cluster is reachable. kubectl takes its credentials from your provider — \
-                 `gcloud container clusters get-credentials <name>`, or a kubeconfig you were \
-                 given."
+                "No cluster is reachable. Pick one below, or point kubectl at it yourself."
                     .to_string(),
             ),
-            "docker" if version.is_some() && !authenticated => {
-                Some("Docker is installed but its daemon is not running.".to_string())
-            }
+            "docker" if version.is_some() && !authenticated => Some(
+                "Docker is installed but its daemon is not running.".to_string(),
+            ),
             "aws" if version.is_some() && profiles.is_empty() => Some(
                 "No AWS profile exists yet. Set one up with Identity Center below, or run \
                  `aws configure` for an access key — Keel never asks for one."
@@ -581,7 +567,7 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
         let setup = (!t.setup.is_empty() && version.is_some() && !authenticated)
             .then(|| t.setup.to_string());
 
-        out.push(ToolStatus {
+        ToolStatus {
             id: t.id,
             label: t.label,
             installed: version.is_some(),
@@ -593,9 +579,19 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             setup,
             blocked,
             manual: t.manual,
-        });
-    }
-    axum::Json(out)
+        }
+    });
+
+    axum::Json(futures_util::future::join_all(checks).await)
+}
+
+/// Run a command and give back its stdout, or nothing if it failed.
+async fn run(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().await.ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[derive(Deserialize)]
