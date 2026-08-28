@@ -315,16 +315,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))
         .route("/api/pipelines", get(crate::infra::pipelines))
         .route("/api/claude", get(crate::clitools::claude_status))
-        .route(
-            "/api/claude/install",
-            get(crate::clitools::install_claude),
-        )
+        .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
-        .route(
-            "/api/cli/install-all",
-            get(crate::clitools::install_all),
-        )
+        .route("/api/cli/install-all", get(crate::clitools::install_all))
         .route("/api/cli/login", get(crate::clitools::login))
         .route(
             "/api/github/clone",
@@ -441,7 +435,13 @@ async fn api_git_diff(
     Query(query): Query<crate::api::FileQuery>,
 ) -> Json<crate::api::DiffResponse> {
     let repo = state.repo();
-    Json(blocking(move || crate::api::git_diff(&repo, &query.path), Default::default()).await)
+    Json(
+        blocking(
+            move || crate::api::git_diff(&repo, &query.path),
+            Default::default(),
+        )
+        .await,
+    )
 }
 
 async fn api_save(
@@ -515,18 +515,24 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     // Off the executor, because it is a full scan and a walk of every Claude Code session in the
     // project — seconds on a large repository, during which nothing else Keel serves could answer.
     let scanning = repo.clone();
-    let scan = blocking(move || {
-        keel_scanner::RepoContext::load(&scanning)
-            .map(|ctx| keel_scanner::scan(&ctx))
-            .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()))
-    }, keel_scanner::Report::new(Vec::new()))
+    let scan = blocking(
+        move || {
+            keel_scanner::RepoContext::load(&scanning)
+                .map(|ctx| keel_scanner::scan(&ctx))
+                .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()))
+        },
+        keel_scanner::Report::new(Vec::new()),
+    )
     .await;
 
     let discovering = repo.clone();
-    let mut workspace = blocking(move || match keel_workspace::claude_home() {
-        Some(home) => keel_workspace::Workspace::discover(&discovering, &home),
-        None => keel_workspace::Workspace::discover(&discovering, "/nonexistent".into()),
-    }, keel_workspace::Workspace::default())
+    let mut workspace = blocking(
+        move || match keel_workspace::claude_home() {
+            Some(home) => keel_workspace::Workspace::discover(&discovering, &home),
+            None => keel_workspace::Workspace::discover(&discovering, "/nonexistent".into()),
+        },
+        keel_workspace::Workspace::default(),
+    )
     .await;
     // A session someone renamed in Keel keeps that name, without Claude Code's transcript being
     // touched to achieve it.

@@ -466,7 +466,9 @@ mod tests {
         for junk in ["} && x", "1\")) && y", "# comment && z", "-flag && w"] {
             let rules = rules_for("Bash", &serde_json::json!({ "command": junk }));
             assert!(
-                rules.iter().all(|r| !r.contains('}') && !r.contains('#') && !r.contains('"')),
+                rules
+                    .iter()
+                    .all(|r| !r.contains('}') && !r.contains('#') && !r.contains('"')),
                 "{junk} produced {rules:?}"
             );
         }

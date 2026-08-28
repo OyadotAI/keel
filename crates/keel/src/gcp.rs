@@ -9,8 +9,8 @@
 //! Keel does not manage GKE beyond this. It answers "which cluster, and point kubectl at it",
 //! which is the gap between having a cluster and the Cluster panel showing anything.
 
-use axum::{Json, extract::State};
 use axum::response::sse::{Event, Sse};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::process::Stdio;
@@ -48,13 +48,10 @@ pub struct Cluster {
 }
 
 async fn out(program: &str, args: &[&str]) -> Option<String> {
-    let output = tokio::time::timeout(
-        DEADLINE,
-        Command::new(program).args(args).output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let output = tokio::time::timeout(DEADLINE, Command::new(program).args(args).output())
+        .await
+        .ok()?
+        .ok()?;
     output
         .status
         .success()
@@ -72,7 +69,12 @@ pub async fn state() -> Json<GcpState> {
 
     let account = out(
         "gcloud",
-        &["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+        &[
+            "auth",
+            "list",
+            "--filter=status:ACTIVE",
+            "--format=value(account)",
+        ],
     )
     .await
     .unwrap_or_default();
@@ -87,9 +89,8 @@ pub async fn state() -> Json<GcpState> {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty() && p != "(unset)");
     if s.project.is_none() {
-        s.problem = Some(
-            "No Google Cloud project is selected. `gcloud config set project <id>`.".into(),
-        );
+        s.problem =
+            Some("No Google Cloud project is selected. `gcloud config set project <id>`.".into());
         return Json(s);
     }
 
@@ -157,20 +158,29 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let message = message.to_string();
     tokio::spawn(async move {
-        let _ = tx.send(Ok(Event::default().event("line").data(message))).await;
+        let _ = tx
+            .send(Ok(Event::default().event("line").data(message)))
+            .await;
         let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
     });
     Sse::new(ReceiverStream::new(rx))
 }
 
-async fn stream(mut command: Command, banner: String) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+async fn stream(
+    mut command: Command,
+    banner: String,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
-        let _ = tx.send(Ok(Event::default().event("line").data(banner))).await;
+        let _ = tx
+            .send(Ok(Event::default().event("line").data(banner)))
+            .await;
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let Ok(mut child) = command.spawn() else {
             let _ = tx
-                .send(Ok(Event::default().event("line").data("could not run gcloud")))
+                .send(Ok(Event::default()
+                    .event("line")
+                    .data("could not run gcloud")))
                 .await;
             let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
             return;

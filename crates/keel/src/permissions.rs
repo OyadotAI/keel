@@ -385,7 +385,10 @@ mod tests {
         .unwrap();
 
         let kept = load(&root);
-        assert!(kept.contains("Bash(git status *)"), "git is real and on the PATH");
+        assert!(
+            kept.contains("Bash(git status *)"),
+            "git is real and on the PATH"
+        );
         assert!(kept.contains("Edit"), "a bare tool name is not a program");
 
         // Malformed, and — the harder half — shaped exactly like a binary but not one.
