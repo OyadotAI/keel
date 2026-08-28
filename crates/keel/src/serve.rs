@@ -20,6 +20,18 @@ use std::sync::Arc;
 /// The single page, compiled into the binary so `keel` stays one file with no assets to lose.
 const INDEX: &str = include_str!("../../../ui/index.html");
 
+/// Monaco, vendored and compiled in for the same reason.
+///
+/// The editor is the one part of an IDE that cannot be approximated: a textarea behind a
+/// highlighted div gives you no multi-cursor, no column selection, no folding, no real find and
+/// replace, and no undo worth the name. Monaco is the engine VS Code itself runs on and ships a
+/// prebuilt bundle needing no build step. The heavy language services (TypeScript, CSS, HTML
+/// workers, ~7.5MB) are deliberately excluded — they add intellisense on top of editing, and
+/// editing is what was missing.
+#[derive(rust_embed::Embed)]
+#[folder = "$CARGO_MANIFEST_DIR/../../ui/vendor/"]
+struct Vendor;
+
 pub struct AppState {
     repo: std::sync::RwLock<Utf8PathBuf>,
 }
@@ -58,9 +70,11 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/vendor/{*path}", get(vendor))
         .route("/api/state", get(api_state))
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
+        .route("/api/file/original", get(api_original))
         .route("/api/chat", get(crate::api::chat))
         .route("/api/git/status", get(api_git_status))
         .route("/api/git/diff", get(api_git_diff))
@@ -104,6 +118,15 @@ async fn api_file(
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
+async fn api_original(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<crate::api::FileQuery>,
+) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
+    crate::api::read_original(&state.repo(), &query.path)
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
     Json(crate::api::git_status(&state.repo()))
 }
@@ -122,6 +145,39 @@ async fn api_save(
     crate::api::write_file(&state.repo(), &req)
         .map(|_| Json(true))
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+/// Serve a vendored asset straight from the binary.
+async fn vendor(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match Vendor::get(&path) {
+        Some(file) => {
+            let mime = mime_for(&path);
+            // These are content-addressed by filename, so they can be cached hard.
+            (
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                file.data,
+            )
+                .into_response()
+        }
+        None => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+fn mime_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("ttf") => "font/ttf",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn index() -> impl axum::response::IntoResponse {

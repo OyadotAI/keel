@@ -176,6 +176,34 @@ pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileResponse, Strin
     })
 }
 
+/// The committed version of a file, for the diff editor.
+///
+/// Returning the baseline text and letting the editor compute the diff beats shipping pre-parsed
+/// hunks: the editor's diff algorithm handles word-level highlighting, navigation and side-by-side
+/// layout that a hand-rolled hunk renderer would have to reimplement badly.
+pub fn read_original(root: &Utf8Path, requested: &str) -> Result<FileResponse, String> {
+    let out = std::process::Command::new("git")
+        .current_dir(root)
+        .arg("show")
+        .arg(format!("HEAD:{requested}"))
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+
+    // A file that is not in HEAD is new. An empty baseline is the honest answer — the whole file
+    // then renders as added, which is exactly what happened.
+    let content = if out.status.success() {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    } else {
+        String::new()
+    };
+
+    Ok(FileResponse {
+        path: requested.to_string(),
+        content,
+        truncated: false,
+    })
+}
+
 #[derive(Deserialize)]
 pub struct ChatQuery {
     pub prompt: String,
