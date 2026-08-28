@@ -23,6 +23,15 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Connections
+
+`keel serve` connects to GitHub and Cloudflare from the Connections panel. Tokens go in the OS
+keychain and are sent only to their own APIs. If you use the `gh` CLI, Keel picks that credential up
+automatically rather than asking you to mint a token that already exists.
+
+From there you can browse your repositories, clone one, or open any local directory — Keel switches
+to it without restarting.
+
 ## The IDE
 
 `keel serve` opens a local interface at `http://127.0.0.1:7777`. Loopback only, and not

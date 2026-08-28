@@ -37,6 +37,8 @@ ignore = "0.4"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["trace"] }
 open = "5"
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3
