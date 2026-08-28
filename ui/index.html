@@ -770,6 +770,19 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   background:var(--n4);font:11.5px var(--mono);color:var(--n11);cursor:pointer;
   box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .doing.hidden{display:none}
+
+/* The offer to split. Same place as the activity strip and the same weight, because it is the
+   same kind of thing: something Keel noticed, sitting where you are already looking. */
+.shift{position:absolute;left:var(--s4);right:var(--s4);bottom:calc(100% + 4px);
+  display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+  padding:var(--s3);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+  border-radius:var(--r2);background:var(--n4);
+  box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.shift.hidden{display:none}
+.shift .q{font:500 12px var(--sans);color:var(--n12)}
+.shift .why{font:11.5px var(--sans);color:var(--n10);flex:1 1 100%;order:2}
+.shift .sp{flex:1}
+.shift .btn{font-size:11.5px;padding:4px var(--s3)}
 .doing .mark{width:6px;height:6px;border-radius:50%;flex:none;background:var(--accent);
   animation:pulse 1.1s ease-in-out infinite}
 .doing .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -1148,6 +1161,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <div class="log" id="log"></div>
     <button class="jump hidden" id="jump">↓ latest</button>
     <div class="doing hidden" id="doing"></div>
+    <div class="shift hidden" id="shift"></div>
     <div class="composer">
       <div class="ment hidden" id="ment"></div>
       <div class="box">
@@ -2748,6 +2762,101 @@ function follow(){
 }
 el('jump').onclick=()=>{ setPinned(true); follow(); };
 
+/* ── noticing when you have changed the subject ───────────────────────────
+   A session is a context that grows, and nobody prunes it by hand. Asking a question about
+   deployment inside a two-hour conversation about CSS costs tokens on every turn and gives the
+   agent a hundred irrelevant messages to weigh — but people do it constantly, because the cost is
+   invisible and starting fresh is a decision nobody remembers to make.
+
+   So Keel notices and offers. Deliberately not by asking a model: that is a request per prompt
+   against the user's own subscription to answer a question that is usually "no". Cheap signals
+   only, and it has to be quiet — a false positive is an interruption, a false negative is just
+   what happens today. It errs heavily toward staying silent.
+
+   Every trigger comes with its reason, because the point is not the suggestion. It is that after
+   the third time you read "nothing here mentions wrangler", you start reaching for New yourself. */
+
+const STOPWORDS=new Set(('the a an and or but if then than that this these those is are was were '+
+  'be been being do does did doing have has had having i you it we they me my your our their to '+
+  'of in on at by for with from into over under about as so not no yes can could should would '+
+  'will just also please make made get got let use using now here there what when where why how '+
+  'all any some more most other new old add added fix fixed change changed update updated file '+
+  'files code line lines').split(' '));
+
+/* Openers that mean "the thing we were just talking about". A prompt starting with one of these is
+   a continuation whatever its vocabulary, and getting that wrong is the most annoying false
+   positive there is. */
+const CONTINUES=/^\s*(also|and|then|now|next|but|so|ok|okay|yes|no|it|its|it's|that|this|these|those|same|again|instead|another|one more|keep going|carry on|continue|go on|do it|try|retry|undo|revert|fix|why|what about|how about|can you|could you|please)\b/i;
+
+const terms=text=>new Set(String(text).toLowerCase()
+  .replace(/[^a-z0-9/._-]+/g,' ')
+  .split(/\s+/)
+  .flatMap(t=>t.includes('/')?[t,...t.split('/')]:[t])   // a path counts as itself and its parts
+  .map(t=>t.replace(/^[._-]+|[._-]+$/g,''))
+  .filter(t=>t.length>=3&&!STOPWORDS.has(t)&&!/^\d+$/.test(t)));
+
+/** Everything this session has been about: its title, its prompts, and the files it touched. */
+let sessionTerms=new Set();
+let topicDismissed=false;
+
+function learnTopic(text){ for(const t of terms(text)) sessionTerms.add(t); }
+function resetTopic(){ sessionTerms=new Set(); topicDismissed=false; }
+
+/**
+ * Whether a prompt looks like a different subject, and why.
+ *
+ * Returns null far more often than not. That is the intended behaviour.
+ */
+function topicShift(prompt){
+  if(topicDismissed||!sessionId) return null;
+  const meta=(state?.workspace.sessions??[]).find(x=>x.id===sessionId);
+  if(!meta) return null;
+
+  const want=terms(prompt);
+  if(want.size<4) return null;              // too short to judge; "fix the build" is not evidence
+  if(CONTINUES.test(prompt)) return null;   // it refers back, whatever words it uses
+
+  const hours=(Date.now()-Date.parse(meta.last_active??0))/3.6e6;
+  const shared=[...want].filter(t=>sessionTerms.has(t));
+
+  // Nothing in common with anything this session has discussed.
+  if(sessionTerms.size>=10&&shared.length===0){
+    const sample=[...want].slice(0,3).join(', ');
+    return {why:'Nothing in this session mentions '+sample+'.'};
+  }
+  // Or the conversation is simply stale enough that continuing it is unlikely to be what you meant.
+  if(hours>=8&&shared.length===0){
+    return {why:'This session was last active '+ago(meta.last_active)+'.'};
+  }
+  return null;
+}
+
+/** The offer. Non-blocking in spirit: one keystroke either way, and it never sends by surprise. */
+function offerNewSession(prompt,shift){
+  const bar=el('shift');
+  bar.className='shift';
+  bar.innerHTML='<span class="q">Start a new session?</span>'+
+    '<span class="why">'+esc(shift.why)+'</span>'+
+    '<span class="sp"></span>'+
+    '<button class="btn" data-fresh>New session</button>'+
+    '<button class="btn quiet" data-here>Continue here</button>';
+
+  const go=fresh=>{
+    bar.className='shift hidden';
+    if(fresh){
+      sessionId=null; cost=null; turn=null;
+      setSessionName('New session','');
+      resetTopic(); emptyLog(); drawStatus();
+    } else {
+      // Said no once, so stop asking for this conversation.
+      topicDismissed=true;
+    }
+    send(prompt);
+  };
+  bar.querySelector('[data-fresh]').onclick=()=>go(true);
+  bar.querySelector('[data-here]').onclick=()=>go(false);
+}
+
 /* ── turn construction ─────────────────────────────────────────────────── */
 function newTurn(promptText){
   const t=frag('<div class="turn"><div class="said"></div><div class="work"></div>'+
@@ -2934,6 +3043,14 @@ function send(text){
   const box=el('prompt');
   const prompt=(text??box.value).trim();
   if(!prompt||stream) return;
+
+  // Asked before anything is sent, because moving a conversation after the fact means losing the
+  // answer or re-running the work.
+  const shift=topicShift(prompt);
+  if(shift){ box.value=''; autoGrow(); offerNewSession(prompt,shift); return; }
+  el('shift').className='shift hidden';
+
+  learnTopic(prompt);
   el('log').querySelector('.start')?.remove();
 
   // Attached files ride along as @paths, which is the convention Claude Code already uses.
@@ -3081,7 +3198,8 @@ function ago(iso){
 }
 
 el('a-new').onclick=()=>{
-  sessionId=null; cost=null; turn=null; setSessionName('New session','');
+  sessionId=null; cost=null; turn=null; setSessionName('New session',''); resetTopic();
+  el('shift').className='shift hidden';
   el('sess-list').classList.add('hidden'); emptyLog(); drawStatus();
 };
 
@@ -3104,6 +3222,8 @@ async function openSession(id){
   el('sess-list').classList.add('hidden');
   const meta=(state?.workspace.sessions??[]).find(s=>s.id===id);
   sessionId=id; cost=null; turn=null;
+  resetTopic();
+  learnTopic(meta?.title??'');
   setSessionName(meta?.title??id.split('-')[0],
     meta ? meta.messages+' msgs · '+ago(meta.last_active) : '');
   el('log').innerHTML='<div class="start"><p>Loading…</p></div>';
@@ -3117,7 +3237,7 @@ async function openSession(id){
   // Replay as turns so an opened session looks exactly like a live one.
   let cur=null;
   for(const t of turns){
-    if(t.role==='user'){ cur=newTurn(t.text); continue; }
+    if(t.role==='user'){ learnTopic(t.text); cur=newTurn(t.text); continue; }
     if(!cur) cur=newTurn('');
     if(t.text){
       const n=frag('<div class="rich"></div>');
@@ -3157,6 +3277,7 @@ async function loadSessionWork(id){
   catch(_){ return; }
 
   agentEdits=new Set(work.files??[]);
+  for(const f of work.files??[]) learnTopic(f);
   consoleNodes.clear();
   agentActs=(work.calls??[]).map((c,i)=>({
     id:'s'+i, tool:c.tool, command:c.subject, out:c.output,
