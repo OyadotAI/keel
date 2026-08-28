@@ -170,6 +170,11 @@ fn menu_bar() -> Result<()> {
         ],
     )?)?;
 
+    // Installing the menu is the one genuinely platform-bound step: `init_for_nsapp` hands the
+    // menu to AppKit as the process-wide bar, and it exists only in muda's macOS build. Keel ships
+    // on macOS, so there is nothing to install anywhere else, but CI compiles on Linux for cheap
+    // minutes and the rest of this module is portable enough to be worth type-checking there.
+    #[cfg(target_os = "macos")]
     menu.init_for_nsapp();
     Ok(())
 }
