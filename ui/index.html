@@ -1198,8 +1198,12 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .field.focused{box-shadow:0 0 0 1px var(--warn),0 0 0 6px color-mix(in srgb,var(--warn) 14%,transparent);
   border-radius:var(--r2);transition:box-shadow 400ms ease}
 .note .dim2{color:var(--n9)}
-.linky{all:unset;cursor:pointer;font:10.5px var(--mono);color:var(--n9)}
-.linky:hover{color:var(--accent)}
+/* Present, but not asking for anything. A working connection should read as working, and an
+   action beside it competes with that until you go looking for one. */
+.onhover{all:unset;cursor:pointer;font:10.5px var(--mono);color:var(--n9);
+  opacity:0;transition:opacity var(--t-hover)}
+.field:hover .onhover,.onhover:focus-visible{opacity:1}
+.onhover:hover{color:var(--accent)}
 .status button{all:unset;cursor:pointer;transition:color var(--t-hover)}
 .status button:hover{color:var(--n12)}
 
@@ -3194,9 +3198,15 @@ function cliBlock(t,extra){
   // between "go and run this somewhere" and being put in front of it.
   if(t.setup) actions.push('<button class="btn quiet" data-setup="'+esc(t.setup)+'">'+
     'Run <code>'+esc(t.setup)+'</code></button>');
-  // Kept, because a token does expire — but as a quiet link rather than a button that reads like
-  // something you are being asked to do.
-  if(state==='ready'&&canLogin) actions.push('<button class="linky" data-cli="login" data-id="'+t.id+'">re-authenticate</button>');
+  // Not shown on a working connection. Making it quieter was not enough — anything sitting next
+  // to "signed in as you" that says re-authenticate reads as a thing you are being asked to do,
+  // and it was read that way twice. A token that expires flips this row to `unauth`, which puts a
+  // Sign in button here exactly when one is useful.
+  //
+  // It survives on hover, because switching accounts is a real thing to want and there is nowhere
+  // else in Keel to do it.
+  if(state==='ready'&&canLogin) actions.push('<button class="onhover" data-cli="login" '+
+    'data-id="'+t.id+'" title="Sign in as someone else">switch account</button>');
 
   const wanted=focusTool===t.id;
   return '<div class="field'+(wanted?' focused':'')+'" id="conn-'+t.id+'"><label>'+esc(t.label)+'</label>'+note+
