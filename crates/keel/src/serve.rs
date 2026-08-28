@@ -290,6 +290,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
         .route("/api/k8s", get(crate::infra::cluster))
+        .route("/api/k8s/workload", get(crate::infra::workload))
+        .route("/api/open-url", axum::routing::post(crate::infra::open_url))
         .route("/api/pipelines", get(crate::infra::pipelines))
         .route("/api/claude", get(crate::clitools::claude_status))
         .route("/api/cli", get(crate::clitools::status))

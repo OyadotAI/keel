@@ -254,6 +254,18 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .rec .btn{font-size:11px;padding:3px var(--s3);flex:none}
 .rec .why3{font:11.5px/1.5 var(--sans);color:var(--n10);margin-top:var(--s2)}
 
+/* Pods, under the deployment they belong to. Indented rather than in a second pane: the reason you
+   opened one is the row above it, and losing that to read this is a bad trade. */
+.wl .pods{padding:2px 0 var(--s3) 26px;background:var(--n2)}
+.pod{display:flex;align-items:center;gap:var(--s2);padding:2px var(--s4) 2px 0;
+  font:11px var(--mono);color:var(--n10)}
+.pod .pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--n11)}
+.pod .pm{flex:none;color:var(--n9)}
+.pod .pi{flex:none;color:var(--n8);max-width:34%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.pnote{padding:var(--s2) var(--s4) var(--s2) 0;font:11px/1.5 var(--sans);color:var(--n9)}
+
 /* State, as a dot. A word costs a chip, a chip costs a colour, and at this
    density a row of chips reads as texture rather than as information. */
 .dot3{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
@@ -2515,12 +2527,34 @@ const PANELS={
       ' namespace'+(c.namespaces===1?'':'s')+
       (bad?' · <b style="color:var(--crit)">'+bad+' not ready</b>':' · all ready')+'</div>'+
       (c.workloads.length
-        ? c.workloads.map(x=>'<div class="prow">'+
+        ? c.workloads.map((x,i)=>'<div class="wl" data-w="'+i+'">'+
+            '<div class="prow click">'+
             '<span class="dot3 '+(x.state==='up'?'on':x.state==='partial'?'warn':'bad')+'"></span>'+
             '<span class="nm">'+esc(x.name)+'</span>'+
-            '<span class="meta">'+esc(x.namespace)+' · '+x.ready+'/'+x.wanted+'</span></div>').join('')
+            '<span class="meta">'+esc(x.namespace)+' · '+x.ready+'/'+x.wanted+'</span></div></div>').join('')
         : '<div class="prow off">No deployments</div>');
     el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
+
+    // "2/3 ready" is where the question starts. The answer is in the pods — their phase, their
+    // restarts, and whichever of ImagePullBackOff or CrashLoopBackOff is on them.
+    el('side').querySelectorAll('[data-w]').forEach(n=>{
+      const x=c.workloads[+n.dataset.w];
+      n.querySelector('.prow').onclick=async()=>{
+        if(n.querySelector('.pods')){ n.querySelector('.pods').remove(); return; }
+        n.insertAdjacentHTML('beforeend','<div class="pods"><div class="pnote">Reading…</div></div>');
+        const d=await (await fetch('/api/k8s/workload?namespace='+encodeURIComponent(x.namespace)+
+          '&name='+encodeURIComponent(x.name))).json().catch(()=>({problem:'kubectl did not answer.'}));
+        const box=n.querySelector('.pods'); if(!box) return;
+        box.innerHTML=d.problem
+          ? '<div class="pnote">'+esc(d.problem)+'</div>'
+          : d.pods.map(p=>'<div class="pod">'+
+              '<span class="dot3 '+(p.phase==='Running'&&!p.reason?'on':p.reason?'bad':'warn')+'"></span>'+
+              '<span class="pn">'+esc(p.name)+'</span>'+
+              '<span class="pm">'+esc(p.reason||p.phase)+' · '+esc(p.ready)+
+              (p.restarts?' · '+p.restarts+' restarts':'')+'</span>'+
+              (p.image?'<span class="pi">'+esc(p.image)+'</span>':'')+'</div>').join('');
+      };
+    });
   },
 
   pipelines(){
@@ -2551,7 +2585,7 @@ const PANELS={
     // Opened in a real browser: a run page is GitHub's, and it wants a session Keel does not have.
     el('side').querySelectorAll('[data-run]').forEach(n=>n.onclick=()=>{
       const url=p.runs[+n.dataset.run]?.url;
-      if(url) window.open(url,'_blank','noopener');
+      openExternal(url);
     });
   },
 
@@ -2733,6 +2767,17 @@ document.querySelectorAll('.ic[data-p]').forEach(b=>b.onclick=()=>setPanel(b.dat
 el('ic-settings').onclick=openSettings;
 el('ic-browser').onclick=()=>openPreview();
 
+/* `window.open` does nothing inside a WKWebView unless the host implements the delegate that
+   creates a second web view — so every external link in the application silently did nothing,
+   while working perfectly in a browser tab. The server opens them instead, which is also the right
+   behaviour: a GitHub run page wants a session this window has not got. */
+async function openExternal(url){
+  if(!url) return;
+  const r=await fetch('/api/open-url',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({url})});
+  if(!r.ok) toast(await r.text());
+}
+
 /* Both are slow enough to be worth loading once and refreshing on request: a cluster on the other
    side of a VPN takes seconds, and neither answer changes between two glances at a panel. */
 let clusterState=null, pipelineState=null;
@@ -2760,7 +2805,11 @@ async function loadPipelines(){
    things you have to act on — gh shows a one-time code for the browser. */
 let clis=null;
 
-async function loadClis(){ clis=await (await fetch('/api/cli')).json(); }
+async function loadClis(){
+  clis=await (await fetch('/api/cli')).json();
+  // Whichever of these two finishes second is the one that has the whole picture.
+  connBadge();
+}
 
 /** Read the standing grant once at boot, so the status bar is right before anything is asked. */
 async function loadTrust(){
@@ -4524,7 +4573,7 @@ function drawPreview(){
   el('pv-url').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); go(); } });
   // Re-assigning src reloads without needing same-origin access to the frame.
   el('pv-reload').onclick=reloadFrame;
-  el('pv-ext').onclick=()=>previewUrl&&window.open(previewUrl,'_blank','noopener');
+  el('pv-ext').onclick=()=>openExternal(previewUrl);
   el('pv-start')&&(el('pv-start').onclick=devStart);
   el('pv-stop2')&&(el('pv-stop2').onclick=devStop);
   el('pv-start2')&&(el('pv-start2').onclick=devStart);
@@ -5323,13 +5372,34 @@ addEventListener('keydown',e=>{
 
 /* ════ boot ══════════════════════════════════════════════════════════════ */
 function badge(name,n,alert){
-  const b=document.querySelector('[data-b="'+name+'"]'); if(!b) return;
-  b.textContent=n; b.classList.toggle('hidden',!n);
-  b.classList.toggle('alert',!!alert);
+  // `querySelectorAll`, not `querySelector`: two rail buttons carry the connections badge and only
+  // the first of them was ever updated, so one of the two was permanently stale.
+  const found=document.querySelectorAll('[data-b="'+name+'"]');
+  found.forEach(b=>{
+    b.textContent=n; b.classList.toggle('hidden',!n);
+    b.classList.toggle('alert',!!alert);
+  });
 }
 async function loadConn(){
   conn=await (await fetch('/api/connections')).json();
-  badge('conn','!',!conn.github||!conn.cloudflare||!conn.claude);
+  connBadge();
+}
+
+/* What "connected" means, in one place.
+ *
+ * The gear used to demand `conn.cloudflare`, which is a *stored API token* — and Keel does not
+ * need one. Signing in with Wrangler is enough for deploys, which the Settings page says in as
+ * many words two inches below the badge claiming otherwise. So it warned permanently on a machine
+ * where everything worked, which is how a badge teaches people to ignore it.
+ *
+ * The bar is now the same one the status bar uses: Claude Code has to be there, because nothing
+ * works without it, and nothing installed may be failing. A tool you have never installed is not a
+ * problem, and a token you do not need is not a missing connection. */
+function connBadge(){
+  const broken=brokenConnections().length;
+  const missingClaude=conn && !conn.claude;
+  const n=broken+(missingClaude?1:0);
+  badge('conn',n?String(n):'',n>0);
 }
 async function refresh(){
   [state,git,treeData]=await Promise.all([

@@ -164,6 +164,168 @@ pub async fn cluster() -> Json<Cluster> {
     Json(out)
 }
 
+/// Open a URL in the real browser.
+///
+/// `window.open` does nothing inside a WKWebView unless the host implements the delegate that
+/// creates a second web view, so every "open on GitHub" in the application silently did nothing.
+/// It is also the wrong behaviour: a run page is GitHub's, and it wants a session and an extension
+/// set that Keel's window does not have.
+pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    let bad = |m: &str| (axum::http::StatusCode::BAD_REQUEST, m.to_string());
+
+    // These URLs come from `gh`, so they are not hostile — but this handler hands a string to the
+    // system's URL opener, which will happily launch a `file://` or a custom scheme registered by
+    // some other application. Two schemes is the whole allowance.
+    if !(body.url.starts_with("https://") || body.url.starts_with("http://")) {
+        return Err(bad("only http and https links can be opened"));
+    }
+    open::that_detached(&body.url).map_err(|e| bad(&e.to_string()))?;
+    Ok(Json(true))
+}
+
+#[derive(serde::Deserialize)]
+pub struct OpenUrl {
+    pub url: String,
+}
+
+// ═══ workload detail ═════════════════════════════════════════════════════════════════════════
+
+#[derive(Serialize, Default)]
+pub struct WorkloadDetail {
+    pub pods: Vec<Pod>,
+    pub events: Vec<String>,
+    pub problem: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Pod {
+    pub name: String,
+    pub phase: String,
+    pub ready: String,
+    pub restarts: i64,
+    /// The container image, which is most of what "which version is this" means.
+    pub image: String,
+    pub reason: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct WorkloadQuery {
+    pub namespace: String,
+    pub name: String,
+}
+
+/// The pods behind one deployment, and why they are unhappy.
+///
+/// "2/3 ready" is where the question starts, not where it ends — the answer is in a pod's phase,
+/// its restart count and the events attached to it.
+pub async fn workload(
+    axum::extract::Query(q): axum::extract::Query<WorkloadQuery>,
+) -> Json<WorkloadDetail> {
+    let mut out = WorkloadDetail::default();
+
+    let safe = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 253
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    };
+    if !safe(&q.namespace) || !safe(&q.name) {
+        out.problem = Some("that is not a Kubernetes name".into());
+        return Json(out);
+    }
+
+    let selector = format!("app={}", q.name);
+    let Some(raw) = run(
+        "kubectl",
+        &[
+            "get",
+            "pods",
+            "-n",
+            &q.namespace,
+            "-l",
+            &selector,
+            "-o=json",
+            "--request-timeout=5s",
+        ],
+        None,
+    )
+    .await
+    else {
+        out.problem = Some("The cluster did not answer.".into());
+        return Json(out);
+    };
+
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Json(out);
+    };
+    for item in json.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default() {
+        let status = item.get("status");
+        let containers = status
+            .and_then(|s| s.get("containerStatuses"))
+            .and_then(|c| c.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let ready_count = containers.iter().filter(|c| {
+            c.get("ready").and_then(|r| r.as_bool()).unwrap_or(false)
+        }).count();
+        let restarts = containers
+            .iter()
+            .filter_map(|c| c.get("restartCount").and_then(|r| r.as_i64()))
+            .sum();
+
+        // The reason a container is not running is on the waiting state, and it is the single most
+        // useful string in the whole payload: ImagePullBackOff, CrashLoopBackOff, OOMKilled.
+        let reason = containers
+            .iter()
+            .find_map(|c| {
+                c.get("state")
+                    .and_then(|s| s.get("waiting").or_else(|| s.get("terminated")))
+                    .and_then(|w| w.get("reason"))
+                    .and_then(|r| r.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+
+        out.pods.push(Pod {
+            name: item
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            phase: status
+                .and_then(|s| s.get("phase"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            ready: format!("{ready_count}/{}", containers.len()),
+            restarts,
+            image: containers
+                .first()
+                .and_then(|c| c.get("image"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string(),
+            reason,
+        });
+    }
+
+    if out.pods.is_empty() {
+        // `app=<name>` is a convention, not a rule. Saying so beats an empty list that reads as
+        // "this deployment has no pods", which would be a different and much worse problem.
+        out.problem = Some(format!(
+            "No pods matched `app={}`. This deployment may label its pods differently.",
+            q.name
+        ));
+    }
+
+    Json(out)
+}
+
 // ═══ pipelines ═══════════════════════════════════════════════════════════════════════════════
 
 #[derive(Serialize, Default)]
