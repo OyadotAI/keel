@@ -91,7 +91,18 @@ fn queue() -> &'static Mutex<Vec<Pending>> {
 /// A command that stands in front of the real one and would launch it.
 ///
 /// Never the rule itself: approving `sudo` approves everything it can start.
-const WRAPPERS: &[&str] = &["sudo", "doas", "env", "nohup", "time", "xargs", "command", "exec"];
+const WRAPPERS: &[&str] = &[
+    "sudo", "doas", "env", "nohup", "time", "xargs", "command", "exec", "nice",
+];
+
+/// A builtin whose arguments are not a command.
+///
+/// Stepping over `cd` the way a wrapper is stepped over reads its *path* as the program, so
+/// `cd frontend && bun install` asks to approve `frontend`. It needs no permission of its own, so
+/// the whole segment is skipped.
+const BUILTINS: &[&str] = &[
+    "cd", "pushd", "popd", "export", "source", ".", "set", "umask", "alias",
+];
 
 fn is_assignment(token: &str) -> bool {
     token.contains('=')
@@ -124,6 +135,9 @@ fn program_of(segment: &str) -> Option<String> {
         }
         if WRAPPERS.contains(&name.as_str()) {
             continue;
+        }
+        if BUILTINS.contains(&name.as_str()) {
+            return None;
         }
         return Some(name);
     }
@@ -338,6 +352,9 @@ mod tests {
             ("FOO=1 BAR=2 node app.js", "Bash(node *)"),
             ("time sudo make install", "Bash(make *)"),
             ("/usr/local/bin/wrangler deploy", "Bash(wrangler *)"),
+            // `cd` takes a path, not a command: stepping over it the way a wrapper is stepped
+            // over would ask to approve `frontend`.
+            ("cd frontend && bun install", "Bash(bun *)"),
         ] {
             assert_eq!(
                 rules_for("Bash", &serde_json::json!({ "command": command })),
