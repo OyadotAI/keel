@@ -12,6 +12,7 @@ mod connect;
 mod dev;
 mod fsops;
 mod gui;
+mod infra;
 mod mcp;
 mod names;
 mod permissions;

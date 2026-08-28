@@ -3,7 +3,8 @@
 //! Asking someone to mint a long-lived token when a first-party CLI exists is friction for its own
 //! sake, and pasting that token into a text box is the worse security posture of the two. So Keel
 //! drives the real tools: check whether they are present, install them, then run their own login
-//! flow — `gh` and `wrangler` both use a browser round-trip, and `aws` uses SSO.
+//! flow — `gh`, `wrangler` and `gcloud` all use a browser round-trip. `kubectl` and `docker`
+//! have none, and Keel says where their credentials actually come from instead.
 //!
 //! Both long-running steps stream their output, because these commands print things the user has to
 //! act on: `gh auth login --web` shows a one-time code to type into the browser. Swallowing that
@@ -127,26 +128,51 @@ const TOOLS: &[Tool] = &[
         manual: "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
     },
     Tool {
-        id: "aws",
-        label: "AWS CLI",
-        binary: "aws",
+        id: "gcloud",
+        label: "Google Cloud",
+        binary: "gcloud",
         version: &["--version"],
-        whoami: &["sts", "get-caller-identity"],
-        install: &[("brew", &["install", "awscli"])],
-        // SSO is the only AWS login that does not involve pasting a long-lived key — but it only
-        // works against a profile that already has SSO configured. Configuring one is interactive
-        // and cannot be driven from here, so Keel detects profiles and says so rather than running
-        // a command that will fail.
-        login: &["sso", "login", "--profile", "{profile}"],
+        whoami: &["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+        install: &[("brew", &["install", "--cask", "google-cloud-sdk"])],
+        // Opens a browser and waits. That is fine here: it is the user's own machine and their own
+        // Google account, and there is no paste-a-key alternative worth offering instead.
+        login: &["auth", "login", "--update-adc"],
         identity: &[
-            "sts",
-            "get-caller-identity",
-            "--query",
-            "Arn",
-            "--output",
-            "text",
+            "auth",
+            "list",
+            "--filter=status:ACTIVE",
+            "--format=value(account)",
         ],
-        manual: "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html",
+        manual: "https://cloud.google.com/sdk/docs/install",
+    },
+    Tool {
+        id: "kubectl",
+        label: "Kubernetes",
+        binary: "kubectl",
+        version: &["version", "--client=true", "-o=yaml"],
+        // A cluster you cannot reach is not a connection, so this asks the API server rather than
+        // reading kubeconfig — a context can exist and point at nothing.
+        whoami: &["cluster-info"],
+        install: &[("brew", &["install", "kubectl"])],
+        // There is no `kubectl login`. Credentials come from the provider — `gcloud container
+        // clusters get-credentials`, `aws eks update-kubeconfig`, or a file someone handed you —
+        // so Keel reports the current context and does not pretend it can sign you in.
+        login: &[],
+        identity: &["config", "current-context"],
+        manual: "https://kubernetes.io/docs/tasks/tools/",
+    },
+    Tool {
+        id: "docker",
+        label: "Docker",
+        binary: "docker",
+        version: &["--version"],
+        // `docker info` fails when the daemon is not running, which is the condition worth
+        // reporting: the binary being installed says nothing about whether anything can run.
+        whoami: &["info", "--format", "{{.ServerVersion}}"],
+        install: &[("brew", &["install", "--cask", "docker"])],
+        login: &[],
+        identity: &["info", "--format", "{{.Name}} · {{.ServerVersion}}"],
+        manual: "https://docs.docker.com/get-docker/",
     },
 ];
 
@@ -154,9 +180,21 @@ fn tool(id: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.id == id)
 }
 
+/// Whether a binary is there and runnable.
+///
+/// Asks it the way its own [`Tool`] says to, rather than assuming `--version`. `kubectl` rejects
+/// that flag outright — it wants `version --client` — so the generic form reported it as missing
+/// on a machine where it was installed, and the sign-in path refused with "not installed yet".
 fn exists(binary: &str) -> bool {
+    let args: &[&str] = TOOLS
+        .iter()
+        .find(|t| t.binary == binary)
+        .map(|t| t.version)
+        // A package manager, which is the other caller here, and those all take `--version`.
+        .unwrap_or(&["--version"]);
+
     std::process::Command::new(binary)
-        .arg("--version")
+        .args(args)
         .output()
         .is_ok_and(|o| o.status.success())
 }
@@ -170,7 +208,8 @@ pub struct ToolStatus {
     pub authenticated: bool,
     /// Who you are signed in as, when the tool can say.
     pub identity: Option<String>,
-    /// Named profiles this tool can log into. Only AWS has them.
+    /// Named profiles this tool can log into. Nothing uses them since AWS was dropped; kept so the
+    /// UI's shape does not change under it, and because a provider with profiles will come back.
     pub profiles: Vec<String>,
     /// The command Keel would run, so the UI can name it before anything happens.
     pub install_cmd: Option<String>,
@@ -210,41 +249,19 @@ fn condense(id: &str, raw: &str) -> String {
                 _ => String::new(),
             }
         }
-        // An ARN is long; the tail identifies the principal and that is what matters.
-        "aws" => raw.trim().rsplit('/').next().unwrap_or("").to_string(),
+        // `cluster-info` prints a banner; the first line names the control plane, which is the
+        // one fact worth showing about a cluster you are pointed at.
+        "kubectl" => raw
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .replace("Kubernetes control plane", "")
+            .replace("is running at", "")
+            .trim()
+            .to_string(),
         _ => raw.trim().lines().next().unwrap_or("").to_string(),
     }
-}
-
-/// Named profiles in `~/.aws/config`.
-///
-/// `aws sso login` needs one, and `aws configure sso` — the command that creates one — is an
-/// interactive prompt that cannot be driven from a streamed subprocess. So Keel reads what already
-/// exists and tells the user plainly when there is nothing to log into.
-fn aws_profiles() -> Vec<String> {
-    let Some(home) = std::env::var_os("HOME") else {
-        return Vec::new();
-    };
-    let path = std::path::Path::new(&home).join(".aws").join("config");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            // `[default]` and `[profile name]`; `[sso-session name]` is not a profile.
-            if rest == "default" {
-                out.push("default".to_string());
-            } else if let Some(name) = rest.strip_prefix("profile ") {
-                out.push(name.trim().to_string());
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 /// Status of every CLI Keel knows about.
@@ -289,16 +306,21 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             })
             .flatten();
 
-        let profiles = if t.id == "aws" {
-            aws_profiles()
-        } else {
-            Vec::new()
+        // Tools with no `login` of their own get credentials from somewhere else, and saying so
+        // is more use than a button that runs nothing.
+        let blocked = match t.id {
+            "kubectl" if version.is_some() && !authenticated => Some(
+                "No cluster is reachable. Point kubectl at one — `gcloud container clusters \
+                 get-credentials <name>`, or a kubeconfig someone gave you — then reload."
+                    .to_string(),
+            ),
+            "docker" if version.is_some() && !authenticated => Some(
+                "Docker is installed but its daemon is not running. Start Docker Desktop, or \
+                 `colima start`, then reload."
+                    .to_string(),
+            ),
+            _ => None,
         };
-        let blocked = (t.id == "aws" && version.is_some() && profiles.is_empty()).then(|| {
-            "No AWS profile is configured. Run `aws configure sso` in a terminal — it is an \
-             interactive prompt Keel cannot drive — then reload."
-                .to_string()
-        });
 
         out.push(ToolStatus {
             id: t.id,
@@ -307,7 +329,7 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             version,
             authenticated,
             identity,
-            profiles,
+            profiles: Vec::new(),
             install_cmd,
             blocked,
             manual: t.manual,
@@ -319,7 +341,7 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
 #[derive(Deserialize)]
 pub struct ToolQuery {
     pub id: String,
-    /// Which named profile to log into. Only AWS uses it.
+    /// Which named profile to log into. Unused since AWS was dropped.
     pub profile: Option<String>,
 }
 
@@ -410,6 +432,15 @@ pub async fn login(Query(q): Query<ToolQuery>) -> Sse<ReceiverStream<Result<Even
     if !exists(t.binary) {
         return refuse(&format!("{} is not installed yet", t.label));
     }
+    // Some tools have no login of their own — kubectl and docker take credentials from elsewhere.
+    // Running `kubectl` with no arguments would print help and report success, which would look
+    // like a connection that worked.
+    if t.login.is_empty() {
+        return refuse(&format!(
+            "{} has no sign-in of its own. Its credentials come from elsewhere — see Settings.",
+            t.label
+        ));
+    }
 
     // Substitute the profile, and refuse rather than run a command that is certain to fail.
     let mut args: Vec<String> = Vec::new();
@@ -451,32 +482,63 @@ mod tests {
         assert_eq!(condense("wrangler", raw), "me@example.com · My Account");
     }
 
+    /// `cluster-info` prints a banner with terminal colour codes and a second line about debug
+    /// dumps. What is worth showing is the control plane's address and nothing else.
     #[test]
-    fn condenses_an_aws_arn_to_the_principal() {
-        assert_eq!(
-            condense("aws", "arn:aws:sts::12345:assumed-role/AdminRole/mk\n"),
-            "mk"
-        );
+    fn condenses_cluster_info_to_the_control_plane() {
+        let raw = "Kubernetes control plane is running at https://10.0.0.1\n\
+                   CoreDNS is running at https://10.0.0.1/api/v1/namespaces/kube-system";
+        assert_eq!(condense("kubectl", raw), "https://10.0.0.1");
     }
 
+    /// Every tool is installable and documented. Not every tool is *loggable into*: `kubectl` and
+    /// `docker` take their credentials from somewhere else entirely, and offering a button that
+    /// runs nothing would be worse than saying where they actually come from.
     #[test]
-    fn aws_login_refuses_without_a_profile() {
-        // The placeholder must survive into the arg list, so login() has something to reject on.
-        let aws = tool("aws").expect("aws is registered");
-        assert!(aws.login.contains(&"{profile}"));
-    }
-
-    #[test]
-    fn every_tool_has_an_install_and_a_login_path() {
+    fn every_tool_can_be_installed_and_explained() {
         for t in TOOLS {
             assert!(!t.install.is_empty(), "{} has no installer", t.id);
-            assert!(!t.login.is_empty(), "{} has no login flow", t.id);
             assert!(
                 t.manual.starts_with("https://"),
                 "{} needs a fallback link",
                 t.id
             );
+            assert!(!t.whoami.is_empty(), "{} cannot report its own state", t.id);
         }
+    }
+
+    /// Every tool has to be detectable by its own version command.
+    ///
+    /// `exists` used to assume `--version`, which `kubectl` rejects — so it reported an installed
+    /// kubectl as missing, and signing in refused with "not installed yet" on a machine where it
+    /// plainly was.
+    #[test]
+    fn a_tool_is_detected_the_way_it_asks_to_be() {
+        for t in TOOLS {
+            assert!(
+                !t.version.is_empty(),
+                "{} has no way to report its version",
+                t.id
+            );
+        }
+        let kubectl = tool("kubectl").expect("kubectl is registered");
+        assert_ne!(
+            kubectl.version,
+            ["--version"],
+            "kubectl rejects --version; detecting it that way finds nothing"
+        );
+    }
+
+    /// A tool with no login flow must be one Keel explains rather than one it silently cannot
+    /// connect. Adding a fourth without a `blocked` message would leave a dead row in Settings.
+    #[test]
+    fn a_tool_without_a_login_is_one_we_explain() {
+        let no_login: Vec<&str> = TOOLS
+            .iter()
+            .filter(|t| t.login.is_empty())
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(no_login, vec!["kubectl", "docker"]);
     }
 
     #[test]
