@@ -70,6 +70,26 @@ provision $6,531 of infrastructure in 24 hours before anyone could see it.
 OS keychain only. Cloudflare tokens are provisioned scoped to a single project and rotated, because
 Cloudflare has no OIDC or keyless deploy path as of August 2026.
 
+## Approval happens in the IDE
+
+`--permission-mode acceptEdits` lets the agent write files but **not** run arbitrary shell commands;
+apart from a read-only command set, those still need an allow rule. A headless `claude -p` session
+has nobody to prompt, and this CLI has no `--permission-prompt-tool`, so a denied command simply
+fails — which is why an agent could write a landing page and then be unable to install or build it.
+
+Keel therefore owns the allowlist. A denial surfaces in the conversation with the exact command and
+three choices: allow the derived rule for this project, allow it for this session only, or refuse.
+Approved rules are passed to `claude` via `--settings` on every subsequent run. Approval stays a
+human act; it happens in the IDE instead of at a terminal prompt.
+
+Rules are derived from the call rather than hardcoded per tool, so this works for any command.
+Verified: `docker --version` returns "This command requires approval", and after approving
+`Bash(docker *)` the same request returns the version.
+
+Project rules live in `.keel/permissions.json`. Session rules last until Keel restarts. The
+project's own build and test commands are *suggested* rather than pre-approved — one click each,
+because the point is that a person decides.
+
 ## Evidence over assertion
 
 The agent does not grade its own work. After every non-plan turn Keel runs the project's own check

@@ -23,6 +23,16 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Approvals
+
+The agent can edit files freely. Running a command needs a rule — that is Claude Code's own model,
+and a headless session cannot stop to ask you. So Keel surfaces the denial in the conversation with
+the exact command, and you allow it there: for the project, for the session, or not at all.
+
+Rules are derived from the command, so it works for anything, not a fixed list. Your project's own
+build and test commands appear as one-click suggestions in Settings → Permissions rather than being
+approved on your behalf.
+
 ## Verification
 
 An agent reporting "done" is an assertion, not evidence. Research on agentic coding is blunt about
