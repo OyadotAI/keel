@@ -220,7 +220,7 @@ pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
             path: p.to_string(),
         })
         .collect();
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
 
     Ok(Json(Listing {
         parent: (path != home).then(|| {

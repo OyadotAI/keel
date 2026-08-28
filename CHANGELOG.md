@@ -30,8 +30,14 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 - CI could not build the workspace on its Linux runner. `wry`/`tao` resolve GTK and WebKit through
   pkg-config on Linux, which `ubuntu-latest` does not ship, so `glib-sys` failed its build script
   before any check ran. Both jobs now install `libwebkit2gtk-4.1-dev`,
-  `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev` and `libgtk-3-dev` (the 4.1/libsoup3 line, which
-  is what `webkit2gtk-sys` 2.0 requires).
+  `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev`, `libgtk-3-dev` and `libxdo-dev` (the
+  4.1/libsoup3 line, which is what `webkit2gtk-sys` 2.0 requires; `tao` links `libxdo` directly, so
+  it is needed to link but not to check).
+- `gui.rs` did not compile off macOS: `Menu::init_for_nsapp` hands the menu bar to AppKit and exists
+  only in muda's macOS build. Gated on `target_os = "macos"`, so the rest of the module is still
+  type-checked on Linux.
+- `unnecessary_sort_by` in `connect.rs`: `sort_by` with a hand-written key comparison became a
+  clippy error on a newer toolchain than the one it was written against. Now `sort_by_key`.
 - `cargo fmt --all -- --check` failed on 43 hunks across 14 files, the backlog from before CI
   existed. Reformatted `crates/keel/src/{api,approve,aws,clitools,fsops,infra,main,mcp,names,
   permissions,prefs,project,serve}.rs` and `crates/keel-workspace/src/sessions.rs`. No behaviour
