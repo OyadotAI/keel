@@ -5,6 +5,7 @@
 //! credential.
 
 mod api;
+mod connect;
 mod render;
 mod serve;
 

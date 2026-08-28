@@ -21,7 +21,25 @@ use std::sync::Arc;
 const INDEX: &str = include_str!("../../../ui/index.html");
 
 pub struct AppState {
-    pub repo: Utf8PathBuf,
+    repo: std::sync::RwLock<Utf8PathBuf>,
+}
+
+impl AppState {
+    pub fn new(repo: Utf8PathBuf) -> Self {
+        Self {
+            repo: std::sync::RwLock::new(repo),
+        }
+    }
+
+    /// The repository currently open. Cloned rather than borrowed so no handler holds the lock
+    /// across an await point.
+    pub fn repo(&self) -> Utf8PathBuf {
+        self.repo.read().expect("repo lock poisoned").clone()
+    }
+
+    pub fn set_repo(&self, path: Utf8PathBuf) {
+        *self.repo.write().expect("repo lock poisoned") = path;
+    }
 }
 
 /// Everything the UI needs, in one request.
@@ -33,20 +51,10 @@ struct StateResponse {
     repo: String,
     scan: keel_scanner::Report,
     workspace: keel_workspace::Workspace,
-    /// Cloud connection status. Explicitly reported rather than assumed, because an IDE that
-    /// implies a deployment exists when none does is worse than one that says so.
-    connections: Connections,
-}
-
-#[derive(Serialize)]
-struct Connections {
-    github: bool,
-    cloudflare: bool,
-    claude: bool,
 }
 
 pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()> {
-    let state = Arc::new(AppState { repo });
+    let state = Arc::new(AppState::new(repo));
 
     let app = Router::new()
         .route("/", get(index))
@@ -57,6 +65,13 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/git/status", get(api_git_status))
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/save", axum::routing::post(api_save))
+        .route("/api/connections", get(crate::connect::status))
+        .route("/api/connect/github", axum::routing::post(crate::connect::connect_github))
+        .route("/api/connect/cloudflare", axum::routing::post(crate::connect::connect_cloudflare))
+        .route("/api/disconnect", axum::routing::post(crate::connect::disconnect))
+        .route("/api/github/repos", get(crate::connect::repos))
+        .route("/api/github/clone", axum::routing::post(crate::connect::clone))
+        .route("/api/open", axum::routing::post(crate::connect::open_repo))
         .with_state(state);
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -77,34 +92,34 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
 }
 
 async fn api_tree(State(state): State<Arc<AppState>>) -> Json<Vec<crate::api::Node>> {
-    Json(crate::api::tree(&state.repo))
+    Json(crate::api::tree(&state.repo()))
 }
 
 async fn api_file(
     State(state): State<Arc<AppState>>,
     Query(query): Query<crate::api::FileQuery>,
 ) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
-    crate::api::read_file(&state.repo, &query.path)
+    crate::api::read_file(&state.repo(), &query.path)
         .map(Json)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
-    Json(crate::api::git_status(&state.repo))
+    Json(crate::api::git_status(&state.repo()))
 }
 
 async fn api_git_diff(
     State(state): State<Arc<AppState>>,
     Query(query): Query<crate::api::FileQuery>,
 ) -> Json<crate::api::DiffResponse> {
-    Json(crate::api::git_diff(&state.repo, &query.path))
+    Json(crate::api::git_diff(&state.repo(), &query.path))
 }
 
 async fn api_save(
     State(state): State<Arc<AppState>>,
     Json(req): Json<crate::api::SaveRequest>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    crate::api::write_file(&state.repo, &req)
+    crate::api::write_file(&state.repo(), &req)
         .map(|_| Json(true))
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
@@ -114,7 +129,7 @@ async fn index() -> impl axum::response::IntoResponse {
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
-    let repo = state.repo.clone();
+    let repo = state.repo();
 
     // Re-read on every request. The developer is editing this repository in another window, and a
     // cached view of a tree that has moved on is worse than a slightly slower one.
@@ -131,20 +146,6 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         repo: repo.to_string(),
         scan,
         workspace,
-        connections: Connections {
-            // Nothing is wired to a provider yet, and the UI says so rather than implying
-            // a deployment that does not exist.
-            github: false,
-            cloudflare: false,
-            claude: which_claude(),
-        },
     })
 }
 
-/// Whether the `claude` binary Keel drives is actually installed.
-fn which_claude() -> bool {
-    std::process::Command::new("claude")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
-}

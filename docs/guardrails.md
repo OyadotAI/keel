@@ -70,7 +70,23 @@ provision $6,531 of infrastructure in 24 hours before anyone could see it.
 OS keychain only. Cloudflare tokens are provisioned scoped to a single project and rotated, because
 Cloudflare has no OIDC or keyless deploy path as of August 2026.
 
-## Known gap: the chat panel is not yet behind this contract
+## Plan mode
+
+The chat panel offers Plan and Auto. Plan passes `--permission-mode plan`, and it holds: asked to
+create a file, the agent attempts `Write`, is refused, and produces a plan instead — verified, with
+no file on disk afterwards. An unrecognised mode falls back to Plan, because the safe default is the
+one that cannot change the repository.
+
+## Credentials
+
+GitHub and Cloudflare tokens live in the OS keychain (`keyring`), keyed under `dev.keel`, and are
+sent only to their own APIs. Keel prefers an explicitly connected GitHub token and otherwise reads
+`gh auth token` per call — never storing that one, so revoking `gh` revokes Keel.
+
+Every token is verified before it is stored. Storing first means the failure surfaces later, in the
+middle of some unrelated operation, with nothing pointing at the credential as the cause.
+
+## Known gap: Auto mode is not yet behind this contract
 
 Rules 1 and 3 describe `keel-harness::invocation`, which is built and tested. **The IDE's chat panel
 does not use it yet.** It spawns `claude` with `--permission-mode acceptEdits`, so the agent has real

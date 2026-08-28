@@ -181,14 +181,21 @@ pub struct ChatQuery {
     pub prompt: String,
     /// Resume an existing conversation rather than starting a new one.
     pub session: Option<String>,
+    /// Permission mode. `plan` explores without touching anything; `acceptEdits` lets the agent
+    /// edit and run commands. Anything unrecognised falls back to `plan`, because the safe default
+    /// is the one that cannot change the repository.
+    pub mode: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
 ///
 /// # Permissions
 ///
-/// This spawns with `--permission-mode acceptEdits`, which means the agent has real file access and
-/// can run commands. That is **not** the locked-down surface described in `docs/guardrails.md` —
+/// The UI selects between `plan` (explore and propose, no writes) and `acceptEdits` (real file
+/// access, runs commands). An unrecognised value falls back to `plan`: the safe default is the one
+/// that cannot change the repository.
+///
+/// `acceptEdits` is **not** the locked-down surface described in `docs/guardrails.md` —
 /// that surface depends on Keel's MCP server, which is a tool catalog with no implementation behind
 /// it yet. Until it exists, an agent restricted to Keel tools would have no tools at all and could
 /// do nothing. The UI states this plainly rather than implying a containment that is not there.
@@ -197,7 +204,7 @@ pub async fn chat(
     Query(query): Query<ChatQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-    let repo = state.repo.clone();
+    let repo = state.repo();
 
     tokio::spawn(async move {
         let mut command = Command::new("claude");
@@ -210,7 +217,10 @@ pub async fn chat(
             .arg("--verbose")
             .arg("--include-partial-messages")
             .arg("--permission-mode")
-            .arg("acceptEdits")
+            .arg(match query.mode.as_deref() {
+                Some("acceptEdits") => "acceptEdits",
+                _ => "plan",
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

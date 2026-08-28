@@ -5,4 +5,5 @@
 //! rather than asking the user for an account-wide token.
 
 pub mod cloudflare;
+pub mod credentials;
 pub mod github;

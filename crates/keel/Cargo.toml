@@ -28,3 +28,4 @@ tokio-stream = "0.1"
 axum.workspace = true
 open.workspace = true
 ignore.workspace = true
+keyring.workspace = true

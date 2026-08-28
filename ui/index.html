@@ -16,7 +16,7 @@
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
   }
   @media (prefers-color-scheme:light){:root:not([data-theme=dark]){
-    --bg:#fff; --panel:#f7f9fb; --panel-2:#eef2f6; --panel-3:#e6ecf2; --line:#d8dee6;
+    --bg:#fff; --panel:#f7f9fb; --panel-2:#eef2f6; --panel-3:#e4eaf1; --line:#d8dee6;
     --text:#1c2128; --dim:#57606a; --faint:#8b949e;
     --accent:#0969da; --crit:#cf222e; --high:#bc4c00; --med:#9a6700; --low:#6e7781; --ok:#1a7f37;
     --add-bg:rgba(74,194,107,.16); --del-bg:rgba(255,129,130,.18);
@@ -26,31 +26,35 @@
   html,body{height:100%}
   body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.55 var(--sans);
     -webkit-font-smoothing:antialiased;overflow:hidden}
-  .app{display:grid;grid-template-columns:52px 268px 1fr 440px;height:100vh}
-  @media(max-width:1560px){.app{grid-template-columns:52px 240px 1fr 390px}}
+  .app{display:grid;grid-template-columns:52px var(--side,272px) 4px 1fr 4px var(--chat,430px);
+    height:100vh}
+  .rz{cursor:col-resize;background:transparent;position:relative;z-index:5}
+  .rz::after{content:"";position:absolute;inset:0 1px;background:var(--line)}
+  .rz:hover::after,.rz.on::after{background:var(--accent)}
 
   /* activity bar */
   .bar{background:var(--panel);border-right:1px solid var(--line);display:flex;
-    flex-direction:column;align-items:center;padding:12px 0;gap:3px}
-  .bar .logo{margin-bottom:14px;color:var(--text)}
+    flex-direction:column;align-items:center;padding:12px 0;gap:2px}
+  .bar .logo{margin-bottom:12px;color:var(--text)}
   .ic{all:unset;width:34px;height:34px;display:grid;place-items:center;border-radius:8px;
     cursor:pointer;color:var(--faint);position:relative}
   .ic:hover{background:var(--panel-2);color:var(--text)}
   .ic[aria-current=true]{background:var(--panel-2);color:var(--accent)}
-  .ic .badge{position:absolute;top:1px;right:1px;min-width:15px;height:15px;border-radius:8px;
+  .ic .badge{position:absolute;top:0;right:0;min-width:15px;height:15px;border-radius:8px;
     background:var(--crit);color:#fff;font:600 9.5px/15px var(--mono);text-align:center;padding:0 3px}
+  .ic .badge.mut{background:var(--faint)}
   .bar .spacer{flex:1}
 
   /* side panel */
-  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;
-    display:flex;flex-direction:column}
-  .side-head{padding:12px 14px 8px;display:flex;align-items:center;gap:8px;flex:none}
-  .side-head h3{margin:0;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;min-width:0}
+  .ph{padding:12px 14px 8px;display:flex;align-items:center;gap:8px;position:sticky;top:0;
+    background:var(--panel);z-index:2}
+  .ph h3{margin:0;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
     color:var(--faint);font-weight:600}
-  .side-head .act{margin-left:auto;font:11px var(--mono);color:var(--faint);cursor:pointer}
-  .side-head .act:hover{color:var(--accent)}
-  .repo{padding:0 14px 12px;font-family:var(--mono);font-size:11px;color:var(--faint);
-    word-break:break-all;line-height:1.4}
+  .ph .act{margin-left:auto;font:11px var(--mono);color:var(--faint);cursor:pointer}
+  .ph .act:hover{color:var(--accent)}
+  .repo{padding:0 14px 10px;font:11px var(--mono);color:var(--faint);word-break:break-all;
+    line-height:1.4}
   .grp{border-top:1px solid var(--line)}
   .tnode{display:flex;align-items:center;gap:6px;padding:3px 14px;cursor:pointer;font-size:12.5px;
     color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
@@ -61,15 +65,43 @@
   .st.modified{color:var(--med)} .st.added,.st.untracked{color:var(--ok)}
   .st.deleted{color:var(--crit)} .st.renamed{color:var(--accent)}
   .tkids.collapsed{display:none}
-  .side .empty{padding:12px 14px;color:var(--faint);font-size:12px;text-align:left}
+  .side .empty{padding:14px;color:var(--faint);font-size:12px;text-align:left;line-height:1.5}
+
+  /* generic list rows in the side panel */
+  .lrow{padding:8px 14px;border-bottom:1px solid var(--line);cursor:default}
+  .lrow.click{cursor:pointer}
+  .lrow.click:hover{background:var(--panel-2)}
+  .lrow .t{font-size:12.5px;font-weight:540;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .lrow .m{font:11px var(--mono);color:var(--faint);margin-top:2px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .lrow .d{font-size:11.5px;color:var(--dim);margin-top:3px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pill{display:inline-block;font:9.5px var(--mono);padding:1.5px 6px;border-radius:4px;
+    background:var(--panel-2);color:var(--faint);margin-left:6px;vertical-align:1px}
+  .pill.project{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
+  .pill.crit{color:var(--crit);background:color-mix(in srgb,var(--crit) 14%,transparent)}
+  .pill.high{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
+  .pill.medium{color:var(--med);background:color-mix(in srgb,var(--med) 14%,transparent)}
+  .pill.low,.pill.info{color:var(--low);background:color-mix(in srgb,var(--low) 14%,transparent)}
+  .lrow.danger{border-left:2px solid var(--crit)}
+
+  .fld{padding:10px 14px;border-bottom:1px solid var(--line)}
+  .fld label{display:block;font-size:11px;color:var(--faint);margin-bottom:5px}
+  .fld input{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:7px;padding:7px 9px;font:12px var(--mono);outline:none}
+  .fld input:focus{border-color:var(--accent)}
+  .fld .row2{display:flex;gap:7px;margin-top:7px;align-items:center}
+  .fld .err{color:var(--crit);font-size:11.5px;margin-top:6px}
+  .fld .ok{color:var(--ok);font-size:11.5px;margin-top:6px}
 
   /* editor */
   .ed{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);min-width:0}
-  .tabs{display:flex;align-items:stretch;height:36px;border-bottom:1px solid var(--line);
-    background:var(--panel);flex:none;overflow-x:auto}
+  .tabs{display:flex;height:36px;border-bottom:1px solid var(--line);background:var(--panel);
+    flex:none;overflow-x:auto}
   .tab{display:flex;align-items:center;gap:7px;padding:0 11px 0 13px;cursor:pointer;
-    border-right:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--dim);
-    white-space:nowrap;flex:none}
+    border-right:1px solid var(--line);font:12px var(--mono);color:var(--dim);white-space:nowrap;
+    flex:none}
   .tab:hover{background:var(--panel-2)}
   .tab.on{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
   .tab .x{opacity:.45;font-size:14px;line-height:1}
@@ -83,12 +115,11 @@
   .seg button[aria-current=true]{background:var(--panel-3);color:var(--text)}
   .subbar .right{margin-left:auto;display:flex;gap:10px;align-items:center;overflow:hidden}
   .subbar .right span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel-2);padding:1px 5px;
-    border-radius:4px;color:var(--faint);flex:none}
+  .kbd{font:10.5px var(--mono);background:var(--panel-2);padding:1px 5px;border-radius:4px;
+    color:var(--faint);flex:none}
 
   .surface{flex:1;overflow:auto;position:relative;padding:12px 0}
-  .lines{display:table;width:100%;border-collapse:collapse;font-family:var(--mono);
-    font-size:12.5px;line-height:1.62}
+  .lines{display:table;width:100%;border-collapse:collapse;font:12.5px/1.62 var(--mono)}
   .ln-row{display:table-row}
   .ln-no,.ln-src{display:table-cell;vertical-align:top}
   .ln-no{text-align:right;color:var(--faint);user-select:none;width:1%;white-space:nowrap;
@@ -96,69 +127,71 @@
   .ln-src{white-space:pre-wrap;word-break:break-word;padding-right:24px}
   .k{color:var(--k)}.s{color:var(--s)}.c{color:var(--c);font-style:italic}
   .n{color:var(--num)}.f{color:var(--fn)}
-
-  /* editable overlay: a transparent textarea sits exactly over the highlighted layer */
   .edit-wrap{position:relative}
-  .edit-wrap textarea,.edit-wrap .hl{font-family:var(--mono);font-size:12.5px;line-height:1.62;
-    padding:0;margin:0;border:0;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
+  .edit-wrap textarea,.edit-wrap .hl{font:12.5px/1.62 var(--mono);padding:0;margin:0;border:0;
+    white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
   .edit-wrap .hl{pointer-events:none;min-height:1.62em}
   .edit-wrap textarea{position:absolute;inset:0;width:100%;height:100%;background:transparent;
     color:transparent;caret-color:var(--accent);resize:none;outline:none;overflow:hidden}
   .edit-wrap textarea::selection{background:color-mix(in srgb,var(--accent) 34%,transparent)}
 
-  /* diff — flex rows, not a CSS table: a table row with one cell cannot span the gutter
-     columns, which trapped every hunk header inside the narrow line-number column. */
-  .diff{font-family:var(--mono);font-size:12.5px;line-height:1.62}
+  /* diff — flex rows, not a CSS table: a one-cell table row cannot span the gutter columns,
+     which trapped every hunk header inside the narrow line-number column. */
+  .diff{font:12.5px/1.62 var(--mono)}
   .dline{display:flex}
-  .dno{width:46px;flex:none;text-align:right;color:var(--faint);user-select:none;
-    padding:0 8px;font-size:11.5px}
+  .dno{width:46px;flex:none;text-align:right;color:var(--faint);user-select:none;padding:0 8px;
+    font-size:11.5px}
   .dsrc{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;padding:0 24px 0 20px;
     position:relative}
-  .dline.add{background:var(--add-bg)}
-  .dline.del{background:var(--del-bg)}
+  .dline.add{background:var(--add-bg)} .dline.del{background:var(--del-bg)}
   .dsrc .mk{position:absolute;left:6px;font-weight:700}
-  .dline.add .mk{color:var(--add-mark)}
-  .dline.del .mk{color:var(--del-mark)}
+  .dline.add .mk{color:var(--add-mark)} .dline.del .mk{color:var(--del-mark)}
   .hunk{color:var(--accent);background:var(--panel-2);padding:5px 14px;font-size:11.5px;
     border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:6px 0 0;
     white-space:pre-wrap;word-break:break-word}
 
   /* chat */
   .chat{background:var(--panel);border-left:1px solid var(--line);display:flex;
-    flex-direction:column;overflow:hidden}
-  .chat-head{padding:10px 14px;border-bottom:1px solid var(--line);flex:none;display:flex;
+    flex-direction:column;overflow:hidden;min-width:0}
+  .chat-head{padding:9px 14px;border-bottom:1px solid var(--line);flex:none;display:flex;
     align-items:center;gap:8px;font-size:12.5px;font-weight:600}
   .chat-head .meta{margin-left:auto;font:11px var(--mono);color:var(--faint);font-weight:400}
-  .perm{font-size:11px;color:var(--high);padding:6px 14px;flex:none;
-    background:color-mix(in srgb,var(--high) 10%,transparent);border-bottom:1px solid var(--line)}
+  .mode-note{font-size:11px;padding:6px 14px;flex:none;border-bottom:1px solid var(--line);
+    line-height:1.45}
+  .mode-note.plan{color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
+  .mode-note.auto{color:var(--high);background:color-mix(in srgb,var(--high) 10%,transparent)}
   .log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:11px}
   .msg .who{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);
     font-weight:600;margin-bottom:4px}
   .msg.user{background:var(--panel-2);border-radius:9px;padding:9px 12px}
   .msg.user .who{color:var(--accent)}
   .txt{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6}
-  .txt code{font-family:var(--mono);font-size:12px;background:var(--panel-2);padding:1px 5px;
-    border-radius:4px}
+  .txt code{font:12px var(--mono);background:var(--panel-2);padding:1px 5px;border-radius:4px}
   .txt strong{font-weight:640}
   .think{font-size:12px;color:var(--faint);font-style:italic;border-left:2px solid var(--line);
     padding-left:10px;white-space:pre-wrap}
-  .tool{display:flex;gap:8px;align-items:baseline;font-family:var(--mono);font-size:11.5px;
-    color:var(--dim);padding:5px 9px;background:var(--panel-2);border-radius:6px;
-    border-left:2px solid var(--accent)}
-  .tool .tn{color:var(--accent);font-weight:600;flex:none}
-  .tool .ta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--faint)}
-  .composer{border-top:1px solid var(--line);padding:11px;flex:none}
+  /* Tool calls: the argument gets its own wrapping block. A shell command truncated to one line
+     is unreadable, and the command is the part you most need to see. */
+  .tool{background:var(--panel-2);border-radius:7px;border-left:2px solid var(--accent);
+    overflow:hidden}
+  .tool .th{display:flex;align-items:center;gap:8px;padding:5px 10px;font:11.5px var(--mono)}
+  .tool .tn{color:var(--accent);font-weight:600}
+  .tool .tsub{color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool pre{margin:0;padding:0 10px 8px;font:11.5px/1.5 var(--mono);color:var(--dim);
+    white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto}
+  .composer{border-top:1px solid var(--line);padding:10px;flex:none}
   .composer textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);
     color:var(--text);border-radius:8px;padding:9px 11px;font:13px/1.5 var(--sans);resize:none;
-    min-height:62px;outline:none}
+    min-height:58px;outline:none}
   .composer textarea:focus{border-color:var(--accent)}
-  .foot{display:flex;align-items:center;gap:9px;margin-top:7px}
+  .foot{display:flex;align-items:center;gap:8px;margin-top:7px}
   .foot .hint{font:11px var(--mono);color:var(--faint);margin-right:auto;overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap}
   .btn{all:unset;background:var(--accent);color:#fff;padding:5.5px 14px;border-radius:7px;
-    font-size:12.5px;font-weight:560;cursor:pointer}
+    font-size:12.5px;font-weight:560;cursor:pointer;text-align:center}
   .btn:hover{filter:brightness(1.1)} .btn[disabled]{opacity:.4;cursor:default}
   .btn.ghost{background:var(--panel-2);color:var(--dim)}
+  .btn.sm{padding:4px 10px;font-size:11.5px}
 
   /* palette */
   .pal{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(620px,88vw);
@@ -167,100 +200,40 @@
   .pal input{all:unset;display:block;width:100%;padding:14px 17px;font:14px var(--sans);
     color:var(--text);border-bottom:1px solid var(--line);box-sizing:border-box}
   .pal .res{max-height:44vh;overflow-y:auto}
-  .pal .r{padding:8px 17px;font-family:var(--mono);font-size:12.5px;color:var(--dim);cursor:pointer;
+  .pal .r{padding:8px 17px;font:12.5px var(--mono);color:var(--dim);cursor:pointer;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pal .r.on{background:var(--panel-2);color:var(--accent)}
-
-  /* drawer */
-  .drawer{position:fixed;inset:0 0 0 auto;width:min(900px,80vw);background:var(--bg);
-    border-left:1px solid var(--line);z-index:30;overflow-y:auto;
-    box-shadow:-24px 0 60px rgba(0,0,0,.35)}
-  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:29}
   .hidden{display:none!important}
   .empty{padding:26px 16px;text-align:center;color:var(--faint);font-size:12.5px}
-
-  main{padding:24px 28px 60px;max-width:960px}
-  h1{font-size:18px;margin:0 0 3px;font-weight:620;letter-spacing:-.015em}
-  .sub{color:var(--dim);font-size:12.5px;margin-bottom:20px}
-  .sect{margin-bottom:22px}
-  .sect h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);
-    font-weight:600;margin:0 0 9px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .row{display:flex;gap:12px;padding:12px 15px;border-bottom:1px solid var(--line)}
-  .row:last-child{border-bottom:0}
-  .sev{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;
-    padding:2.5px 7px;border-radius:4px;height:fit-content;flex:none;width:60px;text-align:center;
-    font-weight:600}
-  .sev.critical{color:var(--crit);background:color-mix(in srgb,var(--crit) 14%,transparent)}
-  .sev.high{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
-  .sev.medium{color:var(--med);background:color-mix(in srgb,var(--med) 14%,transparent)}
-  .sev.low,.sev.info{color:var(--low);background:color-mix(in srgb,var(--low) 14%,transparent)}
-  .body{min-width:0;flex:1}
-  .title{font-weight:545;margin-bottom:3px}
-  .title code,.sub code,.detail code,.fix code{font-family:var(--mono);font-size:12px;
-    background:var(--panel-2);padding:1px 5px;border-radius:4px}
-  .detail{color:var(--dim);font-size:12.5px;margin-bottom:6px}
-  .fix{font-size:12.5px;color:var(--dim);display:flex;gap:7px}
-  .fix b{color:var(--accent);font-weight:560;flex:none}
-  .path{font-family:var(--mono);font-size:11px;color:var(--faint);margin-bottom:5px}
-  .item{display:grid;grid-template-columns:1fr auto;gap:14px;padding:9px 15px;
-    border-bottom:1px solid var(--line);align-items:baseline}
-  .item:last-child{border-bottom:0}
-  .item>div:first-child{min-width:0}
-  .item .nm{font-family:var(--mono);font-size:12.5px;font-weight:550}
-  .item .ds{color:var(--dim);font-size:12.5px;margin-top:2px;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap}
-  .tag{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:4px;
-    background:var(--panel-2);color:var(--faint);white-space:nowrap}
-  .tag.project{color:var(--high);background:color-mix(in srgb,var(--high) 13%,transparent)}
-  .danger{border-left:2px solid var(--crit)}
-  .danger .nm::before{content:"! ";color:var(--crit);font-weight:700}
-  .warn{display:flex;gap:10px;padding:12px 15px;border-radius:9px;margin-bottom:13px;
-    background:color-mix(in srgb,var(--crit) 9%,transparent);
-    border:1px solid color-mix(in srgb,var(--crit) 28%,transparent)}
-  .warn b{color:var(--crit)}
-  .score-row{display:flex;align-items:center;gap:20px;margin-bottom:22px;background:var(--panel);
-    border:1px solid var(--line);border-radius:10px;padding:18px 20px}
-  .score{font-family:var(--mono);font-size:38px;font-weight:600;line-height:1;letter-spacing:-.03em}
-  .score small{font-size:14px;color:var(--faint);font-weight:400}
-  .bar-m{height:5px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin-top:10px;
-    width:240px}
-  .bar-m i{display:block;height:100%;border-radius:3px}
-  .pane-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
-  .pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 17px}
-  .pane h3{margin:0 0 3px;font-size:12.5px;font-weight:600}
-  .pane .st2{font-size:12px;color:var(--faint)}
 </style>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <div class="bar">
     <svg class="logo" width="21" height="21" viewBox="0 0 20 20" fill="none">
       <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
         stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-    <button class="ic" id="ic-files" title="Files" aria-current="true">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 011-1h3.6l1.2 1.5H13a1 1 0 011 1V13a1 1 0 01-1 1H3a1 1 0 01-1-1V3z"/></svg>
-    </button>
-    <button class="ic" id="ic-changes" title="Changes">
+    <button class="ic" data-p="files" title="Files" aria-current="true">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 011-1h3.6l1.2 1.5H13a1 1 0 011 1V13a1 1 0 01-1 1H3a1 1 0 01-1-1V3z"/></svg></button>
+    <button class="ic" data-p="changes" title="Changes">
       <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2v8.2a2.8 2.8 0 105 1.8h3V2h-2v8H8.9A2.8 2.8 0 006 10.2V2H4z"/></svg>
-      <span class="badge hidden" id="badge-changes">0</span>
-    </button>
+      <span class="badge mut hidden" data-b="changes">0</span></button>
+    <button class="ic" data-p="sessions" title="Sessions">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.8 3.5v3.9l3 1.8-.8 1.3-3.7-2.2V4.5h1.5z"/></svg>
+      <span class="badge mut hidden" data-b="sessions">0</span></button>
+    <button class="ic" data-p="skills" title="Skills &amp; extensions">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2 4.4 4.8.5-3.6 3.2 1 4.7L8 11.4 3.8 13.8l1-4.7L1.2 5.9 6 5.4 8 1z"/></svg></button>
+    <button class="ic" data-p="readiness" title="Readiness">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l6 2.6v4c0 3.6-2.5 6.6-6 7.4-3.5-.8-6-3.8-6-7.4v-4L8 1zm2.9 4.6l-3.6 3.6-1.9-1.9-1.1 1.1 3 3 4.7-4.7-1.1-1.1z"/></svg>
+      <span class="badge hidden" data-b="readiness">0</span></button>
     <div class="spacer"></div>
-    <button class="ic" id="ic-insp" title="Inspector">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M7 1a6 6 0 104.2 10.3l3.3 3.2 1-1-3.2-3.3A6 6 0 007 1zm0 2a4 4 0 110 8 4 4 0 010-8z"/></svg>
-      <span class="badge hidden" id="badge-trust">0</span>
-    </button>
+    <button class="ic" data-p="connections" title="Connections">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 2.5a3.5 3.5 0 014.9 4.9l-2 2a3.5 3.5 0 01-5 0l1.1-1.1a2 2 0 002.8 0l2-2a2 2 0 10-2.8-2.8l-.8.8-1.1-1.1.9-.7zM6.5 13.5a3.5 3.5 0 01-4.9-4.9l2-2a3.5 3.5 0 015 0L7.5 7.7a2 2 0 00-2.8 0l-2 2a2 2 0 102.8 2.8l.8-.8 1.1 1.1-.9.7z"/></svg>
+      <span class="badge hidden" data-b="conn">!</span></button>
   </div>
 
-  <aside class="side">
-    <div class="side-head"><h3>Repository</h3><span class="act" id="refresh">refresh</span></div>
-    <div class="repo" id="repo">loading…</div>
-    <div id="changes-grp" class="grp hidden">
-      <div class="side-head"><h3>Changes</h3><span class="act" id="branch"></span></div>
-      <div id="changes"></div>
-    </div>
-    <div class="grp"><div class="side-head"><h3>Files</h3></div><div id="tree"></div></div>
-  </aside>
+  <aside class="side" id="side"></aside>
+  <div class="rz" id="rz1"></div>
 
   <section class="ed">
     <div class="tabs" id="tabs"></div>
@@ -269,22 +242,28 @@
         <button id="m-src" aria-current="true">Source</button>
         <button id="m-diff">Diff</button>
       </div>
-      <div class="right">
-        <span id="fmeta"></span>
-        <span class="kbd">&#8984;P</span><span class="kbd">&#8984;S</span>
-      </div>
+      <div class="right"><span id="fmeta"></span>
+        <span class="kbd">&#8984;P</span><span class="kbd">&#8984;S</span></div>
     </div>
     <div class="surface" id="surface"><div class="empty">Open a file &mdash; press &#8984;P</div></div>
   </section>
 
+  <div class="rz" id="rz2"></div>
+
   <section class="chat">
-    <div class="chat-head"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>
-      Claude Code<span class="meta" id="chat-meta"></span></div>
-    <div class="perm">acceptEdits &mdash; the agent can edit files and run commands here.</div>
+    <div class="chat-head">
+      <span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>
+      Claude Code<span class="meta" id="chat-meta"></span>
+    </div>
+    <div class="mode-note" id="mode-note"></div>
     <div class="log" id="log"><div class="empty">Ask Claude Code to change this repository.</div></div>
     <div class="composer">
-      <textarea id="prompt" placeholder="Describe a change…   ⌘⏎ to send"></textarea>
+      <textarea id="prompt" placeholder="Describe a change…   &#8984;&#9166; to send"></textarea>
       <div class="foot">
+        <div class="seg">
+          <button id="pm-plan">Plan</button>
+          <button id="pm-auto" aria-current="true">Auto</button>
+        </div>
         <span class="hint" id="hint"></span>
         <button class="btn ghost hidden" id="stop">Stop</button>
         <button class="btn" id="send">Send</button>
@@ -293,8 +272,6 @@
   </section>
 </div>
 
-<div class="scrim hidden" id="scrim"></div>
-<div class="drawer hidden" id="drawer"><main id="main"></main></div>
 <div class="pal hidden" id="pal">
   <input id="pal-q" placeholder="Go to file…" spellcheck="false">
   <div class="res" id="pal-res"></div>
@@ -305,10 +282,37 @@ const $ = h => { const t = document.createElement('template'); t.innerHTML = h.t
 const el = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+const short = (s, n) => (s ?? '').length > n ? s.slice(0, n - 1) + '…' : (s ?? '');
 
-let state = null, flat = [], mode = 'src';
-const tabs = [];
-let active = null;
+let state = null, git = null, conn = null, tree = null, flat = [], mode = 'src', panel = 'files';
+const tabs = []; let active = null;
+
+// ── panel sizing ─────────────────────────────────────────────────────────────
+// Widths persist per browser so the layout someone settles on survives a reload.
+function initResize(handle, varName, key, min, max, invert) {
+  const stored = localStorage.getItem(key);
+  if (stored) document.documentElement.style.setProperty(varName, stored + 'px');
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('on');
+    const move = ev => {
+      const raw = invert ? window.innerWidth - ev.clientX : ev.clientX - 52;
+      const w = Math.max(min, Math.min(max, raw));
+      document.documentElement.style.setProperty(varName, w + 'px');
+      localStorage.setItem(key, String(w));
+    };
+    const up = () => {
+      handle.classList.remove('on');
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  });
+}
+initResize(el('rz1'), '--side', 'keel.side', 180, 520, false);
+initResize(el('rz2'), '--chat', 'keel.chat', 300, 760, true);
 
 // ── syntax highlighting ──────────────────────────────────────────────────────
 const KW = /\b(fn|let|mut|pub|use|mod|struct|enum|impl|trait|match|if|else|for|while|loop|return|const|static|async|await|move|where|as|dyn|self|Self|crate|super|type|ref|in|break|continue|unsafe|extern|function|var|class|export|import|from|default|new|try|catch|throw|typeof|instanceof|def|elif|except|lambda|with|yield|None|True|False|null|true|false|undefined)\b/g;
@@ -318,12 +322,12 @@ function hl(src) {
   const stash = [];
   // A digit-free sentinel. An index-based placeholder gets mangled by the number rule below
   // before it can be restored, which rendered every comment line as a bare number.
-  const MARK = '\uE000';
+  const MARK = '';
   const keep = h => { stash.push(h); return MARK; };
-  // One pass, so the stash order matches the order the sentinels appear in. Two separate
-  // passes stashed every comment first and every string second while the sentinels stayed
-  // interleaved, which spliced doc comments into the middle of code lines.
-  // `#` starts a comment only when not followed by `[`, so Rust attributes survive.
+  // One pass, so stash order matches the order the sentinels appear in. Two separate passes
+  // stashed every comment first and every string second while the sentinels stayed interleaved,
+  // which spliced doc comments into the middle of code lines. `#` starts a comment only when not
+  // followed by `[`, so Rust attributes survive.
   out = out.replace(
     /(\/\/[^\n]*|#(?!\[)[^\n]*|\/\*[\s\S]*?\*\/)|((&quot;|&#39;|`)(?:\\.|(?!\3)[^\\])*\3)/g,
     (m, comment, string) => keep(comment
@@ -336,23 +340,21 @@ function hl(src) {
   return out.replace(/\uE000/g, () => stash[i++]);
 }
 
-// ── tabs ─────────────────────────────────────────────────────────────────────
+// ── editor ───────────────────────────────────────────────────────────────────
 function renderTabs() {
-  const host = el('tabs');
-  host.innerHTML = '';
+  el('tabs').innerHTML = '';
   for (const t of tabs) {
-    const node = $('<div class="tab ' + (t.path === active ? 'on' : '') + '">' +
-      '<span>' + esc(t.path.split('/').pop()) + '</span>' +
+    const node = $('<div class="tab ' + (t.path === active ? 'on' : '') + '"><span>' +
+      esc(t.path.split('/').pop()) + '</span>' +
       (t.dirty ? '<span class="dirty" title="unsaved"></span>' : '<span class="x">&times;</span>') +
       '</div>').firstElementChild;
     node.onclick = e => {
       if (e.target.classList.contains('x')) { closeTab(t.path); return; }
       active = t.path; paint();
     };
-    host.append(node);
+    el('tabs').append(node);
   }
 }
-
 function closeTab(path) {
   const i = tabs.findIndex(t => t.path === path);
   if (i < 0) return;
@@ -360,7 +362,6 @@ function closeTab(path) {
   if (active === path) active = tabs.at(-1)?.path ?? null;
   paint();
 }
-
 async function open(path) {
   if (!tabs.some(t => t.path === path)) {
     const r = await fetch('/api/file?path=' + encodeURIComponent(path));
@@ -368,49 +369,35 @@ async function open(path) {
     const f = await r.json();
     tabs.push({ path, content: f.content, dirty: false, truncated: f.truncated });
   }
-  active = path;
-  paint();
+  active = path; paint();
 }
 
-// ── editor surface ───────────────────────────────────────────────────────────
 function paint() {
   renderTabs();
   document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
   const tab = tabs.find(t => t.path === active);
-  const surface = el('surface');
-
   if (!tab) {
     el('fmeta').textContent = '';
-    surface.innerHTML = '<div class="empty">Open a file &mdash; press &#8984;P</div>';
+    el('surface').innerHTML = '<div class="empty">Open a file &mdash; press &#8984;P</div>';
     return;
   }
   if (mode === 'diff') { paintDiff(tab); return; }
 
   const lines = tab.content.split('\n');
   el('fmeta').textContent = tab.path + ' · ' + lines.length + ' lines' + (tab.truncated ? ' · truncated' : '');
-
-  surface.innerHTML =
-    '<div class="lines"><div class="ln-row">' +
-      '<div class="ln-no" id="gutter"></div>' +
-      '<div class="ln-src"><div class="edit-wrap">' +
-        '<div class="hl" id="hl"></div><textarea id="ta" spellcheck="false"></textarea>' +
-      '</div></div>' +
-    '</div></div>';
+  el('surface').innerHTML =
+    '<div class="lines"><div class="ln-row"><div class="ln-no" id="gutter"></div>' +
+    '<div class="ln-src"><div class="edit-wrap"><div class="hl" id="hl"></div>' +
+    '<textarea id="ta" spellcheck="false"></textarea></div></div></div></div>';
 
   const repaint = text => {
     el('hl').innerHTML = hl(text) + '\n';
     el('gutter').innerHTML = text.split('\n').map((_, i) => i + 1).join('<br>');
   };
   repaint(tab.content);
-
   const ta = el('ta');
   ta.value = tab.content;
-  ta.oninput = () => {
-    tab.content = ta.value;
-    tab.dirty = true;
-    repaint(ta.value);
-    renderTabs();
-  };
+  ta.oninput = () => { tab.content = ta.value; tab.dirty = true; repaint(ta.value); renderTabs(); };
 }
 
 async function paintDiff(tab) {
@@ -420,28 +407,21 @@ async function paintDiff(tab) {
     el('surface').innerHTML = '<div class="empty">No uncommitted changes in this file.</div>';
     return;
   }
-  const mark = k => k === 'add' ? '+' : k === 'del' ? '-' : ' ';
+  const mk = k => k === 'add' ? '+' : k === 'del' ? '-' : ' ';
   el('surface').innerHTML = '<div class="diff">' + d.hunks.map(h =>
-    '<div class="hunk">' + esc(h.header) + '</div>' +
-    h.lines.map(l =>
-      '<div class="dline ' + l.kind + '">' +
-        '<div class="dno">' + (l.old ?? '') + '</div>' +
-        '<div class="dno">' + (l.new ?? '') + '</div>' +
-        '<div class="dsrc"><span class="mk">' + mark(l.kind) + '</span>' + (hl(l.text) || '&nbsp;') + '</div>' +
-      '</div>').join('')
-  ).join('') + '</div>';
+    '<div class="hunk">' + esc(h.header) + '</div>' + h.lines.map(l =>
+      '<div class="dline ' + l.kind + '"><div class="dno">' + (l.old ?? '') + '</div>' +
+      '<div class="dno">' + (l.new ?? '') + '</div><div class="dsrc"><span class="mk">' +
+      mk(l.kind) + '</span>' + (hl(l.text) || '&nbsp;') + '</div></div>').join('')).join('') + '</div>';
 }
 
 async function save() {
   const tab = tabs.find(t => t.path === active);
   if (!tab || !tab.dirty) return;
-  const r = await fetch('/api/save', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: tab.path, content: tab.content }),
-  });
-  if (r.ok) { tab.dirty = false; renderTabs(); loadGit(); loadState(); }
+  const r = await fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: tab.path, content: tab.content }) });
+  if (r.ok) { tab.dirty = false; renderTabs(); refresh(); }
 }
-
 function syncMode() {
   el('m-src').setAttribute('aria-current', mode === 'src');
   el('m-diff').setAttribute('aria-current', mode === 'diff');
@@ -449,8 +429,8 @@ function syncMode() {
 el('m-src').onclick = () => { mode = 'src'; syncMode(); paint(); };
 el('m-diff').onclick = () => { mode = 'diff'; syncMode(); paint(); };
 
-// ── file tree ────────────────────────────────────────────────────────────────
-function node(n, depth) {
+// ── side panels ──────────────────────────────────────────────────────────────
+function treeNode(n, depth) {
   const pad = 14 + depth * 11;
   if (!n.dir) {
     const e = $('<div class="tnode" style="padding-left:' + (pad + 15) + 'px" data-p="' +
@@ -464,7 +444,7 @@ function node(n, depth) {
     (collapsed ? '&#9656;' : '&#9662;') + '</span>' + esc(n.name) + '</div>').firstElementChild;
   const kids = document.createElement('div');
   kids.className = 'tkids' + (collapsed ? ' collapsed' : '');
-  for (const c of n.children ?? []) kids.append(node(c, depth + 1));
+  for (const c of n.children ?? []) kids.append(treeNode(c, depth + 1));
   head.onclick = () => {
     kids.classList.toggle('collapsed');
     head.querySelector('.caret').innerHTML = kids.classList.contains('collapsed') ? '&#9656;' : '&#9662;';
@@ -472,87 +452,224 @@ function node(n, depth) {
   wrap.append(head, kids);
   return wrap;
 }
-
-function flatten(nodes, out = []) {
+const flatten = (nodes, out = []) => {
   for (const n of nodes) n.dir ? flatten(n.children ?? [], out) : out.push(n.path);
   return out;
-}
-
-async function loadTree() {
-  const nodes = await (await fetch('/api/tree')).json();
-  flat = flatten(nodes);
-  const host = el('tree');
-  host.innerHTML = '';
-  for (const n of nodes) host.append(node(n, 0));
-  document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
-}
-
-// ── git ──────────────────────────────────────────────────────────────────────
-async function loadGit() {
-  const g = await (await fetch('/api/git/status')).json();
-  const grp = el('changes-grp');
-  if (!g.is_repo) { grp.classList.add('hidden'); return; }
-  grp.classList.remove('hidden');
-  el('branch').textContent = g.branch ?? '';
-
-  const badge = el('badge-changes');
-  badge.textContent = g.changes.length;
-  badge.classList.toggle('hidden', g.changes.length === 0);
-
-  const host = el('changes');
-  host.innerHTML = '';
-  if (!g.changes.length) { host.innerHTML = '<div class="empty">Working tree clean</div>'; return; }
-  for (const c of g.changes) {
-    const e = $('<div class="tnode" data-p="' + esc(c.path) + '" title="' + esc(c.path) + '">' +
-      esc(c.path.split('/').pop()) +
-      '<span class="st ' + esc(c.label) + '">' + esc(c.status.trim() || '?') + '</span></div>').firstElementChild;
-    // Opening from Changes goes straight to the diff — that is the question being asked.
-    e.onclick = () => { mode = 'diff'; syncMode(); open(c.path); };
-    host.append(e);
-  }
-}
-
-// ── command palette ──────────────────────────────────────────────────────────
-let palIdx = 0, palHits = [];
-function openPal() { el('pal').classList.remove('hidden'); el('pal-q').value = ''; el('pal-q').focus(); palFilter(''); }
-function closePal() { el('pal').classList.add('hidden'); }
-function palFilter(q) {
-  const needle = q.toLowerCase();
-  // Subsequence match, the way an editor's file finder behaves: "khtr" finds keel-harness/trust.rs.
-  palHits = flat.filter(p => {
-    const s = p.toLowerCase();
-    let i = 0;
-    for (const ch of needle) { i = s.indexOf(ch, i) + 1; if (i === 0) return false; }
-    return true;
-  }).slice(0, 60);
-  palIdx = 0;
-  renderPal();
-}
-function renderPal() {
-  el('pal-res').innerHTML = palHits.map((p, i) =>
-    '<div class="r ' + (i === palIdx ? 'on' : '') + '" data-i="' + i + '">' + esc(p) + '</div>').join('');
-  el('pal-res').querySelectorAll('.r').forEach(r =>
-    r.onclick = () => { open(palHits[+r.dataset.i]); closePal(); });
-  el('pal-res').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
-}
-el('pal-q').oninput = e => palFilter(e.target.value);
-el('pal-q').onkeydown = e => {
-  if (e.key === 'ArrowDown') { palIdx = Math.min(palIdx + 1, palHits.length - 1); renderPal(); e.preventDefault(); }
-  if (e.key === 'ArrowUp') { palIdx = Math.max(palIdx - 1, 0); renderPal(); e.preventDefault(); }
-  if (e.key === 'Enter' && palHits[palIdx]) { open(palHits[palIdx]); closePal(); }
-  if (e.key === 'Escape') closePal();
 };
 
-addEventListener('keydown', e => {
-  const cmd = e.metaKey || e.ctrlKey;
-  if (cmd && e.key === 'p') { e.preventDefault(); openPal(); }
-  if (cmd && e.key === 's') { e.preventDefault(); save(); }
-  if (e.key === 'Escape') { closePal(); closeDrawer(); }
-});
+const head = (title, action) =>
+  '<div class="ph"><h3>' + title + '</h3>' + (action ?? '') + '</div>';
+
+const PANELS = {
+  files() {
+    el('side').innerHTML = head('Explorer', '<span class="act" id="a-refresh">refresh</span>') +
+      '<div class="repo">' + esc(state?.repo ?? '') + '</div><div id="tree-host"></div>';
+    el('a-refresh').onclick = refresh;
+    const host = el('tree-host');
+    for (const n of tree ?? []) host.append(treeNode(n, 0));
+    document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
+  },
+
+  changes() {
+    if (!git?.is_repo) {
+      el('side').innerHTML = head('Changes') + '<div class="empty">Not a git repository.</div>';
+      return;
+    }
+    el('side').innerHTML = head('Changes',
+      '<span class="act">' + esc(git.branch ?? '') + '</span>') + '<div id="ch-host"></div>';
+    const host = el('ch-host');
+    if (!git.changes.length) { host.innerHTML = '<div class="empty">Working tree clean.</div>'; return; }
+    for (const c of git.changes) {
+      const e = $('<div class="tnode" data-p="' + esc(c.path) + '" title="' + esc(c.path) + '">' +
+        esc(c.path.split('/').pop()) + '<span class="st ' + esc(c.label) + '">' +
+        esc(c.status.trim() || '?') + '</span></div>').firstElementChild;
+      // Opening from Changes goes to the diff — that is the question being asked.
+      e.onclick = () => { mode = 'diff'; syncMode(); open(c.path); };
+      host.append(e);
+    }
+  },
+
+  sessions() {
+    const list = state?.workspace.sessions ?? [];
+    el('side').innerHTML = head('Sessions') +
+      '<div class="empty" style="padding:10px 14px">Titles and counts only — message contents never leave the transcript.</div>' +
+      (list.length ? list.map(s =>
+        '<div class="lrow"><div class="t">' + esc(s.title ?? '(untitled)') + '</div>' +
+        '<div class="m">' + s.messages + ' msg · ' +
+        esc((s.last_active ?? '').slice(0, 16).replace('T', ' ')) + '</div>' +
+        '<div class="m" style="color:var(--accent)">claude --resume ' + esc(s.id.split('-')[0]) + '</div></div>'
+      ).join('') : '<div class="empty">No sessions recorded here yet.</div>');
+  },
+
+  skills() {
+    const w = state?.workspace;
+    if (!w) return;
+    const sec = (title, items, render) =>
+      head(title + ' (' + items.length + ')') +
+      (items.length ? items.map(render).join('') : '<div class="empty">None.</div>');
+    const named = x => '<div class="lrow"><div class="t">' + esc(x.name) +
+      '<span class="pill ' + x.scope + '">' + esc(x.scope) + '</span></div>' +
+      (x.description ? '<div class="d">' + esc(x.description) + '</div>' : '') + '</div>';
+    el('side').innerHTML =
+      sec('Skills', w.skills, named) +
+      sec('Plugins', w.plugins, p => '<div class="lrow"><div class="t">' + esc(p.name) +
+        '<span class="pill">' + esc(p.scope ?? '') + '</span></div><div class="m">' +
+        esc(p.marketplace ?? '') + '</div></div>') +
+      sec('Subagents', w.agents, named) +
+      sec('Commands', w.commands, named) +
+      sec('Hooks', w.hooks, h => '<div class="lrow ' + (h.scope === 'project' ? 'danger' : '') +
+        '"><div class="t">' + esc(h.event) + '<span class="pill ' + h.scope + '">' + esc(h.scope) +
+        '</span></div><div class="m">' + esc(h.command) + '</div></div>') +
+      sec('MCP servers', w.mcp_servers, m => '<div class="lrow ' + (m.scope === 'project' ? 'danger' : '') +
+        '"><div class="t">' + esc(m.name) + '<span class="pill ' + m.scope + '">' + esc(m.scope) +
+        '</span></div><div class="m">' + esc(m.endpoint ?? '') + '</div></div>');
+  },
+
+  readiness() {
+    const s = state?.scan;
+    if (!s) return;
+    const colour = s.score >= 90 ? 'var(--ok)' : s.score >= 70 ? 'var(--med)'
+      : s.score >= 40 ? 'var(--high)' : 'var(--crit)';
+    el('side').innerHTML = head('Readiness', '<span class="act" id="a-rescan">rescan</span>') +
+      '<div style="padding:6px 14px 12px"><span style="font:600 30px var(--mono);color:' + colour + '">' +
+      s.score + '</span><span style="color:var(--faint)">/100</span></div>' +
+      (s.findings.length ? s.findings.map((f, i) =>
+        '<div class="lrow ' + (f.path ? 'click' : '') + '" data-f="' + i + '">' +
+        '<div class="t">' + esc(f.title) + '<span class="pill ' + f.severity + '">' +
+        esc(f.severity) + '</span></div>' +
+        (f.path ? '<div class="m">' + esc(f.path) + '</div>' : '') +
+        '<div class="d">' + esc(f.fix.description) + '</div></div>').join('')
+        : '<div class="empty">Nothing to report.</div>');
+    el('a-rescan').onclick = refresh;
+    el('side').querySelectorAll('[data-f]').forEach(row => {
+      const f = s.findings[+row.dataset.f];
+      if (f.path) row.onclick = () => open(f.path);
+    });
+  },
+
+  connections() { renderConnections(); },
+};
+
+function setPanel(p) {
+  panel = p;
+  document.querySelectorAll('.ic').forEach(b => b.setAttribute('aria-current', b.dataset.p === p));
+  PANELS[p]();
+}
+document.querySelectorAll('.ic').forEach(b => b.onclick = () => setPanel(b.dataset.p));
+
+// ── connections ──────────────────────────────────────────────────────────────
+let repos = null;
+
+function renderConnections() {
+  const gh = conn?.github, cf = conn?.cloudflare;
+  let html = head('Connections');
+
+  html += '<div class="fld"><label>Claude Code</label>' +
+    (conn?.claude
+      ? '<div class="ok">Installed — Keel drives your own `claude`, so your subscription covers it.</div>'
+      : '<div class="err">Not found on PATH. Install Claude Code to use the chat panel.</div>') +
+    '</div>';
+
+  html += '<div class="fld"><label>GitHub</label>' +
+    (gh
+      ? '<div class="ok">' + esc(gh.login) + (conn.github_via_gh ? ' — via your gh CLI' : '') + '</div>' +
+        '<div class="row2"><button class="btn ghost sm" id="gh-repos">Browse repos</button>' +
+        (conn.github_via_gh ? '' : '<button class="btn ghost sm" id="gh-out">Disconnect</button>') + '</div>'
+      : '<input id="gh-token" type="password" placeholder="ghp_… personal access token" ' +
+        'autocomplete="off"><div class="row2"><button class="btn sm" id="gh-in">Connect</button></div>' +
+        '<div class="d" style="margin-top:6px;color:var(--faint)">Needs <code>repo</code> scope. ' +
+        'If you use the <code>gh</code> CLI, Keel picks that up automatically.</div>') +
+    '<div id="gh-msg"></div></div>';
+
+  html += '<div class="fld"><label>Cloudflare</label>' +
+    (cf
+      ? '<div class="ok">' + cf.map(a => esc(a.name)).join(', ') + '</div>' +
+        '<div class="row2"><button class="btn ghost sm" id="cf-out">Disconnect</button></div>'
+      : '<input id="cf-token" type="password" placeholder="API token" autocomplete="off">' +
+        '<div class="row2"><button class="btn sm" id="cf-in">Connect</button></div>' +
+        '<div class="d" style="margin-top:6px;color:var(--faint)">Cloudflare has no OIDC path, so a ' +
+        'scoped API token is the only option. It is stored in your OS keychain.</div>') +
+    '<div id="cf-msg"></div></div>';
+
+  html += '<div class="fld"><label>Open another repository</label>' +
+    '<input id="open-path" placeholder="~/Dev/my-project" spellcheck="false">' +
+    '<div class="row2"><button class="btn sm" id="open-go">Open</button></div>' +
+    '<div id="open-msg"></div></div><div id="repo-list"></div>';
+
+  el('side').innerHTML = html;
+
+  const msg = (id, text, ok) => el(id).innerHTML =
+    '<div class="' + (ok ? 'ok' : 'err') + '">' + esc(text) + '</div>';
+
+  el('gh-in') && (el('gh-in').onclick = async () => {
+    const r = await fetch('/api/connect/github', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: el('gh-token').value }) });
+    r.ok ? (await loadConn(), setPanel('connections')) : msg('gh-msg', await r.text(), false);
+  });
+  el('cf-in') && (el('cf-in').onclick = async () => {
+    const r = await fetch('/api/connect/cloudflare', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: el('cf-token').value }) });
+    r.ok ? (await loadConn(), setPanel('connections')) : msg('cf-msg', await r.text(), false);
+  });
+  const out = provider => async () => {
+    await fetch('/api/disconnect', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider }) });
+    await loadConn(); setPanel('connections');
+  };
+  el('gh-out') && (el('gh-out').onclick = out('github'));
+  el('cf-out') && (el('cf-out').onclick = out('cloudflare'));
+
+  el('gh-repos') && (el('gh-repos').onclick = async () => {
+    el('repo-list').innerHTML = '<div class="empty">Loading…</div>';
+    const r = await fetch('/api/github/repos');
+    if (!r.ok) { el('repo-list').innerHTML = '<div class="empty">' + esc(await r.text()) + '</div>'; return; }
+    repos = await r.json();
+    el('repo-list').innerHTML = head('Repositories (' + repos.length + ')') +
+      repos.map((rp, i) => '<div class="lrow click" data-r="' + i + '"><div class="t">' +
+        esc(rp.name) + (rp.private ? '<span class="pill">private</span>' : '') + '</div>' +
+        '<div class="m">' + esc(rp.full_name) + '</div>' +
+        (rp.description ? '<div class="d">' + esc(rp.description) + '</div>' : '') + '</div>').join('');
+    el('repo-list').querySelectorAll('[data-r]').forEach(row => row.onclick = async () => {
+      const rp = repos[+row.dataset.r];
+      row.querySelector('.m').textContent = 'cloning…';
+      const res = await fetch('/api/github/clone', { method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clone_url: rp.clone_url, name: rp.name }) });
+      row.querySelector('.m').textContent = res.ok ? 'opened' : await res.text();
+      if (res.ok) { tabs.length = 0; active = null; await refresh(); setPanel('files'); }
+    });
+  });
+
+  el('open-go').onclick = async () => {
+    const r = await fetch('/api/open', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: el('open-path').value }) });
+    if (!r.ok) { msg('open-msg', await r.text(), false); return; }
+    tabs.length = 0; active = null;
+    await refresh(); setPanel('files');
+  };
+}
 
 // ── chat ─────────────────────────────────────────────────────────────────────
-let stream = null, sessionId = null, live = null;
+let stream = null, sessionId = null, live = null, permMode = 'acceptEdits';
 const log = () => el('log');
+
+const MODES = {
+  plan: { note: 'Plan — Claude explores and proposes, and will not edit files or run commands.' },
+  acceptEdits: { note: 'Auto — Claude edits files and runs commands here without asking.' },
+};
+function setPermMode(m) {
+  permMode = m;
+  el('pm-plan').setAttribute('aria-current', m === 'plan');
+  el('pm-auto').setAttribute('aria-current', m === 'acceptEdits');
+  const note = el('mode-note');
+  note.className = 'mode-note ' + (m === 'plan' ? 'plan' : 'auto');
+  note.textContent = MODES[m].note;
+}
+el('pm-plan').onclick = () => setPermMode('plan');
+el('pm-auto').onclick = () => setPermMode('acceptEdits');
 
 function push(html) {
   const n = $(html).firstElementChild;
@@ -576,7 +693,8 @@ function record(r) {
   const d = r.event?.delta;
   if (r.type === 'stream_event' && d?.type === 'text_delta') {
     if (!live || live.dataset.kind !== 'text') {
-      live = push('<div class="msg"><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>').querySelector('.txt');
+      live = push('<div class="msg"><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>')
+        .querySelector('.txt');
       live.dataset.raw = '';
     }
     live.dataset.raw += d.text;
@@ -585,30 +703,32 @@ function record(r) {
     return;
   }
   if (r.type === 'stream_event' && d?.type === 'thinking_delta') {
-    if (!live || live.dataset.kind !== 'think') {
-      live = push('<div class="think" data-kind="think"></div>');
-    }
+    if (!live || live.dataset.kind !== 'think') live = push('<div class="think" data-kind="think"></div>');
     live.textContent += d.thinking;
     return;
   }
   if (r.type === 'assistant') {
     for (const b of r.message?.content ?? []) {
-      if (b.type === 'tool_use') {
-        live = null;
-        const arg = b.input?.file_path ?? b.input?.command ?? b.input?.pattern ?? b.input?.path ?? '';
-        push('<div class="tool"><span class="tn">' + esc(b.name) + '</span><span class="ta">' + esc(arg) + '</span></div>');
-      }
+      if (b.type !== 'tool_use') continue;
+      live = null;
+      const i = b.input ?? {};
+      // The full argument gets its own wrapping block. A shell command clipped to one line is
+      // unreadable, and the command is exactly what you need to see.
+      const detail = i.command ?? i.file_path ?? i.path ?? i.pattern ?? i.prompt ?? '';
+      const subtitle = i.description ?? (i.file_path ? '' : i.pattern ? 'search' : '');
+      push('<div class="tool"><div class="th"><span class="tn">' + esc(b.name) + '</span>' +
+        '<span class="tsub">' + esc(subtitle) + '</span></div>' +
+        (detail ? '<pre>' + esc(String(detail)) + '</pre>' : '') + '</div>');
     }
     return;
   }
   if (r.type === 'result') {
     live = null;
     sessionId = r.session_id ?? sessionId;
-    el('hint').textContent =
-      (r.total_cost_usd != null ? '$' + r.total_cost_usd.toFixed(4) : '') +
+    el('hint').textContent = (r.total_cost_usd != null ? '$' + r.total_cost_usd.toFixed(4) : '') +
       ' · ' + (sessionId ?? '').split('-')[0];
-    // The agent has just changed the tree, the open files and the score. Refresh all of it.
-    loadTree(); loadGit(); loadState();
+    // The agent has just changed the tree, the open files and the score.
+    refresh();
     for (const t of tabs) if (!t.dirty) reload(t);
   }
 }
@@ -629,6 +749,7 @@ function send() {
   box.value = ''; live = null; running(true);
 
   stream = new EventSource('/api/chat?prompt=' + encodeURIComponent(prompt) +
+    '&mode=' + encodeURIComponent(permMode) +
     (sessionId ? '&session=' + encodeURIComponent(sessionId) : ''));
   stream.addEventListener('msg', e => { try { record(JSON.parse(e.data)); } catch (_) {} });
   stream.addEventListener('fatal', e =>
@@ -643,133 +764,79 @@ el('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
 });
 
-// ── inspector ────────────────────────────────────────────────────────────────
-let view = 'overview';
-const VIEWS = [
-  { id: 'overview', label: 'Overview' }, { id: 'findings', label: 'Readiness' },
-  { id: 'sessions', label: 'Sessions' }, { id: 'skills', label: 'Skills' },
-  { id: 'trust', label: 'Trust' },
-];
-function openDrawer() { el('drawer').classList.remove('hidden'); el('scrim').classList.remove('hidden'); renderDrawer(); }
-function closeDrawer() { el('drawer').classList.add('hidden'); el('scrim').classList.add('hidden'); }
-el('scrim').onclick = closeDrawer;
-el('ic-insp').onclick = openDrawer;
-el('refresh').onclick = () => { loadTree(); loadGit(); loadState(); };
-el('ic-changes').onclick = () => el('changes-grp').scrollIntoView({ behavior: 'smooth' });
-el('ic-files').onclick = () => el('tree').scrollIntoView({ behavior: 'smooth' });
-
-const trustCount = w =>
-  w.hooks.filter(h => h.scope === 'project').length +
-  w.mcp_servers.filter(m => m.scope === 'project').length;
-const scoreColor = n => n >= 90 ? 'var(--ok)' : n >= 70 ? 'var(--med)' : n >= 40 ? 'var(--high)' : 'var(--crit)';
-
-const fRow = f =>
-  '<div class="row"><span class="sev ' + f.severity + '">' + f.severity + '</span><div class="body">' +
-  '<div class="title">' + md(f.title) + '</div><div class="detail">' + md(f.detail) + '</div>' +
-  (f.path ? '<div class="path">' + esc(f.path) + '</div>' : '') +
-  '<div class="fix"><b>fix</b><span>' + md(f.fix.description) + '</span></div></div></div>';
-
-const listCard = (items, r, empty) => items.length
-  ? '<div class="card">' + items.map(r).join('') + '</div>'
-  : '<div class="card"><div class="empty">' + esc(empty) + '</div></div>';
-
-const views = {
-  overview() {
-    const s = state.scan, w = state.workspace, u = trustCount(w);
-    const top = s.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
-    return '<h1>Overview</h1><div class="sub">Readiness, and everything Claude Code knows about this repository.</div>' +
-      '<div class="score-row"><div class="score" style="color:' + scoreColor(s.score) + '">' + s.score +
-      '<small>/100</small></div><div><div style="font-weight:560">' +
-      (top.length ? 'Not ready to deploy' : 'No blocking issues') + '</div>' +
-      '<div class="detail">' + s.findings.length + ' findings · ' +
-      s.findings.filter(f => f.fix.kind === 'automatic').length + ' fixable automatically</div>' +
-      '<div class="bar-m"><i style="width:' + s.score + '%;background:' + scoreColor(s.score) + '"></i></div></div></div>' +
-      (u ? '<div class="warn"><b>!</b><div><b>' + u + ' item(s) came with this repository and will execute.</b> ' +
-        'Review them under Trust, or run <code>keel trust</code>.</div></div>' : '') +
-      '<div class="sect"><h2>Environments</h2><div class="pane-grid">' +
-      '<div class="pane"><h3>dev</h3><div class="st2">Not connected — no Cloudflare account linked</div></div>' +
-      '<div class="pane"><h3>prod</h3><div class="st2">Not connected — no Cloudflare account linked</div></div>' +
-      '</div></div>' +
-      (top.length ? '<div class="sect"><h2>Blocking</h2><div class="card">' + top.map(fRow).join('') + '</div></div>' : '');
-  },
-  findings() {
-    const g = {};
-    for (const f of state.scan.findings) (g[f.dimension] ??= []).push(f);
-    const lbl = d => d.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
-    return '<h1>Readiness</h1><div class="sub">Can an agent safely work here, and can this run on Cloudflare?</div>' +
-      (state.scan.findings.length
-        ? Object.entries(g).map(([d, fs]) =>
-            '<div class="sect"><h2>' + esc(lbl(d)) + '</h2><div class="card">' + fs.map(fRow).join('') + '</div></div>').join('')
-        : '<div class="card"><div class="empty">Nothing to report.</div></div>');
-  },
-  sessions() {
-    return '<h1>Sessions</h1><div class="sub">Titles and counts only — message contents never leave the transcript.</div>' +
-      listCard(state.workspace.sessions, s =>
-        '<div class="item"><div><div class="nm">' + esc(s.title ?? '(untitled)') + '</div>' +
-        '<div class="ds">' + s.messages + ' messages · ' +
-        esc((s.last_active ?? '').slice(0, 16).replace('T', ' ')) +
-        (s.branch ? ' · ' + esc(s.branch) : '') + '</div></div>' +
-        '<span class="tag">claude --resume ' + esc(s.id.split('-')[0]) + '</span></div>', 'No sessions yet.');
-  },
-  skills() {
-    const w = state.workspace;
-    const named = x => '<div class="item"><div><div class="nm">' + esc(x.name) + '</div>' +
-      (x.description ? '<div class="ds">' + esc(x.description) + '</div>' : '') + '</div>' +
-      '<span class="tag ' + x.scope + '">' + esc(x.scope) + '</span></div>';
-    return '<h1>Skills &amp; extensions</h1><div class="sub"><code>project</code> means it arrived with the repository.</div>' +
-      '<div class="sect"><h2>Skills</h2>' + listCard(w.skills, named, 'No skills.') + '</div>' +
-      '<div class="sect"><h2>Plugins</h2>' + listCard(w.plugins, p =>
-        '<div class="item"><div><div class="nm">' + esc(p.name) + '</div><div class="ds">' +
-        esc(p.marketplace ?? '') + '</div></div><span class="tag">' + esc(p.scope ?? '') + '</span></div>',
-        'No plugins.') + '</div>' +
-      '<div class="sect"><h2>Subagents</h2>' + listCard(w.agents, named, 'No subagents.') + '</div>' +
-      '<div class="sect"><h2>Commands</h2>' + listCard(w.commands, named, 'No custom commands.') + '</div>';
-  },
-  trust() {
-    const w = state.workspace, u = trustCount(w);
-    const row = (x, a, b) => '<div class="item ' + (x.scope === 'project' ? 'danger' : '') + '">' +
-      '<div><div class="nm">' + esc(a) + '</div><div class="ds">' + esc(b) + '</div></div>' +
-      '<span class="tag ' + x.scope + '">' + esc(x.scope) + '</span></div>';
-    return '<h1>Trust</h1><div class="sub">Configuration that executes. <code>project</code> was written by ' +
-      'whoever wrote the repository — not necessarily by you.</div>' +
-      (u ? '<div class="warn"><b>!</b><div><b>' + u + ' item(s) will run when a session starts.</b> ' +
-        'Claude Code loads repository hooks with no trust prompt. Run <code>keel trust</code> to move them aside.</div></div>' : '') +
-      '<div class="sect"><h2>Hooks</h2>' + listCard(w.hooks, h => row(h, h.event, h.command), 'No hooks.') + '</div>' +
-      '<div class="sect"><h2>MCP servers</h2>' +
-        listCard(w.mcp_servers, m => row(m, m.name, m.endpoint ?? ''), 'No MCP servers.') + '</div>';
-  },
-};
-
-function renderDrawer() {
-  if (!state) return;
-  el('main').innerHTML =
-    '<div style="display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap">' +
-    VIEWS.map(v => '<button class="btn ' + (v.id === view ? '' : 'ghost') + '" data-v="' + v.id + '">' +
-      v.label + '</button>').join('') + '</div>' + views[view]();
-  el('main').querySelectorAll('[data-v]').forEach(b =>
-    b.onclick = () => { view = b.dataset.v; renderDrawer(); });
+// ── palette ──────────────────────────────────────────────────────────────────
+let palIdx = 0, palHits = [];
+function openPal() { el('pal').classList.remove('hidden'); el('pal-q').value = ''; el('pal-q').focus(); palFilter(''); }
+function closePal() { el('pal').classList.add('hidden'); }
+function palFilter(q) {
+  const needle = q.toLowerCase();
+  // Subsequence match, the way an editor's file finder behaves: "khtr" finds keel-harness/trust.rs.
+  palHits = flat.filter(p => {
+    const s = p.toLowerCase();
+    let i = 0;
+    for (const ch of needle) { i = s.indexOf(ch, i) + 1; if (i === 0) return false; }
+    return true;
+  }).slice(0, 60);
+  palIdx = 0; renderPal();
 }
+function renderPal() {
+  el('pal-res').innerHTML = palHits.map((p, i) =>
+    '<div class="r ' + (i === palIdx ? 'on' : '') + '" data-i="' + i + '">' + esc(p) + '</div>').join('');
+  el('pal-res').querySelectorAll('.r').forEach(r =>
+    r.onclick = () => { open(palHits[+r.dataset.i]); closePal(); });
+  el('pal-res').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+el('pal-q').oninput = e => palFilter(e.target.value);
+el('pal-q').onkeydown = e => {
+  if (e.key === 'ArrowDown') { palIdx = Math.min(palIdx + 1, palHits.length - 1); renderPal(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { palIdx = Math.max(palIdx - 1, 0); renderPal(); e.preventDefault(); }
+  if (e.key === 'Enter' && palHits[palIdx]) { open(palHits[palIdx]); closePal(); }
+  if (e.key === 'Escape') closePal();
+};
+addEventListener('keydown', e => {
+  const cmd = e.metaKey || e.ctrlKey;
+  if (cmd && e.key === 'p') { e.preventDefault(); openPal(); }
+  if (cmd && e.key === 's') { e.preventDefault(); save(); }
+  if (e.key === 'Escape') closePal();
+});
 
 // ── boot ─────────────────────────────────────────────────────────────────────
-async function loadState() {
-  state = await (await fetch('/api/state')).json();
-  el('repo').textContent = state.repo;
-  const u = trustCount(state.workspace);
-  const b = el('badge-trust');
-  b.textContent = u;
-  b.classList.toggle('hidden', u === 0);
-  if (!el('drawer').classList.contains('hidden')) renderDrawer();
+function badge(name, n, show) {
+  const b = document.querySelector('[data-b="' + name + '"]');
+  if (!b) return;
+  b.textContent = n;
+  b.classList.toggle('hidden', !show);
 }
 
-loadState();
-loadGit();
-loadTree().then(() => {
-  // ?file= opens a file directly, which makes a view shareable and a screenshot reproducible.
+async function loadConn() {
+  conn = await (await fetch('/api/connections')).json();
+  const missing = !conn.github || !conn.cloudflare || !conn.claude;
+  badge('conn', '!', missing);
+}
+
+async function refresh() {
+  [state, git, tree] = await Promise.all([
+    fetch('/api/state').then(r => r.json()),
+    fetch('/api/git/status').then(r => r.json()),
+    fetch('/api/tree').then(r => r.json()),
+  ]);
+  flat = flatten(tree);
+  const blocking = state.scan.findings.filter(f => f.severity === 'critical' || f.severity === 'high').length;
+  badge('changes', git.changes?.length ?? 0, (git.changes?.length ?? 0) > 0);
+  badge('sessions', state.workspace.sessions.length, state.workspace.sessions.length > 0);
+  badge('readiness', blocking, blocking > 0);
+  PANELS[panel]();
+}
+
+setPermMode('acceptEdits');
+(async () => {
+  await loadConn();
+  await refresh();
   const qs = new URLSearchParams(location.search);
+  if (qs.get('panel')) setPanel(qs.get('panel'));
   if (qs.get('mode') === 'diff') { mode = 'diff'; syncMode(); }
-  const want = qs.get('file');
-  if (want) open(want);
-});
+  if (qs.get('file')) open(qs.get('file'));
+})();
 </script>
 </body>
 </html>
