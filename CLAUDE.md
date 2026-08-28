@@ -39,24 +39,32 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 Three folders, because the halves have genuinely different constraints:
 
 - `frontend/` — Next.js + React, compiled to a Worker by OpenNext.
-- `backend/` — Go, in a Cloudflare Container behind a Worker that owns the Durable Object.
+- `backend/` — Hono, its own Worker.
 - `infra/` — the deploy script and the environment map.
 
 The frontend reaches the backend through a **service binding**, so the call never leaves
 Cloudflare and the backend needs no public route.
 
-**Go is not a Workers language.** Workers run JS, TS, Python and Rust; the WASM shim for Go calls
-itself experimental. So a Go backend is either a Container or a second cloud, and a second cloud
-is a second account, token, dashboard and tracing backend — the four things dropping Kubernetes
-was meant to delete. The Container wins on that, and the bill is stated in the generated
-`infra/README.md` rather than buried: no autoscaling, ephemeral disk, cold start on wake. When a
-service outgrows those, the honest answer is Cloud Run and a second credential, not a bigger
-`max_instances`.
+**The seam is a type, not a document.** The API exports the type of its route table and the
+frontend builds its client from it — no generated SDK, no schema file. That is the whole reason
+both halves are TypeScript, and it is verified by deliberately asking for a field the API does not
+return and checking that the frontend stops compiling.
+
+That puts a shape requirement on the API: Hono infers the route table from one chained expression.
+Assigning routes to `app` one at a time still runs, still passes the API's own tests, and silently
+degrades every frontend call to `any`. It is a rule in the generated `CLAUDE.md` and a test here.
+
+**Go was tried and dropped.** Workers run JS, TS, Python and Rust, so a Go backend needs a
+Cloudflare Container or a second cloud. The container worked, but it brought manual instance
+counts, ephemeral disk and cold starts on wake — and none of that buys anything a Hono Worker
+does not already do for this template.
 
 Generated projects are verified by generating one and running its own gate, not by asserting on
-strings alone. Two bugs that only that catches: `NextConfig` dropped `eslint` in Next 16, and
-`@cloudflare/containers` is on 0.3.x. Both would have shipped a project that fails its first
-`make check`.
+strings alone. Three bugs only that catches: `NextConfig` dropped `eslint` in Next 16; passing
+bindings to `app.request` drops Hono's typed-response overload, so `json()` widens in tests in a
+way it does not in the frontend; and, from the container version, `@cloudflare/containers` was on
+0.3.x rather than the version first written. Each would have shipped a project that fails its own
+first `make check`.
 
 ## The editor
 
