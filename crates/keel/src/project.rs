@@ -163,7 +163,9 @@ fn scaffold(name: &str, worker: bool) -> Vec<(&'static str, String)> {
              test(\"health reports the environment it is running in\", async () => {\n  \
              const res = await worker.fetch(new Request(\"https://x/health\"), env);\n  \
              expect(res.status).toBe(200);\n  \
-             expect(await res.json()).toEqual({ ok: true, environment: \"test\" });\n});\n\n\
+             // Typed, because an untyped json() widens to unknown and the matcher narrows wrong.\n  \
+             const body = (await res.json()) as { ok: boolean; environment: string };\n  \
+             expect(body).toEqual({ ok: true, environment: \"test\" });\n});\n\n\
              test(\"unknown routes are a 404, not a 500\", async () => {\n  \
              const res = await worker.fetch(new Request(\"https://x/nope\"), env);\n  \
              expect(res.status).toBe(404);\n});\n"
@@ -185,6 +187,7 @@ fn scaffold(name: &str, worker: bool) -> Vec<(&'static str, String)> {
   }},
   "devDependencies": {{
     "@cloudflare/workers-types": "^4",
+    "@types/bun": "^1",
     "typescript": "^5",
     "wrangler": "^4"
   }}
@@ -196,7 +199,7 @@ fn scaffold(name: &str, worker: bool) -> Vec<(&'static str, String)> {
             "tsconfig.json",
             "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"ESNext\",\n    \
              \"moduleResolution\": \"Bundler\",\n    \"lib\": [\"ES2022\"],\n    \
-             \"types\": [\"@cloudflare/workers-types\"],\n    \"strict\": true,\n    \
+             \"types\": [\"@cloudflare/workers-types\", \"bun\"],\n    \"strict\": true,\n    \
              \"noEmit\": true,\n    \"skipLibCheck\": true\n  },\n  \"include\": [\"src\"]\n}\n"
                 .to_string(),
         ));
@@ -232,6 +235,23 @@ mod tests {
         assert!(!valid_name("My Worker"));
         assert!(!valid_name(""));
         assert!(!valid_name("-leading"));
+    }
+
+    /// The scaffold shipped a `bun:test` import with no Bun types, so `bun run typecheck` failed on
+    /// a freshly created project — caught only by actually running it, not by the scanner.
+    #[test]
+    fn the_scaffold_typechecks_its_own_test_file() {
+        let files = scaffold("demo", true);
+        let get = |name: &str| {
+            files
+                .iter()
+                .find(|(p, _)| *p == name)
+                .map(|(_, b)| b.clone())
+                .unwrap_or_default()
+        };
+        assert!(get("src/index.test.ts").contains("bun:test"));
+        assert!(get("tsconfig.json").contains("\"bun\""), "tsconfig must include Bun types");
+        assert!(get("package.json").contains("@types/bun"));
     }
 
     #[test]

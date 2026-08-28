@@ -23,6 +23,21 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Verification
+
+An agent reporting "done" is an assertion, not evidence. Research on agentic coding is blunt about
+this: self-verification is close to worthless, and the cheapest gate that actually works is running
+the project's own checks and reading the exit code.
+
+So Keel runs them itself after every turn. It finds the gate the project already defines — a `check`
+target in a Makefile wins, then package scripts, then the language default — and refuses to guess
+beyond that. The turn gets a verdict attached: passed, or failed with the count, the raw output, and
+a button that hands the failing lines to the agent rather than a summary of them.
+
+Failures become **Problems**: parsed from tsc, cargo and eslint-style output into file, line, column
+and message. Clicking one opens the file at that position, and they appear as markers in the editor
+gutter where you are actually looking.
+
 ## The agent panel
 
 Work is grouped into turns: what you asked, everything the agent did about it, and a footer with how

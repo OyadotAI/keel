@@ -70,6 +70,17 @@ provision $6,531 of infrastructure in 24 hours before anyone could see it.
 OS keychain only. Cloudflare tokens are provisioned scoped to a single project and rotated, because
 Cloudflare has no OIDC or keyless deploy path as of August 2026.
 
+## Evidence over assertion
+
+The agent does not grade its own work. After every non-plan turn Keel runs the project's own check
+command and attaches the exit code to that turn. This is the gate the research ranks highest for
+cost-to-value, and it is the one that would have caught a landing page reported as finished while
+`bun run typecheck` was failing.
+
+Keel never invents a check. It uses the one the project declares — a `check` target, package
+scripts, or the language default — and says "not verified" when there is none, rather than implying
+a pass it did not observe.
+
 ## Plan mode
 
 The chat panel offers Plan and Auto. Plan passes `--permission-mode plan`, and it holds: asked to
