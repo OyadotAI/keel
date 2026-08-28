@@ -416,7 +416,11 @@ fn git(root: &Utf8Path, args: &[&str]) -> Option<String> {
 
 /// Uncommitted changes, which after an agent run is the answer to "what did it just do".
 pub fn git_status(root: &Utf8Path) -> GitStatus {
-    let Some(raw) = git(root, &["status", "--porcelain=v1", "-z"]) else {
+    // `-uall` rather than the default. Without it git collapses an untracked directory to a single
+    // entry ending in `/` — `.github/` instead of the three files under it — which is useless in a
+    // list you click to open a file, and rendered as a row with no name at all, because the
+    // basename of "a/b/" is the empty string.
+    let Some(raw) = git(root, &["status", "--porcelain=v1", "-z", "-uall"]) else {
         return GitStatus {
             is_repo: false,
             branch: None,
@@ -434,7 +438,9 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
             let (status, path) = entry.split_at(2);
             let staged = !status.starts_with([' ', '?']);
             Change {
-                path: path.trim_start().to_string(),
+                // A submodule still arrives with a trailing slash, and nothing downstream should
+                // have to know that.
+                path: path.trim_start().trim_end_matches('/').to_string(),
                 status: status.to_string(),
                 label: label_for(status).to_string(),
                 staged,
@@ -446,6 +452,52 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
         is_repo: true,
         branch,
         changes,
+    }
+}
+
+#[cfg(test)]
+mod git_tests {
+    use super::*;
+
+    /// `git status --porcelain` reports an untracked *directory* as one entry ending in `/`, so a
+    /// new folder of twelve files was one row whose basename was the empty string — a blank line
+    /// in the changes list that opened nothing.
+    #[test]
+    fn untracked_directories_are_listed_as_their_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("seed"), "x").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+
+        std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        std::fs::write(root.join(".github/workflows/a.yml"), "a").unwrap();
+        std::fs::write(root.join(".github/workflows/b.yml"), "b").unwrap();
+
+        let status = git_status(&root);
+        let paths: Vec<_> = status.changes.iter().map(|c| c.path.as_str()).collect();
+
+        assert!(
+            paths.contains(&".github/workflows/a.yml") && paths.contains(&".github/workflows/b.yml"),
+            "expected the files, got {paths:?}"
+        );
+        for path in &paths {
+            assert!(!path.ends_with('/'), "{path} is a directory, not a file");
+            assert!(
+                !path.rsplit('/').next().unwrap_or_default().is_empty(),
+                "{path} has no basename, so its row would render blank"
+            );
+        }
     }
 }
 
