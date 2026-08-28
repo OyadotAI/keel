@@ -460,7 +460,10 @@ mod prompt_tests {
 
         let (manager, present, _) = crate::clitools::toolchain();
         if let Some(mgr) = manager {
-            assert!(prompt.contains(mgr), "the package manager is named, not implied");
+            assert!(
+                prompt.contains(mgr),
+                "the package manager is named, not implied"
+            );
             assert!(
                 prompt.contains("rather than working around"),
                 "and what to do with it"

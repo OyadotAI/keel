@@ -92,8 +92,7 @@ pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> 
 /// first missing thing is brew itself and every install button is dead until it exists. Its
 /// installer wants sudo, so Keel hosts it in the terminal rather than streaming it into a console
 /// with no way to answer a password prompt.
-pub const BREW_INSTALL: &str =
-    "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
+pub const BREW_INSTALL: &str = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
 
 pub async fn claude_status() -> Json<ClaudeStatus> {
     let mut out = ClaudeStatus {
@@ -432,7 +431,11 @@ pub async fn install_all() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
             // a JavaScript registry; the brew formula declares node as a dependency, so brew does
             // that itself and the step here was code that only looked like it was doing something.
             let Some((mgr, args)) = t.install.iter().find(|(mgr, _)| exists(mgr)) else {
-                say(format!("{} has no installer here — see {}", t.label, t.manual)).await;
+                say(format!(
+                    "{} has no installer here — see {}",
+                    t.label, t.manual
+                ))
+                .await;
                 failed += 1;
                 continue;
             };
@@ -484,9 +487,7 @@ async fn run_install(
 /// — both of which are worse than installing it, which it will not think to do if it does not know
 /// there is a package manager.
 pub fn toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str>) {
-    let manager = ["brew", "apt-get", "dnf"]
-        .into_iter()
-        .find(|m| exists(m));
+    let manager = ["brew", "apt-get", "dnf"].into_iter().find(|m| exists(m));
 
     // Runtimes and version-control the agent reaches for constantly, alongside the CLIs Keel
     // manages. `git` is here because a repository without it changes what the agent can do.
@@ -538,7 +539,11 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             .find(|(mgr, _)| exists(mgr))
             .map(|(mgr, args)| format!("{mgr} {}", args.join(" ")));
 
-        let profiles = if t.id == "aws" { aws_profiles() } else { Vec::new() };
+        let profiles = if t.id == "aws" {
+            aws_profiles()
+        } else {
+            Vec::new()
+        };
 
         // Why it is not connected, in its own words. A tool with no login of its own takes its
         // credentials from somewhere else, and naming that is more use than a button that runs
@@ -548,9 +553,9 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
                 "No cluster is reachable. Pick one below, or point kubectl at it yourself."
                     .to_string(),
             ),
-            "docker" if version.is_some() && !authenticated => Some(
-                "Docker is installed but its daemon is not running.".to_string(),
-            ),
+            "docker" if version.is_some() && !authenticated => {
+                Some("Docker is installed but its daemon is not running.".to_string())
+            }
             "aws" if version.is_some() && profiles.is_empty() => Some(
                 "No AWS profile exists yet. Set one up with Identity Center below, or run \
                  `aws configure` for an access key — Keel never asks for one."

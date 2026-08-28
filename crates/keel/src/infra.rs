@@ -105,7 +105,13 @@ pub async fn cluster() -> Json<Cluster> {
     out.reachable = true;
     out.namespace = run(
         "kubectl",
-        &["config", "view", "--minify", "--output", "jsonpath={..namespace}"],
+        &[
+            "config",
+            "view",
+            "--minify",
+            "--output",
+            "jsonpath={..namespace}",
+        ],
         None,
     )
     .await
@@ -365,8 +371,7 @@ pub async fn set_namespace(
     let ok = !q.name.is_empty()
         && q.name.len() <= 63
         && !q.name.starts_with('-')
-        && q
-            .name
+        && q.name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if !ok {
