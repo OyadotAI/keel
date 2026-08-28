@@ -1,6 +1,6 @@
 //! Connection management: GitHub, Cloudflare, and switching repositories.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{Json, extract::{Query, State}, http::StatusCode};
 use camino::Utf8PathBuf;
 use keel_providers::{cloudflare, credentials, github};
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,137 @@ pub async fn open_repo(
     Ok(Json(OpenedRepo {
         path: path.to_string(),
     }))
+}
+
+#[derive(Deserialize)]
+pub struct BrowseQuery {
+    /// Directory to list. Defaults to the user's home.
+    pub path: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Entry {
+    pub name: String,
+    pub path: String,
+    /// True when the directory is itself a git repository, which is what you are usually looking for.
+    pub repo: bool,
+}
+
+#[derive(Serialize)]
+pub struct Listing {
+    pub path: String,
+    /// `None` at the top of the browsable area.
+    pub parent: Option<String>,
+    pub entries: Vec<Entry>,
+    /// True when this directory can be opened as a project.
+    pub is_repo: bool,
+}
+
+/// List directories, for the folder picker.
+///
+/// Bounded to the user's home. Keel binds to loopback, but any page in the browser can reach a
+/// loopback server, so an unbounded filesystem enumerator would be a real disclosure. Home covers
+/// essentially every project location while keeping the rest of the disk out of reach.
+pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
+    let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
+    let home = Utf8PathBuf::from(home)
+        .canonicalize_utf8()
+        .map_err(|_| bad("home directory is unreadable"))?;
+
+    let requested = q
+        .path
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(|p| Utf8PathBuf::from(shellexpand(p)))
+        .unwrap_or_else(|| home.clone());
+
+    let path = requested
+        .canonicalize_utf8()
+        .map_err(|_| bad(format!("no such directory: {requested}")))?;
+    if !path.starts_with(&home) {
+        return Err(bad("Keel browses inside your home directory only."));
+    }
+    if !path.is_dir() {
+        return Err(bad("that path is not a directory"));
+    }
+
+    let mut entries: Vec<Entry> = std::fs::read_dir(&path)
+        .map_err(|e| bad(e.to_string()))?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+        .filter(|p| {
+            // Hidden directories are noise in a project picker, and node_modules is worse.
+            let name = p.file_name().unwrap_or("");
+            !name.starts_with('.') && name != "node_modules" && name != "target"
+        })
+        .map(|p| Entry {
+            name: p.file_name().unwrap_or("").to_string(),
+            repo: p.join(".git").exists(),
+            path: p.to_string(),
+        })
+        .collect();
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(Json(Listing {
+        parent: (path != home).then(|| {
+            path.parent()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| home.clone())
+                .to_string()
+        }),
+        is_repo: path.join(".git").exists(),
+        path: path.to_string(),
+        entries,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+}
+
+/// List the files in one directory, for the skill file strip.
+///
+/// Allowed inside the repository or the user's Claude home, the same boundary the file reader uses —
+/// a skill lives in one or the other and nothing else needs listing.
+pub async fn browse_files(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<BrowseQuery>,
+) -> ApiResult<Vec<FileEntry>> {
+    let requested = q.path.unwrap_or_default();
+    let dir = Utf8PathBuf::from(shellexpand(&requested))
+        .canonicalize_utf8()
+        .map_err(|_| bad("no such directory"))?;
+
+    let repo = state.repo();
+    let mut allowed: Vec<Utf8PathBuf> = repo.canonicalize_utf8().into_iter().collect();
+    if let Some(home) = keel_workspace::claude_home()
+        && let Ok(c) = home.canonicalize_utf8()
+    {
+        allowed.push(c);
+    }
+    if !allowed.iter().any(|r| dir.starts_with(r)) {
+        return Err(bad("that directory is outside the repository and your Claude config"));
+    }
+
+    let mut files: Vec<FileEntry> = std::fs::read_dir(&dir)
+        .map_err(|e| bad(e.to_string()))?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+        .map(|p| FileEntry {
+            name: p.file_name().unwrap_or("").to_string(),
+            path: p.to_string(),
+        })
+        .collect();
+    // The manifest first, then everything else alphabetically.
+    files.sort_by(|a, b| {
+        (a.name != "SKILL.md", a.name.to_lowercase())
+            .cmp(&(b.name != "SKILL.md", b.name.to_lowercase()))
+    });
+    Ok(Json(files))
 }
 
 /// Expand a leading `~`, which is what people type.
