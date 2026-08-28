@@ -208,6 +208,93 @@ body{margin:0;background:var(--n3);color:var(--n12);
   font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card .d{font:11.5px/1.45 var(--sans);color:var(--n11);margin-top:var(--s2);
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+/* ── one row language across the side panels ───────────────────────────────
+   Every panel used to reach for `.card`, so a critical finding, an installed
+   plugin and a skill's 200-character description all arrived at the same weight
+   and the eye had nothing to sort by. These are the two weights that replaced
+   it: a line, and a line that had something worth saying. */
+
+/* A section inside a panel. Its label carries a count, so the shape of the list
+   is legible before reading any of it. */
+.sec{display:flex;align-items:baseline;gap:var(--s2);padding:var(--s5) var(--s4) var(--s2);
+  font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--n9)}
+.sec .c{color:var(--n8);font-variant-numeric:tabular-nums}
+.sec .sp{flex:1}
+.sec button{all:unset;cursor:pointer;font:10px var(--mono);letter-spacing:0;
+  text-transform:none;color:var(--n9)}
+.sec button:hover{color:var(--accent)}
+
+/* The line. 26px, one piece of text, one optional trailing control. */
+.prow{display:flex;align-items:center;gap:var(--s3);min-height:26px;padding:2px var(--s4);
+  font:12.5px var(--sans);color:var(--n11);cursor:default}
+.prow.click{cursor:pointer}
+.prow:hover{background:var(--n4)}
+.prow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--n12)}
+.prow .meta{font:10.5px var(--mono);color:var(--n9);flex:none;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44%}
+.prow .kebab{all:unset;cursor:pointer;color:var(--n9);padding:0 4px;line-height:1;flex:none}
+.prow:hover .kebab,.prow .kebab:focus-visible{color:var(--n12)}
+.prow.off .nm{color:var(--n9)}
+
+/* State, as a dot. A word costs a chip, a chip costs a colour, and at this
+   density a row of chips reads as texture rather than as information. */
+.dot3{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
+.dot3.on{background:var(--ok)} .dot3.warn{background:var(--warn)}
+.dot3.bad{background:var(--crit)} .dot3.mute{background:var(--n7)}
+
+/* ── readiness ─────────────────────────────────────────────────────────────
+   A score on its own is a number nobody can act on. What matters is how many
+   things stand between this repository and being worked on safely, so that is
+   what the panel leads with and what it sorts by. */
+.verdict{display:flex;align-items:flex-start;gap:var(--s4);padding:var(--s3) var(--s4) var(--s5)}
+.verdict .num{font:300 34px/.9 var(--mono);letter-spacing:-.03em;flex:none;
+  font-variant-numeric:tabular-nums;color:var(--n12)}
+.verdict .num.good{color:var(--ok)}
+.verdict .num.mid{color:var(--warn)}
+.verdict .num.bad{color:var(--crit)}
+.verdict .say{font:12px/1.5 var(--sans);color:var(--n10);padding-top:3px}
+.verdict .say b{color:var(--n12);font-weight:500}
+
+/* A blocking finding is the only thing in the panel that gets room: the reason
+   it matters, and the button that does something about it. */
+.fnd{padding:var(--s3) var(--s4) var(--s4);border-bottom:1px solid var(--n6);
+  box-shadow:inset 2px 0 0 var(--warn)}
+.fnd.crit{box-shadow:inset 2px 0 0 var(--crit)}
+.fnd .ft{font:500 12.5px/1.4 var(--sans);color:var(--n12)}
+.fnd .fp{font:10.5px var(--mono);color:var(--n9);margin-top:3px;cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fnd .fp:hover{color:var(--accent)}
+.fnd .fd{font:11.5px/1.55 var(--sans);color:var(--n10);margin-top:var(--s2)}
+.fnd .fx{all:unset;cursor:pointer;display:inline-block;margin-top:var(--s3);
+  padding:4px var(--s3);border:1px solid var(--n7);border-radius:var(--r1);
+  font:11.5px var(--sans);color:var(--n11)}
+.fnd .fx:hover{border-color:var(--accent);color:var(--accent)}
+
+/* The rest are lines until you ask. Everything above medium is already above. */
+.minor{border-bottom:1px solid var(--n6)}
+.minor .fd{padding:0 var(--s4) var(--s3);margin-top:0}
+.minor .fx{margin:0 var(--s4) var(--s4)}
+
+/* ── the add-a-thing form, shared by MCP and anything else that grows one ── */
+.addform{padding:var(--s3) var(--s4) var(--s4);border-bottom:1px solid var(--n6);
+  background:var(--n2)}
+.addform label{display:block;font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--n9);margin:var(--s3) 0 4px}
+.addform label:first-child{margin-top:0}
+.addform input,.addform textarea{all:unset;box-sizing:border-box;width:100%;
+  padding:5px var(--s3);background:var(--n1);border:1px solid var(--n6);border-radius:var(--r1);
+  font:12px var(--mono);color:var(--n12)}
+.addform textarea{min-height:46px;resize:vertical;line-height:1.5}
+.addform input:focus,.addform textarea:focus{border-color:var(--accent)}
+.addform .segs{display:flex;gap:2px}
+.addform .segs button{all:unset;flex:1;text-align:center;padding:5px 0;cursor:pointer;
+  font:11px var(--mono);color:var(--n9);border:1px solid var(--n6);border-radius:var(--r1)}
+.addform .segs button[aria-current=true]{color:var(--n12);background:var(--n4);
+  border-color:var(--n8)}
+.addform .acts{display:flex;gap:var(--s2);margin-top:var(--s4)}
+.addform .hint{font:11px/1.45 var(--sans);color:var(--n9);margin-top:var(--s2)}
+
 .panel-cta{margin:var(--s4) var(--s4) var(--s5);padding:var(--s4);border-radius:var(--r2);
   background:var(--n4);border:1px solid var(--n6);cursor:pointer;
   transition:border-color var(--t-hover)}
@@ -223,14 +310,6 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .card .kebab:hover{color:var(--n12)}
 .card.off .t{color:var(--n9)}
 .card.off .t::after{content:" disabled";font:9.5px var(--mono);color:var(--n9)}
-.rowmenu{position:absolute;right:var(--s3);top:26px;z-index:15;background:var(--n3);
-  border:1px solid var(--n7);border-radius:var(--r2);box-shadow:0 12px 36px rgba(0,0,0,.5);
-  padding:var(--s2) 0;min-width:150px}
-.rowmenu button{all:unset;display:block;width:100%;box-sizing:border-box;padding:5px var(--s4);
-  cursor:pointer;font:12px var(--sans);color:var(--n11)}
-.rowmenu button:hover{background:var(--n5);color:var(--n12)}
-.rowmenu button.danger{color:var(--crit)}
-.rowmenu button.danger:hover{background:color-mix(in srgb,var(--crit) 16%,transparent)}
 
 /* Right-click menus. The browser reserves the native one, so every web IDE draws its own; the
    cost of that is having to answer the keyboard menu key too, or the menu is mouse-only. */
@@ -1862,6 +1941,10 @@ function contextMenuFor(n,row,x,y){
 const H=(title,count,act)=>'<div class="ph"><h2>'+title+'</h2>'+
   (count!=null?'<span class="n">'+count+'</span>':'')+(act??'')+'</div>';
 
+/** A section heading inside a panel: a label, a count, and room for one action. */
+const sec2=(title,n,act)=>'<div class="sec">'+esc(title)+
+  '<span class="c">'+n+'</span><span class="sp"></span>'+(act??'')+'</div>';
+
 const PANELS={
   files(){
     el('side').innerHTML=H('Explorer')+'<div id="tree"></div>';
@@ -1885,37 +1968,35 @@ const PANELS={
     const w=state?.workspace; if(!w) return;
     const plugins=w.plugins??[];
 
-    const grp=(title,n,body)=>H(title,n)+(n?body:'<div class="empty">None.</div>');
-
-    // A plugin row carries its lifecycle: update, disable, remove.
-    const pluginRow=p=>'<div class="card'+(p.enabled===false?' off':'')+'" data-plug="'+esc(p.name)+'">'+
-      '<div class="rowtop"><div class="t">'+esc(p.name)+
-      '<span class="chip">'+esc(p.scope??'')+'</span></div>'+
-      '<button class="kebab" data-menu-for="'+esc(p.name)+'" aria-expanded="false">⋯</button></div>'+
-      '<div class="m">'+esc(p.marketplace??'')+(p.version?' · '+esc(p.version.slice(0,8)):'')+'</div>'+
+    // A plugin's state is the thing you scan for; its marketplace and version are the thing you
+    // check once. So state is a dot on the left and the rest is muted text on the right.
+    const pluginRow=p=>'<div class="prow'+(p.enabled===false?' off':'')+'">'+
+      '<span class="dot3 '+(p.enabled===false?'mute':'on')+'" title="'+
+        (p.enabled===false?'disabled':'enabled')+'"></span>'+
+      '<span class="nm">'+esc(p.name)+'</span>'+
+      '<span class="meta">'+esc(p.version?p.version.slice(0,8):(p.marketplace??''))+'</span>'+
+      '<button class="kebab" data-menu-for="'+esc(p.name)+'" aria-expanded="false">⋯</button>'+
       '<div id="run-'+esc(p.name)+'"></div></div>';
 
-    // Skills, agents and commands are files. The useful action is to open the file.
-    const fileRow=(x,kind)=>'<div class="card click" data-open="'+esc(x.path??'')+'">'+
-      '<div class="rowtop"><div class="t">'+esc(x.name)+
-      '<span class="chip '+x.scope+'">'+esc(x.scope)+'</span></div></div>'+
-      (x.description?'<div class="d">'+esc(x.description)+'</div>':'')+
-      '<div class="m">'+esc(kind)+'</div></div>';
-
-    const riskRow=(x,a,b)=>'<div class="card'+(x.scope==='project'?' risk':'')+'">'+
-      '<div class="rowtop"><div class="t">'+esc(a)+
-      '<span class="chip '+x.scope+'">'+esc(x.scope)+'</span></div></div>'+
-      '<div class="m">'+esc(b)+'</div></div>';
+    // Skills carry a description written to be matched by a model, not read by a person — two or
+    // three sentences of trigger phrases. Showing all of it turned the panel into prose. It is one
+    // line here and the whole thing is in the file, which is a click away.
+    const fileRow=x=>'<div class="prow click" data-open="'+esc(x.path??'')+'"'+
+      (x.description?' title="'+esc(x.description)+'"':'')+'>'+
+      '<span class="dot3 '+(x.scope==='project'?'warn':'mute')+'"></span>'+
+      '<span class="nm">'+esc(x.name)+'</span>'+
+      (x.scope==='project'?'<span class="meta">repo</span>':'')+'</div>';
 
     el('side').innerHTML=
-      '<div class="panel-cta" id="cta-plugins"><b>Add a skill or plugin</b>'+
-      '<span>Recommendations for this repository, and the full marketplace.</span></div>'+
-      grp('Plugins',plugins.length,plugins.map(pluginRow).join(''))+
-      grp('Skills',w.skills.length,w.skills.map(x=>fileRow(x,'SKILL.md')).join(''))+
-      grp('Commands',w.commands.length,w.commands.map(x=>fileRow(x,'command')).join(''));
+      H('Extensions',plugins.length+w.skills.length+w.commands.length,
+        '<button class="act" id="a-browse">browse…</button>')+
+      sec2('Plugins',plugins.length)+
+      (plugins.length?plugins.map(pluginRow).join(''):'<div class="prow off">None installed</div>')+
+      sec2('Skills',w.skills.length)+
+      (w.skills.length?w.skills.map(fileRow).join(''):'<div class="prow off">None</div>')+
+      (w.commands.length?sec2('Commands',w.commands.length)+w.commands.map(fileRow).join(''):'');
 
-    el('cta-plugins').onclick=()=>{ setsTab='plugins'; openSettings(); };
-
+    el('a-browse').onclick=()=>{ setsTab='plugins'; openSettings(); };
     wireOpeners();
 
     el('side').querySelectorAll('[data-menu-for]').forEach(b=>b.onclick=e=>{
@@ -1960,20 +2041,41 @@ const PANELS={
 
   mcp(){
     const list=state?.workspace.mcp_servers??[];
-    const project=list.filter(m=>m.scope==='project').length;
-    el('side').innerHTML=H('MCP servers',list.length)+
-      '<div class="sub">Tool servers the agent can call. '+
-      (project?'<b style="color:var(--crit)">'+project+' came with this repository</b> — inert '+
-        'inside Keel, which passes <code>--strict-mcp-config</code>, but a plain <code>claude</code> '+
-        'session in this directory would load them.'
-       :'Nothing here came from the repository.')+'</div>'+
-      (list.length?list.map(m=>'<div class="card'+(m.scope==='project'?' risk':'')+
-        ' click" data-open="'+esc(m.source??'')+'">'+
-        '<div class="rowtop"><div class="t">'+esc(m.name)+
-        '<span class="chip '+m.scope+'">'+esc(m.scope)+'</span></div></div>'+
-        '<div class="m">'+esc(m.endpoint??'')+'</div></div>').join('')
-        :'<div class="empty">No MCP servers configured.<br>Add one with <code>claude mcp add</code>.</div>');
+    const fromRepo=list.filter(m=>m.scope==='project');
+    const mine=list.filter(m=>m.scope!=='project');
+
+    // A server that came with the repository is not one you manage — it is one you decide about.
+    // Keel passes --strict-mcp-config so it never loads, but a plain `claude` in this directory
+    // would, and that is the fact worth putting on screen.
+    const repoWarning=fromRepo.length
+      ? '<div class="sub"><b style="color:var(--crit)">'+fromRepo.length+' came with this '+
+        'repository</b> — inert inside Keel, which passes <code>--strict-mcp-config</code>, but a '+
+        'plain <code>claude</code> session in this directory would load them.</div>'
+      : '';
+
+    const row=(m,own)=>'<div class="prow'+(m.source?' click':'')+'"'+
+      (m.source?' data-open="'+esc(m.source)+'"':'')+'>'+
+      '<span class="dot3 '+(m.scope==='project'?'bad':'on')+'"></span>'+
+      '<span class="nm">'+esc(m.name)+'</span>'+
+      '<span class="meta">'+esc(m.endpoint??m.scope??'')+'</span>'+
+      (own?'<button class="kebab" data-rm="'+esc(m.name)+'" data-scope="'+esc(m.scope??'local')+
+        '" title="Remove">×</button>':'')+'</div>';
+
+    el('side').innerHTML=
+      H('MCP servers',list.length,'<button class="act" id="a-addmcp">add server</button>')+
+      repoWarning+
+      '<div id="mcp-form"></div>'+
+      (mine.length?sec2('Available',mine.length)+mine.map(m=>row(m,true)).join('')
+                  :'<div class="prow off">None configured yet</div>')+
+      (fromRepo.length?sec2('From this repository',fromRepo.length)+
+        fromRepo.map(m=>row(m,false)).join(''):'');
+
+    el('a-addmcp').onclick=()=>mcpAddForm();
     wireOpeners();
+    el('side').querySelectorAll('[data-rm]').forEach(b=>b.onclick=e=>{
+      e.stopPropagation();
+      mcpRemove(b.dataset.rm,b.dataset.scope);
+    });
   },
 
   problems(){
@@ -2003,24 +2105,181 @@ const PANELS={
 
   readiness(){
     const s=state?.scan; if(!s) return;
-    el('side').innerHTML=H('Readiness',s.score+'/100','<button class="act" id="a-rescan">rescan</button>')+
-      (s.findings.length?s.findings.map((f,i)=>'<div class="card'+(f.path?' click':'')+
-        (f.severity==='critical'?' risk':'')+'" data-f="'+i+'"><div class="t">'+esc(f.title)+
-        '<span class="chip '+f.severity+'">'+esc(f.severity)+'</span></div>'+
-        (f.path?'<div class="m">'+esc(f.path)+'</div>':'')+
-        '<div class="d">'+esc(f.fix.description)+'</div></div>').join('')
-        :'<div class="empty">Nothing to report.<br>This repository is ready.</div>');
+    const rank={critical:0,high:1,medium:2,low:3,info:4};
+    const all=[...s.findings].sort((a,b)=>rank[a.severity]-rank[b.severity]);
+
+    // The split that matters is not five severities, it is two questions: what stops me working
+    // here, and what would be nice to tidy. Five bands make the reader do that sort themselves.
+    const blocking=all.filter(f=>f.severity==='critical'||f.severity==='high');
+    const minor=all.filter(f=>!blocking.includes(f));
+
+    const band=s.score>=90?'good':s.score>=70?'mid':'bad';
+    const say=blocking.length
+      ? '<b>'+blocking.length+' thing'+(blocking.length===1?'':'s')+'</b> stand'+
+        (blocking.length===1?'s':'')+' between this repository and being worked on safely.'
+      : minor.length
+        ? 'Nothing blocking. <b>'+minor.length+'</b> worth tidying.'
+        : 'Ready. Nothing is in the way.';
+
+    const fnd=(f,i)=>'<div class="fnd'+(f.severity==='critical'?' crit':'')+'">'+
+      '<div class="ft">'+esc(f.title)+'</div>'+
+      (f.path?'<div class="fp" data-open="'+esc(f.path)+'">'+esc(f.path)+'</div>':'')+
+      '<div class="fd">'+esc(f.detail)+'</div>'+
+      '<button class="fx" data-fix="'+i+'">Fix this</button></div>';
+
+    // Below the blocking line a finding is a title until asked about. The detail is the argument
+    // for why it matters, and nobody needs four arguments at once for things that are not urgent.
+    const small=(f,i)=>'<div class="minor" data-m="'+i+'">'+
+      '<div class="prow click"><span class="dot3 '+(f.severity==='medium'?'warn':'mute')+'"></span>'+
+      '<span class="nm">'+esc(f.title)+'</span>'+
+      '<span class="meta">'+esc(f.severity)+'</span></div></div>';
+
+    el('side').innerHTML=
+      H('Readiness',null,'<button class="act" id="a-rescan">rescan</button>')+
+      '<div class="verdict"><div class="num '+band+'">'+s.score+'</div>'+
+      '<div class="say">'+say+'</div></div>'+
+      (blocking.length
+        ? '<div class="sec">Blocking <span class="c">'+blocking.length+'</span></div>'+
+          blocking.map(f=>fnd(f,all.indexOf(f))).join('')
+        : '')+
+      (minor.length
+        ? '<div class="sec">Worth fixing <span class="c">'+minor.length+'</span></div>'+
+          minor.map(f=>small(f,all.indexOf(f))).join('')
+        : '')+
+      (all.length?'':'<div class="empty">Nothing to report.<br>This repository is ready.</div>');
+
     el('a-rescan').onclick=refresh;
-    el('side').querySelectorAll('[data-f]').forEach(r=>{
-      const f=s.findings[+r.dataset.f]; if(f.path) r.onclick=()=>open(f.path);
+    wireOpeners();
+
+    // A minor finding opens in place rather than in a new pane: the reason it matters is three
+    // lines long, and losing your position in the list to read three lines is a bad trade.
+    el('side').querySelectorAll('[data-m]').forEach(n=>{
+      const f=all[+n.dataset.m];
+      n.querySelector('.prow').onclick=()=>{
+        if(n.querySelector('.fd')){ n.querySelector('.fd').remove(); n.querySelector('.fx').remove(); return; }
+        n.insertAdjacentHTML('beforeend',
+          '<div class="fd">'+esc(f.detail)+'</div>'+
+          '<button class="fx" data-fix="'+n.dataset.m+'">Fix this</button>');
+        n.querySelector('[data-fix]').onclick=e=>{ e.stopPropagation(); askFix(f); };
+      };
     });
+    el('side').querySelectorAll('.fnd [data-fix]').forEach(b=>
+      b.onclick=e=>{ e.stopPropagation(); askFix(all[+b.dataset.fix]); });
   },
+
   connections(){ drawConnections(); },
 };
 
 /// Clicking the active icon collapses the panel, the way every editor behaves. That must only
 /// happen on a real click — a deep link or a refresh calling setPanel would otherwise collapse the
 /// sidebar the moment you asked for it.
+/** Hand a finding to the agent as work, which is the only reason a scanner is worth reading.
+ *
+ *  Keel has no fix executor of its own — `apply_fix` is in the MCP catalog and has nothing behind
+ *  it yet — so this is honestly what it is: a well-formed prompt, in the composer, with the
+ *  finding's own reasoning attached so the agent is not rediscovering it. */
+function askFix(f){
+  const where=f.path?'@'+f.path:'this repository';
+  send('Fix this readiness finding in '+where+'.\n\n'+
+       f.title+'\n'+f.detail+'\n\nSuggested fix: '+f.fix.description+'\n\n'+
+       'Make the change, then run the project gate and show me what it said.');
+}
+
+/* ════ MCP servers ═══════════════════════════════════════════════════════
+   `claude mcp add` is driven rather than the config files written directly. Claude Code owns three
+   scopes across three files with its own precedence between them; a second writer would be a
+   second opinion about where a server lives, and the two would disagree the first time anyone used
+   the CLI. */
+let mcpTransport='http';
+
+function mcpAddForm(){
+  const host=el('mcp-form');
+  if(host.dataset.open){ host.innerHTML=''; delete host.dataset.open; return; }
+  host.dataset.open='1';
+
+  const seg=(id,label)=>'<button data-t="'+id+'" aria-current="'+(mcpTransport===id)+'">'+
+    label+'</button>';
+
+  host.innerHTML='<div class="addform">'+
+    '<label>Transport</label><div class="segs">'+
+      seg('http','HTTP')+seg('sse','SSE')+seg('stdio','Local command')+'</div>'+
+    '<label>Name</label><input id="mc-name" spellcheck="false" placeholder="sentry">'+
+    '<label id="mc-tl">URL</label>'+
+    '<input id="mc-target" spellcheck="false" placeholder="https://mcp.sentry.dev/mcp">'+
+    '<label id="mc-el">Headers</label>'+
+    '<textarea id="mc-extra" spellcheck="false" '+
+      'placeholder="Authorization: Bearer …&#10;one per line"></textarea>'+
+    '<label>Scope</label><div class="segs" id="mc-scope">'+
+      '<button data-s="local" aria-current="true">This project</button>'+
+      '<button data-s="user">Every project</button></div>'+
+    '<div class="acts"><button class="btn" id="mc-add">Add server</button>'+
+      '<button class="btn quiet" id="mc-cancel">Cancel</button></div>'+
+    '<div class="hint" id="mc-hint">A remote server is reached over HTTP. Anything you paste here '+
+      'runs with the agent\u2019s tools available to it.</div>'+
+    '<div id="mc-out"></div></div>';
+
+  const paint=()=>{
+    const stdio=mcpTransport==='stdio';
+    host.querySelectorAll('[data-t]').forEach(b=>
+      b.setAttribute('aria-current',String(b.dataset.t===mcpTransport)));
+    el('mc-tl').textContent=stdio?'Command':'URL';
+    el('mc-target').placeholder=stdio?'npx -y @modelcontextprotocol/server-filesystem /path'
+                                     :'https://mcp.sentry.dev/mcp';
+    el('mc-el').textContent=stdio?'Environment':'Headers';
+    el('mc-extra').placeholder=stdio?'API_KEY=…\none per line':'Authorization: Bearer …\none per line';
+    el('mc-hint').textContent=stdio
+      ? 'A local server is a process Keel starts on your machine, with your files and your '+
+        'environment. Add one you wrote or one you trust.'
+      : 'A remote server is reached over HTTP. Anything you add here runs with the agent\u2019s '+
+        'tools available to it.';
+  };
+  host.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{ mcpTransport=b.dataset.t; paint(); });
+  el('mc-scope').querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>
+    el('mc-scope').querySelectorAll('[data-s]').forEach(x=>
+      x.setAttribute('aria-current',String(x===b))));
+  paint();
+
+  el('mc-cancel').onclick=()=>{ host.innerHTML=''; delete host.dataset.open; };
+  el('mc-add').onclick=()=>{
+    const scope=el('mc-scope').querySelector('[aria-current=true]')?.dataset.s??'local';
+    const p=new URLSearchParams({
+      name:el('mc-name').value.trim(), transport:mcpTransport,
+      target:el('mc-target').value.trim(), scope,
+    });
+    const extra=el('mc-extra').value.trim();
+    if(extra) p.set(mcpTransport==='stdio'?'env':'headers',extra);
+    mcpRun('/api/mcp/add?'+p, 'mc-out');
+  };
+}
+
+function mcpRemove(name,scope){
+  modal('Remove '+name+'?',
+    '<div class="why2">It stops being available to every session, not just to Keel. Whatever the '+
+    'server itself is — a process, an account, an API key — is untouched.</div>',
+    'Remove',
+    async()=>{ mcpRun('/api/mcp/remove?name='+encodeURIComponent(name)+
+                      '&scope='+encodeURIComponent(scope), null); return null; });
+}
+
+/** Stream a `claude mcp` command, then re-read the workspace so the list reflects what happened. */
+function mcpRun(url,outId){
+  const out=outId?el(outId):null;
+  if(out) out.innerHTML='<pre class="console" id="mc-log"></pre>';
+  const log=outId?el('mc-log'):null;
+  const write=t=>{ if(log){ log.textContent+=t+'\n'; log.scrollTop=1e9; } };
+
+  const es=new EventSource(url);
+  es.addEventListener('line',e=>write(e.data));
+  es.addEventListener('done',async e=>{
+    es.close();
+    if(e.data!=='0'){ if(!log) toast('That did not work — open the MCP panel for the output.');
+                      write('\nExited '+e.data+'.'); return; }
+    await refresh();
+    setPanel('mcp');
+  });
+  es.onerror=()=>{ es.close(); write('The connection dropped.'); };
+}
+
 function setPanel(p,fromClick){
   if(fromClick && panel===p && !el('app').classList.contains('no-side')){ toggleSide(); return; }
   panel=p;
@@ -2932,28 +3191,20 @@ function showSiblings(dir,files,current){
 /* ════ plugin row actions ════════════════════════════════════════════════
    Everything here shells out to `claude plugin`, so the result is the same
    whether you do it in Keel or the CLI. */
-function closeRowMenu(){ document.querySelector('.rowmenu')?.remove();
-  document.querySelectorAll('[data-menu-for]').forEach(b=>b.setAttribute('aria-expanded','false')); }
-addEventListener('click',closeRowMenu);
 
+/* One menu component in the application, not two. This was its own `.rowmenu` absolutely
+   positioned inside a `.card`, which broke the moment the card became a row — and there was never
+   a reason for a plugin's menu to look different from a file's. */
 function rowMenu(anchor,plugin){
-  if(document.querySelector('.rowmenu')){ closeRowMenu(); return; }
   if(!plugin) return;
-  anchor.setAttribute('aria-expanded','true');
-  const card=anchor.closest('.card');
   const enabled=plugin.enabled!==false;
-  const acts=[
-    {label:'Update',      run:()=>pluginAction('update',plugin)},
-    {label:enabled?'Disable':'Enable',
-                          run:()=>pluginAction(enabled?'disable':'enable',plugin)},
-    {label:'Uninstall',   run:()=>confirmUninstall(plugin), danger:true},
-  ];
-  const m=frag('<div class="rowmenu">'+acts.map((a,i)=>
-    '<button data-a="'+i+'"'+(a.danger?' class="danger"':'')+'>'+esc(a.label)+'</button>').join('')+'</div>');
-  card.append(m);
-  m.querySelectorAll('[data-a]').forEach(b=>b.onclick=e=>{
-    e.stopPropagation(); closeRowMenu(); acts[+b.dataset.a].run();
-  });
+  const r=anchor.getBoundingClientRect();
+  contextMenu(r.left-150,r.bottom+2,[
+    {label:'Update',                  run:()=>pluginAction('update',plugin)},
+    {label:enabled?'Disable':'Enable',run:()=>pluginAction(enabled?'disable':'enable',plugin)},
+    {sep:true},
+    {label:'Uninstall', danger:true,  run:()=>confirmUninstall(plugin)},
+  ]);
 }
 
 function confirmUninstall(plugin){

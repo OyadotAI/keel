@@ -10,6 +10,7 @@ mod connect;
 mod dev;
 mod fsops;
 mod gui;
+mod mcp;
 mod permissions;
 mod prefs;
 mod plugins;
