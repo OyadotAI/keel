@@ -89,6 +89,7 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/plugins", get(crate::plugins::list))
         .route("/api/plugins/install", get(crate::plugins::install))
         .route("/api/plugins/action", get(crate::plugins::action))
+        .route("/api/plugins/details", get(crate::plugins::details))
         .route("/api/plugins/marketplaces", get(crate::plugins::marketplaces))
         .route("/api/plugins/refresh", get(crate::plugins::refresh_marketplaces))
         .route("/api/cli", get(crate::clitools::status))
@@ -96,6 +97,8 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/cli/login", get(crate::clitools::login))
         .route("/api/github/clone", axum::routing::post(crate::connect::clone))
         .route("/api/open", axum::routing::post(crate::connect::open_repo))
+        .route("/api/browse", get(crate::connect::browse))
+        .route("/api/browse-files", get(crate::connect::browse_files))
         .route("/api/project/new", axum::routing::post(crate::project::create))
         .with_state(state);
 

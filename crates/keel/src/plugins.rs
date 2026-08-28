@@ -239,6 +239,127 @@ pub struct InstallQuery {
     pub marketplace: String,
 }
 
+/// What a plugin actually contains, from `claude plugin details`.
+///
+/// This is how you find a *skill* rather than a plugin: the catalog lists packages, and a package's
+/// value is the skills inside it. The token cost matters too — an always-on cost is paid by every
+/// session whether the skill fires or not.
+#[derive(Serialize, Default)]
+pub struct Details {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub skills: Vec<String>,
+    pub agents: Vec<String>,
+    pub hooks: Vec<String>,
+    pub mcp: Vec<String>,
+    /// Tokens added to every session, as printed.
+    pub always_on: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct DetailsQuery {
+    pub name: String,
+}
+
+/// Read a plugin's component inventory.
+pub async fn details(Query(q): Query<DetailsQuery>) -> axum::Json<Details> {
+    if !valid(&q.name) {
+        return axum::Json(Details {
+            error: Some("invalid plugin name".into()),
+            ..Default::default()
+        });
+    }
+
+    let out = std::process::Command::new("claude")
+        .args(["plugin", "details", &q.name])
+        .output();
+    let Ok(out) = out else {
+        return axum::Json(Details {
+            name: q.name,
+            error: Some("could not run `claude`".into()),
+            ..Default::default()
+        });
+    };
+    if !out.status.success() {
+        return axum::Json(Details {
+            name: q.name,
+            error: Some(
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("not installed")
+                    .to_string(),
+            ),
+            ..Default::default()
+        });
+    }
+
+    axum::Json(parse_details(&q.name, &String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Parse the human-readable inventory.
+///
+/// Shelling out and parsing beats reading the plugin directory: the CLI already resolves which
+/// components a plugin contributes after its manifest and any conditional loading, and that
+/// resolution is not something to reimplement.
+fn parse_details(name: &str, text: &str) -> Details {
+    let mut d = Details {
+        name: name.to_string(),
+        ..Default::default()
+    };
+
+    // `Skills (6)  a, b, c` — the count is in parentheses, the names follow.
+    let list = |line: &str, label: &str| -> Option<Vec<String>> {
+        let rest = line.trim().strip_prefix(label)?;
+        let rest = rest.split_once(')')?.1;
+        Some(
+            rest.split(',')
+                .map(|s| s.split("  (").next().unwrap_or(s).trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        )
+    };
+
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix(name).map(str::trim)
+            && d.version.is_none()
+            && !v.is_empty()
+            && v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        {
+            d.version = Some(v.to_string());
+        }
+        if let Some(v) = t.strip_prefix("Description:") {
+            d.description = Some(v.trim().to_string());
+        }
+        if let Some(v) = list(t, "Skills (") {
+            d.skills = v;
+        }
+        if let Some(v) = list(t, "Agents (") {
+            d.agents = v;
+        }
+        if let Some(v) = list(t, "Hooks (") {
+            d.hooks = v;
+        }
+        if let Some(v) = list(t, "MCP servers (") {
+            d.mcp = v;
+        }
+        if let Some(v) = t.strip_prefix("Always-on:") {
+            d.always_on = Some(
+                v.split("added")
+                    .next()
+                    .unwrap_or(v)
+                    .trim()
+                    .trim_start_matches('~')
+                    .to_string(),
+            );
+        }
+    }
+    d
+}
+
 #[derive(Deserialize)]
 pub struct ActionQuery {
     /// One of `uninstall`, `enable`, `disable`, `update`.
@@ -437,6 +558,19 @@ async fn pipe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_a_component_inventory() {
+        let text = "ponytail 4.9.0\n              Description: Lazy senior dev mode.\n              Source: ponytail@ponytail\n\n            Component inventory\n              Skills (6)  ponytail, ponytail-audit, ponytail-help\n              Agents (0)\n              Hooks (3)  SessionStart, SubagentStart  (harness-only — no model context cost)\n              MCP servers (0)\n\n            Projected token cost\n              Always-on:   ~983 tok   added to every session\n";
+        let d = parse_details("ponytail", text);
+        assert_eq!(d.version.as_deref(), Some("4.9.0"));
+        assert_eq!(d.skills.len(), 3);
+        assert_eq!(d.skills[0], "ponytail");
+        assert!(d.agents.is_empty());
+        // The trailing annotation must not become part of a hook name.
+        assert_eq!(d.hooks, vec!["SessionStart", "SubagentStart"]);
+        assert_eq!(d.always_on.as_deref(), Some("983 tok"));
+    }
 
     #[test]
     fn install_ids_are_validated() {

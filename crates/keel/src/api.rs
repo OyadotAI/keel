@@ -145,20 +145,48 @@ pub struct FileResponse {
 ///
 /// The path is resolved and checked to stay inside the repository. Keel binds to loopback, but a
 /// traversal bug would still let any page in the user's browser read their filesystem.
+/// Directories Keel is allowed to read from.
+///
+/// The repository, and the user's Claude Code home — skills, agents and commands live there, and
+/// opening one is the point. Nothing else: a loopback server is reachable by any page in the
+/// browser, so the boundary has to be explicit rather than implied by the UI never asking.
+fn roots(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(c) = repo.canonicalize_utf8() {
+        out.push(c);
+    }
+    if let Some(home) = keel_workspace::claude_home()
+        && let Ok(c) = home.canonicalize_utf8()
+    {
+        out.push(c);
+    }
+    out
+}
+
+/// Resolve a path and confirm it sits inside one of the allowed roots.
+///
+/// A path is taken as repo-relative first, then as absolute — so the UI can pass either without
+/// caring which, and a `..` in a relative path still has to survive the containment check.
+fn resolve(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> {
+    let candidates = [repo.join(requested), Utf8PathBuf::from(requested)];
+    let allowed = roots(repo);
+
+    for candidate in candidates {
+        let Ok(canonical) = candidate.canonicalize_utf8() else {
+            continue;
+        };
+        if allowed.iter().any(|r| canonical.starts_with(r)) {
+            return Ok(canonical);
+        }
+        return Err("path is outside the repository and your Claude config".to_string());
+    }
+    Err("no such file".to_string())
+}
+
 pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileResponse, String> {
     const MAX: usize = 400_000;
 
-    let joined = root.join(requested);
-    let canonical = joined
-        .canonicalize_utf8()
-        .map_err(|_| "no such file".to_string())?;
-    let root_canonical = root
-        .canonicalize_utf8()
-        .map_err(|_| "repository unavailable".to_string())?;
-
-    if !canonical.starts_with(&root_canonical) {
-        return Err("path escapes the repository".to_string());
-    }
+    let canonical = resolve(root, requested)?;
 
     let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
     let truncated = bytes.len() > MAX;
@@ -501,19 +529,22 @@ pub struct SaveRequest {
 
 /// Write a file from the editor, bounded to the repository like [`read_file`].
 pub fn write_file(root: &Utf8Path, req: &SaveRequest) -> Result<(), String> {
-    let joined = root.join(&req.path);
-    let root_canonical = root
-        .canonicalize_utf8()
-        .map_err(|_| "repository unavailable".to_string())?;
+    // An existing file resolves directly; a new one is checked by its parent, since the file itself
+    // cannot be canonicalised until it exists.
+    let target = match resolve(root, &req.path) {
+        Ok(p) => p,
+        Err(_) => {
+            let joined = root.join(&req.path);
+            let parent = joined.parent().ok_or("invalid path")?;
+            let parent = parent
+                .canonicalize_utf8()
+                .map_err(|_| "no such directory".to_string())?;
+            if !roots(root).iter().any(|r| parent.starts_with(r)) {
+                return Err("path is outside the repository and your Claude config".to_string());
+            }
+            parent.join(joined.file_name().ok_or("invalid path")?)
+        }
+    };
 
-    // Canonicalise the parent: the file itself may legitimately not exist yet.
-    let parent = joined.parent().ok_or("invalid path")?;
-    let parent_canonical = parent
-        .canonicalize_utf8()
-        .map_err(|_| "no such directory".to_string())?;
-    if !parent_canonical.starts_with(&root_canonical) {
-        return Err("path escapes the repository".to_string());
-    }
-
-    std::fs::write(&joined, &req.content).map_err(|e| e.to_string())
+    std::fs::write(&target, &req.content).map_err(|e| e.to_string())
 }

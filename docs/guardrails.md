@@ -77,6 +77,16 @@ create a file, the agent attempts `Write`, is refused, and produces a plan inste
 no file on disk afterwards. An unrecognised mode falls back to Plan, because the safe default is the
 one that cannot change the repository.
 
+## What the server will read
+
+The file reader allows two roots: the open repository, and the user's Claude Code home. The second
+is deliberate — skills, subagents and commands live under `~/.claude`, and opening one is the point
+of the skills panel. Everything else is refused, verified against `/etc/passwd` and `~/.ssh/id_rsa`.
+
+The folder browser is narrower still: it lists directories inside `$HOME` only. Keel binds to
+loopback, but any page in the browser can reach a loopback server, so an unbounded filesystem
+enumerator would be a real disclosure rather than a theoretical one.
+
 ## Credentials
 
 GitHub and Cloudflare tokens live in the OS keychain (`keyring`), keyed under `dev.keel`, and are

@@ -58,6 +58,12 @@ the terminal.
   all through `claude plugin`, so the result is identical whether you do it here or in the terminal.
   Disabled plugins stay visible and say so.
 - **Sessions** live in the agent panel; open a past one and continue it.
+- **Open folder** browses, rather than asking you to type a path. Git repositories are marked.
+- **Skills open as files.** Clicking one opens its `SKILL.md` and lists the rest of the skill
+  directory in a strip, since the manifest alone rarely says what a skill actually does.
+- **Finding skills, not just plugins.** A plugin's value is the skills inside it, so an installed
+  plugin can report its component inventory — skills, subagents, hooks — along with the tokens it
+  adds to every session whether they fire or not.
 
 ## Settings
 

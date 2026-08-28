@@ -131,6 +131,15 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .modal .foot2{display:flex;gap:var(--s2);justify-content:flex-end;padding:var(--s4) var(--s5);
   border-top:1px solid var(--n6);background:var(--n2)}
 .modal .why2{font:11.5px/1.5 var(--sans);color:var(--n10);margin-top:var(--s3)}
+.browser{border:1px solid var(--n7);border-radius:var(--r2);background:var(--n2);
+  max-height:260px;overflow-y:auto;margin-top:var(--s2)}
+.browser .b{display:flex;align-items:center;gap:var(--s3);padding:5px var(--s4);cursor:pointer;
+  font:12px var(--mono);color:var(--n11);transition:background var(--t-hover)}
+.browser .b:hover{background:var(--n4);color:var(--n12)}
+.browser .b .ic2{color:var(--n9);flex:none;width:10px}
+.browser .b .nm4{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browser .b .tag2{font:9.5px var(--mono);color:var(--ok);flex:none}
+.browser .none{padding:var(--s5);text-align:center;color:var(--n9);font:12px var(--sans)}
 
 /* ── activity rail ──────────────────────────────────────────────────────── */
 .rail{grid-row:2/4;background:var(--n3);border-right:1px solid var(--n6);
@@ -278,6 +287,16 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   border-bottom-width:2px;padding:1px 4px;border-radius:var(--r1);color:var(--n10)}
 
 .surface{flex:1;min-height:0;position:relative}
+/* File strip for a skill directory, so its scripts and references are one click away. */
+.siblings{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s4);flex:none;
+  background:var(--n2);border-bottom:1px solid var(--n6);overflow-x:auto}
+.siblings .lbl2{font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--n9);flex:none;padding-right:var(--s2)}
+.siblings button{all:unset;padding:2px var(--s3);border-radius:var(--r1);cursor:pointer;
+  font:11px var(--mono);color:var(--n10);white-space:nowrap;
+  transition:background var(--t-hover),color var(--t-hover)}
+.siblings button:hover{background:var(--n4);color:var(--n12)}
+.siblings button[aria-current=true]{background:var(--n5);color:var(--accent)}
 #mon,#mondiff{position:absolute;inset:0}
 .surface .empty{position:absolute;inset:0;display:grid;place-content:center;align-content:center}
 
@@ -510,6 +529,16 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   padding-top:var(--s1)}
 /* Buttons in a row must not stretch to its height. */
 .plug>.btn{flex:none;align-self:flex-start}
+.linky{all:unset;cursor:pointer;font:11px var(--sans);color:var(--accent);margin-left:var(--s3)}
+.linky:hover{text-decoration:underline}
+.inv{margin-top:var(--s3);padding:var(--s3);background:var(--n3);border-radius:var(--r2);
+  font:11.5px var(--sans);color:var(--n10)}
+.invrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s2);margin-bottom:var(--s2)}
+.invrow:last-child{margin-bottom:0}
+.invrow b{font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--n9);
+  width:66px;flex:none}
+.pill2{font:10.5px var(--mono);background:var(--n5);color:var(--n11);padding:1px 6px;
+  border-radius:var(--r1)}
 .searchbox{width:100%;background:var(--n2);border:1px solid var(--n7);color:var(--n12);
   border-radius:var(--r2);padding:7px var(--s4);font:12.5px var(--sans);outline:none;
   margin-bottom:var(--s4)}
@@ -943,6 +972,7 @@ function drawPreview(tab){
 
 /* ════ rendering ═════════════════════════════════════════════════════════ */
 async function draw(){
+  document.querySelector('.siblings')?.remove();
   drawTabs();
   document.querySelectorAll('.row[data-p]').forEach(r=>r.classList.toggle('sel',r.dataset.p===active));
   const tab=tabs.find(t=>t.path===active);
@@ -1095,13 +1125,11 @@ const PANELS={
 
     el('cta-plugins').onclick=()=>{ setsTab='plugins'; openSettings(); };
 
-    // Opening a skill or agent opens the file that defines it, relative to the repo when it lives
-    // inside it — a user-scoped skill lives outside and cannot be opened here.
+    // Skills, agents and commands are files — including user-scoped ones, which live under
+    // ~/.claude rather than in the repository. The reader allows both roots, so either opens.
     el('side').querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>{
-      const abs=n.dataset.open; if(!abs) return;
-      const root=state?.repo??'';
-      if(abs.startsWith(root+'/')) open(abs.slice(root.length+1));
-      else toast('That file lives outside this repository: '+abs);
+      const abs=n.dataset.open;
+      if(abs) openSkill(abs);
     });
 
     el('side').querySelectorAll('[data-menu-for]').forEach(b=>b.onclick=e=>{
@@ -1752,9 +1780,12 @@ const SET_PANES={
       return;
     }
     const row=p=>'<div class="plug"><div class="body2">'+
-      '<div class="nm3">'+esc(p.name)+'</div>'+
+      '<div class="nm3">'+esc(p.name)+
+      (p.installed?'<button class="linky" data-det="'+esc(p.name)+'">what\'s inside</button>':'')+
+      '</div>'+
       (p.description?'<div class="ds3">'+esc(p.description)+'</div>':'')+
       (p.reason?'<div class="why">'+esc(p.reason)+'</div>':'')+
+      '<div id="det-'+esc(p.name)+'"></div>'+
       '<div id="pi-'+esc(p.name)+'"></div></div>'+
       (p.installed
         ? '<span class="done">installed</span>'
@@ -1782,6 +1813,8 @@ const SET_PANES={
       SET_PANES.plugins(); const b2=el('plug-q'); b2.focus(); b2.setSelectionRange(at,at); };
     el('set-pane').querySelectorAll('[data-plug]').forEach(b=>b.onclick=()=>
       installPlugin(b.dataset.plug,b.dataset.mk,el('pi-'+b.dataset.plug)));
+    el('set-pane').querySelectorAll('[data-det]').forEach(b=>b.onclick=()=>
+      showDetails(b.dataset.det,el('det-'+b.dataset.det)));
   },
 
   editor(){
@@ -1857,6 +1890,23 @@ const SET_PANES={
   },
 };
 
+/** A plugin's value is the skills inside it, and the tokens they cost every session. */
+async function showDetails(name,host){
+  if(host.dataset.open){ host.innerHTML=''; delete host.dataset.open; return; }
+  host.dataset.open='1';
+  host.innerHTML='<div class="inv">Reading…</div>';
+  const d=await (await fetch('/api/plugins/details?name='+encodeURIComponent(name))).json();
+  if(d.error){ host.innerHTML='<div class="inv">'+esc(d.error)+'</div>'; return; }
+  const part=(label,items)=>items.length
+    ? '<div class="invrow"><b>'+label+'</b>'+items.map(i=>'<span class="pill2">'+esc(i)+'</span>').join('')+'</div>'
+    : '';
+  host.innerHTML='<div class="inv">'+
+    part('Skills',d.skills)+part('Agents',d.agents)+part('Hooks',d.hooks)+part('MCP',d.mcp)+
+    (d.always_on?'<div class="invrow"><b>Always-on</b><span class="pill2">'+esc(d.always_on)+
+      ' every session</span></div>':'')+
+    '</div>';
+}
+
 async function loadCatalog(){
   const r=await fetch('/api/plugins?repo='+encodeURIComponent(state?.repo??''));
   catalog=await r.json();
@@ -1904,6 +1954,29 @@ function wireRepoActions(){
       else el('cl-'+b.dataset.clone).innerHTML='<div class="note bad">'+esc(await res.text())+'</div>';
     });
   });
+}
+
+/* ════ skills as files ═══════════════════════════════════════════════════
+   A skill is a directory: SKILL.md plus whatever scripts and references it
+   carries. Opening one opens the manifest and lists its siblings, because the
+   manifest alone rarely tells you what the skill actually does. */
+async function openSkill(manifestPath){
+  await open(manifestPath);
+  const dir=manifestPath.replace(/\/[^/]+$/,'');
+  const r=await fetch('/api/browse-files?path='+encodeURIComponent(dir));
+  if(!r.ok) return;
+  const files=await r.json();
+  if(files.length<2) return;   // a lone SKILL.md needs no strip
+  showSiblings(dir,files,manifestPath);
+}
+
+function showSiblings(dir,files,current){
+  const bar=frag('<div class="siblings"></div>');
+  bar.innerHTML='<span class="lbl2">'+esc(dir.split('/').pop())+'</span>'+
+    files.map(f=>'<button data-f="'+esc(f.path)+'"'+
+      (f.path===current?' aria-current="true"':'')+'>'+esc(f.name)+'</button>').join('');
+  el('crumb').parentElement.after(bar);
+  bar.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>open(b.dataset.f));
 }
 
 /* ════ plugin row actions ════════════════════════════════════════════════
@@ -2124,11 +2197,36 @@ function newProjectDialog(){
 }
 
 function openFolderDialog(){
+  let here=null;
   modal('Open folder',
-    '<label>Path</label><input type="text" id="of-path" placeholder="~/Dev/my-project" spellcheck="false">',
-    'Open',
+    '<label>Path</label><input type="text" id="of-path" spellcheck="false">'+
+    '<div class="browser" id="of-list"></div>',
+    'Open this folder',
     async()=>await openPath(el('of-path').value.trim()),
-    'Keel switches to it without restarting. Your editor can stay open on the same directory.');
+    'Browsing is limited to your home directory. Keel switches without restarting — your editor '+
+    'can stay open on the same files.');
+
+  async function show(path){
+    const r=await fetch('/api/browse'+(path?'?path='+encodeURIComponent(path):''));
+    if(!r.ok){ el('of-list').innerHTML='<div class="none">'+esc(await r.text())+'</div>'; return; }
+    here=await r.json();
+    el('of-path').value=here.path;
+    const rows=[];
+    if(here.parent) rows.push('<div class="b" data-up="1"><span class="ic2">↑</span>'+
+      '<span class="nm4">..</span></div>');
+    rows.push(...here.entries.map((e,i)=>'<div class="b" data-i="'+i+'">'+
+      '<span class="ic2">▸</span><span class="nm4">'+esc(e.name)+'</span>'+
+      (e.repo?'<span class="tag2">git</span>':'')+'</div>'));
+    el('of-list').innerHTML=rows.join('')||'<div class="none">No folders here.</div>';
+    el('of-list').querySelectorAll('[data-i]').forEach(n=>
+      n.onclick=()=>show(here.entries[+n.dataset.i].path));
+    el('of-list').querySelector('[data-up]')?.addEventListener('click',()=>show(here.parent));
+  }
+  // Typing a path and pressing enter navigates rather than opening, so you can browse from there.
+  el('of-path').addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); e.stopPropagation(); show(el('of-path').value.trim()); }
+  });
+  show(state?.repo);
 }
 
 /* ════ status rail ═══════════════════════════════════════════════════════ */
