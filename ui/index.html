@@ -370,11 +370,39 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .said .mention{color:var(--accent)}
 
 .work{margin-top:var(--s4);display:flex;flex-direction:column;gap:var(--s3)}
+/* A user message is verbatim: what you typed, spacing included. */
 .txt{font:13.5px/1.65 var(--sans);white-space:pre-wrap;word-break:break-word;color:var(--n12)}
 .txt code{font:12px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1)}
 .txt strong{font-weight:620}
+
+/* An assistant reply is Markdown. It arrives with headings, lists and fenced code, and rendering
+   it as preformatted text was throwing all of that away. */
+.rich{font:13.5px/1.65 var(--sans);color:var(--n12);word-break:break-word}
+.rich>*:first-child{margin-top:0}
+.rich>*:last-child{margin-bottom:0}
+.rich p{margin:0 0 var(--s4)}
+.rich h1,.rich h2,.rich h3{font-weight:620;line-height:1.35;letter-spacing:-.005em;
+  margin:var(--s5) 0 var(--s3);color:var(--n12)}
+.rich h1{font-size:15px} .rich h2{font-size:14px} .rich h3{font-size:13.5px}
+.rich ul,.rich ol{margin:0 0 var(--s4);padding-left:var(--s5)}
+.rich li{margin-bottom:var(--s2)}
+.rich li::marker{color:var(--n9)}
+.rich code{font:12px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1);
+  word-break:break-all}
+.rich pre{background:var(--n2);border:1px solid var(--n6);border-radius:var(--r2);
+  padding:var(--s3);overflow-x:auto;margin:0 0 var(--s4)}
+.rich pre code{background:none;padding:0;font-size:11.5px;line-height:1.55;word-break:normal}
+.rich blockquote{margin:0 0 var(--s4);padding-left:var(--s3);border-left:2px solid var(--n7);
+  color:var(--n11)}
+.rich strong{font-weight:620}
+.rich a{color:var(--accent)}
+.rich hr{border:0;border-top:1px solid var(--n6);margin:var(--s4) 0}
+.rich table{border-collapse:collapse;margin:0 0 var(--s4);font-size:12.5px;display:block;
+  overflow-x:auto}
+.rich th,.rich td{border:1px solid var(--n6);padding:var(--s2) var(--s3);text-align:left}
+.rich th{background:var(--n2);font-weight:600}
 /* The caret marks live output. It is the only thing in the panel that moves. */
-.txt.live::after{content:"";display:inline-block;width:7px;height:14px;margin-left:2px;
+.txt.live::after,.rich.live::after{content:"";display:inline-block;width:7px;height:14px;margin-left:2px;
   background:var(--accent);vertical-align:-2px;animation:blink 1.1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 
@@ -496,6 +524,43 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .vout{margin-top:var(--s2);padding:var(--s3);background:var(--n1);border:1px solid var(--n6);
   border-radius:var(--r2);font:10.5px/1.5 var(--mono);color:var(--n11);white-space:pre-wrap;
   word-break:break-word;max-height:220px;overflow:auto}
+
+/* ── live changes ───────────────────────────────────────────────────────────
+   What the agent is doing to the code, in the pane you are already looking at.
+   Stacked per file rather than tab-per-file: a change that touches six files is
+   one thing to review, not six. */
+.live-head{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s5);
+  border-bottom:1px solid var(--n6);background:var(--n2);position:sticky;top:0;z-index:3}
+.live-head h2{margin:0;font:600 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--n10)}
+.live-head .n2{font:11px var(--mono);color:var(--n9);font-variant-numeric:tabular-nums}
+.live-head .sp{flex:1}
+.live-head button{all:unset;cursor:pointer;font:11px var(--mono);color:var(--n9)}
+.live-head button:hover{color:var(--accent)}
+
+.fdiff{border-bottom:1px solid var(--n6)}
+.fdiff .fh{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s5);
+  cursor:pointer;background:var(--n2);position:sticky;top:37px;z-index:2}
+.fdiff .fh:hover{background:var(--n4)}
+.fdiff .fh .pathn{font:12px var(--mono);color:var(--n12);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.fdiff .fh .stat{margin-left:auto;font:11px var(--mono);flex:none;
+  font-variant-numeric:tabular-nums}
+.fdiff .fh .stat .plus{color:var(--add)} .fdiff .fh .stat .minus{color:var(--del)}
+.fdiff .fh .caret2{color:var(--n9);font-size:9px;flex:none}
+.fdiff.shut .body3{display:none}
+.fdiff .body3{font:12px/1.55 var(--mono);font-variant-numeric:tabular-nums;
+  overflow-x:auto;padding-bottom:var(--s2)}
+.fdiff .hk{background:var(--n2);color:var(--accent);padding:2px var(--s5);font-size:10.5px;
+  border-top:1px solid var(--n6);border-bottom:1px solid var(--n6)}
+.dr{display:flex}
+.dr .no{width:42px;flex:none;text-align:right;color:var(--n9);padding:0 var(--s2);user-select:none}
+.dr .tx{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;padding:0 var(--s5) 0 var(--s4);
+  position:relative}
+.dr.add{background:var(--add-bg)} .dr.del{background:var(--del-bg)}
+.dr .m2{position:absolute;left:var(--s2);font-weight:700}
+.dr.add .m2{color:var(--add)} .dr.del .m2{color:var(--del)}
+.live-empty{padding:var(--s6);text-align:center;color:var(--n9);font:12.5px/1.6 var(--sans)}
 
 /* ── settings ──────────────────────────────────────────────────────────────
    Settings opens in the editor area, not the sidebar. Connection cards, install
@@ -646,6 +711,15 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
       <span class="badge hidden" data-b="changes">0</span></button>
     <button class="ic" data-p="skills" title="Skills and extensions">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4l1.9 4.2 4.6.45-3.45 3.1.98 4.5L8 11.3l-4.03 2.35.98-4.5L1.5 6.05l4.6-.45L8 1.4z"/></svg></button>
+    <button class="ic" data-p="agents" title="Subagents">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.2 2.4a2.6 2.6 0 112.6 2.6H5.2V2.4zm-2.8 6a2.6 2.6 0 112.6 2.6H2.4V8.4zm8 0a2.6 2.6 0 112.6 2.6h-2.6V8.4z"/><path d="M7.3 5h1.4v3.4H7.3z"/><path d="M4.6 8.4h6.8v1.3H4.6z"/></svg>
+      <span class="badge mut hidden" data-b="agents">0</span></button>
+    <button class="ic" data-p="hooks" title="Hooks">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.5 1.5a3.2 3.2 0 013.2 3.2v3.6a3.6 3.6 0 11-7.2 0h1.9a1.7 1.7 0 103.4 0V4.7a1.3 1.3 0 10-2.6 0v1.1H7.3V4.7a3.2 3.2 0 013.2-3.2z"/></svg>
+      <span class="badge hidden" data-b="hooks">0</span></button>
+    <button class="ic" data-p="mcp" title="MCP servers">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.2A1.2 1.2 0 013.2 3h9.6A1.2 1.2 0 0114 4.2v2.1A1.2 1.2 0 0112.8 7.5H3.2A1.2 1.2 0 012 6.3V4.2zm0 5.5A1.2 1.2 0 013.2 8.5h9.6A1.2 1.2 0 0114 9.7v2.1A1.2 1.2 0 0112.8 13H3.2A1.2 1.2 0 012 11.8V9.7zM4 5.25a.75.75 0 100 1.5.75.75 0 000-1.5zm0 5.5a.75.75 0 100 1.5.75.75 0 000-1.5z"/></svg>
+      <span class="badge hidden" data-b="mcp">0</span></button>
     <button class="ic" data-p="problems" title="Problems">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.4L15 14H1L8 1.4zm0 4.1a.85.85 0 00-.85.9l.2 3.4a.65.65 0 001.3 0l.2-3.4A.85.85 0 008 5.5zm0 5.6a.95.95 0 100 1.9.95.95 0 000-1.9z"/></svg>
       <span class="badge hidden" data-b="problems">0</span></button>
@@ -1033,6 +1107,13 @@ async function draw(){
   el('v-diff').classList.toggle('hidden',!!tab.settings);
   if(view==='prev'&&!previewable(tab.path)) view='src';
   if(view==='prev'){ syncView(); drawPreview(tab); return; }
+  if(tab.changes){
+    if(mon){ mon.dispose(); mon=null; ready=false; }
+    if(monDiff){ monDiff.dispose(); monDiff=null; }
+    el('v-src').classList.add('hidden'); el('v-diff').classList.add('hidden');
+    el('v-prev').classList.add('hidden');
+    drawChanges(); return;
+  }
   if(tab.settings){
     if(mon){ mon.dispose(); mon=null; ready=false; }
     if(monDiff){ monDiff.dispose(); monDiff=null; }
@@ -1158,25 +1239,68 @@ const PANELS={
       '<span>Recommendations for this repository, and the full marketplace.</span></div>'+
       grp('Plugins',plugins.length,plugins.map(pluginRow).join(''))+
       grp('Skills',w.skills.length,w.skills.map(x=>fileRow(x,'SKILL.md')).join(''))+
-      grp('Subagents',w.agents.length,w.agents.map(x=>fileRow(x,'agent')).join(''))+
-      grp('Commands',w.commands.length,w.commands.map(x=>fileRow(x,'command')).join(''))+
-      grp('Hooks',w.hooks.length,w.hooks.map(h=>riskRow(h,h.event,h.command)).join(''))+
-      grp('MCP servers',w.mcp_servers.length,
-        w.mcp_servers.map(m=>riskRow(m,m.name,m.endpoint??'')).join(''));
+      grp('Commands',w.commands.length,w.commands.map(x=>fileRow(x,'command')).join(''));
 
     el('cta-plugins').onclick=()=>{ setsTab='plugins'; openSettings(); };
 
-    // Skills, agents and commands are files — including user-scoped ones, which live under
-    // ~/.claude rather than in the repository. The reader allows both roots, so either opens.
-    el('side').querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>{
-      const abs=n.dataset.open;
-      if(abs) openSkill(abs);
-    });
+    wireOpeners();
 
     el('side').querySelectorAll('[data-menu-for]').forEach(b=>b.onclick=e=>{
       e.stopPropagation();
       rowMenu(b, plugins.find(p=>p.name===b.dataset.menuFor));
     });
+  },
+
+  agents(){
+    const list=state?.workspace.agents??[];
+    el('side').innerHTML=H('Subagents',list.length)+
+      '<div class="sub">Specialised agents the main one can delegate to. Each is a Markdown file '+
+      'with its own tools and prompt.</div>'+
+      (list.length?list.map(a=>'<div class="card click" data-open="'+esc(a.path??'')+'">'+
+        '<div class="rowtop"><div class="t">'+esc(a.name)+
+        '<span class="chip '+a.scope+'">'+esc(a.scope)+'</span></div></div>'+
+        (a.description?'<div class="d">'+esc(a.description)+'</div>':'')+'</div>').join('')
+        :'<div class="empty">No subagents.<br>Add one at <code>.claude/agents/&lt;name&gt;.md</code>, '+
+         'or install a plugin that brings some.</div>');
+    wireOpeners();
+  },
+
+  hooks(){
+    const list=state?.workspace.hooks??[];
+    const project=list.filter(h=>h.scope==='project').length;
+    el('side').innerHTML=H('Hooks',list.length)+
+      '<div class="sub">Shell commands Claude Code runs at lifecycle points. '+
+      (project?'<b style="color:var(--crit)">'+project+' came with this repository.</b>'
+              :'Nothing here came from the repository.')+'</div>'+
+      (project?'<div class="panel-cta" id="cta-trust"><b>Quarantine repository hooks</b>'+
+        '<span>Moves them aside for review. Runs <code>keel trust</code>.</span></div>':'')+
+      (list.length?list.map(h=>'<div class="card'+(h.scope==='project'?' risk':'')+
+        ' click" data-open="'+esc(h.source??'')+'">'+
+        '<div class="rowtop"><div class="t">'+esc(h.event)+
+        '<span class="chip '+h.scope+'">'+esc(h.scope)+'</span></div></div>'+
+        '<div class="m">'+esc(h.command)+'</div></div>').join('')
+        :'<div class="empty">No hooks configured.</div>');
+    wireOpeners();
+    el('cta-trust')&&(el('cta-trust').onclick=()=>send(
+      'Run `keel trust` on this repository to quarantine its agent config, then tell me what it moved.'));
+  },
+
+  mcp(){
+    const list=state?.workspace.mcp_servers??[];
+    const project=list.filter(m=>m.scope==='project').length;
+    el('side').innerHTML=H('MCP servers',list.length)+
+      '<div class="sub">Tool servers the agent can call. '+
+      (project?'<b style="color:var(--crit)">'+project+' came with this repository</b> — inert '+
+        'inside Keel, which passes <code>--strict-mcp-config</code>, but a plain <code>claude</code> '+
+        'session in this directory would load them.'
+       :'Nothing here came from the repository.')+'</div>'+
+      (list.length?list.map(m=>'<div class="card'+(m.scope==='project'?' risk':'')+
+        ' click" data-open="'+esc(m.source??'')+'">'+
+        '<div class="rowtop"><div class="t">'+esc(m.name)+
+        '<span class="chip '+m.scope+'">'+esc(m.scope)+'</span></div></div>'+
+        '<div class="m">'+esc(m.endpoint??'')+'</div></div>').join('')
+        :'<div class="empty">No MCP servers configured.<br>Add one with <code>claude mcp add</code>.</div>');
+    wireOpeners();
   },
 
   problems(){
@@ -1410,7 +1534,7 @@ function mentionise(t){
 
 function textNode(){
   if(!turn.text){
-    turn.text=frag('<div class="txt live"></div>');
+    turn.text=frag('<div class="rich live"></div>');
     turn.text.dataset.raw='';
     turn.work.append(turn.text);
   }
@@ -1484,7 +1608,7 @@ function record(r){
   if(r.type==='stream_event'&&d?.type==='text_delta'){
     const n=textNode();
     n.dataset.raw+=d.text;
-    n.innerHTML=md(n.dataset.raw);
+    n.innerHTML=markdown(n.dataset.raw);
     n.classList.add('live');
     follow(); return;
   }
@@ -1501,6 +1625,8 @@ function record(r){
       if(/requires approval|permission to use|denied/i.test(text)){
         const call=pendingCalls.get(b.tool_use_id);
         if(call) askApproval(call);
+      } else if(WRITE_TOOLS.has(pendingCalls.get(b.tool_use_id)?.tool) && active===CHANGES){
+        drawChanges();
       }
     }
     return;
@@ -1513,6 +1639,7 @@ function record(r){
       const i=b.input??{};
       const arg=i.command??i.file_path??i.path??i.pattern??i.description??'';
       pendingCalls.set(b.id,{tool:b.name,input:i});
+      if(WRITE_TOOLS.has(b.name)) noteEdit(i.file_path??i.path);
       actLine(b.name,trimRepo(String(arg)).split('\n')[0].slice(0,120),true);
       follow();
     }
@@ -1540,7 +1667,7 @@ async function reload(tab){
   // setValue would wipe undo history and jump the cursor. A full-range edit keeps both, so the
   // agent's change is undoable like any other.
   if(m&&m.getValue()!==text) m.pushEditOperations([],[{range:m.getFullModelRange(),text}],()=>null);
-  if(tab.path===active&&view!=='src') draw();
+  if(tab.path===active&&view!=='src'&&!tabs.find(t=>t.path===active)?.changes) draw();
 }
 
 function busy(on){
@@ -1560,6 +1687,7 @@ function send(text){
   const full=withCtx?withCtx+'\n\n'+prompt:prompt;
 
   turn=newTurn(full); started=Date.now();
+  agentEdits=new Set(); collapsedDiffs.clear();
   box.value=''; autoGrow(); attached.clear(); drawCtx();
   pinned=true; follow(); busy(true);
 
@@ -1716,8 +1844,8 @@ async function openSession(id){
     if(t.role==='user'){ cur=newTurn(t.text); continue; }
     if(!cur) cur=newTurn('');
     if(t.text){
-      const n=frag('<div class="txt"></div>');
-      n.innerHTML=md(t.text); n.dataset.raw=t.text;
+      const n=frag('<div class="rich"></div>');
+      n.innerHTML=markdown(t.text); n.dataset.raw=t.text;
       cur.work.append(n);
     }
     for(const name of t.tools){
@@ -2080,6 +2208,15 @@ function wireRepoActions(){
   });
 }
 
+/** Rows that point at a file open it. Skills and agents live under ~/.claude or in the repo, and
+    the reader allows both, so either resolves. */
+function wireOpeners(){
+  el('side').querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>{
+    const path=n.dataset.open;
+    if(path) openSkill(path);
+  });
+}
+
 /* ════ skills as files ═══════════════════════════════════════════════════
    A skill is a directory: SKILL.md plus whatever scripts and references it
    carries. Opening one opens the manifest and lists its siblings, because the
@@ -2234,6 +2371,10 @@ function menuItems(which){
     item('Files','',()=>setPanel('files')),
     item('Changes','',()=>setPanel('changes')),
     item('Skills & plugins','',()=>setPanel('skills')),
+    item('Subagents','',()=>setPanel('agents')),
+    item('Hooks','',()=>setPanel('hooks')),
+    item('MCP servers','',()=>setPanel('mcp')),
+    item('Agent changes','',()=>{ if(!tabs.some(t=>t.path===CHANGES)) tabs.push({path:CHANGES,changes:true,dirty:false}); active=CHANGES; draw(); }),
     item('Problems','',()=>setPanel('problems')),
     item('Readiness','',()=>setPanel('readiness')),
     SEP,
@@ -2363,26 +2504,48 @@ function openFolderDialog(){
    it just happens in the IDE rather than at a terminal prompt. */
 const pendingCalls=new Map();
 
-/** The rule that would allow this call — derived from the call, not hardcoded per tool. */
-function ruleFor(call){
-  if(call.tool!=='Bash') return call.tool;                 // e.g. WebFetch, Edit
-  const cmd=String(call.input?.command??'').trim();
-  // The program is the first token that is not an environment assignment.
-  const prog=cmd.split(/\s+/).find(t=>!/^[A-Za-z_][A-Za-z0-9_]*=/.test(t))??cmd;
-  return 'Bash('+prog.split('/').pop()+' *)';
+/** The program a single shell segment invokes, ignoring leading environment assignments. */
+function programOf(segment){
+  const t=segment.trim().split(/\s+/).find(t=>!/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+  return t ? t.split('/').pop().replace(/^["']|["']$/g,'') : '';
 }
 
+/** Every rule a call needs.
+ *
+ *  Claude Code approves a compound command part by part — `bun install && make check` needs both
+ *  `bun` and `make`, and it says so explicitly. Deriving a rule from only the first token left the
+ *  second half denied and the approval looking broken. */
+function rulesFor(call){
+  if(call.tool!=='Bash') return [call.tool];
+  const cmd=String(call.input?.command??'');
+  const progs=cmd
+    .split(/&&|\|\||;|\|/)
+    .map(programOf)
+    .filter(Boolean)
+    // `sudo foo` and `env foo` hide the real program behind a wrapper; approving the wrapper would
+    // be approving everything it can launch.
+    .filter(p=>!['sudo','env','nohup','time','xargs'].includes(p));
+  return [...new Set(progs)].map(p=>'Bash('+p+' *)');
+}
+
+const askedFor=new Set();
 function askApproval(call){
   if(!turn) return;
+  // A compound command produces one denial per part; the card covers all of them at once.
+  const key=call.tool+':'+String(call.input?.command??JSON.stringify(call.input??{}));
+  if(askedFor.has(key)) return;
+  askedFor.add(key);
   const cmd=call.tool==='Bash'
     ? String(call.input?.command??'')
     : call.tool+' '+JSON.stringify(call.input??{}).slice(0,200);
-  const rule=ruleFor(call);
+  const rules=rulesFor(call);
+  if(!rules.length) return;
+  const label=rules.join(' ');
 
   const card=frag('<div class="ask"><div class="hd">Needs your approval</div>'+
     '<pre>'+esc(cmd)+'</pre>'+
     '<div class="opts">'+
-      '<button class="btn" data-scope="project">Always allow <code>'+esc(rule)+'</code></button>'+
+      '<button class="btn" data-scope="project">Always allow <code>'+esc(label)+'</code></button>'+
       '<button class="btn quiet" data-scope="session">Allow this session</button>'+
       '<button class="btn quiet" data-deny>Not now</button>'+
     '</div></div>');
@@ -2393,16 +2556,103 @@ function askApproval(call){
     '<div class="settled">'+esc(text)+'</div>'; };
 
   card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=async()=>{
-    const r=await fetch('/api/permissions/add',{method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({rule,scope:b.dataset.scope})});
-    if(!r.ok){ settle(await r.text()); return; }
-    settle('Allowed '+rule+(b.dataset.scope==='project'?' for this project':' for this session')+
+    for(const rule of rules){
+      const r=await fetch('/api/permissions/add',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({rule,scope:b.dataset.scope})});
+      if(!r.ok){ settle(await r.text()); return; }
+    }
+    settle('Allowed '+label+(b.dataset.scope==='project'?' for this project':' for this session')+
       ' — retrying.');
     // Resume the same session so the agent continues from where it was stopped.
     send('Retry the command you were denied. It is allowed now.');
   });
   card.querySelector('[data-deny]').onclick=()=>settle('Not allowed.');
+}
+
+/* ════ live changes ══════════════════════════════════════════════════════
+   The agent writes files; you should be able to watch it. Every write during a
+   turn is collected and shown as a stacked diff in the editor pane, refreshed
+   as the turn proceeds. */
+const CHANGES='\u25c8 Agent changes';
+let agentEdits=new Set();
+const WRITE_TOOLS=new Set(['Edit','Write','MultiEdit','NotebookEdit','Update']);
+const collapsedDiffs=new Set();
+
+/** Record a write and make sure the change view is in front of you. */
+function noteEdit(path){
+  if(!path) return;
+  const root=(state?.repo??'')+'/';
+  const rel=path.startsWith(root)?path.slice(root.length):path;
+  const isNew=!agentEdits.has(rel);
+  agentEdits.add(rel);
+
+  if(!tabs.some(t=>t.path===CHANGES)) tabs.push({path:CHANGES,changes:true,dirty:false});
+  // Follow the work, unless you have deliberately opened something else to read.
+  if(isNew && (active===CHANGES||!active||tabs.length<=2)) active=CHANGES;
+  if(active===CHANGES) drawChanges();
+  else drawTabs();
+}
+
+async function drawChanges(){
+  el('crumb').textContent='Agent changes';
+  const files=[...agentEdits];
+  if(!files.length){
+    el('surface').innerHTML='<div class="live-empty">Nothing changed yet in this turn.<br>'+
+      'Files the agent writes will appear here as diffs.</div>';
+    drawStatus(); return;
+  }
+
+  const parts=await Promise.all(files.map(async f=>{
+    const d=await (await fetch('/api/git/diff?path='+encodeURIComponent(f))).json().catch(()=>null);
+    return {f,d};
+  }));
+
+  const mk=k=>k==='add'?'+':k==='del'?'\u2212':' ';
+  const body=parts.map(({f,d})=>{
+    const hunks=d?.hunks??[];
+    const plus=hunks.reduce((n,h)=>n+h.lines.filter(l=>l.kind==='add').length,0);
+    const minus=hunks.reduce((n,h)=>n+h.lines.filter(l=>l.kind==='del').length,0);
+    const shut=collapsedDiffs.has(f);
+    return '<div class="fdiff'+(shut?' shut':'')+'" data-f="'+esc(f)+'">'+
+      '<div class="fh"><span class="caret2">'+(shut?'\u25b8':'\u25be')+'</span>'+
+      '<span class="pathn">'+esc(f)+'</span>'+
+      (d?.untracked?'<span class="chip">new</span>':'')+
+      '<span class="stat"><span class="plus">+'+plus+'</span> '+
+      '<span class="minus">\u2212'+minus+'</span></span></div>'+
+      '<div class="body3">'+(hunks.length
+        ? hunks.map(h=>'<div class="hk">'+esc(h.header)+'</div>'+h.lines.map(l=>
+            '<div class="dr '+l.kind+'"><div class="no">'+(l.old??'')+'</div>'+
+            '<div class="no">'+(l.new??'')+'</div>'+
+            '<div class="tx"><span class="m2">'+mk(l.kind)+'</span>'+esc(l.text||' ')+'</div></div>'
+          ).join('')).join('')
+        : '<div class="live-empty">No diff — the file matches HEAD.</div>')+'</div></div>';
+  }).join('');
+
+  const totalPlus=parts.reduce((n,{d})=>n+(d?.hunks??[]).reduce((m,h)=>
+    m+h.lines.filter(l=>l.kind==='add').length,0),0);
+  const totalMinus=parts.reduce((n,{d})=>n+(d?.hunks??[]).reduce((m,h)=>
+    m+h.lines.filter(l=>l.kind==='del').length,0),0);
+
+  el('surface').innerHTML=
+    '<div class="live-head"><h2>Agent changes</h2>'+
+    '<span class="n2">'+files.length+' file'+(files.length===1?'':'s')+
+    ' · <span style="color:var(--add)">+'+totalPlus+'</span> '+
+    '<span style="color:var(--del)">\u2212'+totalMinus+'</span></span>'+
+    '<span class="sp"></span><button id="lc-clear">clear</button></div>'+body;
+
+  el('lc-clear').onclick=()=>{ agentEdits.clear(); drawChanges(); };
+  el('surface').querySelectorAll('.fdiff').forEach(n=>{
+    const f=n.dataset.f;
+    n.querySelector('.fh').onclick=e=>{
+      // The filename opens the file; anywhere else folds the diff.
+      if(e.target.classList.contains('pathn')){ open(f); return; }
+      n.classList.toggle('shut');
+      collapsedDiffs.has(f)?collapsedDiffs.delete(f):collapsedDiffs.add(f);
+      n.querySelector('.caret2').textContent=n.classList.contains('shut')?'\u25b8':'\u25be';
+    };
+  });
+  drawStatus();
 }
 
 /* ════ verification ══════════════════════════════════════════════════════
@@ -2577,6 +2827,9 @@ const COMMANDS=[
   {id:'files',      label:'View: Files',        run:()=>setPanel('files'),      key:MAC?'⌘B':'Ctrl+B'},
   {id:'changes',    label:'View: Changes',      run:()=>setPanel('changes')},
   {id:'skills',     label:'View: Skills',       run:()=>setPanel('skills')},
+  {id:'agents',     label:'View: Subagents',    run:()=>setPanel('agents')},
+  {id:'hooks',      label:'View: Hooks',        run:()=>setPanel('hooks')},
+  {id:'mcp',        label:'View: MCP servers',  run:()=>setPanel('mcp')},
   {id:'readiness',  label:'View: Readiness',    run:()=>setPanel('readiness')},
   {id:'connections',label:'View: Connections',  run:()=>setPanel('connections')},
   {id:'save',       label:'File: Save',         run:save, key:MAC?'⌘S':'Ctrl+S'},
@@ -2726,6 +2979,11 @@ async function refresh(){
   el('menu-repo').textContent=state.repo;
   const blocking=state.scan.findings.filter(f=>f.severity==='critical'||f.severity==='high').length;
   badge('changes',git.changes?.length??0,false);
+  const w=state.workspace;
+  const risky=a=>a.filter(x=>x.scope==='project').length;
+  badge('agents',w.agents.length,false);
+  badge('hooks',w.hooks.length,risky(w.hooks)>0);
+  badge('mcp',w.mcp_servers.length,risky(w.mcp_servers)>0);
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
   el('side').append(frag('<div class="rz left" id="rz1"></div>'));

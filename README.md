@@ -23,6 +23,15 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Watching the agent work
+
+Every file the agent writes during a turn appears as a stacked diff in the editor pane, refreshed as
+the turn proceeds — one screen for a change that touches six files, rather than six tabs. Click a
+filename to open it properly; click anywhere else on the header to fold it.
+
+Replies render as Markdown. Headings, lists and fenced code arrive that way and showing them as
+preformatted text threw all of it away.
+
 ## Approvals
 
 The agent can edit files freely. Running a command needs a rule — that is Claude Code's own model,
@@ -83,6 +92,9 @@ the terminal.
   all through `claude plugin`, so the result is identical whether you do it here or in the terminal.
   Disabled plugins stay visible and say so.
 - **Sessions** live in the agent panel; open a past one and continue it.
+- **Subagents, hooks and MCP servers** each get their own panel, alongside files and git. Anything
+  that arrived with the repository is marked, because a project-scoped hook was written by whoever
+  wrote the repo.
 - **Open folder** browses, rather than asking you to type a path. Git repositories are marked.
 - **Skills open as files.** Clicking one opens its `SKILL.md` and lists the rest of the skill
   directory in a strip, since the manifest alone rarely says what a skill actually does.
