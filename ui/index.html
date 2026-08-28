@@ -168,9 +168,17 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .rail .grow{flex:1}
 
 /* ── side panel ─────────────────────────────────────────────────────────── */
+/* The sidebar is a frame that does not scroll, holding a body that does.
+   The drag handle used to live inside the scrolling element, which meant two things: it was
+   clipped to a 3px sliver by that element's `overflow-x: hidden`, and it scrolled out of sight as
+   soon as the tree was longer than the pane. Between them the sidebar read as fixed-width. */
 .side{grid-row:2/3;background:var(--n3);border-right:1px solid var(--n6);
-  overflow:hidden auto;position:relative;min-width:0}
+  position:relative;min-width:0;display:flex;flex-direction:column}
+.side-body{flex:1;min-height:0;overflow:hidden auto}
 .app.no-side .side{border-right:0}
+/* Collapsed, the handle would be the only thing left of the sidebar — 4px of drag target hanging
+   over the editor with nothing attached to it. */
+.app.no-side .rz.left{display:none}
 .ph{display:flex;align-items:center;gap:var(--s3);padding:var(--s4) var(--s4) var(--s3);
   position:sticky;top:0;background:var(--n3);z-index:2}
 .ph h2{margin:0;font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
@@ -1056,7 +1064,10 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
       <span class="badge hidden" data-b="conn">!</span></button>
   </nav>
 
-  <aside class="side" id="side"><div class="rz left" id="rz1"></div></aside>
+  <aside class="side" id="side-wrap">
+    <div class="side-body" id="side"></div>
+    <div class="rz left" id="rz1"></div>
+  </aside>
 
   <section class="ed">
     <div class="tabs" id="tabs"></div>
@@ -2513,8 +2524,6 @@ function setPanel(p,fromClick){
   el('app').classList.remove('no-side');
   document.querySelectorAll('.ic').forEach(b=>b.setAttribute('aria-current',b.dataset.p===p));
   PANELS[p]();
-  el('side').append(frag('<div class="rz left" id="rz1"></div>'));
-  wireResize(el('rz1'),'--side','keel.side',190,540,false);
 }
 document.querySelectorAll('.ic[data-p]').forEach(b=>b.onclick=()=>setPanel(b.dataset.p,true));
 el('ic-settings').onclick=openSettings;
@@ -4674,8 +4683,6 @@ async function refresh(){
   badge('preview','\u2022',devState.running);
   badge('ready',blocking,blocking>0);
   PANELS[panel]();
-  el('side').append(frag('<div class="rz left" id="rz1"></div>'));
-  wireResize(el('rz1'),'--side','keel.side',190,540,false);
   drawStatus();
 }
 
@@ -4817,6 +4824,7 @@ addEventListener('keydown',e=>{
   if(cmd&&e.shiftKey&&(e.key==='e'||e.key==='E')){ e.preventDefault(); toggleAgentPane(); }
 });
 
+wireResize(el('rz1'),'--side','keel.side',190,540,false);
 wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   // One cheap request decides which of the two screens this is, before anything expensive runs:
