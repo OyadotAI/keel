@@ -86,6 +86,8 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/connect/cloudflare", axum::routing::post(crate::connect::connect_cloudflare))
         .route("/api/disconnect", axum::routing::post(crate::connect::disconnect))
         .route("/api/github/repos", get(crate::connect::repos))
+        .route("/api/plugins", get(crate::plugins::list))
+        .route("/api/plugins/install", get(crate::plugins::install))
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
         .route("/api/cli/login", get(crate::clitools::login))

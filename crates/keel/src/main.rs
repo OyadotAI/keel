@@ -7,6 +7,7 @@
 mod api;
 mod connect;
 mod clitools;
+mod plugins;
 mod render;
 mod serve;
 
