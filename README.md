@@ -44,6 +44,21 @@ fight the stream.
 replaces the close × on a dirty tab, and the status rail says `unsaved`. Nothing autosaves — the
 agent writes to disk directly, so an autosave racing it would overwrite work you did not make.
 
+## An IDE for Claude Code
+
+The goal is that everything the CLI can do has a surface here, so you can work in the IDE instead of
+the terminal.
+
+- **Menu bar** — File (new project, open folder, recent, clone), View (panels, palette), Agent
+  (sessions, modes, stop), Help.
+- **New project** scaffolds from the golden path: two isolated environments, a health route, a test
+  that can fail, and CI. A project Keel creates starts at 100/100 rather than at the same findings
+  every empty directory produces.
+- **Plugins and skills** are managed, not just listed — install, update, enable, disable, uninstall,
+  all through `claude plugin`, so the result is identical whether you do it here or in the terminal.
+  Disabled plugins stay visible and say so.
+- **Sessions** live in the agent panel; open a past one and continue it.
+
 ## Settings
 
 `⌘⇧,` or the gear. Settings opens in the editor area rather than the sidebar — connection cards,
