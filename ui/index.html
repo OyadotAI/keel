@@ -1210,6 +1210,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   opacity:0;transition:opacity var(--t-hover)}
 .field:hover .onhover,.onhover:focus-visible{opacity:1}
 .onhover:hover{color:var(--accent)}
+.card2:hover .onhover{opacity:1}
 .status button{all:unset;cursor:pointer;transition:color var(--t-hover)}
 .status button:hover{color:var(--n12)}
 
@@ -3178,56 +3179,99 @@ function runCli(kind,id,host,profile){
 let repoList=null;
 /* Named so the status bar can send you straight at one, rather than to a page of six where the
    one that needs you looks like the five that do not. */
+/* One description of a tool's state, rendered two ways.
+ *
+ * The sidebar and the Settings page each had their own copy of this — which state a pip is, what
+ * the line under the name says, which buttons appear — and they drifted, silently, because nothing
+ * makes two copies of a decision agree. Settings kept offering "Re-authenticate" on a working
+ * connection for two rounds of fixing it, because I was only ever fixing the other one. And it
+ * offered it on kubectl and docker, which have no sign-in at all and would have refused.
+ *
+ * The layouts still differ, because a 274px column and a settings page are not the same shape.
+ * The decisions do not. */
+function toolView(t){
+  const acts=[];
+  if(!t.installed){
+    if(t.install_cmd) acts.push({kind:'install',label:'Install'});
+    else acts.push({kind:'manual',label:'Instructions',href:t.manual});
+    return {
+      pip:'off',
+      note:t.install_cmd
+        ? 'Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.'
+        : 'Not installed, and no supported package manager found.',
+      acts,
+    };
+  }
+
+  if(t.authenticated){
+    // Nothing to ask for. Switching accounts is a real thing to want and lives on hover, not in
+    // front of somebody whose connection is working.
+    if(!NO_LOGIN.has(t.id)) acts.push({kind:'login',label:'switch account',quiet:true});
+    // Several identities already carry the version — docker reports "docker-desktop · 29.2.0" and
+    // kubectl's context has it — so appending it produced the same number twice in one line.
+    const ident=t.identity??'';
+    const ver=(t.version??'').trim();
+    // Compared on normalised words: docker reports an identity of "docker-desktop · 29.2.0" and a
+    // version of "Docker version 29.2.0, build 0b9d198", which share everything that matters and
+    // no exact substring — the comma and the capital D were enough to defeat a literal match.
+    const words=x=>new Set(x.toLowerCase().split(/[^a-z0-9.]+/).filter(v=>v.length>2));
+    const iw=words(ident);
+    const repeats=!ver||!ident||[...words(ver)].some(v=>iw.has(v));
+    return {
+      pip:'on',
+      note:(ident?esc(ident):'Signed in')+
+           (repeats?'':' <span class="dim2">· '+esc(ver)+'</span>'),
+      acts,
+    };
+  }
+
+  // Installed and not working. Its own reason where there is one — "the daemon is not running" has
+  // a different fix from "you are signed out".
+  // `aws sso login` takes a profile, so with none configured a Sign in button can only refuse.
+  // The setup below it is the actual path, and offering both makes the wrong one look primary.
+  const needsProfile=t.id==='aws'&&!t.profiles?.length;
+  if(!NO_LOGIN.has(t.id)&&!needsProfile){
+    if(t.profiles?.length) acts.push({kind:'profile',id:t.id,profiles:t.profiles});
+    acts.push({kind:'login',label:'Sign in'});
+  }
+  if(t.setup) acts.push({kind:'setup',label:'Run '+t.setup,cmd:t.setup});
+  return {
+    pip:'warn',
+    note:(t.blocked?esc(t.blocked):'Installed, not signed in.')
+      .replace(/`([^`]+)`/g,'<code>$1</code>'),
+    acts,
+  };
+}
+
+/** The buttons for one tool, as markup. `quiet` actions are revealed on hover. */
+function toolActions(t,view){
+  return view.acts.map(a=>{
+    if(a.kind==='manual')
+      return '<a class="btn quiet" href="'+esc(a.href)+'" target="_blank" rel="noopener">'+
+             esc(a.label)+'</a>';
+    if(a.kind==='profile')
+      return '<select class="picksel" id="prof-'+esc(a.id)+'">'+
+             a.profiles.map(p=>'<option>'+esc(p)+'</option>').join('')+'</select>';
+    if(a.kind==='setup')
+      return '<button class="btn quiet" data-setup="'+esc(a.cmd)+'">'+esc(a.label)+'</button>';
+    return '<button class="'+(a.quiet?'onhover':'btn')+'" data-cli="'+a.kind+'" '+
+           'data-id="'+esc(t.id)+'">'+esc(a.label)+'</button>';
+  }).join('');
+}
+
 let focusTool=null;
 const NO_LOGIN=new Set(['kubectl','docker']);
 
 function cliBlock(t,extra){
-  const state = !t.installed ? 'missing' : t.authenticated ? 'ready' : 'unauth';
-  const note =
-    // Signed in reads as signed in. It used to show only the version with a "Re-authenticate"
-    // button beside it, which is a prompt to act on a connection that is working — reported as
-    // gcloud and gh asking to re-authenticate over and over.
-    state==='ready'  ? '<div class="note good">'+
-                       (t.identity?esc(t.identity):'Signed in')+
-                       (t.version?' <span class="dim2">· '+esc(t.version)+'</span>':'')+'</div>' :
-    // Its own reason where there is one — "the daemon is not running" is a different problem from
-    // "you are signed out", and they have different fixes.
-    state==='unauth' ? '<div class="note bad">'+esc(t.blocked??'Installed but not signed in.')+'</div>' :
-    t.install_cmd    ? '<div class="note dim">Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.</div>'
-                     : '<div class="note bad">Not installed, and no supported package manager found. '+
-                       '<a href="'+esc(t.manual)+'" target="_blank" rel="noopener">Install instructions</a></div>';
-  const actions = [];
-  if(state==='missing'&&t.install_cmd) actions.push('<button class="btn" data-cli="install" data-id="'+t.id+'">Install</button>');
-  // kubectl and docker have no sign-in of their own — their `blocked` message says where their
-  // credentials actually come from, and a button here would only refuse.
-  const canLogin=!NO_LOGIN.has(t.id);
-  if(state==='unauth'&&canLogin) actions.push('<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>');
-  // Keel owns a real shell, so a flow it cannot drive it can still host. This is the difference
-  // between "go and run this somewhere" and being put in front of it.
-  if(t.setup) actions.push('<button class="btn quiet" data-setup="'+esc(t.setup)+'">'+
-    'Run <code>'+esc(t.setup)+'</code></button>');
-  // Not shown on a working connection. Making it quieter was not enough — anything sitting next
-  // to "signed in as you" that says re-authenticate reads as a thing you are being asked to do,
-  // and it was read that way twice. A token that expires flips this row to `unauth`, which puts a
-  // Sign in button here exactly when one is useful.
-  //
-  // It survives on hover, because switching accounts is a real thing to want and there is nowhere
-  // else in Keel to do it.
-  if(state==='ready'&&canLogin) actions.push('<button class="onhover" data-cli="login" '+
-    'data-id="'+t.id+'" title="Sign in as someone else">switch account</button>');
-
+  const view=toolView(t);
+  const acts=toolActions(t,view)+(extra??'');
   const wanted=focusTool===t.id;
-  return '<div class="field'+(wanted?' focused':'')+'" id="conn-'+t.id+'"><label>'+esc(t.label)+'</label>'+note+
-    (actions.length||extra?'<div class="line">'+actions.join('')+(extra??'')+'</div>':'')+
+  return '<div class="field'+(wanted?' focused':'')+'" id="conn-'+t.id+'"><label>'+esc(t.label)+
+    '</label><div class="note '+(view.pip==='on'?'good':view.pip==='warn'?'bad':'dim')+'">'+
+    view.note+'</div>'+
+    (acts?'<div class="line">'+acts+'</div>':'')+
     '<div id="cli-'+t.id+'"></div></div>';
 }
-
-/* Every row here is three shell commands, several of which ask a cloud API who you are. That is
-   seconds even done concurrently, and a panel that shows nothing for three seconds reads as a
-   hang — which is what it was reported as. So it paints the rows it knows about immediately and
-   fills them in as the answers land. */
-const KNOWN_TOOLS=[['gh','GitHub CLI'],['wrangler','Wrangler'],['gcloud','Google Cloud'],
-                   ['kubectl','Kubernetes'],['docker','Docker'],['aws','AWS']];
 
 function drawConnections(){
   const gh=conn?.github, cf=conn?.cloudflare;
@@ -4144,30 +4188,15 @@ const SET_PANES={
                    : 'Not on PATH. The agent panel needs it.',
       '', null, null);
 
-    for(const id of ['gh','wrangler','gcloud','kubectl','docker']){
+    // Same decisions as the sidebar, wider layout. `aws` is here too — it was simply missing from
+    // this list, so the one connection with a setup flow could not be reached from Settings.
+    for(const id of ['gh','wrangler','gcloud','kubectl','docker','aws']){
       const t=byId(id); if(!t) continue;
-      const pip=!t.installed?'off':t.authenticated?'on':'warn';
-      let sub, acts='';
-      if(!t.installed){
-        sub = t.install_cmd
-          ? 'Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.'
-          : 'Not installed, and no supported package manager found.';
-        if(t.install_cmd) acts+='<button class="btn" data-cli="install" data-id="'+t.id+'">Install</button>';
-        else acts+='<a class="btn quiet" href="'+esc(t.manual)+'" target="_blank" rel="noopener">Instructions</a>';
-      } else if(t.blocked){
-        sub = esc(t.blocked).replace(/`([^`]+)`/g,'<code>$1</code>');
-      } else if(!t.authenticated){
-        sub = 'Installed, not signed in.';
-        if(t.profiles.length){
-          acts+='<select class="picksel" id="prof-'+t.id+'">'+
-            t.profiles.map(p=>'<option>'+esc(p)+'</option>').join('')+'</select>';
-        }
-        acts+='<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>';
-      } else {
-        sub = esc(t.version??'Signed in.');
-        acts+='<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>';
-      }
-      h+=card(t.label,pip,sub,acts,t.identity,'cli-'+t.id);
+      const view=toolView(t);
+      // The identity is already the note when signed in; repeating it in the box below is the
+      // same string twice.
+      const ident=view.pip==='on'?null:t.identity;
+      h+=card(t.label,view.pip,view.note,toolActions(t,view),ident,'cli-'+t.id);
     }
 
     h+='<h2>Repository</h2>'+
@@ -4185,6 +4214,9 @@ const SET_PANES={
     el('set-pane').querySelectorAll('[data-cli]').forEach(b=>b.onclick=()=>{
       const prof=el('prof-'+b.dataset.id)?.value;
       runCli(b.dataset.cli,b.dataset.id,el('cli-'+b.dataset.id),prof);
+    });
+    el('set-pane').querySelectorAll('[data-setup]').forEach(b=>b.onclick=()=>{
+      sendToTerm(b.dataset.setup);
     });
     wireRepoActions();
   },

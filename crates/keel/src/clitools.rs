@@ -211,7 +211,9 @@ const TOOLS: &[Tool] = &[
         id: "kubectl",
         label: "Kubernetes",
         binary: "kubectl",
-        version: &["version", "--client=true", "-o=yaml"],
+        // Not `-o=yaml`: its first line is the literal word "clientVersion:", and the first line
+        // is what gets shown. Plain `--client` prints "Client Version: v1.35.0".
+        version: &["version", "--client=true"],
         // A cluster you cannot reach is not a connection, so this asks the API server rather than
         // reading kubeconfig — a context can exist and point at nothing.
         whoami: &["cluster-info"],
