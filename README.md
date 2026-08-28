@@ -8,6 +8,38 @@ loop where GitHub state, both environments and a live preview are always on scre
 
 It is not an editor. Keep using yours — Keel works on the same directory.
 
+## Install
+
+Keel is a macOS application: a real window, a Dock icon, a menu bar. It drives the `claude` you
+already have, so your Claude subscription covers the agent and Keel never sees an API key.
+
+**From a release.** Download `Keel.dmg`, open it, drag Keel to Applications.
+
+If macOS says *"Keel is damaged and can't be opened"*, the build was signed but not notarised —
+that is Gatekeeper's message for it, and the file is fine. Either use a notarised release, or:
+
+```
+xattr -dr com.apple.quarantine /Applications/Keel.app
+```
+
+**From source.** Needs Rust and about three minutes. Sidesteps Gatekeeper entirely, because you
+built it.
+
+```
+git clone <this repo> && cd keel
+make app                 # dist/Keel.app
+cp -R dist/Keel.app /Applications/
+```
+
+`make dmg` wraps it in a disk image. Both sign with a Developer ID if one is on the machine and
+ad-hoc if not; `packaging/README.md` covers notarisation.
+
+**Just the CLI.** No window, no application bundle:
+
+```
+cargo install --path crates/keel
+```
+
 ## Status
 
 `keel scan`, `keel workspace`, `keel sessions` and `keel trust` all work end to end.

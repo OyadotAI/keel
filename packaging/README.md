@@ -30,17 +30,28 @@ remembered between launches.
 
 ## Signing
 
-The bundle is signed ad-hoc (`codesign -s -`), which is enough to run on the machine that built it.
-Anyone else's Mac will refuse it on first open — Gatekeeper wants a Developer ID and a notarisation
-ticket, which need a paid Apple Developer account. Until there is one:
+`make app` and `make dmg` sign with a Developer ID when one is in the keychain, found automatically
+or named by `KEEL_SIGN_IDENTITY`. Both use the hardened runtime and a secure timestamp, which
+notarisation requires and does not explain the absence of.
+
+Signed is not enough. Gatekeeper's assessment says so exactly:
+
+    dist/Keel.app: rejected
+    source=Unnotarized Developer ID
+
+Notarisation closes it, and needs credentials in the keychain. `notarytool store-credentials` asks
+for them interactively — an Apple ID, a team id, an app-specific password — so it cannot be driven
+from a script. Once, then every `make dmg` notarises and staples on its own:
+
+    xcrun notarytool store-credentials keel \
+      --apple-id <apple-id> --team-id <team> --password <app-specific-password>
+
+Use `KEEL_NOTARY_PROFILE` for a different profile name.
+
+Without any of that the image still builds and still works — on the machine that built it. Anyone
+else gets "Keel is damaged and can't be opened", which is what Gatekeeper says instead of the
+truth, and the fix they need is:
 
     xattr -dr com.apple.quarantine /Applications/Keel.app
 
-is what a user has to run, and saying so plainly is better than shipping something that fails with
-"Keel is damaged and can't be opened", which is what Gatekeeper says instead of the truth.
-
-To sign properly once an account exists:
-
-    codesign --deep --force --options runtime --sign "Developer ID Application: …" dist/Keel.app
-    xcrun notarytool submit dist/Keel.dmg --keychain-profile … --wait
-    xcrun stapler staple dist/Keel.dmg
+Saying that plainly in a release note is better than shipping something that appears corrupt.
