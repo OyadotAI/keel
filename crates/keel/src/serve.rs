@@ -597,6 +597,40 @@ mod ui_tests {
     ///
     /// A `var(--x, fallback)` is deliberate and allowed — that is how the runtime-set ones work.
     #[test]
+    fn no_control_is_invisible_until_hovered() {
+        // Three separate reports came in as "I cannot find the X": the session rename, the console
+        // close, the per-card actions. All three were `opacity:0` with a `:hover` rule to bring
+        // them back — an affordance only findable by someone who already knew where it was, which
+        // is precisely the person who does not need it.
+        //
+        // `.onhover` is the deliberate exception and says so at its definition: switching accounts
+        // is a real thing to want, and putting it in front of somebody whose connection is working
+        // is worse than making them look for it.
+        let html = include_str!("../../../ui/index.html");
+        let css = html
+            .split_once("<style>")
+            .and_then(|(_, tail)| tail.split_once("</style>"))
+            .map(|(body, _)| body)
+            .expect("the UI has a stylesheet");
+
+        let hidden: Vec<&str> = css
+            .lines()
+            .filter(|line| line.contains("opacity:0}") || line.contains("opacity:0;"))
+            .filter(|line| line.trim_start().starts_with('.') || line.trim_start().starts_with('#'))
+            // Animations fade things in; they are not a permanent state.
+            .filter(|line| !line.contains("@keyframes"))
+            .filter(|line| !line.contains(".boot") && !line.contains(".onhover"))
+            // A tab's close button is drawn on the tab that is open, which is the one you can close.
+            .filter(|line| !line.contains(".tab .x"))
+            .collect();
+
+        assert!(
+            hidden.is_empty(),
+            "these controls are invisible until hovered, so nobody finds them: {hidden:#?}"
+        );
+    }
+
+    #[test]
     fn every_css_variable_is_defined() {
         let html = include_str!("../../../ui/index.html");
         let css = html
