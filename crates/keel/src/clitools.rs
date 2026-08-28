@@ -376,6 +376,111 @@ fn condense(id: &str, raw: &str) -> String {
     }
 }
 
+/// Install everything that is missing, in one go.
+///
+/// Two things are prerequisites and cannot be done from here: `claude`, because Keel has nothing
+/// to drive without it, and Homebrew, because its installer wants a password. Everything else is a
+/// `brew install` and there is no reason to make somebody run six of them by hand, one at a time,
+/// discovering each missing tool only when a button for it fails.
+///
+/// Sequential rather than parallel: brew serialises its own work anyway, and interleaved output
+/// from six installs is not something anyone can read.
+pub async fn install_all() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+
+    tokio::spawn(async move {
+        let say = |line: String| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Ok(Event::default().event("line").data(line))).await;
+            }
+        };
+
+        if !exists("brew") {
+            say("Homebrew is missing, and everything here needs it.".into()).await;
+            say("Install it first — Keel can open a terminal with the command ready.".into()).await;
+            let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
+            return;
+        }
+
+        let missing: Vec<&Tool> = TOOLS.iter().filter(|t| !exists(t.binary)).collect();
+        if missing.is_empty() {
+            say("Everything is already installed.".into()).await;
+            let _ = tx.send(Ok(Event::default().event("done").data("0"))).await;
+            return;
+        }
+
+        say(format!(
+            "Installing {}.\n",
+            missing
+                .iter()
+                .map(|t| t.label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .await;
+
+        let mut failed = 0;
+        for t in missing {
+            // wrangler comes from a JavaScript package registry, not from brew, so it needs a
+            // runtime that may itself be missing. Installing node first is the difference between
+            // this working on a bare machine and reporting one confusing failure.
+            if t.id == "wrangler" && !exists("bun") && !exists("npm") {
+                say("$ brew install node".into()).await;
+                let code = run_install(Command::new("brew").args(["install", "node"]), &tx).await;
+                if code != 0 {
+                    say("node failed, so wrangler cannot be installed.".into()).await;
+                    failed += 1;
+                    continue;
+                }
+            }
+
+            let Some((mgr, args)) = t.install.iter().find(|(mgr, _)| exists(mgr)) else {
+                say(format!("{} has no installer here — see {}", t.label, t.manual)).await;
+                failed += 1;
+                continue;
+            };
+
+            say(format!("\n$ {mgr} {}", args.join(" "))).await;
+            let mut command = Command::new(mgr);
+            command.args(*args);
+            if run_install(&mut command, &tx).await != 0 {
+                failed += 1;
+            }
+        }
+
+        say(if failed == 0 {
+            "\nDone. Reload connections to see them.".into()
+        } else {
+            format!("\n{failed} did not install. The output above says why.")
+        })
+        .await;
+        let _ = tx
+            .send(Ok(Event::default().event("done").data(failed.to_string())))
+            .await;
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+}
+
+/// Run one install, forwarding its output, and give back its exit code.
+async fn run_install(
+    command: &mut Command,
+    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+) -> i32 {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let Ok(mut child) = command.spawn() else {
+        return 1;
+    };
+    let (out, err) = (child.stdout.take(), child.stderr.take());
+    tokio::join!(pump(out, tx.clone()), pump(err, tx.clone()));
+    child
+        .wait()
+        .await
+        .map(|s| s.code().unwrap_or(-1))
+        .unwrap_or(-1)
+}
+
 /// Status of every CLI Keel knows about.
 pub async fn status() -> axum::Json<Vec<ToolStatus>> {
     let mut out = Vec::new();

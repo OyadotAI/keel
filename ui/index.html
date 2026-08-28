@@ -2992,11 +2992,36 @@ function drawConnections(){
       '<div id="aw-msg"></div></div>';
   }
 
+  // Everything below brew is a `brew install`, and there is no reason to make somebody run six of
+  // them by hand — discovering each missing tool only when its own button fails.
+  const absent=(clis??[]).filter(t=>!t.installed);
+  if(absent.length) h+='<div class="field"><label>Missing tools</label>'+
+    '<div class="note dim">'+absent.map(t=>esc(t.label)).join(', ')+
+    ' — Keel installs these with Homebrew.</div>'+
+    '<div class="line"><button class="btn" id="cli-all">Install all '+absent.length+'</button></div>'+
+    '<div id="cli-all-out"></div></div>';
+
   h+='<div class="field"><label>Open a repository</label>'+
     '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
     '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
     '<div id="repos"></div>';
   el('side').innerHTML=h;
+  const all=el('cli-all');
+  if(all) all.onclick=()=>{
+    all.disabled=true;
+    const host=el('cli-all-out');
+    host.innerHTML='<pre class="console" id="all-out"></pre>';
+    const out=el('all-out');
+    const es=new EventSource('/api/cli/install-all');
+    const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
+    es.addEventListener('line',e=>write(e.data));
+    es.addEventListener('done',async()=>{
+      es.close(); all.disabled=false;
+      await loadClis(); drawConnections();
+    });
+    es.onerror=()=>{ es.close(); all.disabled=false; write('The connection dropped.'); };
+  };
+
   const awgo=el('aw-go');
   if(awgo) awgo.onclick=async()=>{
     awgo.disabled=true;
@@ -5610,12 +5635,14 @@ async function drawWelcome(){
         '<div class="wact"><button class="btn" id="w-signin">Open a terminal here</button></div>'+
         '</div>';
   } else if(!c.brew){
-    // Not blocking: nothing on the welcome screen needs brew. But every install button in
-    // Settings is dead without it, and finding that out one at a time is worse than being told.
-    fix='<div class="wfix">Homebrew is not installed. Nothing here needs it, but the GitHub, '+
-        'Google Cloud and Kubernetes installers in Settings all do.'+
-        '<div class="wact"><button class="btn quiet" id="w-brew">Install Homebrew in a terminal'+
-        '</button></div></div>';
+    // The second and last prerequisite. Everything else Keel installs itself, through brew — so
+    // brew is where the chain of "install this first" stops, and it stops here rather than six
+    // buttons deep in Settings.
+    fix='<div class="wfix">Homebrew is missing. It is the last thing you install by hand — '+
+        'GitHub, Google Cloud, Kubernetes and the rest all come from it, and Keel installs those '+
+        'for you once it is here.<br><br>Its installer asks for your password, which Keel cannot '+
+        'type, so it opens in the terminal below.'+
+        '<div class="wact"><button class="btn" id="w-brew">Install Homebrew</button></div></div>';
   }
 
   el('w-claude').innerHTML=
@@ -5628,12 +5655,15 @@ async function drawWelcome(){
 
   // Opening a project before Claude Code works gets you a readiness scan and a chat box that
   // cannot answer. Offering it anyway is offering a dead end, so the section waits.
-  const ready=c.installed&&c.authenticated;
+  // Both prerequisites, not just the agent. A project opened without brew works, but every
+  // connection in it is a dead end, and finding that out one tool at a time is the experience
+  // this screen exists to prevent.
+  const ready=c.installed&&c.authenticated&&c.brew;
   el('w-open').classList.toggle('waiting',!ready);
   el('w-open').querySelector('.wh').innerHTML=ready
     ? '<h2>Open something</h2>'
-    : '<h2>Open something</h2><span class="note2">After Claude Code — Keel has nothing to drive '+
-      'until then.</span>';
+    : '<h2>Open something</h2><span class="note2">After the two above. They are the only things '+
+      'Keel cannot install for you.</span>';
 }
 
 function leaveWelcome(){

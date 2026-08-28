@@ -316,6 +316,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
+        .route(
+            "/api/cli/install-all",
+            get(crate::clitools::install_all),
+        )
         .route("/api/cli/login", get(crate::clitools::login))
         .route(
             "/api/github/clone",
