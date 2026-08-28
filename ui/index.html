@@ -800,6 +800,18 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
    Next three times to reach it is not respect for anybody's time. */
 /* Above the application it replaces, below the modals it opens. The first version sat at 80 and
    every dialog it raised — open a folder, new project — rendered behind it, invisible. */
+/* Shown before a single line of script runs — it is in the markup, so it is on screen with the
+   first paint rather than after the work it is covering. Reading a repository and asking six CLIs
+   who they are takes seconds, and the honest thing to do with those seconds is account for them. */
+.boot{position:fixed;inset:0;z-index:90;background:var(--n1);color:var(--accent);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s4)}
+.boot.gone{opacity:0;pointer-events:none;transition:opacity 220ms ease}
+.bootbar{width:180px;height:2px;background:var(--n5);border-radius:2px;overflow:hidden}
+.bootbar i{display:block;width:40%;height:100%;background:var(--accent);border-radius:2px;
+  animation:bootslide 1.1s ease-in-out infinite}
+@keyframes bootslide{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+.bootsay{font:11px var(--mono);color:var(--n9);letter-spacing:.04em}
+
 .welcome{position:fixed;inset:0;z-index:55;background:var(--n1);
   overflow-y:auto;display:grid;align-items:start;justify-items:center}
 .welcome.hidden{display:none}
@@ -1352,6 +1364,14 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <span><b>&gt;</b> commands</span><span><b>:</b> line</span><span><b>?</b> help</span>
     <span class="sp" style="flex:1"></span><span>↑↓ navigate · ↵ open · esc close</span>
   </div>
+</div>
+
+<div class="boot" id="boot">
+  <svg width="28" height="28" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
+      stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  <div class="bootbar"><i></i></div>
+  <div class="bootsay" id="bootsay">Starting</div>
 </div>
 
 <div class="welcome hidden" id="welcome">
@@ -5888,9 +5908,14 @@ function connBadge(){
   const n=broken+(missingClaude?1:0);
   badge('conn',n?String(n):'',n>0);
 }
-async function refresh(){
+/* `seed` is a state payload already in hand.
+ *
+ * Boot fetched `/api/state` to choose between the welcome screen and the IDE, and then refresh
+ * fetched it again — two seconds each on a large repository, for the same answer. It is passed
+ * through now. */
+async function refresh(seed){
   [state,git,treeData]=await Promise.all([
-    fetch('/api/state').then(r=>r.json()),
+    seed ? Promise.resolve(seed) : fetch('/api/state').then(r=>r.json()),
     fetch('/api/git/status').then(r=>r.json()),
     fetch('/api/tree').then(r=>r.json()),
   ]);
@@ -5921,6 +5946,7 @@ async function refresh(){
    the `claude` it is about to drive is actually usable. Everything else waits until there is
    something to work on. */
 async function drawWelcome(){
+  booted();
   el('welcome').classList.remove('hidden');
   el('app').setAttribute('aria-hidden','true');
 
@@ -6023,15 +6049,36 @@ function leaveWelcome(){
 }
 
 /** Everything that has to happen once a project exists — shared by every way of getting one. */
-async function bootProject(){
-  await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev(), loadTrust()]);
-  claudeGate();
-  await refresh();
+/** Say what is happening, while it happens. */
+function booting(what){ const n=el('bootsay'); if(n) n.textContent=what; }
+function booted(){
+  const b=el('boot'); if(!b) return;
+  b.classList.add('gone');
+  setTimeout(()=>b.remove(),260);
+}
+
+async function bootProject(seed){
+  // Only what the first screen is made of. Asking six CLIs who they are takes four seconds and
+  // nothing on that screen is waiting for the answer — it used to be awaited anyway, which is
+  // most of why opening Keel meant six seconds of nothing.
+  booting('Reading the repository');
+  await Promise.all([loadCheck(), loadDev()]);
+  await refresh(seed);
+
+  booting('Opening');
   try{ wirePanel(); setPanelTab('terminal'); }
   catch(e){ console.error('panel',e); }
   PANELS._skillsCta?.();
   emptyLog();
   draw();
+  booted();
+
+  // Everything below here updates something already on screen, so it happens behind it. Each
+  // redraws only its own part when it lands.
+  loadConn().then(drawStatus).catch(()=>{});
+  loadClis().then(()=>{ drawStatus(); if(panel==='connections') drawConnections(); }).catch(()=>{});
+  loadTrust().then(drawStatus).catch(()=>{});
+  claudeGate();
   resumeLast();
 }
 
@@ -6127,10 +6174,11 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   // One cheap request decides which of the two screens this is, before anything expensive runs:
   // with nothing open there is no tree to walk, no scan to run and no session list to read.
+  booting('Checking Claude Code');
   const first=await fetch('/api/state').then(r=>r.json()).catch(()=>({project_open:true}));
   if(!first.project_open){ await drawWelcome(); return; }
 
-  await bootProject();
+  await bootProject(first);
   const qs=new URLSearchParams(location.search);
   if(qs.get('panel')) setPanel(qs.get('panel'));
   if(qs.get('mode')==='diff'){ view='diff'; syncView(); }
