@@ -1082,6 +1082,14 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .status .live{color:var(--accent)}
 .status .score.ok{color:var(--ok)} .status .score.warn{color:var(--warn)}
 .status .score.crit{color:var(--crit)}
+/* A stale connection is a warning, not an error: nothing is broken yet, but the next command that
+   needs it fails in a way that reads like the agent's fault. */
+.status .cell.warn{color:var(--warn)}
+.status .cell.warn:hover{background:color-mix(in srgb,var(--warn) 20%,transparent)}
+
+/* Arriving from the status bar, so the row that sent you is the row you land on. */
+.field.focused{box-shadow:0 0 0 1px var(--warn),0 0 0 6px color-mix(in srgb,var(--warn) 14%,transparent);
+  border-radius:var(--r2);transition:box-shadow 400ms ease}
 .status button{all:unset;cursor:pointer;transition:color var(--t-hover)}
 .status button:hover{color:var(--n12)}
 
@@ -2778,20 +2786,32 @@ function runCli(kind,id,host,profile){
 
 /* ════ connections ═══════════════════════════════════════════════════════ */
 let repoList=null;
+/* Named so the status bar can send you straight at one, rather than to a page of six where the
+   one that needs you looks like the five that do not. */
+let focusTool=null;
+const NO_LOGIN=new Set(['kubectl','docker']);
+
 function cliBlock(t,extra){
   const state = !t.installed ? 'missing' : t.authenticated ? 'ready' : 'unauth';
   const note =
     state==='ready'  ? '<div class="note good">'+esc(t.version??'')+'</div>' :
-    state==='unauth' ? '<div class="note dim">Installed but not signed in.</div>' :
+    // Its own reason where there is one — "the daemon is not running" is a different problem from
+    // "you are signed out", and they have different fixes.
+    state==='unauth' ? '<div class="note bad">'+esc(t.blocked??'Installed but not signed in.')+'</div>' :
     t.install_cmd    ? '<div class="note dim">Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.</div>'
                      : '<div class="note bad">Not installed, and no supported package manager found. '+
                        '<a href="'+esc(t.manual)+'" target="_blank" rel="noopener">Install instructions</a></div>';
   const actions = [];
   if(state==='missing'&&t.install_cmd) actions.push('<button class="btn" data-cli="install" data-id="'+t.id+'">Install</button>');
-  if(state==='unauth') actions.push('<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>');
-  if(state==='ready') actions.push('<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>');
-  return '<div class="field"><label>'+esc(t.label)+'</label>'+note+
-    '<div class="line">'+actions.join('')+(extra??'')+'</div>'+
+  // kubectl and docker have no sign-in of their own — their `blocked` message says where their
+  // credentials actually come from, and a button here would only refuse.
+  const canLogin=!NO_LOGIN.has(t.id);
+  if(state==='unauth'&&canLogin) actions.push('<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>');
+  if(state==='ready'&&canLogin) actions.push('<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>');
+
+  const wanted=focusTool===t.id;
+  return '<div class="field'+(wanted?' focused':'')+'" id="conn-'+t.id+'"><label>'+esc(t.label)+'</label>'+note+
+    (actions.length||extra?'<div class="line">'+actions.join('')+(extra??'')+'</div>':'')+
     '<div id="cli-'+t.id+'"></div></div>';
 }
 
@@ -2835,6 +2855,14 @@ function drawConnections(){
     '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
     '<div id="repos"></div>';
   el('side').innerHTML=h;
+  if(focusTool){
+    const box=el('conn-'+focusTool);
+    box?.scrollIntoView({block:'center'});
+    focusTool=null;
+    // The highlight is a pointer, not a state. Leaving it on would say "still wrong" after it
+    // has been fixed.
+    setTimeout(()=>box?.classList.remove('focused'),2400);
+  }
 
   el('side').querySelectorAll('[data-cli]').forEach(b=>b.onclick=()=>
     runCli(b.dataset.cli,b.dataset.id,el('cli-'+b.dataset.id)));
@@ -5035,6 +5063,28 @@ function syncSave(){
   el('do-save').classList.toggle('hidden',!tab?.dirty||view!=='src');
 }
 
+/* Connections that have gone stale.
+ *
+ * A token expires, `gcloud auth` lapses, Docker Desktop is not running — and none of that surfaces
+ * until a command fails halfway through a turn, with an error that reads like the agent's fault.
+ * So it goes in the status bar, where you already look, and it is one click from the place that
+ * fixes it.
+ *
+ * Only tools that are *installed* and not working. Not having gcloud is not an error, and a
+ * machine that has never used it should not be nagged about it. */
+function brokenConnections(){
+  return (clis??[]).filter(t=>t.installed&&!t.authenticated);
+}
+
+function connectionTrouble(){
+  const bad=brokenConnections();
+  if(!bad.length) return null;
+  // Naming the one is more useful than counting it; past that, a count is what fits.
+  return bad.length===1
+    ? {label:bad[0].label+' needs signing in',id:bad[0].id}
+    : {label:bad.length+' connections need attention',id:bad[0].id};
+}
+
 function drawStatus(){
   syncSave();
   const s=state?.scan, tab=tabs.find(t=>t.path===active);
@@ -5051,6 +5101,9 @@ function drawStatus(){
       ? '<span class="score ok">check ✓</span>'
       : '<span class="score crit">'+problems.length+' problem'+(problems.length===1?'':'s')+'</span>')+
     '</button>');
+  const trouble=connectionTrouble();
+  if(trouble) cells.push('<button class="cell warn" data-conn="'+esc(trouble.id)+'" '+
+    'title="Open Connections">\u26a0 '+esc(trouble.label)+'</button>');
   cells.push('<span class="sp"></span>');
   if(mon&&view==='src'&&tab){
     const p=mon.getPosition();
@@ -5069,6 +5122,9 @@ function drawStatus(){
   el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
   el('status').querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>openPreview());
   el('status').querySelectorAll('[data-trust]').forEach(b=>b.onclick=()=>reviewTrust());
+  el('status').querySelectorAll('[data-conn]').forEach(b=>b.onclick=()=>{
+    setsTab='connections'; focusTool=b.dataset.conn; openSettings();
+  });
 }
 
 /** Withdrawing trust has to be as reachable as granting it, or granting it is a trap. */
