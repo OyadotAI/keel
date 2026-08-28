@@ -340,6 +340,10 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   border-bottom-width:2px;padding:1px 4px;border-radius:var(--r1);color:var(--n10)}
 
 .surface{flex:1;min-height:0;position:relative}
+/* Monaco scrolls itself, so the surface must not — but the panes Keel draws into the same element
+   (agent changes, the empty state) are ordinary flow content and need a scroll container, which is
+   also what their sticky headers are positioned against. The class says which kind is in there. */
+.surface.scrolls{overflow-y:auto;overflow-x:hidden}
 /* File strip for a skill directory, so its scripts and references are one click away. */
 .siblings{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s4);flex:none;
   background:var(--n2);border-bottom:1px solid var(--n6);overflow-x:auto}
@@ -1444,6 +1448,9 @@ function drawPreview(tab){
 /* ════ rendering ═════════════════════════════════════════════════════════ */
 async function draw(){
   document.querySelector('.siblings')?.remove();
+  // Cleared here and set by whichever renderer takes the surface, so a mode never inherits the
+  // previous one's scrolling.
+  el('surface').classList.remove('scrolls');
   drawTabs();
   document.querySelectorAll('.row[data-p]').forEach(r=>r.classList.toggle('sel',r.dataset.p===active));
   const tab=tabs.find(t=>t.path===active);
@@ -3422,6 +3429,7 @@ function noteEdit(path){
 
 async function drawChanges(){
   el('crumb').textContent='Agent changes';
+  el('surface').classList.add('scrolls');
   const files=[...agentEdits];
   if(!files.length){
     el('surface').innerHTML='<div class="live-empty">Nothing changed yet in this turn.<br>'+
