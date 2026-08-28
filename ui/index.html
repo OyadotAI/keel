@@ -586,7 +586,22 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   border-radius:3px;padding:1px 4px}
 .ask .opts{display:flex;flex-wrap:wrap;gap:var(--s2)}
 .ask .opts .btn{font-size:11.5px;padding:4px var(--s3)}
-.ask .settled{font:11.5px var(--mono);color:var(--n10)}
+/* Once a card is decided it is history, and history should not hold the same amount of screen as
+   the question does. It folds to one line — what you chose — and keeps the command one click away,
+   because the reason you scroll back to a decision is almost always to read the command again. */
+.ask .settled{display:flex;align-items:center;gap:var(--s2);
+  font:11.5px var(--mono);color:var(--n10);min-width:0}
+.ask .settled .mk{flex:none;font-weight:700}
+.ask.ok .settled .mk{color:var(--ok)}
+.ask.no .settled .mk{color:var(--n9)}
+.ask .settled .st{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask .settled .exp{all:unset;cursor:pointer;flex:none;color:var(--n9);
+  padding:0 var(--s2);font:11px var(--mono);line-height:1}
+.ask .settled .exp:hover{color:var(--n12)}
+.ask.done{padding:5px var(--s3);
+  border-color:var(--n6);background:transparent}
+.ask.done .hd{display:none}
+.ask.min pre,.ask.min .why{display:none}
 
 /* ── the welcome screen ────────────────────────────────────────────────────
    Shown when nothing is open: a first launch, or an application opened from the
@@ -3481,6 +3496,23 @@ function openFolderDialog(){
 const APPROVABLE=/requires approval|permission to use|has been denied|haven.t granted/i;
 const UNAPPROVABLE=/contains expansion|banned command|contains banned/i;
 
+/** Fold a decided card down to the line that says what was decided. */
+function settleCard(card,text,ok){
+  card.querySelector('.opts')?.remove();
+  card.classList.add('done','min',ok?'ok':'no');
+  card.insertAdjacentHTML('beforeend',
+    '<div class="settled"><span class="mk">'+(ok?'\u2713':'\u2014')+'</span>'+
+    '<span class="st">'+esc(text)+'</span>'+
+    '<button class="exp" title="Show the command">&#8964;</button></div>');
+  const b=card.querySelector('.exp');
+  b.onclick=()=>{
+    const folded=card.classList.toggle('min');
+    // Set as text, not markup: an entity assigned to textContent renders as its own characters.
+    b.textContent=folded?'\u2304':'\u2303';
+    b.title=folded?'Show the command':'Hide the command';
+  };
+}
+
 const pendingCalls=new Map();
 const actNodes=new Map();
 
@@ -3532,14 +3564,14 @@ function explainRejection(call,text){
   turn.work.append(card);
   follow();
 
-  const settle=t=>{ card.querySelector('.opts').outerHTML='<div class="settled">'+esc(t)+'</div>'; };
+  const settle=(t,ok)=>settleCard(card,t,ok);
   card.querySelector('[data-fix]').onclick=()=>{
-    settle('Asked it to rewrite the command.');
+    settle('Asked it to rewrite the command.',true);
     send('That command was refused because it contains shell expansion, which no permission rule '+
          'can allow. Run it again without $(...), backticks or $? — use separate commands and read '+
          'the output instead.');
   };
-  card.querySelector('[data-skip]').onclick=()=>settle('Left alone.');
+  card.querySelector('[data-skip]').onclick=()=>settle('Left alone.',false);
 }
 
 const askedFor=new Set();
@@ -3566,22 +3598,21 @@ function askApproval(call){
   turn.work.append(card);
   follow();
 
-  const settle=text=>{ card.querySelector('.opts').outerHTML=
-    '<div class="settled">'+esc(text)+'</div>'; };
+  const settle=(text,ok)=>settleCard(card,text,ok);
 
   card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=async()=>{
     for(const rule of rules){
       const r=await fetch('/api/permissions/add',{method:'POST',
         headers:{'content-type':'application/json'},
         body:JSON.stringify({rule,scope:b.dataset.scope})});
-      if(!r.ok){ settle(await r.text()); return; }
+      if(!r.ok){ settle(await r.text(),false); return; }
     }
-    settle('Allowed '+label+(b.dataset.scope==='project'?' for this project':' for this session')+
-      ' — retrying.');
+    settle('Allowed '+label+(b.dataset.scope==='project'?' for this project':' for this session'),
+      true);
     // Resume the same session so the agent continues from where it was stopped.
     send('Retry the command you were denied. It is allowed now.');
   });
-  card.querySelector('[data-deny]').onclick=()=>settle('Not allowed.');
+  card.querySelector('[data-deny]').onclick=()=>settle('Not allowed.',false);
 }
 
 /* ════ preview ═══════════════════════════════════════════════════════════
