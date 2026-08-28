@@ -525,6 +525,33 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   border-radius:var(--r2);font:10.5px/1.5 var(--mono);color:var(--n11);white-space:pre-wrap;
   word-break:break-word;max-height:220px;overflow:auto}
 
+/* ── preview ────────────────────────────────────────────────────────────────
+   Shipping something and having nowhere to look is half a loop. */
+.pv{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--n1)}
+.pv-bar{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3);flex:none;
+  background:var(--n3);border-bottom:1px solid var(--n6)}
+.pv-bar input{flex:1;background:var(--n2);border:1px solid var(--n7);color:var(--n12);
+  border-radius:var(--r2);padding:4px var(--s3);font:11.5px var(--mono);outline:none}
+.pv-bar input:focus{border-color:var(--accent)}
+.pv-bar button{all:unset;cursor:pointer;color:var(--n10);padding:3px var(--s2);border-radius:var(--r1);
+  font:11px var(--mono);flex:none;transition:color var(--t-hover),background var(--t-hover)}
+.pv-bar button:hover{color:var(--n12);background:var(--n4)}
+.pv-bar .w{display:flex;gap:1px;background:var(--n4);border-radius:var(--r1);padding:1px;flex:none}
+.pv-bar .w button{padding:2px var(--s2)}
+.pv-bar .w button[aria-current=true]{background:var(--n6);color:var(--n12)}
+.pv-stage{flex:1;min-height:0;display:grid;place-items:center;overflow:auto;background:var(--n2);
+  padding:var(--s4)}
+.pv-stage iframe{width:100%;height:100%;border:0;background:#fff;border-radius:var(--r2);
+  box-shadow:0 6px 30px rgba(0,0,0,.35)}
+.pv-stage.narrow iframe{width:390px;max-width:100%}
+.pv-stage.tablet iframe{width:820px;max-width:100%}
+.pv-note{padding:var(--s6);text-align:center;color:var(--n10);font:12.5px/1.7 var(--sans);
+  max-width:460px}
+.pv-note b{display:block;color:var(--n12);font-size:13.5px;margin-bottom:var(--s2)}
+.pv-note .btn{margin-top:var(--s4)}
+.pv-log{flex:none;max-height:150px;overflow:auto;padding:var(--s3);background:var(--n1);
+  border-top:1px solid var(--n6);font:10.5px/1.5 var(--mono);color:var(--n10);white-space:pre-wrap}
+
 /* ── live changes ───────────────────────────────────────────────────────────
    What the agent is doing to the code, in the pane you are already looking at.
    Stacked per file rather than tab-per-file: a change that touches six files is
@@ -1107,6 +1134,14 @@ async function draw(){
   el('v-diff').classList.toggle('hidden',!!tab.settings);
   if(view==='prev'&&!previewable(tab.path)) view='src';
   if(view==='prev'){ syncView(); drawPreview(tab); return; }
+  if(tab.preview){
+    if(mon){ mon.dispose(); mon=null; ready=false; }
+    if(monDiff){ monDiff.dispose(); monDiff=null; }
+    el('v-src').classList.add('hidden'); el('v-diff').classList.add('hidden');
+    el('v-prev').classList.add('hidden');
+    loadDev().then(drawPreview);
+    return;
+  }
   if(tab.changes){
     if(mon){ mon.dispose(); mon=null; ready=false; }
     if(monDiff){ monDiff.dispose(); monDiff=null; }
@@ -1627,6 +1662,9 @@ function record(r){
         if(call) askApproval(call);
       } else if(WRITE_TOOLS.has(pendingCalls.get(b.tool_use_id)?.tool) && active===CHANGES){
         drawChanges();
+      } else if(pendingCalls.get(b.tool_use_id)?.tool==='Bash'){
+        // A deploy or a dev server announces its URL in the output. Catch it.
+        noticeUrl(text);
       }
     }
     return;
@@ -2374,6 +2412,7 @@ function menuItems(which){
     item('Subagents','',()=>setPanel('agents')),
     item('Hooks','',()=>setPanel('hooks')),
     item('MCP servers','',()=>setPanel('mcp')),
+    item('Preview','',()=>openPreview()),
     item('Agent changes','',()=>{ if(!tabs.some(t=>t.path===CHANGES)) tabs.push({path:CHANGES,changes:true,dirty:false}); active=CHANGES; draw(); }),
     item('Problems','',()=>setPanel('problems')),
     item('Readiness','',()=>setPanel('readiness')),
@@ -2568,6 +2607,118 @@ function askApproval(call){
     send('Retry the command you were denied. It is allowed now.');
   });
   card.querySelector('[data-deny]').onclick=()=>settle('Not allowed.');
+}
+
+/* ════ preview ═══════════════════════════════════════════════════════════
+   A pane that points at whatever is serving: the dev server Keel started, or a
+   URL a deploy printed. Deploy output announces the URL, and that announcement
+   is the only reliable place a runtime-chosen port appears. */
+const PREVIEW='\u25b7 Preview';
+let devState={running:false,url:null,detected:null,log:[]};
+let previewUrl=null, previewWidth='full';
+
+function openPreview(url){
+  if(url) previewUrl=url;
+  if(!tabs.some(t=>t.path===PREVIEW)) tabs.push({path:PREVIEW,preview:true,dirty:false});
+  active=PREVIEW; draw();
+}
+
+async function loadDev(){
+  devState=await (await fetch('/api/dev')).json();
+  if(devState.url&&!previewUrl) previewUrl=devState.url;
+}
+
+async function devStart(){
+  const r=await fetch('/api/dev/start',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({})});
+  if(!r.ok){ toast(await r.text()); return; }
+  // The URL appears in the server's own output a moment after it starts.
+  for(let i=0;i<40&&!devState.url;i++){
+    await new Promise(r=>setTimeout(r,400));
+    await loadDev();
+    if(active===PREVIEW) drawPreview();
+  }
+  // A dev server you started is a thing you want to look at.
+  if(devState.url){ previewUrl=devState.url; openPreview(devState.url); }
+  else if(active===PREVIEW) drawPreview();
+}
+
+async function devStop(){
+  await fetch('/api/dev/stop',{method:'POST'});
+  await loadDev();
+  if(active===PREVIEW) drawPreview();
+}
+
+function drawPreview(){
+  el('crumb').textContent='Preview'+(previewUrl?'  ·  '+previewUrl:'');
+  const bar=
+    '<div class="pv-bar">'+
+      '<button id="pv-reload" title="Reload">\u21bb</button>'+
+      '<input id="pv-url" spellcheck="false" placeholder="http://localhost:8787" value="'+
+        esc(previewUrl??'')+'">'+
+      '<span class="w"><button data-w="full" aria-current="'+(previewWidth==='full')+'">full</button>'+
+      '<button data-w="tablet" aria-current="'+(previewWidth==='tablet')+'">tablet</button>'+
+      '<button data-w="narrow" aria-current="'+(previewWidth==='narrow')+'">phone</button></span>'+
+      (devState.running
+        ? '<button id="pv-stop">stop server</button>'
+        : devState.detected ? '<button id="pv-start">run '+esc(devState.detected)+'</button>' : '')+
+      '<button id="pv-ext" title="Open in a real browser tab">open \u2197</button>'+
+    '</div>';
+
+  const stage = previewUrl
+    ? '<div class="pv-stage '+previewWidth+'"><iframe id="pv-frame" src="'+esc(previewUrl)+'" '+
+      'sandbox="allow-scripts allow-forms allow-same-origin allow-popups"></iframe></div>'
+    : '<div class="pv-stage"><div class="pv-note"><b>Nothing to preview yet</b>'+
+      (devState.detected
+        ? 'Start the dev server and Keel will point the preview at whatever URL it announces.'+
+          '<div><button class="btn" id="pv-start2">Run '+esc(devState.detected)+'</button></div>'
+        : 'This project has no dev command. Add a <code>dev</code> script to package.json, '+
+          'or paste a URL above — a deploy URL works too.')+
+      '</div></div>';
+
+  const log = devState.running&&devState.log.length
+    ? '<div class="pv-log">'+esc(devState.log.slice(-40).join('\n'))+'</div>' : '';
+
+  el('surface').innerHTML='<div class="pv">'+bar+stage+log+'</div>';
+
+  const go=()=>{ previewUrl=el('pv-url').value.trim()||null; drawPreview(); };
+  el('pv-url').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); go(); } });
+  el('pv-reload').onclick=()=>{
+    const f=el('pv-frame');
+    // Re-assigning src reloads without needing same-origin access to the frame.
+    if(f) f.src=f.src;
+  };
+  el('pv-ext').onclick=()=>previewUrl&&window.open(previewUrl,'_blank','noopener');
+  el('pv-start')&&(el('pv-start').onclick=devStart);
+  el('pv-start2')&&(el('pv-start2').onclick=devStart);
+  el('pv-stop')&&(el('pv-stop').onclick=devStop);
+  el('surface').querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
+    previewWidth=b.dataset.w; drawPreview();
+  });
+  drawStatus();
+}
+
+/** A URL the agent printed — from a deploy, or a server it started itself. */
+function noticeUrl(text){
+  const m=String(text).match(/https?:\/\/[^\s"'),<>]+/g);
+  if(!m) return;
+  const noise=['docs.','developers.','dash.','github.com','npmjs.com','schemastore','anthropic.com'];
+  const hit=m.map(u=>u.replace(/[.,:\]]+$/,''))
+             .find(u=>u.length>10&&!noise.some(n=>u.includes(n)));
+  if(!hit) return;
+  // Only the origin: a deploy or dev server announces internal paths too, and the app is at the root.
+  const origin=hit.match(/^https?:\/\/[^/]+/)?.[0]??hit;
+  if(origin===previewUrl) return;
+  previewUrl=origin;
+  if(turn) offerPreview(origin);
+}
+
+function offerPreview(url){
+  const card=frag('<div class="verdict"><span>Serving at <b>'+esc(url)+'</b></span>'+
+    '<span class="sp"></span><button data-open-pv>preview</button></div>');
+  turn.work.append(card);
+  card.querySelector('[data-open-pv]').onclick=()=>openPreview(url);
+  follow();
 }
 
 /* ════ live changes ══════════════════════════════════════════════════════
@@ -2775,6 +2926,8 @@ function drawStatus(){
   if(git?.is_repo) cells.push('<button class="cell" data-go="changes"><b>⑂</b>'+esc(git.branch??'')+'</button>');
   if(git?.changes?.length) cells.push('<button class="cell" data-go="changes">'+git.changes.length+' changed</button>');
   if(s) cells.push('<button class="cell" data-go="readiness">ready <span class="score '+band(s.score)+'">'+s.score+'</span>/100</button>');
+  if(devState.running) cells.push('<button class="cell" data-pv="1">'+
+    (devState.url?'<span class="score ok">serving</span>':'starting…')+'</button>');
   if(verifyState.running) cells.push('<span class="cell live">checking…</span>');
   else if(verifyState.ran) cells.push('<button class="cell" data-go="problems">'+
     (verifyState.code===0
@@ -2793,6 +2946,7 @@ function drawStatus(){
   if(sessionId) cells.push('<span class="cell">'+esc(sessionId.split('-')[0])+'</span>');
   el('status').innerHTML=cells.join('');
   el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
+  el('status').querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>openPreview());
 }
 
 /* ════ command palette ═══════════════════════════════════════════════════
@@ -2844,6 +2998,9 @@ const COMMANDS=[
   {id:'refresh',    label:'Repository: Refresh',       run:refresh},
   {id:'verify',     label:'Run project checks',        run:()=>{ setPanel('problems'); runVerify(); }},
   {id:'problems',   label:'View: Problems',            run:()=>setPanel('problems')},
+  {id:'preview',    label:'Preview: Open',             run:()=>openPreview()},
+  {id:'devstart',   label:'Preview: Run dev server',   run:()=>{ openPreview(); devStart(); }},
+  {id:'devstop',    label:'Preview: Stop dev server',  run:devStop},
 ];
 
 let hits=[], cursor=0;
@@ -2993,7 +3150,7 @@ async function refresh(){
 
 wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
-  await Promise.all([loadConn(), loadClis(), loadCheck()]);
+  await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev()]);
   await refresh();
   PANELS._skillsCta?.();
   emptyLog();   // suggestions are drawn from the scan and git status, so it waits for them
@@ -3007,6 +3164,7 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
   if(qs.get('settings')){ setsTab=qs.get('settings'); openSettings(); }
   // ?verify=1 runs the project's checks on load, for a link that lands on the failures.
   if(qs.get('verify')){ setPanel('problems'); runVerify(); }
+  if(qs.get('preview')) openPreview(qs.get('preview')==='1'?null:qs.get('preview'));
 })();
 </script>
 </body>

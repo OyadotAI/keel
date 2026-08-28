@@ -23,6 +23,23 @@ keel sessions . --all    # every recorded session, resumable by id
 keel trust .             # quarantine repo-supplied agent config
 ```
 
+## Preview
+
+Shipping something and having nowhere to look is half a loop. The preview pane points at whatever is
+serving: the dev server Keel starts for you, or a URL a deploy printed.
+
+Keel runs the project's own `dev` script — falling back to `wrangler dev` only when there is a
+Wrangler config, rather than inventing a run command for a project that has none — and watches its
+output for the URL. That announcement is the only reliable place the port appears, since it is
+chosen at runtime when the preferred one is taken. Only the origin is kept: Wrangler also prints
+internal endpoints like `/cdn-cgi/local/explorer/api`, and pointing a preview at one of those shows
+the wrong thing.
+
+Deploy output is watched the same way, so finishing a deploy offers the URL it just printed.
+
+The pane has width presets, a reload, and an open-in-browser escape hatch for anything that refuses
+to be framed.
+
 ## Watching the agent work
 
 Every file the agent writes during a turn appears as a stacked diff in the editor pane, refreshed as
