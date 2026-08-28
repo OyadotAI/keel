@@ -1137,6 +1137,22 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .console{margin-top:var(--s3);padding:var(--s3);background:var(--n1);border:1px solid var(--n6);
   border-radius:var(--r2);font:10.5px/1.5 var(--mono);color:var(--n11);white-space:pre-wrap;
   word-break:break-word;max-height:240px;overflow:auto}
+/* A one-time code, lifted out of the console.
+ *
+ * `gh auth login --web` prints the code and the URL as two of about eight lines of ordinary
+ * output, in 10.5px monospace, the same grey as everything around it. It is the only line you
+ * have to act on and it read as log noise — so it is pulled out above the console, at a size you
+ * can read across a desk, and the console keeps scrolling underneath. */
+.handoff{margin-top:var(--s3);padding:var(--s4);border:1px solid var(--n7);border-radius:var(--r2);
+  background:var(--n2);display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}
+.handoff .hl{font:11px var(--sans);color:var(--n10)}
+.handoff .code{display:flex;align-items:center;gap:var(--s3)}
+.handoff .otp{font:600 22px/1 var(--mono);letter-spacing:.14em;color:var(--crit);
+  user-select:all;-webkit-user-select:all}
+.handoff .hb{font:11px var(--sans)}
+/* Inside the console, so a URL in ordinary output is still reachable. */
+.console a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.console .otp{color:var(--crit);font-weight:600}
 .picksel{background:var(--n3);border:1px solid var(--n7);color:var(--n12);border-radius:var(--r2);
   padding:4px var(--s3);font:11.5px var(--mono);outline:none}
 
@@ -3157,13 +3173,75 @@ async function loadTrust(){
   catch(_){ trustState=false; }
 }
 
+/* A URL and a one-time code, marked up so they can be acted on rather than read.
+ *
+ * The code shape is the one every device flow uses — two groups of four, hyphenated. Matching it
+ * generically rather than looking for GitHub's wording means gcloud and `aws sso login` get the
+ * same treatment, and a change to gh's phrasing does not quietly turn this off. */
+const OTP=/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/;
+const URLRE=/https?:\/\/[^\s'"<>)\]]+/;
+
+/** Escape, then linkify URLs and highlight a one-time code. */
+function cliLine(t){
+  return esc(t)
+    .replace(new RegExp(URLRE.source,'g'),u=>'<a data-open="'+esc(u)+'">'+u+'</a>')
+    .replace(new RegExp(OTP.source,'g'),c=>'<span class="otp">'+c+'</span>');
+}
+
+/** Put a string on the clipboard, in a WKWebView that may not have the async API. */
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }
+  catch(_){}
+  const ta=document.createElement('textarea');
+  ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  let ok=false;
+  try{ ok=document.execCommand('copy'); }catch(_){}
+  ta.remove();
+  return ok;
+}
+
 /** Run an install or login, streaming its output into a live console block. */
 function runCli(kind,id,host,profile){
-  host.innerHTML='<pre class="console" id="cli-out"></pre>';
+  host.innerHTML='<div id="cli-act"></div><pre class="console" id="cli-out"></pre>';
   const out=el('cli-out');
   const es=new EventSource('/api/cli/'+kind+'?id='+encodeURIComponent(id)+
     (profile?'&profile='+encodeURIComponent(profile):''));
-  const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
+
+  const lines=[];
+  let code=null, url=null;
+
+  /* The two facts arrive on different lines, and gh prints the code first. Render as soon as the
+     code is known so it is on screen at the earliest moment it is useful, and again when the URL
+     follows. */
+  const handoff=()=>{
+    const box=el('cli-act');
+    if(!box||!code) return;
+    // The device page reads `user_code` from the query string, so the field arrives filled in.
+    // Not relied on: clicking also copies, so a paste is the worst case rather than retyping.
+    const deep=url ? url+(url.includes('?')?'&':'?')+'user_code='+encodeURIComponent(code) : null;
+    box.className='handoff';
+    box.innerHTML='<div class="hl">Enter this code in the browser</div>'+
+      '<div class="code"><span class="otp">'+esc(code)+'</span>'+
+      '<button class="btn quiet hb" id="ho-copy">copy</button></div>'+
+      (deep ? '<button class="btn hb" id="ho-go" data-open="'+esc(deep)+'">Open '+
+        esc(url.replace(/^https?:\/\//,''))+'</button>' : '');
+    const c=el('ho-copy');
+    c.onclick=async()=>{ c.textContent=await copyText(code)?'copied':'select it above'; };
+    const g=el('ho-go');
+    if(g) g.onclick=async()=>{ await copyText(code); openExternal(deep); };
+  };
+
+  const write=t=>{
+    lines.push(t);
+    const m=t.match(OTP); if(m&&!code){ code=m[0]; handoff(); }
+    const u=t.match(URLRE);
+    // The verification page, not whatever else the output mentions.
+    if(u&&!url&&/device|verif|activate|oauth/i.test(u[0])){ url=u[0]; handoff(); }
+    out.innerHTML=lines.map(cliLine).join('\n');
+    out.scrollTop=1e9;
+  };
+  out.onclick=e=>{ const a=e.target.closest('a[data-open]'); if(a) openExternal(a.dataset.open); };
   es.addEventListener('line',e=>write(e.data));
   es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
   es.onerror=()=>{ es.close(); write('\nThe connection dropped before it finished.'); };

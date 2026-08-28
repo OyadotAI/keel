@@ -29,7 +29,12 @@ w.monaco = undefined;
 w.Terminal = function () { throw new Error('no terminal here'); };
 w.FitAddon = { FitAddon: function () {} };
 w.WebSocket = function () { return { readyState: 0, send() {}, close() {} }; };
-w.EventSource = function () { return { addEventListener() {}, close() {} }; };
+// Captured so the device-flow check can feed it the lines `gh` really prints.
+w.EventSource = function () {
+  const on = {};
+  w.__cliStream = { on: (kind, data) => on[kind] && on[kind]({ data }) };
+  return { addEventListener: (k, f) => { on[k] = f; }, close() {} };
+};
 w.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
 w.fetch = (u, o) => fetch(u.startsWith('http') ? u : BASE + u, o);
 
@@ -49,7 +54,7 @@ w.globalThis = w;
 const ctx = vm.createContext(w);
 try {
   vm.runInContext(script +
-    '\n;globalThis.__t = { PANELS, askFix, mcpAddForm, topicShift, learnTopic, resetTopic };',
+    '\n;globalThis.__t = { PANELS, askFix, mcpAddForm, topicShift, learnTopic, resetTopic, runCli };',
     ctx, { filename: 'ui/index.html' });
 } catch (e) { console.log('RUN ERROR: ' + e.message); }
 
@@ -146,6 +151,35 @@ console.log('\n=== TOPIC SHIFT ' + '='.repeat(34));
 
   failed += bad;
   console.log(bad ? bad + ' wrong' : '  ' + quiet.length + ' quiet, ' + ask.length + ' asked, correctly');
+}
+
+// A one-time code has to be findable. `gh auth login --web` prints it as one of eight lines of
+// grey 10.5px monospace, and it is the only line that requires the person to do anything.
+{
+  console.log('\n=== DEVICE FLOW ' + '='.repeat(40));
+  let bad = 0;
+  const host = d.createElement('div');
+  d.body.appendChild(host);
+  w.__t.runCli('login', 'github', host);
+  for (const line of [
+    '$ gh auth login --web --hostname github.com -p https -s repo,read:org',
+    '! First copy your one-time code: D27F-6526',
+    'Open this URL to continue in your web browser: https://github.com/login/device',
+  ]) w.__cliStream.on('line', line);
+
+  const box = host.querySelector('#cli-act');
+  const say = (ok, what) => { if (!ok) { console.log('  MISSING: ' + what); bad++; } };
+  say(box?.className === 'handoff', 'the code is lifted out of the console');
+  say(box?.querySelector('.otp')?.textContent === 'D27F-6526', 'the code itself');
+  say(!!box?.querySelector('#ho-copy'), 'a copy button');
+  say(box?.querySelector('#ho-go')?.getAttribute('data-open')
+        === 'https://github.com/login/device?user_code=D27F-6526',
+      'a link carrying the code, so the field arrives filled in');
+  const pre = host.querySelector('#cli-out');
+  say(!!pre?.querySelector('a[data-open]'), 'the URL clickable in the console too');
+  say(!!pre?.querySelector('.otp'), 'the code marked up in the console too');
+  failed += bad;
+  if (!bad) console.log('  code, copy, deeplink, and both marked up in the console');
 }
 
 console.log(failed ? '\n' + failed + ' check(s) failed' : '\nAll panels rendered.');
