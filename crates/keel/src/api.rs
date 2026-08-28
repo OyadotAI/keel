@@ -310,6 +310,10 @@ pub async fn chat(
                 Some("acceptEdits") => "acceptEdits",
                 _ => "plan",
             })
+            // acceptEdits covers file writes but not arbitrary shell, and headless has nobody to
+            // ask. These are the rules the user approved in the IDE.
+            .arg("--settings")
+            .arg(crate::permissions::settings_json(&repo))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

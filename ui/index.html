@@ -408,6 +408,18 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .tfoot .act-btn:hover{color:var(--accent)}
 .tfoot .sp{flex:1}
 
+/* Approval: the agent hit a command it is not allowed to run, and only a person can widen that. */
+.ask{border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);border-radius:var(--r2);
+  background:color-mix(in srgb,var(--warn) 8%,transparent);padding:var(--s3) var(--s4)}
+.ask .hd{font:600 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--warn);margin-bottom:var(--s2)}
+.ask pre{margin:0 0 var(--s3);font:11.5px/1.5 var(--mono);color:var(--n12);white-space:pre-wrap;
+  word-break:break-word;background:var(--n1);border-radius:var(--r1);padding:var(--s2) var(--s3);
+  max-height:140px;overflow:auto}
+.ask .opts{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.ask .opts .btn{font-size:11.5px;padding:4px var(--s3)}
+.ask .settled{font:11.5px var(--mono);color:var(--n10)}
+
 .err{font:12px/1.55 var(--sans);color:var(--crit);background:color-mix(in srgb,var(--crit) 8%,transparent);
   border:1px solid color-mix(in srgb,var(--crit) 26%,transparent);border-radius:var(--r2);
   padding:var(--s3) var(--s4)}
@@ -1480,6 +1492,19 @@ function record(r){
     thinkNode().querySelector('.body').textContent+=d.thinking;
     follow(); return;
   }
+  // A denial arrives as a tool_result on a later record, so remember what each call was.
+  if(r.type==='user'){
+    for(const b of r.message?.content??[]){
+      if(b.type!=='tool_result') continue;
+      const text=typeof b.content==='string' ? b.content
+        : Array.isArray(b.content) ? b.content.map(c=>c.text??'').join(' ') : '';
+      if(/requires approval|permission to use|denied/i.test(text)){
+        const call=pendingCalls.get(b.tool_use_id);
+        if(call) askApproval(call);
+      }
+    }
+    return;
+  }
   if(r.type==='assistant'){
     for(const b of r.message?.content??[]){
       if(b.type!=='tool_use') continue;
@@ -1487,6 +1512,7 @@ function record(r){
       if(turn.text){ turn.text.classList.remove('live'); turn.text=null; }
       const i=b.input??{};
       const arg=i.command??i.file_path??i.path??i.pattern??i.description??'';
+      pendingCalls.set(b.id,{tool:b.name,input:i});
       actLine(b.name,trimRepo(String(arg)).split('\n')[0].slice(0,120),true);
       follow();
     }
@@ -1744,6 +1770,7 @@ const SET_TABS=[
   {id:'editor',     label:'Editor'},
   {id:'appearance', label:'Appearance'},
   {id:'agent',      label:'Agent'},
+  {id:'permissions',label:'Permissions'},
   {id:'about',      label:'About'},
 ];
 
@@ -1929,6 +1956,46 @@ const SET_PANES={
       'refused and returns a plan instead.</p></section>';
     el('set-pane').querySelectorAll('[data-dm]').forEach(b=>b.onclick=()=>{
       prefs.defaultMode=b.dataset.dm; savePrefs(); setMode(b.dataset.dm); drawSettings();
+    });
+  },
+
+  permissions(){
+    el('set-pane').innerHTML='<section><h1>Permissions</h1><p class="lede">Loading…</p></section>';
+    fetch('/api/permissions').then(r=>r.json()).then(p=>{
+      const rows=(list,scope)=>list.length
+        ? list.map(r=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);'+
+          'font-size:12px">'+esc(r)+'</b></div>'+
+          '<button class="btn quiet" data-rm="'+esc(r)+'" data-sc="'+scope+'">Remove</button></div>').join('')
+        : '<p class="lede">None.</p>';
+      el('set-pane').innerHTML='<section><h1>Permissions</h1>'+
+        '<p class="lede">The agent can edit files freely. Running a command needs a rule, because '+
+        'a headless session cannot stop and ask you — so approval happens here instead. Rules are '+
+        'passed to <code>claude</code> on every run.</p>'+
+        '<h2>Allowed in this project</h2>'+rows(p.project,'project')+
+        '<h2>This session only</h2>'+rows(p.session,'session')+
+        (p.suggested.length?'<h2>Suggested by your toolchain</h2>'+
+          '<p class="lede">These are the build and test commands this project already defines.</p>'+
+          p.suggested.map(r=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);'+
+            'font-size:12px">'+esc(r)+'</b></div>'+
+            '<button class="btn" data-add="'+esc(r)+'">Allow</button></div>').join(''):'')+
+        '<h2>Add a rule</h2>'+
+        '<div style="display:flex;gap:8px"><input type="text" id="pm-new" '+
+        'placeholder="Bash(docker *)" spellcheck="false">'+
+        '<button class="btn" id="pm-add" style="flex:none">Add</button></div>'+
+        '<div id="pm-msg"></div></section>';
+
+      const post=(url,body)=>fetch(url,{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(body)});
+      const again=()=>SET_PANES.permissions();
+      el('set-pane').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{
+        await post('/api/permissions/remove',{rule:b.dataset.rm,scope:b.dataset.sc}); again(); });
+      el('set-pane').querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
+        await post('/api/permissions/add',{rule:b.dataset.add,scope:'project'}); again(); });
+      el('pm-add').onclick=async()=>{
+        const r=await post('/api/permissions/add',{rule:el('pm-new').value.trim(),scope:'project'});
+        if(!r.ok){ el('pm-msg').innerHTML='<div class="note bad">'+esc(await r.text())+'</div>'; return; }
+        again();
+      };
     });
   },
 
@@ -2286,6 +2353,56 @@ function openFolderDialog(){
     if(e.key==='Enter'){ e.preventDefault(); e.stopPropagation(); show(el('of-path').value.trim()); }
   });
   show(state?.repo);
+}
+
+/* ════ approvals ═════════════════════════════════════════════════════════
+   acceptEdits lets the agent write files but not run arbitrary shell, and
+   headless `claude -p` has nobody to ask — this CLI has no permission-prompt
+   hook. So Keel owns the allowlist: a denial surfaces here, you approve it,
+   and the rule is passed on every run afterwards. Approval stays a human act;
+   it just happens in the IDE rather than at a terminal prompt. */
+const pendingCalls=new Map();
+
+/** The rule that would allow this call — derived from the call, not hardcoded per tool. */
+function ruleFor(call){
+  if(call.tool!=='Bash') return call.tool;                 // e.g. WebFetch, Edit
+  const cmd=String(call.input?.command??'').trim();
+  // The program is the first token that is not an environment assignment.
+  const prog=cmd.split(/\s+/).find(t=>!/^[A-Za-z_][A-Za-z0-9_]*=/.test(t))??cmd;
+  return 'Bash('+prog.split('/').pop()+' *)';
+}
+
+function askApproval(call){
+  if(!turn) return;
+  const cmd=call.tool==='Bash'
+    ? String(call.input?.command??'')
+    : call.tool+' '+JSON.stringify(call.input??{}).slice(0,200);
+  const rule=ruleFor(call);
+
+  const card=frag('<div class="ask"><div class="hd">Needs your approval</div>'+
+    '<pre>'+esc(cmd)+'</pre>'+
+    '<div class="opts">'+
+      '<button class="btn" data-scope="project">Always allow <code>'+esc(rule)+'</code></button>'+
+      '<button class="btn quiet" data-scope="session">Allow this session</button>'+
+      '<button class="btn quiet" data-deny>Not now</button>'+
+    '</div></div>');
+  turn.work.append(card);
+  follow();
+
+  const settle=text=>{ card.querySelector('.opts').outerHTML=
+    '<div class="settled">'+esc(text)+'</div>'; };
+
+  card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=async()=>{
+    const r=await fetch('/api/permissions/add',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({rule,scope:b.dataset.scope})});
+    if(!r.ok){ settle(await r.text()); return; }
+    settle('Allowed '+rule+(b.dataset.scope==='project'?' for this project':' for this session')+
+      ' — retrying.');
+    // Resume the same session so the agent continues from where it was stopped.
+    send('Retry the command you were denied. It is allowed now.');
+  });
+  card.querySelector('[data-deny]').onclick=()=>settle('Not allowed.');
 }
 
 /* ════ verification ══════════════════════════════════════════════════════
