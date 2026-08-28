@@ -266,6 +266,11 @@ body{margin:0;background:var(--n3);color:var(--n12);
   white-space:nowrap}
 .pnote{padding:var(--s2) var(--s4) var(--s2) 0;font:11px/1.5 var(--sans);color:var(--n9)}
 
+/* Says the view is live. Without it a panel that refreshes and one that does not look identical,
+   and the one that does not is the one you would rather know about. */
+.livedot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);
+  margin-right:6px;vertical-align:middle;animation:pulse 2.4s ease-in-out infinite}
+
 /* State, as a dot. A word costs a chip, a chip costs a colour, and at this
    density a row of chips reads as texture rather than as information. */
 .dot3{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
@@ -2523,8 +2528,8 @@ const PANELS={
 
     const bad=c.workloads.filter(x=>x.state!=='up').length;
     el('side').innerHTML=head+
-      '<div class="sub"><code>'+esc(c.context??'')+'</code> · '+c.namespaces+
-      ' namespace'+(c.namespaces===1?'':'s')+
+      '<div class="sub"><span class="livedot"></span>every 10s · <code>'+esc(c.context??'')+
+      '</code> · '+c.namespaces+' namespace'+(c.namespaces===1?'':'s')+
       (bad?' · <b style="color:var(--crit)">'+bad+' not ready</b>':' · all ready')+'</div>'+
       (c.workloads.length
         ? c.workloads.map((x,i)=>'<div class="wl" data-w="'+i+'">'+
@@ -2575,6 +2580,7 @@ const PANELS={
       :r.conclusion==='success'?'on'
       :r.conclusion==='cancelled'||r.conclusion==='skipped'?'mute':'bad';
     el('side').innerHTML=head+
+      '<div class="sub"><span class="livedot"></span>every 30s</div>'+
       (p.runs.length
         ? p.runs.map((r,i)=>'<div class="prow click" data-run="'+i+'" title="'+esc(r.url)+'">'+
             '<span class="dot3 '+dot(r)+'"></span>'+
@@ -2759,6 +2765,7 @@ function mcpRun(url,outId){
 function setPanel(p,fromClick){
   if(fromClick && panel===p && !el('app').classList.contains('no-side')){ toggleSide(); return; }
   panel=p;
+  watchInfra(p==='cluster'||p==='pipelines'?p:null);
   el('app').classList.remove('no-side');
   document.querySelectorAll('.ic').forEach(b=>b.setAttribute('aria-current',b.dataset.p===p));
   PANELS[p]();
@@ -2778,25 +2785,59 @@ async function openExternal(url){
   if(!r.ok) toast(await r.text());
 }
 
-/* Both are slow enough to be worth loading once and refreshing on request: a cluster on the other
-   side of a VPN takes seconds, and neither answer changes between two glances at a panel. */
+/* Both refresh while you are looking at them, and only while you are looking at them.
+ *
+ * A cluster and a pipeline are the two things in this application that change without you: a
+ * rollout finishes, a build goes red, a pod starts crash-looping. A panel that answered that
+ * question once when you opened it is a screenshot, and you cannot tell a screenshot from a live
+ * view by looking at it — which is worse than not having it.
+ *
+ * Polled rather than pushed, because the truth lives in someone else's API and neither `kubectl`
+ * nor `gh` will call us. Intervals are set by what actually moves: a rollout is seconds, a CI run
+ * is minutes, and `gh` spends a GitHub rate-limit token every time. Stopped when the panel is not
+ * on screen, so a window left open overnight is not still asking. */
 let clusterState=null, pipelineState=null;
+let clusterTimer=null, pipelineTimer=null;
+const CLUSTER_EVERY=10_000, PIPELINE_EVERY=30_000;
 
-async function loadCluster(){
-  try{ clusterState=await (await fetch('/api/k8s')).json(); }
-  catch(_){ clusterState={problem:'Keel could not run kubectl.'}; }
-  const bad=(clusterState.workloads??[]).filter(x=>x.state!=='up').length;
-  badge('cluster',bad,bad>0);
-  if(panel==='cluster') PANELS.cluster();
+function watchInfra(which){
+  clearInterval(clusterTimer); clusterTimer=null;
+  clearInterval(pipelineTimer); pipelineTimer=null;
+  if(which==='cluster') clusterTimer=setInterval(()=>loadCluster(true),CLUSTER_EVERY);
+  if(which==='pipelines') pipelineTimer=setInterval(()=>loadPipelines(true),PIPELINE_EVERY);
 }
 
-async function loadPipelines(){
-  try{ pipelineState=await (await fetch('/api/pipelines')).json(); }
-  catch(_){ pipelineState={available:false,problem:'Keel could not run gh.'}; }
+/* A tab in the background gets no timers from the browser anyway, and would then fire a burst of
+   them on return. Stopping is what the browser was going to do; restarting is the part worth
+   doing deliberately. */
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) watchInfra(null);
+  else if(panel==='cluster'||panel==='pipelines') watchInfra(panel);
+});
+
+async function loadCluster(quiet){
+  let next;
+  try{ next=await (await fetch('/api/k8s')).json(); }
+  catch(_){ next={problem:'Keel could not run kubectl.'}; }
+  // A refresh that changed nothing must not redraw: rebuilding the list closes any workload you
+  // had expanded, and doing that every ten seconds makes the panel unusable.
+  const same=quiet&&JSON.stringify(next)===JSON.stringify(clusterState);
+  clusterState=next;
+  const bad=(clusterState.workloads??[]).filter(x=>x.state!=='up').length;
+  badge('cluster',bad,bad>0);
+  if(panel==='cluster'&&!same) PANELS.cluster();
+}
+
+async function loadPipelines(quiet){
+  let next;
+  try{ next=await (await fetch('/api/pipelines')).json(); }
+  catch(_){ next={available:false,problem:'Keel could not run gh.'}; }
+  const same=quiet&&JSON.stringify(next)===JSON.stringify(pipelineState);
+  pipelineState=next;
   const failed=(pipelineState.runs??[])
     .filter(r=>r.status==='completed'&&r.conclusion!=='success'&&r.conclusion!=='skipped').length;
   badge('pipelines',failed,failed>0);
-  if(panel==='pipelines') PANELS.pipelines();
+  if(panel==='pipelines'&&!same) PANELS.pipelines();
 }
 
 /* ════ CLI setup ═════════════════════════════════════════════════════════
@@ -2857,6 +2898,10 @@ function cliBlock(t,extra){
   // credentials actually come from, and a button here would only refuse.
   const canLogin=!NO_LOGIN.has(t.id);
   if(state==='unauth'&&canLogin) actions.push('<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>');
+  // Keel owns a real shell, so a flow it cannot drive it can still host. This is the difference
+  // between "go and run this somewhere" and being put in front of it.
+  if(t.setup) actions.push('<button class="btn quiet" data-setup="'+esc(t.setup)+'">'+
+    'Run <code>'+esc(t.setup)+'</code></button>');
   if(state==='ready'&&canLogin) actions.push('<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>');
 
   const wanted=focusTool===t.id;
@@ -2900,11 +2945,50 @@ function drawConnections(){
     if(t) h+=cliBlock(t);
   }
 
+  const aws=byId('aws');
+  if(aws){
+    // The profile list is the whole state of AWS auth: one that exists can be signed into, and
+    // one that does not is why the setup form is here.
+    const picker=aws.profiles.length
+      ? '<select id="aws-prof">'+aws.profiles.map(p=>'<option>'+esc(p)+'</option>').join('')+'</select>'
+      : '';
+    h+=cliBlock(aws,picker)+
+      '<div class="field"><label>Identity Center</label>'+
+      '<div class="note dim">Four things once, and it behaves like every other connection after '+
+      'that. Keel writes the profile and runs <code>aws sso login</code>; it never asks for an '+
+      'access key.</div>'+
+      '<input type="text" id="aw-url" placeholder="https://d-xxxxxxxxxx.awsapps.com/start" spellcheck="false">'+
+      '<input type="text" id="aw-ssoreg" placeholder="Identity Center region, e.g. us-east-1" spellcheck="false">'+
+      '<input type="text" id="aw-acct" placeholder="Account id (12 digits)" spellcheck="false">'+
+      '<input type="text" id="aw-role" placeholder="Role name, e.g. PowerUserAccess" spellcheck="false">'+
+      '<div class="line"><button class="btn" id="aw-go">Set up and sign in</button></div>'+
+      '<div id="aw-msg"></div></div>';
+  }
+
   h+='<div class="field"><label>Open a repository</label>'+
     '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
     '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
     '<div id="repos"></div>';
   el('side').innerHTML=h;
+  const awgo=el('aw-go');
+  if(awgo) awgo.onclick=async()=>{
+    awgo.disabled=true;
+    const r=await fetch('/api/aws/sso',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({
+        start_url:el('aw-url').value.trim(), sso_region:el('aw-ssoreg').value.trim(),
+        account:el('aw-acct').value.trim(), role:el('aw-role').value.trim(),
+      })});
+    awgo.disabled=false;
+    if(!r.ok){ el('aw-msg').innerHTML='<div class="note bad">'+esc(await r.text())+'</div>'; return; }
+    const {profile}=await r.json();
+    // Straight into the login, which prints a code and a URL — the same streamed flow as `gh`.
+    runCli('login','aws',el('aw-msg'),profile);
+  };
+  el('side').querySelectorAll('[data-setup]').forEach(b=>b.onclick=()=>{
+    sendToTerm(b.dataset.setup);
+    toast('Running in the terminal — finish it there, then reload connections.');
+  });
   if(focusTool){
     const box=el('conn-'+focusTool);
     box?.scrollIntoView({block:'center'});

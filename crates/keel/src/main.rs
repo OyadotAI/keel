@@ -6,6 +6,7 @@
 
 mod agents;
 mod approve;
+mod aws;
 mod api;
 mod clitools;
 mod connect;

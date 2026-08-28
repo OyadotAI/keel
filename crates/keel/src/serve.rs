@@ -289,6 +289,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/agents/create", axum::routing::post(crate::agents::create))
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
+        .route("/api/aws/sso", axum::routing::post(crate::aws::configure_sso))
         .route("/api/k8s", get(crate::infra::cluster))
         .route("/api/k8s/workload", get(crate::infra::workload))
         .route("/api/open-url", axum::routing::post(crate::infra::open_url))
