@@ -10,18 +10,17 @@
 //! split is not organisational tidiness — it is the seam where the two halves have genuinely
 //! different constraints, and putting them in one folder hides that.
 //!
-//! # Why the Go service runs in a Container
+//! # Why the backend is its own Worker rather than Next.js API routes
 //!
-//! Workers run JavaScript, TypeScript, Python and Rust. Go is not on that list, and the community
-//! WASM shim for it describes itself as experimental. So a Go backend has exactly two homes: a
-//! Cloudflare Container, or a second cloud.
+//! Two Workers cost almost nothing on Cloudflare and buy three things a single Next.js app cannot
+//! have: the backend deploys on its own schedule, it is reachable by things that are not the
+//! website, and the frontend talks to it over a service binding — an internal call with no public
+//! route, no CORS and no second TLS hop.
 //!
-//! This scaffold picks the Container, because a second cloud costs a second account, a second
-//! token, a second dashboard and a second tracing story — and the point of being Cloudflare-only
-//! was to delete all four. The price is real and is written down in `infra/README.md`: containers
-//! do not autoscale, so instance count is a number a human sets, and their disk is wiped on every
-//! restart, so nothing durable may live on it. Both are fine at the size this template is for, and
-//! both are load-bearing enough that the generated project says so out loud.
+//! The seam is typed rather than documented. The backend exports the type of its route table, and
+//! the frontend builds its client from that type, so a route that changes shape breaks the
+//! frontend at compile time instead of at runtime. That is the whole argument for TypeScript on
+//! both sides, and it is worth more than the language being the same.
 
 use axum::{Json, extract::State, http::StatusCode};
 use camino::Utf8PathBuf;
@@ -46,7 +45,7 @@ pub struct Created {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Template {
-    /// frontend (Next.js on Workers) + backend (Go in a Container) + infra.
+    /// frontend (Next.js on Workers) + backend (Hono on Workers) + infra.
     App,
     /// Agent scaffolding and nothing else, for a project that brings its own stack.
     Empty,
@@ -61,7 +60,7 @@ fn expand(path: &str) -> String {
     }
 }
 
-/// Names that are safe as a directory, as a Worker name and as a Go module path.
+/// Names that are safe as a directory and as a Worker name.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 48
@@ -80,7 +79,7 @@ pub async fn create(
     if !valid_name(&req.name) {
         return Err(bad(
             "Use lowercase letters, digits and hyphens — the name becomes a directory, two Worker \
-             names and a Go module path.",
+             names.",
         ));
     }
 
@@ -164,19 +163,11 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         ("frontend/app/page.tsx", f(APP_PAGE)),
         ("frontend/app/globals.css", APP_CSS.to_string()),
         // ── backend ──────────────────────────────────────────────────────────────────────────
-        ("backend/go.mod", f(GO_MOD)),
-        ("backend/cmd/api/main.go", f(GO_MAIN)),
-        ("backend/internal/api/router.go", GO_ROUTER.to_string()),
-        (
-            "backend/internal/api/router_test.go",
-            GO_ROUTER_TEST.to_string(),
-        ),
-        ("backend/Dockerfile", DOCKERFILE.to_string()),
-        ("backend/.dockerignore", DOCKERIGNORE.to_string()),
         ("backend/package.json", f(BACK_PACKAGE_JSON)),
         ("backend/wrangler.jsonc", f(BACK_WRANGLER)),
         ("backend/tsconfig.json", BACK_TSCONFIG.to_string()),
-        ("backend/worker/index.ts", BACK_WORKER.to_string()),
+        ("backend/src/index.ts", BACK_INDEX.to_string()),
+        ("backend/src/index.test.ts", BACK_TEST.to_string()),
     ]);
 
     files
@@ -192,46 +183,50 @@ behind one folder is how the constraints get violated.
 | Folder | What it is | Where it runs |
 |---|---|---|
 | `frontend/` | Next.js + React | A Cloudflare Worker, built by OpenNext |
-| `backend/` | Go HTTP service | A Cloudflare Container, fronted by a Worker |
+| `backend/` | Hono API | A Cloudflare Worker |
 | `infra/` | Deploy scripts and the environment map | Nowhere — it is how the other two ship |
 
 The frontend reaches the backend through a **service binding**, not a public URL. The call never
 leaves Cloudflare's network, so the backend needs no public route and no CORS.
 
+The seam between them is typed, not documented. `backend/src/index.ts` exports `AppType`, the
+frontend builds its client from it, and a route that changes shape breaks the frontend at compile
+time. There is no generated client to regenerate.
+
 ## Rules that are not style preferences
 
-- **Nothing durable on the container's disk.** It is wiped on every restart. State goes in D1, R2,
-  KV or a Durable Object.
+- **Routes stay chained** in `backend/src/index.ts`. Assigning them one at a time to `app` throws
+  away the type the frontend depends on, and nothing fails loudly when it happens.
 - **Dev and prod never share a binding.** Each environment has its own Workers and its own
   resources. Pointing dev at a prod database is the failure this layout exists to prevent.
-- **The container does not autoscale.** `max_instances` is a number a human chose. If you need it
-  higher, raise it deliberately and say why.
+- **Nothing is added to the frontend that the backend should own.** A Next.js route handler is the
+  easy place to put an endpoint and the wrong one: it cannot be called by a cron trigger, a
+  webhook or anything that is not the website.
 - Explain *why* in comments, not what. The code already says what.
 
 ## Verification
 
-`make check` is the gate: it typechecks the frontend and runs `go vet` and the Go tests. Every
-change keeps it green.
+`make check` is the gate: it typechecks both halves and runs the API's tests. Every change keeps
+it green.
 
 ## Running it
 
-`make dev` runs the Next.js dev server. `cd backend && go run ./cmd/api` runs the API directly on
-:8080 — no Docker needed for the inner loop.
+`make dev` runs the Next.js dev server. `cd backend && bun run dev` runs the API on its own.
 "#;
 
 const README_MD: &str = r#"# {{NAME}}
 
 ```
 frontend/   Next.js + React, deployed as a Cloudflare Worker
-backend/    Go service, deployed as a Cloudflare Container
+backend/    Hono API, deployed as a Cloudflare Worker
 infra/      how both of them reach dev and prod
 ```
 
 ## Develop
 
 ```
-make dev                      # Next.js on :3000
-cd backend && go run ./cmd/api # Go API on :8080
+make dev                    # Next.js on :3000
+cd backend && bun run dev   # the API on :8787
 ```
 
 ## Check
@@ -251,23 +246,20 @@ Promotion to production is a separate, gated step — see `infra/README.md`.
 "#;
 
 const GITIGNORE: &str = "node_modules/\n.next/\n.open-next/\n.wrangler/\ndist/\n.DS_Store\n\n\
-     # Go build output.\nbin/\n*.test\n\n\
      # Never commit real values.\n.env\n.env.*\n!.env.example\n\n\
      # Repository-supplied agent config, quarantined by `keel trust`.\n.keel/quarantine/\n";
 
 // Recipes need real tabs, so this one is not a raw string.
 const MAKEFILE: &str = "# The gate. Keel and CI both run `make check`, so there is exactly one\n\
      # command to keep green and one place to change what it means.\n\
-     .PHONY: check check-frontend check-backend check-worker dev clean\n\n\
-     check: check-frontend check-backend check-worker\n\n\
+     .PHONY: check check-frontend check-backend dev clean\n\n\
+     check: check-frontend check-backend\n\n\
+     # The frontend has no tests of its own yet — it is a page that renders what the API returns,\n\
+     # and the typecheck already proves it agrees with the API about the shape of that.\n\
      check-frontend:\n\
      \tcd frontend && bun run typecheck\n\n\
      check-backend:\n\
-     \tcd backend && go vet ./... && go test ./...\n\n\
-     # The Worker that fronts the container is shipped code too. A type error there is a failed\n\
-     # deploy rather than a broken page, which is the more expensive of the two.\n\
-     check-worker:\n\
-     \tcd backend && bun run typecheck\n\n\
+     \tcd backend && bun run typecheck && bun test\n\n\
      dev:\n\
      \tcd frontend && bun run dev\n\n\
      clean:\n\
@@ -286,9 +278,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
       - run: bun install --frozen-lockfile
         working-directory: frontend
       - run: bun install --frozen-lockfile
@@ -304,6 +293,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
         working-directory: frontend
+      - run: bun install --frozen-lockfile
+        working-directory: backend
       - run: infra/deploy.sh dev
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -322,7 +313,7 @@ Two Workers per environment, four in total.
 ```
               ┌──────────────────────────┐        ┌───────────────────────────┐
   internet ──▶│ {{NAME}}-web-dev         │──API──▶│ {{NAME}}-api-dev          │
-              │ Next.js, built by OpenNext│ bind  │ Worker ──▶ Go container    │
+              │ Next.js, built by OpenNext│ bind  │ Hono                       │
               └──────────────────────────┘        └───────────────────────────┘
 
               ┌──────────────────────────┐        ┌───────────────────────────┐
@@ -333,23 +324,18 @@ Two Workers per environment, four in total.
 `API` is a service binding. The frontend calls the backend over Cloudflare's internal network, so
 the backend has no public route, no CORS configuration and no second TLS hop.
 
-## Why Go lives in a container
+## Why the API is its own Worker
 
-Workers support JavaScript, TypeScript, Python and Rust. Go is not on that list. A Go service can
-therefore run in a Cloudflare Container, or on another cloud — and another cloud means another
-account, another token, another dashboard and another tracing backend.
+A Next.js route handler is the easy place to put an endpoint. It is also only reachable by the
+website: a cron trigger, a webhook, a mobile client or a partner integration cannot call it
+without going through the frontend's rendering stack.
 
-The container keeps it to one vendor. What that costs, honestly:
+A second Worker costs almost nothing on Cloudflare and separates the two lifecycles. The API can
+ship without rebuilding the site, and the site can ship without redeploying the API.
 
-- **No autoscaling.** `max_instances` in `backend/wrangler.jsonc` is a number a human sets. There
-  is no traffic-driven scaling to hide behind.
-- **Ephemeral disk.** A container that sleeps and wakes comes back with the image's filesystem and
-  nothing else. Uploads, caches and databases do not go there.
-- **Cold starts on wake.** `sleepAfter` trades idle cost against first-request latency.
-
-If the service outgrows those — sustained traffic that needs real autoscaling, or a workload that
-wants local disk — the honest move is Cloud Run and a second credential, not a bigger container.
-Say so when it happens instead of raising `max_instances` forever.
+The seam is typed. `backend/src/index.ts` exports `AppType` — the type of its whole route table —
+and the frontend builds its client from it. No generated SDK, no schema file, no drift: change a
+route and the frontend stops compiling.
 
 ## Deploying
 
@@ -418,6 +404,7 @@ const FRONT_PACKAGE_JSON: &str = r#"{
     "deploy:prod": "opennextjs-cloudflare build && wrangler versions upload --env prod"
   },
   "dependencies": {
+    "hono": "^4",
     "next": "^16",
     "react": "^19",
     "react-dom": "^19"
@@ -479,7 +466,9 @@ const FRONT_TSCONFIG: &str = r#"{
     "incremental": true,
     "skipLibCheck": true,
     "plugins": [{ "name": "next" }],
-    "paths": { "@/*": ["./*"] }
+    // `@backend/*` reaches the API's source for its types only. The import in app/page.tsx is an
+    // `import type`, so it is erased before anything is bundled — no backend code ships here.
+    "paths": { "@/*": ["./*"], "@backend/*": ["../backend/src/*"] }
   },
   "include": ["next-env.d.ts", "cloudflare-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules", ".open-next"]
@@ -523,7 +512,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "{{NAME}}",
-  description: "Next.js on Workers, talking to a Go service over a service binding.",
+  description: "Next.js and Hono, two Workers talking over a service binding.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -536,20 +525,28 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 "#;
 
 const APP_PAGE: &str = r#"import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { hc } from "hono/client";
+import type { AppType } from "@backend/index";
 
-// The page reads live state from the backend on every request, so there is nothing to prerender.
+// The page reads live state from the API on every request, so there is nothing to prerender.
 export const dynamic = "force-dynamic";
 
-type Hello = { message: string; environment: string };
-
-async function hello(): Promise<Hello | null> {
+async function hello() {
   const { env } = await getCloudflareContext({ async: true });
 
-  // The hostname is ignored: a service binding routes by binding, not by DNS. It has to be a valid
-  // URL, so it may as well say what it is.
-  const res = await env.API.fetch("https://api.internal/api/hello");
+  // The hostname is ignored — a service binding routes by binding, not by DNS — but it has to be a
+  // valid URL, so it may as well say what it is.
+  //
+  // The client is built from the API's own exported type. There is no generated SDK here and
+  // nothing to keep in step: rename a route or change what it returns and this file stops
+  // compiling, which is the reason both halves are TypeScript.
+  const api = hc<AppType>("https://api.internal", {
+    fetch: env.API.fetch.bind(env.API),
+  });
+
+  const res = await api.api.hello.$get();
   if (!res.ok) return null;
-  return (await res.json()) as Hello;
+  return await res.json();
 }
 
 export default async function Home() {
@@ -560,8 +557,9 @@ export default async function Home() {
       <p className="eyebrow">{{NAME}}</p>
       <h1>The frontend is talking to the backend.</h1>
       <p className="lede">
-        This page is a React server component running in a Cloudflare Worker. It called a Go service
-        running in a container next to it, over a service binding that never left the network.
+        This page is a React server component running in a Cloudflare Worker. It called the API
+        Worker next to it over a service binding — an internal call with no public route, no CORS
+        and no second TLS hop — using a client built from the API's own types.
       </p>
 
       {data ? (
@@ -573,8 +571,8 @@ export default async function Home() {
         </dl>
       ) : (
         <p className="panel error">
-          The backend did not answer. In local development it is a separate process — run{" "}
-          <code>go run ./cmd/api</code> in <code>backend/</code>.
+          The API did not answer. In local development it is a separate Worker — run{" "}
+          <code>bun run dev</code> in <code>backend/</code>.
         </p>
       )}
     </main>
@@ -649,221 +647,23 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 // ═══ backend ═════════════════════════════════════════════════════════════════════════════════
 
-const GO_MOD: &str = "module {{NAME}}\n\ngo 1.25\n";
-
-const GO_MAIN: &str = r#"// Command api is the HTTP service. It runs in a Cloudflare Container in production and directly
-// on the host during development — the same binary either way, configured only through the
-// environment.
-package main
-
-import (
-	"context"
-	"errors"
-	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
-	"{{NAME}}/internal/api"
-)
-
-func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: api.Router(log),
-		// A container is reachable from a Worker, not from the open internet, but a slow-header
-		// client is a resource leak regardless of who can reach it.
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	// The platform stops a container with SIGTERM and waits before killing it. Draining in that
-	// window is the difference between a clean deploy and a handful of dropped requests.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-
-	go func() {
-		log.Info("listening", "port", port)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("server failed", "err", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-stop
-	log.Info("shutting down")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Error("shutdown did not finish cleanly", "err", err)
-	}
-}
-"#;
-
-const GO_ROUTER: &str = r#"// Package api holds the HTTP surface. It is separate from main so the routes can be tested
-// without binding a port.
-package api
-
-import (
-	"encoding/json"
-	"log/slog"
-	"net/http"
-	"os"
-)
-
-// Header the fronting Worker sets. The container has no notion of which environment it is in on
-// its own — it is one image deployed to both — so the Worker that routes to it says.
-const environmentHeader = "X-Environment"
-
-type health struct {
-	OK          bool   `json:"ok"`
-	Environment string `json:"environment"`
-}
-
-type hello struct {
-	Message     string `json:"message"`
-	Environment string `json:"environment"`
-}
-
-// Router returns the service's routes.
-func Router(log *slog.Logger) http.Handler {
-	mux := http.NewServeMux()
-
-	// A readiness endpoint the platform can poll, kept separate from any business route so that
-	// health checks never depend on application state.
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		write(w, log, health{OK: true, Environment: environment(r)})
-	})
-
-	mux.HandleFunc("GET /api/hello", func(w http.ResponseWriter, r *http.Request) {
-		write(w, log, hello{Message: "Hello from Go.", Environment: environment(r)})
-	})
-
-	return mux
-}
-
-func environment(r *http.Request) string {
-	if env := r.Header.Get(environmentHeader); env != "" {
-		return env
-	}
-	// Reached only outside a container — during local development there is no Worker in front.
-	if env := os.Getenv("ENVIRONMENT"); env != "" {
-		return env
-	}
-	return "local"
-}
-
-func write(w http.ResponseWriter, log *slog.Logger, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		// The status is already written by now, so this can only be logged, not reported.
-		log.Error("encoding response failed", "err", err)
-	}
-}
-"#;
-
-const GO_ROUTER_TEST: &str = r#"package api
-
-import (
-	"encoding/json"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-)
-
-func do(t *testing.T, method, target string, headers map[string]string) *http.Response {
-	t.Helper()
-	req := httptest.NewRequest(method, target, nil)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	rec := httptest.NewRecorder()
-	Router(slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
-	return rec.Result()
-}
-
-func TestHealthReportsTheEnvironmentTheWorkerNamed(t *testing.T) {
-	res := do(t, http.MethodGet, "/health", map[string]string{environmentHeader: "prod"})
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", res.StatusCode)
-	}
-
-	var got health
-	body, _ := io.ReadAll(res.Body)
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("body is not JSON: %v (%s)", err, body)
-	}
-	if !got.OK || got.Environment != "prod" {
-		t.Fatalf("got %+v, want {true prod}", got)
-	}
-}
-
-func TestEnvironmentFallsBackWhenNoWorkerIsInFront(t *testing.T) {
-	res := do(t, http.MethodGet, "/health", nil)
-
-	var got health
-	body, _ := io.ReadAll(res.Body)
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("body is not JSON: %v (%s)", err, body)
-	}
-	if got.Environment != "local" {
-		t.Fatalf("environment = %q, want local", got.Environment)
-	}
-}
-
-func TestUnknownRoutesAre404NotPanics(t *testing.T) {
-	res := do(t, http.MethodGet, "/nope", nil)
-	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", res.StatusCode)
-	}
-}
-"#;
-
-const DOCKERFILE: &str = r#"# Multi-stage so the shipped image is a single static binary and nothing else: no shell, no package
-# manager, no Go toolchain. A container that cannot run a shell cannot be talked into running one.
-FROM golang:1.25-alpine AS build
-
-WORKDIR /src
-COPY go.mod ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
-
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/api /api
-EXPOSE 8080
-USER nonroot:nonroot
-ENTRYPOINT ["/api"]
-"#;
-
-const DOCKERIGNORE: &str =
-    "node_modules/\nworker/\n.wrangler/\n*.md\npackage.json\ntsconfig.json\nwrangler.jsonc\n";
-
 const BACK_PACKAGE_JSON: &str = r#"{
   "name": "{{NAME}}-api",
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "wrangler dev --env dev",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "deploy:dev": "wrangler deploy --env dev",
     "deploy:prod": "wrangler versions upload --env prod"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.3"
+    "hono": "^4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4",
+    "@types/bun": "^1",
     "typescript": "^5",
     "wrangler": "^4"
   }
@@ -871,53 +671,24 @@ const BACK_PACKAGE_JSON: &str = r#"{
 "#;
 
 const BACK_WRANGLER: &str = r#"{
-  // A Worker whose only job is to put the Go container behind a service binding. Cloudflare has no
-  // way to route to a container directly — it is always reached through a Durable Object — so this
-  // shim is a platform requirement, not indirection someone chose.
+  // The API, as its own Worker. It deploys on its own schedule and is reachable by things that
+  // are not the website — a cron trigger, a webhook, a mobile client — which is the reason it is
+  // not a folder of Next.js route handlers.
   "name": "{{NAME}}-api",
-  "main": "worker/index.ts",
+  "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
+
+  // Traces come from Cloudflare's native Workers tracing, not an SDK inside the bundle.
   "observability": { "enabled": true },
 
-  // The container class is a Durable Object class, so it needs a migration tag the first time it
-  // appears. Migrations are inherited by every environment; bindings below are not.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Backend"] }],
-
-  // Named environments replace bindings rather than merging them, so each one is written out in
-  // full. `max_instances` is a number a human chose: containers do not autoscale, and pretending
-  // otherwise is how a launch turns into a queue.
+  // Bindings and vars are NOT inherited by named environments — wrangler replaces them wholesale.
+  // Anything that must exist in both is written out twice, on purpose: a binding that silently
+  // falls through to the top level is how dev ends up writing to prod. When this Worker gains a
+  // D1 database or an R2 bucket, each environment gets its own, with its own id.
   "env": {
-    "dev": {
-      "name": "{{NAME}}-api-dev",
-      "vars": { "ENVIRONMENT": "dev" },
-      "containers": [
-        {
-          "class_name": "Backend",
-          "image": "./Dockerfile",
-          "max_instances": 1,
-          "instance_type": "dev"
-        }
-      ],
-      "durable_objects": {
-        "bindings": [{ "name": "BACKEND", "class_name": "Backend" }]
-      }
-    },
-    "prod": {
-      "name": "{{NAME}}-api-prod",
-      "vars": { "ENVIRONMENT": "prod" },
-      "containers": [
-        {
-          "class_name": "Backend",
-          "image": "./Dockerfile",
-          "max_instances": 3,
-          "instance_type": "basic"
-        }
-      ],
-      "durable_objects": {
-        "bindings": [{ "name": "BACKEND", "class_name": "Backend" }]
-      }
-    }
+    "dev":  { "name": "{{NAME}}-api-dev",  "vars": { "ENVIRONMENT": "dev" } },
+    "prod": { "name": "{{NAME}}-api-prod", "vars": { "ENVIRONMENT": "prod" } }
   }
 }
 "#;
@@ -928,57 +699,77 @@ const BACK_TSCONFIG: &str = r#"{
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "types": ["@cloudflare/workers-types", "bun"],
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // Hono infers the route table from the chained calls in src/index.ts. Without this the
+    // inference blows past the default depth on a real API and every route degrades to `any`.
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
   },
-  "include": ["worker"]
+  "include": ["src"]
 }
 "#;
 
-const BACK_WORKER: &str = r#"import { Container, getContainer } from "@cloudflare/containers";
+const BACK_INDEX: &str = r#"import { Hono } from "hono";
+
+type Bindings = {
+  ENVIRONMENT: string;
+};
+
+// Routes are chained rather than declared one at a time on `app`. That is not a style choice:
+// the chained expression is what carries every route's path, method and response type, and it is
+// what the frontend's client is built from.
+const app = new Hono<{ Bindings: Bindings }>()
+  // A readiness endpoint the platform can poll, kept apart from any business route so that a
+  // health check never depends on application state.
+  .get("/health", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }))
+
+  .get("/api/hello", (c) =>
+    c.json({ message: "Hello from the API.", environment: c.env.ENVIRONMENT }),
+  );
 
 /**
- * The Go service, as a Durable Object. Every request to this Worker is forwarded into the
- * container over its own port; nothing else about the process is visible from here.
+ * The shape of this API, as a type.
+ *
+ * The frontend imports it and builds a client from it, so there is no generated SDK to regenerate
+ * and no schema to keep in step. Change a route here and the frontend stops compiling — which is
+ * the point of both halves being TypeScript.
  */
-export class Backend extends Container<Env> {
-  // Matches the port the Go server listens on. They are two separate declarations of the same
-  // number, which is exactly the kind of thing to check first when the container answers 502.
-  defaultPort = 8080;
+export type AppType = typeof app;
 
-  // Containers bill for the time they are awake, so an idle one should stop. Ten minutes is long
-  // enough that a burst of traffic pays the cold start once rather than repeatedly.
-  sleepAfter = "10m";
-}
+export default app;
+"#;
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+const BACK_TEST: &str = r#"import { expect, test } from "bun:test";
+import app from "./index";
 
-    // Answered by the Worker, not the container: the health of the edge and the health of the
-    // service are different questions, and a check that wakes a sleeping container is a bill.
-    if (url.pathname === "/health/edge") {
-      return Response.json({ ok: true, environment: env.ENVIRONMENT });
-    }
+// Bindings are passed in rather than mocked: `app.request` takes the env a Worker would get, so
+// these tests exercise the same code path production does.
+//
+// Passing that third argument drops the typed-response overload, so `json()` widens here in a way
+// it does not for the frontend — annotate the body rather than trusting the matcher to narrow it.
+const env = { ENVIRONMENT: "test" };
 
-    // A fixed id keeps every request on one instance. Give it a tenant or session id instead when
-    // one instance stops being enough — and remember `max_instances` bounds how many can exist.
-    const container = getContainer(env.BACKEND, env.ENVIRONMENT);
+test("health reports the environment it is running in", async () => {
+  const res = await app.request("/health", {}, env);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { ok: boolean; environment: string };
+  expect(body).toEqual({ ok: true, environment: "test" });
+});
 
-    // The image is identical in both environments, so the environment travels with the request.
-    const headers = new Headers(request.headers);
-    headers.set("X-Environment", env.ENVIRONMENT);
+test("hello answers with the environment attached", async () => {
+  const res = await app.request("/api/hello", {}, env);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { message: string; environment: string };
+  expect(body.environment).toBe("test");
+});
 
-    return container.fetch(new Request(request, { headers }));
-  },
-} satisfies ExportedHandler<Env>;
-
-interface Env {
-  ENVIRONMENT: string;
-  BACKEND: DurableObjectNamespace<Backend>;
-}
+test("unknown routes are a 404, not a 500", async () => {
+  const res = await app.request("/nope", {}, env);
+  expect(res.status).toBe(404);
+});
 "#;
 
 #[cfg(test)]
@@ -1019,8 +810,8 @@ mod tests {
         }
     }
 
-    /// The one binding that makes the layout worth having: the frontend reaches Go without leaving
-    /// Cloudflare, and it reaches a *different* Worker in each environment.
+    /// The one binding that makes the layout worth having: the frontend reaches the API without
+    /// leaving Cloudflare, and it reaches a *different* Worker in each environment.
     #[test]
     fn the_frontend_binds_to_its_own_environments_backend() {
         let wrangler = get(&files(Template::App), "frontend/wrangler.jsonc");
@@ -1050,38 +841,44 @@ mod tests {
         }
     }
 
-    /// A Go container is reachable only through a Durable Object, and a DO class is only usable
-    /// with a migration tag. Ship one without the other and the first deploy fails.
+    /// The seam is a type, and it only exists if the API exports it and the frontend can resolve
+    /// it. Break either half and the two sides drift silently — which is the failure this layout
+    /// was chosen to prevent.
     #[test]
-    fn the_container_is_wired_to_a_durable_object_with_a_migration() {
-        let wrangler = get(&files(Template::App), "backend/wrangler.jsonc");
-        assert!(wrangler.contains(r#""class_name": "Backend""#));
-        assert!(wrangler.contains("new_sqlite_classes"));
-        assert!(wrangler.contains(r#""name": "BACKEND""#));
+    fn the_api_type_reaches_the_frontend() {
+        let files = files(Template::App);
+        assert!(get(&files, "backend/src/index.ts").contains("export type AppType = typeof app;"));
         assert!(
-            get(&files(Template::App), "backend/worker/index.ts").contains("export class Backend")
+            get(&files, "frontend/app/page.tsx")
+                .contains(r#"import type { AppType } from "@backend/index""#)
         );
+        assert!(
+            get(&files, "frontend/tsconfig.json").contains(r#""@backend/*": ["../backend/src/*"]"#)
+        );
+        // hc() is what turns that type into calls, so the frontend has to actually depend on hono.
+        assert!(get(&files, "frontend/package.json").contains(r#""hono""#));
     }
 
-    /// The port is declared twice — once in Go, once in the container class — and a mismatch is a
-    /// 502 with nothing useful in the logs.
+    /// Hono infers the route table from one chained expression. Assigning routes to `app` one at a
+    /// time still runs, still passes the API's own tests, and silently degrades every frontend
+    /// call to `any` — so the shape of the file is the contract, not a preference.
     #[test]
-    fn the_worker_and_the_go_server_agree_on_the_port() {
-        let files = files(Template::App);
-        assert!(get(&files, "backend/worker/index.ts").contains("defaultPort = 8080"));
-        assert!(get(&files, "backend/cmd/api/main.go").contains(r#"port = "8080""#));
-        assert!(get(&files, "backend/Dockerfile").contains("EXPOSE 8080"));
+    fn the_api_routes_are_chained_into_one_expression() {
+        let index = get(&files(Template::App), "backend/src/index.ts");
+        assert!(index.contains("const app = new Hono<{ Bindings: Bindings }>()"));
+        assert!(index.contains(".get(\"/health\""));
+        assert!(index.contains(".get(\"/api/hello\""));
+        // A route added as its own statement is the mistake this guards against.
+        assert!(!index.contains("app.get("));
     }
 
     /// `make check` is the gate Keel runs after every turn. It has to cover both languages, or half
     /// the project ships unverified.
     #[test]
-    fn the_gate_covers_both_languages() {
+    fn the_gate_covers_both_halves() {
         let makefile = get(&files(Template::App), "Makefile");
         assert!(makefile.contains("cd frontend && bun run typecheck"));
-        assert!(makefile.contains("go test ./..."));
-        // The container's fronting Worker is TypeScript that ships; it is part of the gate too.
-        assert!(makefile.contains("cd backend && bun run typecheck"));
+        assert!(makefile.contains("cd backend && bun run typecheck && bun test"));
         // Recipes are tab-indented or make refuses to parse them at all.
         assert!(makefile.contains("\n\tcd frontend"));
         assert!(makefile.contains("\n\tcd backend"));
@@ -1090,17 +887,9 @@ mod tests {
     #[test]
     fn a_new_project_starts_with_something_that_can_fail() {
         let files = files(Template::App);
-        assert!(files.iter().any(|(p, _)| p.ends_with("_test.go")));
+        assert!(files.iter().any(|(p, _)| p.ends_with(".test.ts")));
         // And with instructions for the agent that will work in it.
         assert!(files.iter().any(|(p, _)| *p == "CLAUDE.md"));
-    }
-
-    /// The Go module path is the name, so every import has to be rewritten with it.
-    #[test]
-    fn the_go_module_path_matches_its_imports() {
-        let files = files(Template::App);
-        assert!(get(&files, "backend/go.mod").starts_with("module demo\n"));
-        assert!(get(&files, "backend/cmd/api/main.go").contains(r#""demo/internal/api""#));
     }
 
     #[test]
