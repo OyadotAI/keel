@@ -740,6 +740,22 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .sugg button span{font-size:11.5px;color:var(--n10)}
 
 /* Jump-to-latest, shown only once you have scrolled away from the tail. */
+/* What it is doing, right now, pinned above the composer. Scrolling away from the log should not
+   cost you the answer to "is this still working, and on what" — that is the question, and it does
+   not deserve to depend on where you happen to be scrolled. */
+.doing{position:absolute;left:var(--s4);right:var(--s4);bottom:calc(100% + 4px);
+  display:flex;align-items:center;gap:var(--s3);
+  padding:5px var(--s3);border:1px solid var(--n6);border-radius:var(--r2);
+  background:var(--n4);font:11.5px var(--mono);color:var(--n11);cursor:pointer;
+  box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.doing.hidden{display:none}
+.doing .mark{width:6px;height:6px;border-radius:50%;flex:none;background:var(--accent);
+  animation:pulse 1.1s ease-in-out infinite}
+.doing .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--n12)}
+.doing .tool{flex:none;color:var(--n9);font-size:10px;letter-spacing:.05em;text-transform:uppercase}
+.doing:hover{border-color:var(--accent)}
+
 .jump{position:absolute;left:50%;transform:translateX(-50%);bottom:112px;z-index:4;
   background:var(--n5);border:1px solid var(--n7);color:var(--n11);border-radius:20px;
   padding:3px var(--s4);font:11px var(--mono);cursor:pointer;
@@ -747,7 +763,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .jump:hover{color:var(--n12)}
 
 /* ── composer ───────────────────────────────────────────────────────────── */
-.composer{flex:none;border-top:1px solid var(--n6);padding:var(--s3);position:relative}
+/* Positions the live-activity strip that sits just above it. */
+.composer{position:relative;flex:none;border-top:1px solid var(--n6);padding:var(--s3);position:relative}
 .composer .box{background:var(--n2);border:1px solid var(--n7);border-radius:var(--r2);
   transition:border-color var(--t-hover)}
 .composer .box:focus-within{border-color:var(--accent)}
@@ -1108,6 +1125,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <div class="sesslist hidden" id="sess-list"></div>
     <div class="log" id="log"></div>
     <button class="jump hidden" id="jump">↓ latest</button>
+    <div class="doing hidden" id="doing"></div>
     <div class="composer">
       <div class="ment hidden" id="ment"></div>
       <div class="box">
@@ -2674,15 +2692,39 @@ function setMode(m){
 el('pm-plan').onclick=()=>setMode('plan');
 el('pm-auto').onclick=()=>setMode('acceptEdits');
 
-/* ── autoscroll that yields to the reader ───────────────────────────────── */
+/* ── autoscroll that yields to the reader, and only to the reader ─────────
+   The first version unpinned on any `scroll` event that did not land at the bottom — including
+   ones it caused itself. A programmatic scroll that lands mid-content for one frame, a reflow from
+   an image or a diff arriving, an element resizing under it: any of those turned following off
+   permanently, and the only way back was a button.
+
+   So intent is read from the person instead. Wheel, touch and the navigation keys mean "I am
+   reading"; nothing else unpins. Landing back at the bottom re-pins, because that is what going
+   back to the bottom means. */
 let pinned=true;
 const atBottom=()=>{ const l=el('log'); return l.scrollHeight-l.scrollTop-l.clientHeight<40; };
-el('log').addEventListener('scroll',()=>{
-  pinned=atBottom();
-  el('jump').classList.toggle('hidden',pinned);
-});
-function follow(){ if(pinned) el('log').scrollTop=el('log').scrollHeight; }
-el('jump').onclick=()=>{ pinned=true; el('jump').classList.add('hidden'); follow(); };
+
+function setPinned(on){
+  pinned=on;
+  el('jump').classList.toggle('hidden',on);
+}
+
+const READING_KEYS=new Set(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End']);
+el('log').addEventListener('wheel',()=>{ if(!atBottom()) setPinned(false); },{passive:true});
+el('log').addEventListener('touchmove',()=>{ if(!atBottom()) setPinned(false); },{passive:true});
+el('log').addEventListener('keydown',e=>{ if(READING_KEYS.has(e.key)&&!atBottom()) setPinned(false); });
+// Whatever moved it, arriving at the bottom means "follow again".
+el('log').addEventListener('scroll',()=>{ if(atBottom()) setPinned(true); },{passive:true});
+
+/* Two frames, not one. Appending and reading scrollHeight in the same tick reads the height from
+   before the browser laid the new content out, so the last thing added stays just below the fold. */
+function follow(){
+  if(!pinned) return;
+  const l=el('log');
+  l.scrollTop=l.scrollHeight;
+  requestAnimationFrame(()=>{ if(pinned) l.scrollTop=l.scrollHeight; });
+}
+el('jump').onclick=()=>{ setPinned(true); follow(); };
 
 /* ── turn construction ─────────────────────────────────────────────────── */
 function newTurn(promptText){
@@ -2837,6 +2879,7 @@ function record(r){
     sessionId=r.session_id??sessionId;
     const done=turn;
     finishTurn(r);
+    drawDoing();
     refresh();
     tabs.filter(t=>!t.dirty).forEach(reload);
     // The agent does not grade its own work. Run the project's checks and show what happened.
@@ -2891,13 +2934,13 @@ function send(text){
     turn.work.append(frag('<div class="err">'+esc(e.data)+'</div>'));
   });
   const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); watchApprovals(false);
-                              finishTurn(null); } };
+                              finishTurn(null); drawDoing(); } };
   stream.addEventListener('done',end);
   stream.onerror=end;
 }
 el('send').onclick=()=>send();
 el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); watchApprovals(false);
-                                     finishTurn(null); } };
+                                     finishTurn(null); drawDoing(); } };
 
 /* ── composer ──────────────────────────────────────────────────────────── */
 const attached=new Set();
@@ -4132,6 +4175,17 @@ const collapsedDiffs=new Set();
 
 const paneHidden=()=>el('agent-pane').classList.contains('hidden');
 
+/** The call in flight, named, above the composer. */
+function drawDoing(){
+  const box=el('doing');
+  const act=[...agentActs].reverse().find(a=>!a.done);
+  if(!act||!stream){ box.classList.add('hidden'); return; }
+  box.className='doing';
+  box.innerHTML='<span class="mark"></span><span class="tool">'+esc(act.tool)+'</span>'+
+    '<span class="what">'+esc((act.command||'\u2014').split('\n')[0].slice(0,140))+'</span>';
+  box.onclick=()=>{ if(paneHidden()) toggleAgentPane(true); agentView='console'; drawAgent(); };
+}
+
 /** Just the counts, so appending one block does not cost a rebuild of all of them. */
 function avCount(){
   const nc=el('av-nc'); if(!nc) return;
@@ -4158,6 +4212,7 @@ function noteAct(id,tool,input){
   if(paneHidden()) toggleAgentPane(true);
   else if(agentView==='console'){ appendBlock(act); avCount(); }
   else avCount();
+  drawDoing();
   return act;
 }
 
@@ -4169,6 +4224,7 @@ function finishAct(id,out,isError){
   const node=consoleNodes.get(id);
   if(node) fillBlock(node,act);
   avCount();
+  drawDoing();
 }
 
 // A replayed session has no clock — its records carry no timing, so nothing is shown.
