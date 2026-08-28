@@ -2473,6 +2473,12 @@ let clis=null;
 
 async function loadClis(){ clis=await (await fetch('/api/cli')).json(); }
 
+/** Read the standing grant once at boot, so the status bar is right before anything is asked. */
+async function loadTrust(){
+  try{ trustState=(await (await fetch('/api/permissions')).json()).trusted===true; }
+  catch(_){ trustState=false; }
+}
+
 /** Run an install or login, streaming its output into a live console block. */
 function runCli(kind,id,host,profile){
   host.innerHTML='<pre class="console" id="cli-out"></pre>';
@@ -3735,6 +3741,30 @@ function explainRejection(call,text){
   card.querySelector('[data-skip]').onclick=()=>settle('Left alone.',false);
 }
 
+/* Trust is one decision that removes a whole class of question, so it is worth one dialog that
+   says exactly what it grants. Saying "are you sure" would be worse than useless — the useful
+   thing is naming the grant and where it stops. */
+let trustState=false;
+
+function confirmTrust(then){
+  modal('Trust this project?',
+    '<div class="why2">The agent will run shell commands in <code>'+esc(state?.repo??'')+
+    '</code> without asking each time — installs, builds, tests, deploys, deletions. Keel will '+
+    'not ask again here.<br><br>It changes nothing for any other project, and you can withdraw it '+
+    'in Settings at any time. Grant it for repositories you would run a script from; not for one '+
+    'you just cloned to look at.</div>',
+    'Trust this project',
+    async()=>{ await then(); return null; });
+}
+
+async function setTrust(on){
+  const r=await fetch('/api/permissions/trust',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({trusted:on})});
+  if(!r.ok){ toast(await r.text()); return; }
+  trustState=on;
+  drawStatus();
+}
+
 /* ════ live approvals ════════════════════════════════════════════════════
    A Claude Code PreToolUse hook runs before every Bash call and blocks the agent while it runs, so
    Keel points one at itself: the hook asks the running Keel, Keel asks here, and the agent is
@@ -3761,27 +3791,33 @@ async function pollApprovals(){
 function liveApproval(p){
   if(!turn) return;
   const label=p.rules.join(' ');
+  // Trust first, because it is what someone on their own repository actually wants. Approving one
+  // program at a time is the thing that drives people to turn permissions off everywhere.
   const card=frag('<div class="ask"><div class="hd">Waiting for you</div>'+
     '<pre>'+esc(p.command||p.tool)+'</pre>'+
     '<div class="opts">'+
-      '<button class="btn" data-scope="project">Always allow <code>'+esc(label)+'</code></button>'+
-      '<button class="btn quiet" data-scope="session">Allow this session</button>'+
+      '<button class="btn" data-scope="trust">Trust this project</button>'+
+      '<button class="btn quiet" data-scope="project">Just <code>'+esc(label)+'</code></button>'+
+      '<button class="btn quiet" data-scope="session">Once, this session</button>'+
       '<button class="btn quiet" data-deny>Deny</button>'+
     '</div></div>');
   turn.work.append(card);
   follow();
 
+  const said={trust:'Project trusted — Keel will not ask again here.',
+              project:'Allowed '+label+' for this project.',
+              session:'Allowed '+label+' for this session.'};
   const answer=async(decision,scope)=>{
-    settleCard(card,
-      decision==='allow'
-        ? 'Allowed '+label+(scope==='project'?' for this project':' for this session')
-        : 'Denied.',
-      decision==='allow');
+    settleCard(card, decision==='allow'?said[scope]:'Denied.', decision==='allow');
     await fetch('/api/approve/answer',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({id:p.id,decision,rules:p.rules,scope:scope??'session'})});
+    if(scope==='trust'){ trustState=true; drawStatus(); }
   };
-  card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>answer('allow',b.dataset.scope));
+  card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.scope==='trust'){ confirmTrust(()=>answer('allow','trust')); return; }
+    answer('allow',b.dataset.scope);
+  });
   card.querySelector('[data-deny]').onclick=()=>answer('deny');
 }
 
@@ -4208,6 +4244,10 @@ function drawStatus(){
     if(p) cells.push('<span class="cell">'+p.lineNumber+':'+p.column+'</span>');
   }
   if(tab?.dirty) cells.push('<span class="cell">unsaved</span>');
+  // Trust is a standing grant, so it stays on screen. A permission you granted once and then
+  // forgot about is the one that surprises you later.
+  if(trustState) cells.push('<button class="cell" data-trust="1" '+
+    'title="This project is trusted — click to review">trusted</button>');
   cells.push('<span class="cell">'+MODE_LABEL[permMode]+'</span>');
   if(stream) cells.push('<span class="cell live">working…</span>');
   if(cost!=null) cells.push('<span class="cell">$'+cost.toFixed(4)+'</span>');
@@ -4215,6 +4255,17 @@ function drawStatus(){
   el('status').innerHTML=cells.join('');
   el('status').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>setPanel(b.dataset.go));
   el('status').querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>openPreview());
+  el('status').querySelectorAll('[data-trust]').forEach(b=>b.onclick=()=>reviewTrust());
+}
+
+/** Withdrawing trust has to be as reachable as granting it, or granting it is a trap. */
+function reviewTrust(){
+  modal('This project is trusted',
+    '<div class="why2">The agent runs shell commands in <code>'+esc(state?.repo??'')+
+    '</code> without asking. Withdraw it and Keel goes back to asking once per program, keeping '+
+    'the rules you have already approved.</div>',
+    'Withdraw trust',
+    async()=>{ await setTrust(false); return null; });
 }
 
 /* ════ command palette ═══════════════════════════════════════════════════
@@ -4473,7 +4524,7 @@ function leaveWelcome(){
 
 /** Everything that has to happen once a project exists — shared by every way of getting one. */
 async function bootProject(){
-  await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev()]);
+  await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev(), loadTrust()]);
   await refresh();
   try{ wirePanel(); setPanelTab('terminal'); }
   catch(e){ console.error('panel',e); }
