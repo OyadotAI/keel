@@ -598,6 +598,50 @@ mod ui_tests {
         );
     }
 
+    /// A scrolling flex child must be allowed to shrink.
+    ///
+    /// A flex item's `min-height` defaults to `auto`, which resolves to its own content — so an
+    /// `overflow-y: auto` child of a flex column grows to fit everything instead of scrolling,
+    /// pushes its siblings out of a container with `overflow: hidden`, and never scrolls because
+    /// it is never overflowing.
+    ///
+    /// That is what happened to the chat: as the agent wrote, the composer was pushed off the
+    /// bottom and the log stopped scrolling. One missing declaration, invisible until a
+    /// conversation got long enough, and invisible to a headless DOM because nothing there does
+    /// layout. A grep is the only thing that catches this class, so here it is.
+    #[test]
+    fn a_scrolling_flex_child_can_shrink() {
+        let html = include_str!("../../../ui/index.html");
+        let css = html
+            .split_once("<style>")
+            .and_then(|(_, tail)| tail.split_once("</style>"))
+            .map(|(body, _)| body)
+            .expect("the UI has a stylesheet");
+
+        let mut offenders = Vec::new();
+        for rule in css.split('}') {
+            let Some((selector, body)) = rule.split_once('{') else {
+                continue;
+            };
+            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            if !flat.contains("flex:1") {
+                continue;
+            }
+            let scrolls = flat.contains("overflow-y:auto")
+                || flat.contains("overflow:auto")
+                || flat.contains("overflow-y:scroll");
+            if scrolls && !flat.contains("min-height:0") {
+                offenders.push(selector.trim().to_string());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these scroll and grow instead of scrolling, because a flex item will not shrink \
+             below its content without `min-height: 0`: {offenders:?}"
+        );
+    }
+
     /// Markup has to precede the script that reaches for it.
     ///
     /// The welcome screen's markup was appended after the closing `</script>`, so the top-level
