@@ -46,6 +46,167 @@ pub struct Turn {
     pub tools: Vec<String>,
 }
 
+/// One tool call, as recorded.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionCall {
+    pub tool: String,
+    /// The command for a Bash call, or the path for a file tool.
+    pub subject: String,
+    pub output: String,
+    pub error: bool,
+}
+
+/// What a session actually did: which files it changed, and what it ran.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SessionWork {
+    /// Repository-relative, in the order they were first touched.
+    pub files: Vec<String>,
+    pub calls: Vec<SessionCall>,
+    /// Whether the record was cut short by the caps below.
+    pub truncated: bool,
+}
+
+/// Tools whose input names a file the session wrote.
+const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"];
+
+/// Bounds on what one session can put on screen. A long session is thousands of calls, and the
+/// last few hundred are the ones anybody scrolls to.
+const MAX_CALLS: usize = 300;
+const MAX_OUTPUT: usize = 8_000;
+
+/// Read what a session changed and ran.
+///
+/// Shares [`transcript`]'s guard and its rule: this runs on a click, on one session the user named
+/// — never in the listing. It returns paths, commands and command output, which is what "show me
+/// what this session did" means; the conversation itself is [`transcript`]'s job.
+pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> SessionWork {
+    let mut work = SessionWork::default();
+    let Some(contents) = read_transcript(repo, claude_home, id) else {
+        return work;
+    };
+
+    let root = format!("{repo}/");
+    // A tool call and its result are separate records, so calls are held by id until the result
+    // arrives rather than being emitted twice.
+    let mut pending: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for line in contents.lines() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(Value::Array(blocks)) = record.get("message").and_then(|m| m.get("content"))
+        else {
+            continue;
+        };
+
+        for block in blocks {
+            match block.get("type").and_then(Value::as_str) {
+                Some("tool_use") => {
+                    let Some(tool) = block.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let input = block.get("input");
+                    let get = |k: &str| {
+                        input
+                            .and_then(|i| i.get(k))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+
+                    if WRITE_TOOLS.contains(&tool) {
+                        let path = if get("file_path").is_empty() {
+                            get("path")
+                        } else {
+                            get("file_path")
+                        };
+                        let rel = path.strip_prefix(&root).unwrap_or(&path).to_string();
+                        if !rel.is_empty() && !work.files.contains(&rel) {
+                            work.files.push(rel);
+                        }
+                    }
+
+                    if work.calls.len() >= MAX_CALLS {
+                        work.truncated = true;
+                        continue;
+                    }
+                    let subject = match tool {
+                        "Bash" => get("command"),
+                        _ => {
+                            let p = if get("file_path").is_empty() {
+                                get("path")
+                            } else {
+                                get("file_path")
+                            };
+                            let p = if p.is_empty() { get("pattern") } else { p };
+                            p.strip_prefix(&root).unwrap_or(&p).to_string()
+                        }
+                    };
+                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                        pending.insert(id.to_string(), work.calls.len());
+                    }
+                    work.calls.push(SessionCall {
+                        tool: tool.to_string(),
+                        subject,
+                        output: String::new(),
+                        error: false,
+                    });
+                }
+                Some("tool_result") => {
+                    let Some(at) = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| pending.remove(id))
+                    else {
+                        continue;
+                    };
+                    let text = match block.get("content") {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(Value::Array(parts)) => parts
+                            .iter()
+                            .filter_map(|p| p.get("text").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        _ => String::new(),
+                    };
+                    if let Some(call) = work.calls.get_mut(at) {
+                        if text.len() > MAX_OUTPUT {
+                            // Keep the tail: an error is at the end of the output, not the start.
+                            call.output = text[text.len() - MAX_OUTPUT..].to_string();
+                            work.truncated = true;
+                        } else {
+                            call.output = text;
+                        }
+                        call.error =
+                            block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    work
+}
+
+/// The one place a transcript path is built, so its guard cannot be forgotten by a second reader.
+fn read_transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<String> {
+    // The id comes from the UI. Reject anything that could climb out of the project directory.
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    std::fs::read_to_string(
+        claude_home
+            .join("projects")
+            .join(project_key(repo))
+            .join(format!("{id}.jsonl")),
+    )
+    .ok()
+}
+
 /// Read one session's transcript for display.
 ///
 /// This is deliberately separate from [`discover_sessions`], which stays metadata-only. Listing
@@ -53,16 +214,7 @@ pub struct Turn {
 /// user explicitly asked for is. Keeping the two apart means the cheap, always-on path can never
 /// leak a conversation, and the expensive one only runs on a click.
 pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn> {
-    // The id comes from the UI. Reject anything that could climb out of the project directory.
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Vec::new();
-    }
-
-    let path = claude_home
-        .join("projects")
-        .join(project_key(repo))
-        .join(format!("{id}.jsonl"));
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    let Some(contents) = read_transcript(repo, claude_home, id) else {
         return Vec::new();
     };
 
@@ -307,6 +459,49 @@ mod tests {
         let (_d, home) = home_with("-repo", "x.jsonl", "{}");
         assert!(transcript(Utf8Path::new("/repo"), &home, "../../../etc/passwd").is_empty());
         assert!(transcript(Utf8Path::new("/repo"), &home, "").is_empty());
+    }
+
+    /// Selecting a session should answer "what did this do to my repository", which means the
+    /// files it wrote and the commands it ran with their output — paired across two records,
+    /// since a call and its result arrive separately.
+    #[test]
+    fn a_session_reports_what_it_changed_and_ran() {
+        // One record per line: a transcript is JSONL, and a pretty-printed fixture would be
+        // split by `lines()` into fragments that all fail to parse — silently, into an empty
+        // result that looks like "this session did nothing".
+        let lines = [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/repo/src/a.ts"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make check"}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"1 failed"}]}}"#,
+            // The same file twice is one entry; a read is not a change.
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/repo/src/a.ts"}},{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"/repo/src/b.ts"}}]}}"#,
+            // Subagent chatter is not the session's own work.
+            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"t5","name":"Write","input":{"file_path":"/repo/side.ts"}}]}}"#,
+        ]
+        .join("\n");
+
+        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
+        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
+
+        assert_eq!(work.files, vec!["src/a.ts".to_string()], "written once, relative");
+        assert_eq!(work.calls.len(), 4, "reads are calls even though they are not changes");
+
+        let bash = work.calls.iter().find(|c| c.tool == "Bash").expect("the bash call");
+        assert_eq!(bash.subject, "make check");
+        assert_eq!(bash.output, "1 failed", "its result, paired by tool_use_id");
+        assert!(bash.error);
+
+        // A call whose result never arrived is still shown; it just has nothing under it.
+        let write = work.calls.iter().find(|c| c.tool == "Write").expect("the write");
+        assert_eq!(write.subject, "src/a.ts");
+        assert!(write.output.is_empty());
+    }
+
+    #[test]
+    fn session_work_cannot_escape_the_project_directory_either() {
+        let (_d, home) = home_with("-repo", "x.jsonl", "{}");
+        assert!(session_work(Utf8Path::new("/repo"), &home, "../../../etc/passwd").files.is_empty());
+        assert!(session_work(Utf8Path::new("/repo"), &home, "a/b").calls.is_empty());
+        assert!(session_work(Utf8Path::new("/repo"), &home, "").calls.is_empty());
     }
 
     #[test]
