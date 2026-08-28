@@ -21,4 +21,32 @@ rm -f dist/Keel.dmg
 hdiutil create -quiet -volname "Keel $version" -srcfolder "$stage" \
   -ov -format UDZO dist/Keel.dmg
 
+identity="${KEEL_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')}"
+
+if [ -n "$identity" ]; then
+  echo "==> signing the image"
+  codesign --force --sign "$identity" --timestamp dist/Keel.dmg
+fi
+
+# Notarisation needs credentials stored in the keychain, which `notarytool store-credentials` asks
+# for interactively — an Apple ID, a team id and an app-specific password. It cannot be driven from
+# here, so the image is built either way and the command to enable it is printed rather than
+# assumed.
+profile="${KEEL_NOTARY_PROFILE:-keel}"
+if [ -n "$identity" ] && xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1; then
+  echo "==> notarising (a few minutes)"
+  xcrun notarytool submit dist/Keel.dmg --keychain-profile "$profile" --wait
+  xcrun stapler staple dist/Keel.dmg
+  echo "    stapled — this opens with no warning on any Mac"
+else
+  echo
+  echo "    Not notarised. It is signed, but Gatekeeper still blocks a first open."
+  echo "    One-time setup, then re-run this:"
+  echo "      xcrun notarytool store-credentials $profile \\"
+  echo "        --apple-id <your-apple-id> --team-id <team> --password <app-specific-password>"
+fi
+
+echo
 echo "    dist/Keel.dmg"
+spctl --assess --type open --context context:primary-signature -v dist/Keel.dmg 2>&1 | sed 's/^/    /' || true
