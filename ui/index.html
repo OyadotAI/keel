@@ -539,18 +539,42 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .pv-bar .w{display:flex;gap:1px;background:var(--n4);border-radius:var(--r1);padding:1px;flex:none}
 .pv-bar .w button{padding:2px var(--s2)}
 .pv-bar .w button[aria-current=true]{background:var(--n6);color:var(--n12)}
-.pv-stage{flex:1;min-height:0;display:grid;place-items:center;overflow:auto;background:var(--n2);
-  padding:var(--s4)}
-.pv-stage iframe{width:100%;height:100%;border:0;background:#fff;border-radius:var(--r2);
+/* The frame fills the stage so the page inside owns the scrolling. Centring it in a grid sized it
+   to content and left the inner page unable to scroll at all. */
+.pv-stage{flex:1;min-height:0;display:flex;justify-content:center;overflow:hidden;
+  background:var(--n2)}
+.pv-stage iframe{width:100%;height:100%;border:0;background:#fff;display:block}
+.pv-stage.narrow,.pv-stage.tablet{padding:var(--s4) 0}
+.pv-stage.narrow iframe{width:390px;max-width:100%;border-radius:var(--r2);
   box-shadow:0 6px 30px rgba(0,0,0,.35)}
-.pv-stage.narrow iframe{width:390px;max-width:100%}
-.pv-stage.tablet iframe{width:820px;max-width:100%}
+.pv-stage.tablet iframe{width:820px;max-width:100%;border-radius:var(--r2);
+  box-shadow:0 6px 30px rgba(0,0,0,.35)}
+/* The empty state is prose, so it scrolls with the stage rather than inside a frame. */
+.pv-stage:not(:has(iframe)){overflow:auto;align-items:center}
 .pv-note{padding:var(--s6);text-align:center;color:var(--n10);font:12.5px/1.7 var(--sans);
   max-width:460px}
 .pv-note b{display:block;color:var(--n12);font-size:13.5px;margin-bottom:var(--s2)}
 .pv-note .btn{margin-top:var(--s4)}
-.pv-log{flex:none;max-height:150px;overflow:auto;padding:var(--s3);background:var(--n1);
-  border-top:1px solid var(--n6);font:10.5px/1.5 var(--mono);color:var(--n10);white-space:pre-wrap}
+/* The server's output is always on screen, not conditional on it having said something yet —
+   "nothing is running" is information too. Height is dragged and remembered. */
+.pv-term{flex:none;display:flex;flex-direction:column;border-top:1px solid var(--n6);
+  background:var(--n1);height:var(--term,180px);min-height:28px}
+.pv-term .th2{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s3);height:26px;
+  flex:none;background:var(--n2);border-bottom:1px solid var(--n6);cursor:row-resize;
+  -webkit-user-select:none;user-select:none}
+.pv-term .th2 h4{margin:0;font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--n10)}
+.pv-term .th2 .cmd2{font:10.5px var(--mono);color:var(--n9);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.pv-term .th2 .sp{flex:1}
+.pv-term .th2 button{all:unset;cursor:pointer;font:10.5px var(--mono);color:var(--n9);
+  padding:2px var(--s2);border-radius:var(--r1)}
+.pv-term .th2 button:hover{color:var(--n12);background:var(--n4)}
+.pv-term .out2{flex:1;overflow:auto;padding:var(--s3);font:10.5px/1.55 var(--mono);
+  color:var(--n11);white-space:pre-wrap;word-break:break-word}
+.pv-term .out2 .idle{color:var(--n9)}
+.dot2{width:6px;height:6px;border-radius:50%;flex:none;background:var(--n8)}
+.dot2.on{background:var(--ok)}
 
 /* ── live changes ───────────────────────────────────────────────────────────
    What the agent is doing to the code, in the pane you are already looking at.
@@ -1583,6 +1607,7 @@ function actLine(name,arg,running){
   if(turn.lastTool===name && turn.acts.lastElementChild){
     turn.lastCount++;
     const last=turn.acts.lastElementChild;
+    if(running) last.classList.add('run');
     last.querySelector('.ar').textContent=arg||'';
     let c=last.querySelector('.cnt');
     if(!c){ c=frag('<span class="cnt"></span>'); last.append(c); }
@@ -1657,6 +1682,8 @@ function record(r){
       if(b.type!=='tool_result') continue;
       const text=typeof b.content==='string' ? b.content
         : Array.isArray(b.content) ? b.content.map(c=>c.text??'').join(' ') : '';
+      // The call is over; the indicator was pulsing until the whole turn ended.
+      actNodes.get(b.tool_use_id)?.classList.remove('run');
       if(/requires approval|permission to use|denied/i.test(text)){
         const call=pendingCalls.get(b.tool_use_id);
         if(call) askApproval(call);
@@ -1678,7 +1705,7 @@ function record(r){
       const arg=i.command??i.file_path??i.path??i.pattern??i.description??'';
       pendingCalls.set(b.id,{tool:b.name,input:i});
       if(WRITE_TOOLS.has(b.name)) noteEdit(i.file_path??i.path);
-      actLine(b.name,trimRepo(String(arg)).split('\n')[0].slice(0,120),true);
+      actNodes.set(b.id,actLine(b.name,trimRepo(String(arg)).split('\n')[0].slice(0,120),true));
       follow();
     }
     return;
@@ -1692,6 +1719,8 @@ function record(r){
     tabs.filter(t=>!t.dirty).forEach(reload);
     // The agent does not grade its own work. Run the project's checks and show what happened.
     if(permMode!=='plan') verifyTurn(done);
+    // The dev server rebuilds on write; if you are watching the preview, show the result.
+    if(devState.running&&active===PREVIEW) setTimeout(reloadFrame,900);
     follow();
   }
 }
@@ -1726,6 +1755,7 @@ function send(text){
 
   turn=newTurn(full); started=Date.now();
   agentEdits=new Set(); collapsedDiffs.clear();
+  pendingCalls.clear(); actNodes.clear(); askedFor.clear();
   box.value=''; autoGrow(); attached.clear(); drawCtx();
   pinned=true; follow(); busy(true);
 
@@ -2542,6 +2572,7 @@ function openFolderDialog(){
    and the rule is passed on every run afterwards. Approval stays a human act;
    it just happens in the IDE rather than at a terminal prompt. */
 const pendingCalls=new Map();
+const actNodes=new Map();
 
 /** The program a single shell segment invokes, ignoring leading environment assignments. */
 function programOf(segment){
@@ -2616,6 +2647,10 @@ function askApproval(call){
 const PREVIEW='\u25b7 Preview';
 let devState={running:false,url:null,detected:null,log:[]};
 let previewUrl=null, previewWidth='full';
+/* Set when you type a URL yourself. Without this, a stale URL from a previous run outranked the
+   server that was actually up — the port changes when the old one is still held, so the preview
+   pointed at a dead 8788 while 8789 was serving. */
+let urlPinned=false;
 
 function openPreview(url){
   if(url) previewUrl=url;
@@ -2624,8 +2659,12 @@ function openPreview(url){
 }
 
 async function loadDev(){
+  const before=devState.url;
   devState=await (await fetch('/api/dev')).json();
-  if(devState.url&&!previewUrl) previewUrl=devState.url;
+  // A running server wins over whatever was there, unless you pinned a URL by typing one.
+  if(devState.url&&!urlPinned&&devState.url!==previewUrl) previewUrl=devState.url;
+  // The server restarted on a different port: follow it.
+  if(before&&devState.url&&before!==devState.url&&!urlPinned) previewUrl=devState.url;
 }
 
 async function devStart(){
@@ -2676,26 +2715,63 @@ function drawPreview(){
           'or paste a URL above — a deploy URL works too.')+
       '</div></div>';
 
-  const log = devState.running&&devState.log.length
-    ? '<div class="pv-log">'+esc(devState.log.slice(-40).join('\n'))+'</div>' : '';
+  const term=
+    '<div class="pv-term" id="pv-term">'+
+      '<div class="th2" id="pv-grip"><span class="dot2'+(devState.running?' on':'')+'"></span>'+
+      '<h4>Server</h4><span class="cmd2">'+
+        esc(devState.command??devState.detected??'no dev command')+'</span>'+
+      '<span class="sp"></span>'+
+      (devState.running?'<button id="pv-stop2">stop</button>':'')+
+      '<button id="pv-clear">clear</button></div>'+
+      '<div class="out2" id="pv-out">'+
+        (devState.log.length?esc(devState.log.slice(-400).join('\n'))
+          :'<span class="idle">'+(devState.running?'Starting…':'Not running.')+'</span>')+
+      '</div></div>';
 
-  el('surface').innerHTML='<div class="pv">'+bar+stage+log+'</div>';
+  el('surface').innerHTML='<div class="pv">'+bar+stage+term+'</div>';
+  const out=el('pv-out'); if(out) out.scrollTop=out.scrollHeight;
 
-  const go=()=>{ previewUrl=el('pv-url').value.trim()||null; drawPreview(); };
-  el('pv-url').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); go(); } });
-  el('pv-reload').onclick=()=>{
-    const f=el('pv-frame');
-    // Re-assigning src reloads without needing same-origin access to the frame.
-    if(f) f.src=f.src;
+  const go=()=>{
+    const typed=el('pv-url').value.trim();
+    previewUrl=typed||null;
+    // Typing pins it; clearing the box hands control back to the dev server.
+    urlPinned=!!typed && typed!==devState.url;
+    drawPreview();
   };
+  el('pv-url').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); go(); } });
+  // Re-assigning src reloads without needing same-origin access to the frame.
+  el('pv-reload').onclick=reloadFrame;
   el('pv-ext').onclick=()=>previewUrl&&window.open(previewUrl,'_blank','noopener');
   el('pv-start')&&(el('pv-start').onclick=devStart);
+  el('pv-stop2')&&(el('pv-stop2').onclick=devStop);
+  el('pv-clear')&&(el('pv-clear').onclick=()=>{ devState.log=[]; drawPreview(); });
+  wireTermResize();
   el('pv-start2')&&(el('pv-start2').onclick=devStart);
   el('pv-stop')&&(el('pv-stop').onclick=devStop);
   el('surface').querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
     previewWidth=b.dataset.w; drawPreview();
   });
   drawStatus();
+}
+
+/** Drag the output panel's header to resize it. The height persists per browser. */
+function wireTermResize(){
+  const grip=el('pv-grip'); if(!grip) return;
+  const saved=localStorage.getItem('keel.term');
+  if(saved) document.documentElement.style.setProperty('--term',saved+'px');
+  grip.addEventListener('pointerdown',e=>{
+    // A click on a button in the header is not a drag.
+    if(e.target.tagName==='BUTTON') return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const move=ev=>{
+      const rect=el('surface').getBoundingClientRect();
+      const h=Math.max(28,Math.min(rect.height-120,rect.bottom-ev.clientY));
+      document.documentElement.style.setProperty('--term',h+'px');
+      localStorage.setItem('keel.term',String(Math.round(h)));
+    };
+    const up=()=>{ removeEventListener('pointermove',move); removeEventListener('pointerup',up); };
+    addEventListener('pointermove',move); addEventListener('pointerup',up);
+  });
 }
 
 /** A URL the agent printed — from a deploy, or a server it started itself. */
@@ -2719,6 +2795,24 @@ function offerPreview(url){
   turn.work.append(card);
   card.querySelector('[data-open-pv]').onclick=()=>openPreview(url);
   follow();
+}
+
+/* Poll while a server is up: the log grows, and a restart can move the port. Only while the
+   preview is the open tab, so a background poll never runs for nothing. */
+setInterval(async()=>{
+  if(active!==PREVIEW) return;
+  const wasUrl=devState.url, wasLen=devState.log.length, wasRunning=devState.running;
+  await loadDev();
+  if(devState.url!==wasUrl||devState.log.length!==wasLen||devState.running!==wasRunning){
+    drawPreview();
+    // A restart means the code changed; show the new output rather than the old page.
+    if(devState.url!==wasUrl) reloadFrame();
+  }
+},1500);
+
+function reloadFrame(){
+  const f=el('pv-frame');
+  if(f) f.src=f.src;
 }
 
 /* ════ live changes ══════════════════════════════════════════════════════
