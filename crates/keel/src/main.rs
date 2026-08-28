@@ -5,6 +5,7 @@
 //! credential.
 
 mod agents;
+mod approve;
 mod api;
 mod clitools;
 mod connect;
@@ -106,6 +107,18 @@ enum Command {
         headless: bool,
     },
 
+    /// Answer a Claude Code `PreToolUse` hook by asking the running Keel.
+    ///
+    /// Not typed by anyone: Keel writes this into the settings it passes to `claude`, and Claude
+    /// Code runs it before every matching tool call and blocks on the result. It reads the hook's
+    /// JSON on stdin and prints a permission decision.
+    #[command(hide = true)]
+    Approve {
+        /// The port the Keel that spawned this agent is serving on.
+        #[arg(long)]
+        port: u16,
+    },
+
     /// Move repository-supplied agent configuration out of the way.
     ///
     /// Run before pointing any agent at a repository you did not write. Claude Code loads a repo's
@@ -179,6 +192,39 @@ fn main() -> Result<()> {
                 .build()
                 .context("starting the async runtime")?
                 .block_on(serve::run(repo, port, !no_open))?;
+        }
+
+        Command::Approve { port } => {
+            // Every failure here prints nothing and exits 0, which defers to Claude Code's own
+            // permission check. A guardrail that can wedge the agent is one people disable.
+            let mut raw = String::new();
+            if std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).is_err() {
+                return Ok(());
+            }
+            let Ok(hook) = serde_json::from_str::<approve::HookInput>(&raw) else {
+                return Ok(());
+            };
+
+            let decision = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("starting the async runtime")?
+                .block_on(approve::request(port, &hook));
+
+            if let Some(d) = decision
+                && d.decision != "defer"
+            {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": d.decision,
+                            "permissionDecisionReason": d.reason,
+                        }
+                    })
+                );
+            }
         }
 
         Command::App { port, headless } => {

@@ -448,6 +448,7 @@ pub async fn chat(
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
     let repo = state.repo();
+    let port = state.port();
 
     tokio::spawn(async move {
         let mut command = Command::new("claude");
@@ -467,7 +468,7 @@ pub async fn chat(
             // acceptEdits covers file writes but not arbitrary shell, and headless has nobody to
             // ask. These are the rules the user approved in the IDE.
             .arg("--settings")
-            .arg(crate::permissions::settings_json(&repo))
+            .arg(crate::permissions::settings_json(&repo, port))
             .arg("--append-system-prompt")
             .arg(system_prompt(&repo))
             // Note what is deliberately *not* in that prompt: an instruction to avoid shell

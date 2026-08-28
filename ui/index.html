@@ -2758,6 +2758,8 @@ function send(text){
   pendingCalls.clear(); actNodes.clear(); askedFor.clear();
   box.value=''; autoGrow(); attached.clear(); drawCtx();
   pinned=true; follow(); busy(true);
+  // The agent can be blocked on a question from the moment it starts.
+  watchApprovals(true);
 
   stream=new EventSource('/api/chat?prompt='+encodeURIComponent(full)+'&mode='+permMode+
     (sessionId?'&session='+encodeURIComponent(sessionId):''));
@@ -2765,12 +2767,14 @@ function send(text){
   stream.addEventListener('fatal',e=>{
     turn.work.append(frag('<div class="err">'+esc(e.data)+'</div>'));
   });
-  const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); finishTurn(null); } };
+  const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); watchApprovals(false);
+                              finishTurn(null); } };
   stream.addEventListener('done',end);
   stream.onerror=end;
 }
 el('send').onclick=()=>send();
-el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); finishTurn(null); } };
+el('stop').onclick=()=>{ if(stream){ stream.close(); stream=null; busy(false); watchApprovals(false);
+                                     finishTurn(null); } };
 
 /* ── composer ──────────────────────────────────────────────────────────── */
 const attached=new Set();
@@ -3679,6 +3683,56 @@ function explainRejection(call,text){
          'the output instead.');
   };
   card.querySelector('[data-skip]').onclick=()=>settle('Left alone.',false);
+}
+
+/* ════ live approvals ════════════════════════════════════════════════════
+   A Claude Code PreToolUse hook runs before every Bash call and blocks the agent while it runs, so
+   Keel points one at itself: the hook asks the running Keel, Keel asks here, and the agent is
+   stopped at the question rather than told about it afterwards.
+
+   Polled rather than pushed. There is at most one of these outstanding at a time — the agent is
+   blocked, so it cannot produce a second — and a second long-lived SSE connection with its own
+   reconnection logic is not worth it for that. */
+let approvalPoll=null;
+
+function watchApprovals(on){
+  if(on&&!approvalPoll) approvalPoll=setInterval(pollApprovals,700);
+  if(!on&&approvalPoll){ clearInterval(approvalPoll); approvalPoll=null; }
+}
+
+async function pollApprovals(){
+  let pending;
+  try{ pending=await (await fetch('/api/approve/poll')).json(); }
+  catch(_){ return; }
+  for(const p of pending) liveApproval(p);
+}
+
+/** An approval the agent is currently waiting on. */
+function liveApproval(p){
+  if(!turn) return;
+  const label=p.rules.join(' ');
+  const card=frag('<div class="ask"><div class="hd">Waiting for you</div>'+
+    '<pre>'+esc(p.command||p.tool)+'</pre>'+
+    '<div class="opts">'+
+      '<button class="btn" data-scope="project">Always allow <code>'+esc(label)+'</code></button>'+
+      '<button class="btn quiet" data-scope="session">Allow this session</button>'+
+      '<button class="btn quiet" data-deny>Deny</button>'+
+    '</div></div>');
+  turn.work.append(card);
+  follow();
+
+  const answer=async(decision,scope)=>{
+    settleCard(card,
+      decision==='allow'
+        ? 'Allowed '+label+(scope==='project'?' for this project':' for this session')
+        : 'Denied.',
+      decision==='allow');
+    await fetch('/api/approve/answer',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({id:p.id,decision,rules:p.rules,scope:scope??'session'})});
+  };
+  card.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>answer('allow',b.dataset.scope));
+  card.querySelector('[data-deny]').onclick=()=>answer('deny');
 }
 
 const askedFor=new Set();
