@@ -351,8 +351,28 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
     Ok(())
 }
 
+/// Walking a repository is filesystem work, not async work.
+///
+/// Every handler here used to do its work directly on the executor. A `git clone` of a real
+/// repository takes seconds to minutes, and for all of it Keel served nothing at all — reported as
+/// the screen freezing after cloning a project. The same was true, less dramatically, of walking a
+/// large tree or running the scanner.
 async fn api_tree(State(state): State<Arc<AppState>>) -> Json<Vec<crate::api::Node>> {
-    Json(crate::api::tree(&state.repo()))
+    let repo = state.repo();
+    Json(blocking(move || crate::api::tree(&repo), Vec::new()).await)
+}
+
+/// Run blocking work off the executor, so one slow call cannot stall the whole server.
+///
+/// The caller supplies what to return if the task panics, rather than the helper requiring
+/// `Default` — a scan report has no meaningful empty value, and inventing one to satisfy a
+/// signature is the wrong way round.
+async fn blocking<T, F>(work: F, fallback: T) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.unwrap_or(fallback)
 }
 
 async fn api_file(
@@ -412,14 +432,16 @@ async fn api_session_work(
 }
 
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
-    Json(crate::api::git_status(&state.repo()))
+    let repo = state.repo();
+    Json(blocking(move || crate::api::git_status(&repo), Default::default()).await)
 }
 
 async fn api_git_diff(
     State(state): State<Arc<AppState>>,
     Query(query): Query<crate::api::FileQuery>,
 ) -> Json<crate::api::DiffResponse> {
-    Json(crate::api::git_diff(&state.repo(), &query.path))
+    let repo = state.repo();
+    Json(blocking(move || crate::api::git_diff(&repo, &query.path), Default::default()).await)
 }
 
 async fn api_save(
@@ -489,14 +511,23 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
 
     // Re-read on every request. The developer is editing this repository in another window, and a
     // cached view of a tree that has moved on is worse than a slightly slower one.
-    let scan = keel_scanner::RepoContext::load(&repo)
-        .map(|ctx| keel_scanner::scan(&ctx))
-        .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()));
+    //
+    // Off the executor, because it is a full scan and a walk of every Claude Code session in the
+    // project — seconds on a large repository, during which nothing else Keel serves could answer.
+    let scanning = repo.clone();
+    let scan = blocking(move || {
+        keel_scanner::RepoContext::load(&scanning)
+            .map(|ctx| keel_scanner::scan(&ctx))
+            .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()))
+    }, keel_scanner::Report::new(Vec::new()))
+    .await;
 
-    let mut workspace = match keel_workspace::claude_home() {
-        Some(home) => keel_workspace::Workspace::discover(&repo, &home),
-        None => keel_workspace::Workspace::discover(&repo, "/nonexistent".into()),
-    };
+    let discovering = repo.clone();
+    let mut workspace = blocking(move || match keel_workspace::claude_home() {
+        Some(home) => keel_workspace::Workspace::discover(&discovering, &home),
+        None => keel_workspace::Workspace::discover(&discovering, "/nonexistent".into()),
+    }, keel_workspace::Workspace::default())
+    .await;
     // A session someone renamed in Keel keeps that name, without Claude Code's transcript being
     // touched to achieve it.
     crate::names::apply(&mut workspace.sessions);

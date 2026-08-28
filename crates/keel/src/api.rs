@@ -589,7 +589,7 @@ pub struct Change {
     pub staged: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct GitStatus {
     pub is_repo: bool,
     pub branch: Option<String>,
@@ -708,7 +708,7 @@ fn label_for(status: &str) -> &'static str {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct DiffResponse {
     pub path: String,
     pub hunks: Vec<Hunk>,

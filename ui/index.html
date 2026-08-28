@@ -902,6 +902,29 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .shift .why{font:11.5px var(--sans);color:var(--n10);flex:1 1 100%;order:2}
 .shift .sp{flex:1}
 .shift .btn{font-size:11.5px;padding:4px var(--s3)}
+
+/* What you typed while it was busy. Visible, because a queue you cannot see is indistinguishable
+   from a message that was thrown away — which is what used to happen. */
+.queued{flex:none;margin:0 var(--s4) 4px;padding:var(--s2) var(--s3);
+  border:1px dashed var(--n7);border-radius:var(--r2);background:var(--n2)}
+.queued.hidden{display:none}
+.queued .qn{display:block;font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--n9);margin-bottom:3px}
+.queued .qitem{display:flex;align-items:center;gap:var(--s2);
+  font:11.5px var(--sans);color:var(--n11)}
+.queued .qitem span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queued .qitem button{all:unset;cursor:pointer;color:var(--n9);padding:0 3px;flex:none}
+.queued .qitem button:hover{color:var(--crit)}
+
+/* No agent, said where you would otherwise be typing into nothing. */
+.gate{flex:none;margin:0 var(--s4) 4px;padding:var(--s3);display:flex;align-items:center;
+  gap:var(--s3);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);
+  border-radius:var(--r2);background:color-mix(in srgb,var(--warn) 10%,transparent);
+  font:11.5px/1.45 var(--sans);color:var(--n11)}
+.gate.hidden{display:none}
+.gate span{flex:1;min-width:0}
+.gate .btn{flex:none;font-size:11.5px;padding:4px var(--s3)}
+.composer textarea:disabled{opacity:.5;cursor:not-allowed}
 .doing .mark{width:6px;height:6px;border-radius:50%;flex:none;background:var(--accent);
   animation:pulse 1.1s ease-in-out infinite}
 .doing .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -1162,6 +1185,9 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 /* Arriving from the status bar, so the row that sent you is the row you land on. */
 .field.focused{box-shadow:0 0 0 1px var(--warn),0 0 0 6px color-mix(in srgb,var(--warn) 14%,transparent);
   border-radius:var(--r2);transition:box-shadow 400ms ease}
+.note .dim2{color:var(--n9)}
+.linky{all:unset;cursor:pointer;font:10.5px var(--mono);color:var(--n9)}
+.linky:hover{color:var(--accent)}
 .status button{all:unset;cursor:pointer;transition:color var(--t-hover)}
 .status button:hover{color:var(--n12)}
 
@@ -1296,6 +1322,8 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <button class="jump hidden" id="jump">↓ latest</button>
     <div class="doing hidden" id="doing"></div>
     <div class="shift hidden" id="shift"></div>
+    <div class="queued hidden" id="queued"></div>
+    <div class="gate hidden" id="gate"></div>
     <div class="composer">
       <div class="ment hidden" id="ment"></div>
       <div class="box">
@@ -3124,7 +3152,12 @@ const NO_LOGIN=new Set(['kubectl','docker']);
 function cliBlock(t,extra){
   const state = !t.installed ? 'missing' : t.authenticated ? 'ready' : 'unauth';
   const note =
-    state==='ready'  ? '<div class="note good">'+esc(t.version??'')+'</div>' :
+    // Signed in reads as signed in. It used to show only the version with a "Re-authenticate"
+    // button beside it, which is a prompt to act on a connection that is working — reported as
+    // gcloud and gh asking to re-authenticate over and over.
+    state==='ready'  ? '<div class="note good">'+
+                       (t.identity?esc(t.identity):'Signed in')+
+                       (t.version?' <span class="dim2">· '+esc(t.version)+'</span>':'')+'</div>' :
     // Its own reason where there is one — "the daemon is not running" is a different problem from
     // "you are signed out", and they have different fixes.
     state==='unauth' ? '<div class="note bad">'+esc(t.blocked??'Installed but not signed in.')+'</div>' :
@@ -3141,7 +3174,9 @@ function cliBlock(t,extra){
   // between "go and run this somewhere" and being put in front of it.
   if(t.setup) actions.push('<button class="btn quiet" data-setup="'+esc(t.setup)+'">'+
     'Run <code>'+esc(t.setup)+'</code></button>');
-  if(state==='ready'&&canLogin) actions.push('<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>');
+  // Kept, because a token does expire — but as a quiet link rather than a button that reads like
+  // something you are being asked to do.
+  if(state==='ready'&&canLogin) actions.push('<button class="linky" data-cli="login" data-id="'+t.id+'">re-authenticate</button>');
 
   const wanted=focusTool===t.id;
   return '<div class="field'+(wanted?' focused':'')+'" id="conn-'+t.id+'"><label>'+esc(t.label)+'</label>'+note+
@@ -3381,6 +3416,15 @@ function follow(){
   requestAnimationFrame(()=>{ if(pinned) l.scrollTop=l.scrollHeight; });
 }
 el('jump').onclick=()=>{ setPinned(true); follow(); };
+
+/** Send the next queued prompt, once the turn that blocked it has finished. */
+function drainQueue(){
+  if(stream||!queued.length) return;
+  const next=queued.shift();
+  drawQueue();
+  // A tick, so the finished turn has settled into the log before the next one starts appending.
+  setTimeout(()=>send(next),0);
+}
 
 /* ── noticing when you have changed the subject ───────────────────────────
    A session is a context that grows, and nobody prunes it by hand. Asking a question about
@@ -3631,6 +3675,7 @@ function record(r){
     const done=turn;
     finishTurn(r);
     drawDoing();
+    drainQueue();
     refresh();
     tabs.filter(t=>!t.dirty).forEach(reload);
     // The agent does not grade its own work. Run the project's checks and show what happened.
@@ -3659,10 +3704,33 @@ function busy(on){
   drawStatus();
 }
 
+/* Typed while the agent is working. `send` used to return silently, so the message was simply
+   gone — you watched it clear the box and never arrive. Queued instead, and sent when the turn
+   ends, which is what pressing enter meant. */
+let queued=[];
+
+function drawQueue(){
+  const box=el('queued');
+  box.className=queued.length?'queued':'queued hidden';
+  if(!queued.length) return;
+  box.innerHTML='<span class="qn">'+queued.length+' queued</span>'+
+    queued.map((q,i)=>'<div class="qitem"><span>'+esc(q.split('\n')[0].slice(0,90))+'</span>'+
+      '<button data-unqueue="'+i+'" title="Remove">\u2715</button></div>').join('');
+  box.querySelectorAll('[data-unqueue]').forEach(b=>b.onclick=()=>{
+    queued.splice(+b.dataset.unqueue,1); drawQueue();
+  });
+}
+
 function send(text){
   const box=el('prompt');
   const prompt=(text??box.value).trim();
-  if(!prompt||stream) return;
+  if(!prompt) return;
+  if(stream){
+    queued.push(prompt);
+    if(text==null){ box.value=''; autoGrow(); }
+    drawQueue();
+    return;
+  }
 
   // Asked before anything is sent, because moving a conversation after the fact means losing the
   // answer or re-running the work.
@@ -3693,7 +3761,7 @@ function send(text){
     turn.work.append(frag('<div class="err">'+esc(e.data)+'</div>'));
   });
   const end=()=>{ if(stream){ stream.close(); stream=null; busy(false); watchApprovals(false);
-                              finishTurn(null); drawDoing(); } };
+                              finishTurn(null); drawDoing(); drainQueue(); } };
   stream.addEventListener('done',end);
   stream.onerror=end;
 }
@@ -4456,6 +4524,34 @@ async function openPath(path){
   tabs.length=0; active=null; sessionId=null; turn=null;
   await enterProject();
   return null;
+}
+
+/* Without Claude Code there is no agent, and the composer is a box that swallows what you type.
+   The welcome screen catches this before a project is open; this catches the other way in — a
+   project reopened on a machine where `claude` was removed, or signed out since. */
+async function claudeGate(){
+  let c;
+  try{ c=await (await fetch('/api/claude')).json(); }catch(_){ return; }
+  const bad=!c.installed||!c.authenticated;
+  el('prompt').disabled=bad;
+  el('send').disabled=bad;
+  el('prompt').placeholder=bad
+    ? (c.installed?'Sign in to Claude Code to use the agent':'Claude Code is not installed')
+    : 'Describe a change…   @ for a file';
+
+  const strip=el('gate');
+  strip.className=bad?'gate':'gate hidden';
+  if(!bad) return;
+  strip.innerHTML='<span>'+(c.installed
+    ? 'Claude Code is installed but not signed in. It opens a browser, which Keel cannot drive.'
+    : 'Claude Code is not installed. Keel drives it and has no agent without it.')+'</span>'+
+    '<button class="btn" id="gate-go">'+(c.installed?'Sign in':'Install')+'</button>';
+  el('gate-go').onclick=async()=>{
+    if(c.installed){ sendToTerm('claude'); return; }
+    const es=new EventSource('/api/claude/install');
+    el('gate-go').disabled=true;
+    es.addEventListener('done',async()=>{ es.close(); el('gate-go').disabled=false; claudeGate(); });
+  };
 }
 
 /** Land in the IDE, whether this is the first project ever opened or the fourth switch today. */
@@ -5929,6 +6025,7 @@ function leaveWelcome(){
 /** Everything that has to happen once a project exists — shared by every way of getting one. */
 async function bootProject(){
   await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev(), loadTrust()]);
+  claudeGate();
   await refresh();
   try{ wirePanel(); setPanelTab('terminal'); }
   catch(e){ console.error('panel',e); }

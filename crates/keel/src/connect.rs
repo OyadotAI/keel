@@ -122,7 +122,13 @@ pub async fn clone(
             .ok_or_else(|| bad("no parent directory to clone into"))?,
     };
 
-    let path = github::clone(&body.clone_url, &parent, &body.name).map_err(bad)?;
+    // Off the executor: this is the one call in Keel that can take minutes, and running it here
+    // stalled every other request for the whole clone — the UI simply stopped responding.
+    let (url, name) = (body.clone_url.clone(), body.name.clone());
+    let path = tokio::task::spawn_blocking(move || github::clone(&url, &parent, &name))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(bad)?;
     state.set_repo(path.clone());
     Ok(Json(OpenedRepo {
         path: path.to_string(),
