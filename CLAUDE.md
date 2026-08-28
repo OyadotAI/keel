@@ -17,9 +17,11 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 4. **Dev and prod never share a stateful binding.**
 5. **Promotion redeploys the proven artifact**, never rebuilds.
 6. **Stop sends SIGINT**, not SIGTERM. SIGTERM abandons the turn.
-7. **Session transcripts are summarised, never displayed.** Titles, counts and timestamps only.
-   A transcript holds everything the user ever said in that repo; reading one to render a list is
-   not a licence to show it. Asserted by test.
+7. **Listing sessions never shows what was said.** `discover_sessions` runs constantly to populate
+   the switcher and returns titles, counts and timestamps only — reading a transcript to render a
+   list is not licence to display it. `transcript()` is the separate, explicit path for opening one
+   session the user asked for by name, and it rejects any id that could climb out of the project
+   directory. Both asserted by test.
 
 ## Layout
 

@@ -176,6 +176,39 @@ pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileResponse, Strin
     })
 }
 
+/// Serve a file's raw bytes, for previewing images and anything else the editor cannot show as text.
+///
+/// Bounded to the repository like [`read_file`]. Loopback is not a substitute for that check: a
+/// traversal bug would let any page in the user's browser read their filesystem.
+pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let canonical = root
+        .join(requested)
+        .canonicalize_utf8()
+        .map_err(|_| "no such file".to_string())?;
+    let root_canonical = root
+        .canonicalize_utf8()
+        .map_err(|_| "repository unavailable".to_string())?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err("path escapes the repository".to_string());
+    }
+
+    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
+    let mime = match canonical.extension().map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("ico") => "image/x-icon",
+        // SVG is served as a download rather than inline: it is executable markup, and this is
+        // repository content that nobody has reviewed.
+        Some("svg") => "application/octet-stream",
+        Some("pdf") => "application/pdf",
+        _ => "application/octet-stream",
+    };
+    Ok((bytes, mime))
+}
+
 /// The committed version of a file, for the diff editor.
 ///
 /// Returning the baseline text and letting the editor compute the diff beats shipping pre-parsed

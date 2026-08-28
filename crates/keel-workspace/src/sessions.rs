@@ -36,6 +36,91 @@ impl Session {
     }
 }
 
+/// One exchange in a transcript, shaped for display.
+#[derive(Debug, Clone, Serialize)]
+pub struct Turn {
+    /// `user` or `assistant`.
+    pub role: &'static str,
+    pub text: String,
+    /// Tool names called in this turn, in order.
+    pub tools: Vec<String>,
+}
+
+/// Read one session's transcript for display.
+///
+/// This is deliberately separate from [`discover_sessions`], which stays metadata-only. Listing
+/// every session in a repository is not licence to render what was said in them; opening one the
+/// user explicitly asked for is. Keeping the two apart means the cheap, always-on path can never
+/// leak a conversation, and the expensive one only runs on a click.
+pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn> {
+    // The id comes from the UI. Reject anything that could climb out of the project directory.
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Vec::new();
+    }
+
+    let path = claude_home
+        .join("projects")
+        .join(project_key(repo))
+        .join(format!("{id}.jsonl"));
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    let mut turns: Vec<Turn> = Vec::new();
+    for line in contents.lines() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let role = match record.get("type").and_then(Value::as_str) {
+            Some("user") => "user",
+            Some("assistant") => "assistant",
+            _ => continue,
+        };
+        // Sidechain records are subagent chatter, not the conversation the user had.
+        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+
+        let content = record.get("message").and_then(|m| m.get("content"));
+        let (mut text, mut tools) = (String::new(), Vec::new());
+
+        match content {
+            // A plain user message.
+            Some(Value::String(s)) => text.push_str(s),
+            Some(Value::Array(blocks)) => {
+                for block in blocks {
+                    match block.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                text.push_str(t);
+                            }
+                        }
+                        Some("tool_use") => {
+                            if let Some(n) = block.get("name").and_then(Value::as_str) {
+                                tools.push(n.to_string());
+                            }
+                        }
+                        // Thinking and tool results are skipped: replaying an old session is for
+                        // reading what was said and done, not for re-litigating the reasoning.
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if text.trim().is_empty() && tools.is_empty() {
+            continue;
+        }
+        turns.push(Turn {
+            role,
+            text: text.trim().to_string(),
+            tools,
+        });
+    }
+    turns
+}
+
 /// Claude Code's directory name for a working directory.
 ///
 /// Path separators become dashes, so `/Users/mk/Dev/oya` is stored as `-Users-mk-Dev-oya`.
@@ -188,6 +273,37 @@ mod tests {
         let sessions = discover_sessions(Utf8Path::new("/repo"), &home);
         assert_eq!(sessions[0].title.as_deref(), Some("kept"));
         assert_eq!(sessions[0].messages, 1);
+    }
+
+    #[test]
+    fn reads_a_transcript_for_display() {
+        let transcript = concat!(
+            r#"{"type":"user","message":{"content":"fix the build"}}"#, "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"On it."},{"type":"tool_use","name":"Read"}]}}"#, "\n",
+            r#"{"type":"user","isSidechain":true,"message":{"content":"subagent noise"}}"#, "\n",
+        );
+        let (_d, home) = home_with("-repo", "abc-1.jsonl", transcript);
+
+        let turns = transcript_of(&home);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "user");
+        assert_eq!(turns[0].text, "fix the build");
+        assert_eq!(turns[1].text, "On it.");
+        assert_eq!(turns[1].tools, vec!["Read"]);
+        // Thinking is not replayed, and subagent chatter is not the user's conversation.
+        assert!(!turns.iter().any(|t| t.text.contains("hmm")));
+        assert!(!turns.iter().any(|t| t.text.contains("subagent")));
+    }
+
+    fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
+        transcript(Utf8Path::new("/repo"), home, "abc-1")
+    }
+
+    #[test]
+    fn a_session_id_cannot_escape_the_project_directory() {
+        let (_d, home) = home_with("-repo", "x.jsonl", "{}");
+        assert!(transcript(Utf8Path::new("/repo"), &home, "../../../etc/passwd").is_empty());
+        assert!(transcript(Utf8Path::new("/repo"), &home, "").is_empty());
     }
 
     #[test]

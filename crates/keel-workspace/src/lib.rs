@@ -9,9 +9,10 @@
 //!
 //! # Privacy
 //!
-//! Session transcripts contain the full text of everything discussed. Nothing here surfaces message
-//! bodies — only titles, counts and timestamps. Reading a transcript to render a list is not a
-//! licence to display its contents.
+//! Session transcripts contain the full text of everything discussed. [`discover_sessions`], which
+//! runs constantly to populate lists, surfaces only titles, counts and timestamps — reading a
+//! transcript to render a list is not licence to display its contents. [`transcript`] is the
+//! separate, explicit path for opening one session the user asked for by name.
 
 mod agents;
 mod config;
@@ -22,7 +23,7 @@ mod skills;
 pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers};
 pub use plugins::{Plugin, discover_plugins};
-pub use sessions::{Session, discover_sessions, project_key};
+pub use sessions::{Session, Turn, discover_sessions, project_key, transcript};
 pub use skills::{Skill, discover_skills};
 
 use camino::{Utf8Path, Utf8PathBuf};

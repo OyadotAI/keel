@@ -75,6 +75,8 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/file/original", get(api_original))
+        .route("/api/session", get(api_session))
+        .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::api::chat))
         .route("/api/git/status", get(api_git_status))
         .route("/api/git/diff", get(api_git_diff))
@@ -84,6 +86,9 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/connect/cloudflare", axum::routing::post(crate::connect::connect_cloudflare))
         .route("/api/disconnect", axum::routing::post(crate::connect::disconnect))
         .route("/api/github/repos", get(crate::connect::repos))
+        .route("/api/cli", get(crate::clitools::status))
+        .route("/api/cli/install", get(crate::clitools::install))
+        .route("/api/cli/login", get(crate::clitools::login))
         .route("/api/github/clone", axum::routing::post(crate::connect::clone))
         .route("/api/open", axum::routing::post(crate::connect::open_repo))
         .with_state(state);
@@ -125,6 +130,31 @@ async fn api_original(
     crate::api::read_original(&state.repo(), &query.path)
         .map(Json)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+async fn api_raw(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<crate::api::FileQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match crate::api::read_raw(&state.repo(), &query.path) {
+        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SessionQuery {
+    id: String,
+}
+
+/// Read one session's transcript, for the session switcher in the agent panel.
+async fn api_session(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SessionQuery>,
+) -> Json<Vec<keel_workspace::Turn>> {
+    let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+    Json(keel_workspace::transcript(&state.repo(), &home, &query.id))
 }
 
 async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
