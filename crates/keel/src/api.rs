@@ -167,7 +167,7 @@ fn roots(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
 ///
 /// A path is taken as repo-relative first, then as absolute — so the UI can pass either without
 /// caring which, and a `..` in a relative path still has to survive the containment check.
-fn resolve(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> {
+pub fn resolve(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> {
     let candidates = [repo.join(requested), Utf8PathBuf::from(requested)];
     let allowed = roots(repo);
 
@@ -181,6 +181,19 @@ fn resolve(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> {
         return Err("path is outside the repository and your Claude config".to_string());
     }
     Err("no such file".to_string())
+}
+
+/// Resolve a path that must be an existing directory.
+///
+/// The tree's context menu creates things *inside* a directory, and a create whose parent turned
+/// out to be a file would otherwise fail later with a confusing io error.
+pub fn resolve_dir(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> {
+    let path = resolve(repo, requested)?;
+    if path.is_dir() {
+        Ok(path)
+    } else {
+        Err(format!("{requested} is not a directory"))
+    }
 }
 
 pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileResponse, String> {
