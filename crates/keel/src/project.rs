@@ -151,7 +151,10 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         ("infra/deploy.sh", DEPLOY_SH.to_string()),
         // ── the agent's own setup ────────────────────────────────────────────────────────────
         (".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()),
-        (".claude/agents/platform-limits.md", LIMITS_AGENT.to_string()),
+        (
+            ".claude/agents/platform-limits.md",
+            LIMITS_AGENT.to_string(),
+        ),
         // ── frontend ─────────────────────────────────────────────────────────────────────────
         ("frontend/package.json", f(FRONT_PACKAGE_JSON)),
         ("frontend/wrangler.jsonc", f(FRONT_WRANGLER)),
@@ -1002,11 +1005,17 @@ mod tests {
         assert!(claude.contains("make check"), "the gate is named");
         assert!(claude.contains("Never report a result you have not seen"));
 
-        for agent in [".claude/agents/reviewer.md", ".claude/agents/platform-limits.md"] {
+        for agent in [
+            ".claude/agents/reviewer.md",
+            ".claude/agents/platform-limits.md",
+        ] {
             let body = get(&files, agent);
             assert!(body.starts_with("---\nname: "), "{agent} needs frontmatter");
-            assert!(body.contains("description: \""), "{agent}: a description with a colon in it \
-                    must be quoted or YAML swallows it");
+            assert!(
+                body.contains("description: \""),
+                "{agent}: a description with a colon in it \
+                    must be quoted or YAML swallows it"
+            );
         }
 
         // Shipping either of these would hand every new project a Critical finding on its first

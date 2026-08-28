@@ -232,7 +232,6 @@ pub async fn stat(
         }));
     }
 
-
     let (entries, repository, more) = survey(&target);
     Ok(Json(Stat {
         kind: "dir".into(),
@@ -329,7 +328,10 @@ mod tests {
             std::fs::write(root.join(format!("f{i}")), "").unwrap();
         }
         let (count, _, more) = survey(&root);
-        assert!(more, "the count is reported as a floor once it hits the cap");
+        assert!(
+            more,
+            "the count is reported as a floor once it hits the cap"
+        );
         assert!(count <= 2_100);
     }
 

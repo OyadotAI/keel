@@ -360,7 +360,10 @@ mod tests {
 
         set_trusted(&root, false).unwrap();
         assert!(!trusted(&root));
-        assert!(load(&root).contains("Bash(docker *)"), "rules survive withdrawal");
+        assert!(
+            load(&root).contains("Bash(docker *)"),
+            "rules survive withdrawal"
+        );
     }
 
     /// A trusted project passes a blanket rule too, so the hook path and the plain permission path
@@ -368,8 +371,7 @@ mod tests {
     #[test]
     fn a_trusted_project_says_so_in_its_settings() {
         let (_d, root) = repo(&["Cargo.toml"]);
-        let before: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777)).unwrap();
+        let before: serde_json::Value = serde_json::from_str(&settings_json(&root, 7777)).unwrap();
         let allow = before["permissions"]["allow"].as_array().unwrap();
         assert!(!allow.iter().any(|r| r == "Bash"));
 

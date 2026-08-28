@@ -62,7 +62,12 @@ pub async fn rename(Json(body): Json<RenameBody>) -> Result<Json<Renamed>, (Stat
 
     // The id is a map key here rather than a path, but it is the same id that becomes a filename
     // elsewhere and the same rule keeps both honest.
-    if body.id.is_empty() || !body.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if body.id.is_empty()
+        || !body
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         return Err(bad("that is not a session id"));
     }
     let name = body.name.trim();
@@ -101,7 +106,10 @@ mod tests {
             names.get(id).cloned().or_else(|| Some(title.to_string()))
         };
 
-        assert_eq!(titled("aaa", "written by claude").as_deref(), Some("my nickname"));
+        assert_eq!(
+            titled("aaa", "written by claude").as_deref(),
+            Some("my nickname")
+        );
         assert_eq!(
             titled("bbb", "also written by claude").as_deref(),
             Some("also written by claude")

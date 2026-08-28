@@ -5,9 +5,9 @@
 //! credential.
 
 mod agents;
+mod api;
 mod approve;
 mod aws;
-mod api;
 mod clitools;
 mod connect;
 mod dev;
@@ -17,8 +17,8 @@ mod infra;
 mod mcp;
 mod names;
 mod permissions;
-mod prefs;
 mod plugins;
+mod prefs;
 mod project;
 mod render;
 mod serve;

@@ -120,7 +120,11 @@ mod tests {
             onboarded: true,
             ..Default::default()
         };
-        assert_eq!(gone.resume(), None, "a moved project shows the welcome screen");
+        assert_eq!(
+            gone.resume(),
+            None,
+            "a moved project shows the welcome screen"
+        );
 
         assert_eq!(Prefs::default().resume(), None);
     }

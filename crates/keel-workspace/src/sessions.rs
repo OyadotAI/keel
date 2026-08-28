@@ -180,8 +180,10 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
                         } else {
                             call.output = text;
                         }
-                        call.error =
-                            block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                        call.error = block
+                            .get("is_error")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
                     }
                 }
                 _ => {}
@@ -482,16 +484,32 @@ mod tests {
         let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
         let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
 
-        assert_eq!(work.files, vec!["src/a.ts".to_string()], "written once, relative");
-        assert_eq!(work.calls.len(), 4, "reads are calls even though they are not changes");
+        assert_eq!(
+            work.files,
+            vec!["src/a.ts".to_string()],
+            "written once, relative"
+        );
+        assert_eq!(
+            work.calls.len(),
+            4,
+            "reads are calls even though they are not changes"
+        );
 
-        let bash = work.calls.iter().find(|c| c.tool == "Bash").expect("the bash call");
+        let bash = work
+            .calls
+            .iter()
+            .find(|c| c.tool == "Bash")
+            .expect("the bash call");
         assert_eq!(bash.subject, "make check");
         assert_eq!(bash.output, "1 failed", "its result, paired by tool_use_id");
         assert!(bash.error);
 
         // A call whose result never arrived is still shown; it just has nothing under it.
-        let write = work.calls.iter().find(|c| c.tool == "Write").expect("the write");
+        let write = work
+            .calls
+            .iter()
+            .find(|c| c.tool == "Write")
+            .expect("the write");
         assert_eq!(write.subject, "src/a.ts");
         assert!(write.output.is_empty());
     }
@@ -499,9 +517,21 @@ mod tests {
     #[test]
     fn session_work_cannot_escape_the_project_directory_either() {
         let (_d, home) = home_with("-repo", "x.jsonl", "{}");
-        assert!(session_work(Utf8Path::new("/repo"), &home, "../../../etc/passwd").files.is_empty());
-        assert!(session_work(Utf8Path::new("/repo"), &home, "a/b").calls.is_empty());
-        assert!(session_work(Utf8Path::new("/repo"), &home, "").calls.is_empty());
+        assert!(
+            session_work(Utf8Path::new("/repo"), &home, "../../../etc/passwd")
+                .files
+                .is_empty()
+        );
+        assert!(
+            session_work(Utf8Path::new("/repo"), &home, "a/b")
+                .calls
+                .is_empty()
+        );
+        assert!(
+            session_work(Utf8Path::new("/repo"), &home, "")
+                .calls
+                .is_empty()
+        );
     }
 
     #[test]

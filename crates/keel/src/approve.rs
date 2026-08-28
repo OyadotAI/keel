@@ -294,7 +294,9 @@ pub async fn answer(
             Ok(Json(serde_json::json!({ "ok": true })))
         }
         // Already timed out, or answered twice. Not an error worth showing anyone.
-        None => Ok(Json(serde_json::json!({ "ok": false, "reason": "no longer waiting" }))),
+        None => Ok(Json(
+            serde_json::json!({ "ok": false, "reason": "no longer waiting" }),
+        )),
     }
 }
 
@@ -307,7 +309,9 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let body = serde_json::to_string(hook).ok()?;
-    let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+    let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .ok()?;
 
     let request = format!(
         "POST /api/approve/ask HTTP/1.0\r\nHost: 127.0.0.1\r\n\
@@ -319,10 +323,13 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
     // The server holds this open while the person decides, so the read deadline has to exceed the
     // wait it enforces — otherwise the answer arrives after this side has already given up.
     let mut raw = String::new();
-    tokio::time::timeout(WAIT + std::time::Duration::from_secs(20), sock.read_to_string(&mut raw))
-        .await
-        .ok()?
-        .ok()?;
+    tokio::time::timeout(
+        WAIT + std::time::Duration::from_secs(20),
+        sock.read_to_string(&mut raw),
+    )
+    .await
+    .ok()?
+    .ok()?;
 
     let payload = raw.split("\r\n\r\n").nth(1)?;
     serde_json::from_str::<Decision>(payload).ok()
@@ -382,12 +389,18 @@ mod tests {
             &allowed
         ));
         assert!(already_allowed(
-            &rules_for("Bash", &serde_json::json!({ "command": "bun install && make check" })),
+            &rules_for(
+                "Bash",
+                &serde_json::json!({ "command": "bun install && make check" })
+            ),
             &allowed
         ));
         // One half missing is still a question.
         assert!(!already_allowed(
-            &rules_for("Bash", &serde_json::json!({ "command": "bun install && docker ps" })),
+            &rules_for(
+                "Bash",
+                &serde_json::json!({ "command": "bun install && docker ps" })
+            ),
             &allowed
         ));
         assert!(!already_allowed(
