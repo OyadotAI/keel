@@ -27,6 +27,22 @@ pub struct CreateRequest {
 #[derive(Deserialize)]
 pub struct PathRequest {
     pub path: String,
+    /// The entry's own name, typed by the user. Required only for a directory that holds a git
+    /// repository — see [`delete`].
+    #[serde(default)]
+    pub confirm: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Stat {
+    /// `file` or `dir`.
+    pub kind: String,
+    /// How many entries are inside, counted to a cap. `None` for a file.
+    pub entries: Option<usize>,
+    /// Whether more remained beyond the cap — the count is a floor, not a total.
+    pub more: bool,
+    /// The directory is, or contains, a git repository.
+    pub repository: bool,
 }
 
 #[derive(Deserialize)]
@@ -53,7 +69,9 @@ fn valid_name(name: &str) -> Result<(), (StatusCode, String)> {
         return Err(bad("a name is required"));
     }
     if name.contains('/') || name.contains('\\') {
-        return Err(bad("a name cannot contain a path separator — move the file instead"));
+        return Err(bad(
+            "a name cannot contain a path separator — move the file instead",
+        ));
     }
     if name == "." || name == ".." {
         return Err(bad("that is not a name"));
@@ -138,8 +156,90 @@ pub async fn delete(
         return Err(bad("that is the repository itself"));
     }
 
+    // The open folder is not always a project — it is often the folder projects live in, and then
+    // every project inside it is one confirmation away from the trash. A directory holding a git
+    // repository is somebody's work with its own history, so it costs a typed name. This is
+    // enforced here and not only in the dialog: the check has to hold for anything that can reach
+    // the endpoint.
+    if target.is_dir() {
+        let (_, nested, _) = survey(&target);
+        if nested || target.join(".git").exists() {
+            let name = target.file_name().unwrap_or_default();
+            if req.confirm.as_deref() != Some(name) {
+                return Err(bad(format!(
+                    "{name} contains a git repository — type its name to confirm"
+                )));
+            }
+        }
+    }
+
     to_trash(target.as_std_path()).map_err(bad)?;
-    Ok(Json(PathResponse { path: req.path }))
+    Ok(Json(PathResponse {
+        path: req.path.clone(),
+    }))
+}
+
+/// Count entries under a directory, and notice whether a git repository is in there.
+///
+/// Bounded rather than exhaustive: the number exists to tell someone that "delete" means two
+/// thousand files and not two, and past a few thousand the distinction stops mattering while the
+/// walk starts costing real time.
+fn survey(root: &Utf8Path) -> (usize, bool, bool) {
+    const CAP: usize = 2_000;
+    let mut count = 0usize;
+    let mut repo = false;
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            count += 1;
+            let name = entry.file_name();
+            if name == ".git" {
+                repo = true;
+            }
+            if count >= CAP {
+                return (count, repo, true);
+            }
+            // Symlinks are counted but never followed: a link into $HOME would turn a count into a
+            // walk of the whole disk, and a link out of the tree is not this directory's content.
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && let Ok(p) = Utf8PathBuf::from_path_buf(entry.path())
+            {
+                stack.push(p);
+            }
+        }
+    }
+    (count, repo, false)
+}
+
+/// Report what deleting a path would actually destroy.
+pub async fn stat(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PathRequest>,
+) -> Result<Json<Stat>, (StatusCode, String)> {
+    let repo = state.repo();
+    let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
+
+    if !target.is_dir() {
+        return Ok(Json(Stat {
+            kind: "file".into(),
+            entries: None,
+            more: false,
+            repository: false,
+        }));
+    }
+
+
+    let (entries, repository, more) = survey(&target);
+    Ok(Json(Stat {
+        kind: "dir".into(),
+        entries: Some(entries),
+        more,
+        repository: repository || target.join(".git").exists(),
+    }))
 }
 
 /// Move a path to the system trash.
@@ -158,9 +258,8 @@ fn to_trash(path: &std::path::Path) -> Result<(), String> {
         }
         let mut ctx = trash::TrashContext::default();
         ctx.set_delete_method(DeleteMethod::NsFileManager);
-        return ctx
-            .delete(path)
-            .map_err(|e| format!("could not move to trash: {e}"));
+        ctx.delete(path)
+            .map_err(|e| format!("could not move to trash: {e}"))
     }
     #[cfg(not(target_os = "macos"))]
     trash::delete(path).map_err(|e| format!("could not move to trash: {e}"))
@@ -194,6 +293,45 @@ pub async fn reveal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The open folder is frequently the folder projects live in rather than a project, and then
+    /// every project under it is one click from the trash. This is the check that stops that, and
+    /// it lives on the server so the dialog is not the only thing standing between the two.
+    #[test]
+    fn a_directory_holding_a_repository_needs_its_name_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let plain = root.join("notes");
+        std::fs::create_dir_all(plain.join("sub")).unwrap();
+        std::fs::write(plain.join("sub/a.txt"), "x").unwrap();
+        let (count, repo, _) = survey(&plain);
+        assert_eq!(count, 2);
+        assert!(!repo, "a plain folder is not a repository");
+
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        let (_, repo, _) = survey(&project);
+        assert!(repo, "a folder holding .git is a repository");
+
+        // And so is a folder that merely contains one, which is the case that lost a project.
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(workspace.join("app/.git")).unwrap();
+        let (_, repo, _) = survey(&workspace);
+        assert!(repo, "a folder containing a repository counts too");
+    }
+
+    #[test]
+    fn the_survey_stops_rather_than_walking_a_whole_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for i in 0..2_100 {
+            std::fs::write(root.join(format!("f{i}")), "").unwrap();
+        }
+        let (count, _, more) = survey(&root);
+        assert!(more, "the count is reported as a floor once it hits the cap");
+        assert!(count <= 2_100);
+    }
 
     #[test]
     fn a_name_cannot_carry_a_path() {

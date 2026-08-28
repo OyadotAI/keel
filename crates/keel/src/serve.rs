@@ -92,6 +92,7 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         )
         .route("/api/fs/create", axum::routing::post(crate::fsops::create))
         .route("/api/fs/rename", axum::routing::post(crate::fsops::rename))
+        .route("/api/fs/stat", axum::routing::post(crate::fsops::stat))
         .route("/api/fs/delete", axum::routing::post(crate::fsops::delete))
         .route("/api/fs/reveal", axum::routing::post(crate::fsops::reveal))
         .route("/api/term/ws", get(crate::term::ws))

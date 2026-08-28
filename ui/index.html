@@ -497,6 +497,10 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .ask pre{margin:0 0 var(--s3);font:11.5px/1.5 var(--mono);color:var(--n12);white-space:pre-wrap;
   word-break:break-word;background:var(--n1);border-radius:var(--r1);padding:var(--s2) var(--s3);
   max-height:140px;overflow:auto}
+/* The explanation of a refusal that no button can lift; it has to read as prose, not a log line. */
+.ask .why{font:12px/1.55 var(--sans);color:var(--n11);margin:0 0 var(--s3)}
+.ask .why code{font:11.5px var(--mono);color:var(--n12);background:var(--n1);
+  border-radius:3px;padding:1px 4px}
 .ask .opts{display:flex;flex-wrap:wrap;gap:var(--s2)}
 .ask .opts .btn{font-size:11.5px;padding:4px var(--s3)}
 .ask .settled{font:11.5px var(--mono);color:var(--n10)}
@@ -1648,9 +1652,35 @@ function newEntryDialog(parent,kind){
     'In <code>'+esc(parent||'the project root')+'</code>.');
 }
 
-function confirmDelete(path,isDir){
-  modal('Move '+base(path)+' to the Trash?',
-    '<div class="why2">'+(isDir?'The folder and everything in it goes':'It goes')+
+async function confirmDelete(path,isDir){
+  // Ask what is in there before offering to destroy it. "Move to Trash" reads identically over one
+  // file and over somebody's entire project, and the tree is often opened on the folder that holds
+  // every project rather than on one of them.
+  const st=await fsCall('stat',{path});
+  if(st.err){ toast(st.err); return; }
+
+  const name=base(path);
+  const many=st.entries?st.entries+(st.more?'+':'')+' item'+(st.entries===1?'':'s'):'';
+
+  if(st.repository){
+    modal('Delete '+name+'?',
+      '<div class="why2"><b>'+esc(name)+'</b> contains a git repository — '+esc(many)+
+      ', with its own history and commits that may exist nowhere else.</div>'+
+      '<label>Type <code>'+esc(name)+'</code> to confirm</label>'+
+      '<input type="text" id="del-confirm" spellcheck="false" autocomplete="off">',
+      'Move to Trash',
+      async()=>{
+        const r=await fsCall('delete',{path,confirm:el('del-confirm').value.trim()});
+        if(r.err) return r.err;
+        closeTab(path);
+        await refresh();
+        return null;
+      });
+    return;
+  }
+
+  modal('Move '+name+' to the Trash?',
+    '<div class="why2">'+(isDir?esc(many)+' go':'It goes')+
     ' to the Trash, so you can put it back from Finder. Git history is untouched — a tracked file '+
     'still exists in every commit that had it.</div>',
     'Move to Trash',
@@ -1709,7 +1739,12 @@ function rowKeys(e,n,row){
   }
   if(e.key==='F2'){ e.preventDefault(); startRename(row,n.path); }
   if(e.key==='Enter'&&!row.querySelector('input.rename')&&!n.dir){ e.preventDefault(); open(n.path); }
-  if(e.key==='Delete'||e.key==='Backspace'){ e.preventDefault(); confirmDelete(n.path,!!n.dir); }
+  // ⌘⌫ on macOS, Delete elsewhere. Bare Backspace is what the first version bound, and it is the
+  // single most-pressed key on a keyboard — a focused row and a stray keystroke should not be the
+  // start of deleting anything.
+  if((MAC&&e.metaKey&&e.key==='Backspace')||(!MAC&&e.key==='Delete')){
+    e.preventDefault(); confirmDelete(n.path,!!n.dir);
+  }
 }
 
 function treeMenu(e,n,row){
@@ -1732,7 +1767,7 @@ function contextMenuFor(n,row,x,y){
     {label:'Copy path',        run:()=>copyText(path)},
     {sep:true},
     {label:'Rename…',          key:'F2', run:()=>startRename(row,path)},
-    {label:'Delete',           key:'⌫',  danger:true, run:()=>confirmDelete(path,dir)},
+    {label:'Delete',           key:MAC?'⌘⌫':'Del', danger:true, run:()=>confirmDelete(path,dir)},
   ]);
 }
 
@@ -2177,12 +2212,16 @@ function record(r){
         : Array.isArray(b.content) ? b.content.map(c=>c.text??'').join(' ') : '';
       // The call is over; the indicator was pulsing until the whole turn ended.
       actNodes.get(b.tool_use_id)?.classList.remove('run');
-      if(/requires approval|permission to use|denied/i.test(text)){
-        const call=pendingCalls.get(b.tool_use_id);
+      const call=pendingCalls.get(b.tool_use_id);
+      if(b.is_error&&call&&UNAPPROVABLE.test(text)){
+        // Not a permission question at all — no rule can allow it. Saying "needs your approval"
+        // here is a dead end: the button would add a rule that changes nothing.
+        explainRejection(call,text);
+      } else if(APPROVABLE.test(text)){
         if(call) askApproval(call);
-      } else if(WRITE_TOOLS.has(pendingCalls.get(b.tool_use_id)?.tool) && active===CHANGES){
+      } else if(WRITE_TOOLS.has(call?.tool) && active===CHANGES){
         drawChanges();
-      } else if(pendingCalls.get(b.tool_use_id)?.tool==='Bash'){
+      } else if(call?.tool==='Bash'){
         // A deploy or a dev server announces its URL in the output. Catch it.
         noticeUrl(text);
       }
@@ -2697,7 +2736,7 @@ const SET_PANES={
       '<h2>Keyboard</h2>'+
       ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  terminal','⌘⇧A  agent panel',
        '⌘S  save','⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⌘I  explain the selection',
-       'F2  rename','⌫  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
+       'F2  rename',(MAC?'⌘⌫':'Del')+'  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
        'right-click  files, tabs and the editor all have menus']
         .map(k=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);font-size:12px">'+
           esc(k)+'</b></div></div>').join('')+
@@ -3015,7 +3054,7 @@ function newProjectDialog(){
     '<button id="np-worker" aria-current="true">Full stack</button>'+
     '<button id="np-empty">Empty</button></span>'+
     '<div class="np-layout"><b>frontend/</b><span>Next.js + React, deployed as a Worker</span>'+
-    '<b>backend/</b><span>Go, deployed as a Cloudflare Container</span>'+
+    '<b>backend/</b><span>Hono API, its own Worker, typed end to end</span>'+
     '<b>infra/</b><span>how both halves reach dev and prod</span></div>',
     'Create',
     async()=>{
@@ -3030,8 +3069,8 @@ function newProjectDialog(){
       await refresh(); emptyLog(); setPanel('files'); draw();
       return null;
     },
-    'Two isolated environments, a service binding from the frontend to the backend, Go tests that '+
-    'can fail, and a CI workflow — a new project starts at a passing readiness score.');
+    'Two isolated environments, a typed service binding from the frontend to the backend, tests '+
+    'that can fail, and a CI workflow — a new project starts at a passing readiness score.');
   const pick=w=>{ el('np-worker').setAttribute('aria-current',String(w));
                   el('np-empty').setAttribute('aria-current',String(!w));
                   document.querySelector('.np-layout').hidden=!w; };
@@ -3078,6 +3117,20 @@ function openFolderDialog(){
    hook. So Keel owns the allowlist: a denial surfaces here, you approve it,
    and the rule is passed on every run afterwards. Approval stays a human act;
    it just happens in the IDE rather than at a terminal prompt. */
+/* Claude Code refuses a Bash call for two different reasons and says so in prose, so telling them
+   apart is string matching against what it actually emits:
+
+     "This command requires approval"                          → a rule would allow it
+     "Permission to use Bash with command ... has been denied." → a rule would allow it
+     "Contains expansion"                                      → no rule can ever allow it
+
+   The third is the one that matters. A command carrying `$(...)`, backticks or `$?` cannot be
+   matched against a prefix rule, so it is refused outright — and the first version of this code
+   matched none of those three words, which is why those calls appeared to fail for no reason with
+   nothing offered. The agent writes `echo "EXIT: $?"` constantly, so this was most of them. */
+const APPROVABLE=/requires approval|permission to use|has been denied|haven.t granted/i;
+const UNAPPROVABLE=/contains expansion|banned command|contains banned/i;
+
 const pendingCalls=new Map();
 const actNodes=new Map();
 
@@ -3103,6 +3156,40 @@ function rulesFor(call){
     // be approving everything it can launch.
     .filter(p=>!['sudo','env','nohup','time','xargs'].includes(p));
   return [...new Set(progs)].map(p=>'Bash('+p+' *)');
+}
+
+const explained=new Set();
+/** A refusal no permission can lift. Say why, and offer the thing that actually works. */
+function explainRejection(call,text){
+  if(!turn) return;
+  const cmd=String(call.input?.command??'');
+  if(explained.has(cmd)) return;
+  explained.add(cmd);
+
+  const expansion=/contains expansion/i.test(text);
+  const card=frag('<div class="ask"><div class="hd">'+
+    (expansion?'Blocked, and approval cannot fix it':'Blocked')+'</div>'+
+    '<pre>'+esc(cmd)+'</pre>'+
+    '<div class="why">'+(expansion
+      ? 'Shell expansion — <code>$(…)</code>, backticks or <code>$?</code> — cannot be checked '+
+        'against a permission rule, so it is refused whatever you allow. The same command without '+
+        'it runs fine.'
+      : esc(text.slice(0,240)))+'</div>'+
+    '<div class="opts">'+
+      '<button class="btn" data-fix>Ask it to rewrite the command</button>'+
+      '<button class="btn quiet" data-skip>Leave it</button>'+
+    '</div></div>');
+  turn.work.append(card);
+  follow();
+
+  const settle=t=>{ card.querySelector('.opts').outerHTML='<div class="settled">'+esc(t)+'</div>'; };
+  card.querySelector('[data-fix]').onclick=()=>{
+    settle('Asked it to rewrite the command.');
+    send('That command was refused because it contains shell expansion, which no permission rule '+
+         'can allow. Run it again without $(...), backticks or $? — use separate commands and read '+
+         'the output instead.');
+  };
+  card.querySelector('[data-skip]').onclick=()=>settle('Left alone.');
 }
 
 const askedFor=new Set();

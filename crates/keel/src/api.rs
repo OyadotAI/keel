@@ -331,6 +331,12 @@ pub async fn chat(
             // ask. These are the rules the user approved in the IDE.
             .arg("--settings")
             .arg(crate::permissions::settings_json(&repo))
+            // No `--append-system-prompt` telling the agent to avoid shell expansion. It was tried:
+            // with and without the instruction, the first command out was `wc -l < a.txt; echo
+            // "exit: $?"` both times. The agent self-corrects from the refusal text either way, so
+            // the instruction bought nothing and cost tokens on every turn. The fix that works is
+            // in the UI, which now says what an expansion refusal is instead of showing nothing.
+
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
