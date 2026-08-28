@@ -221,7 +221,11 @@ pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static s
     }
 
     let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
-    let mime = match canonical.extension().map(str::to_ascii_lowercase).as_deref() {
+    let mime = match canonical
+        .extension()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
@@ -338,7 +342,11 @@ pub async fn chat(
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
             // places to update when the CLI's stream changes; the browser does the interpreting.
             while let Ok(Some(line)) = lines.next_line().await {
-                if tx.send(Ok(Event::default().event("msg").data(line))).await.is_err() {
+                if tx
+                    .send(Ok(Event::default().event("msg").data(line)))
+                    .await
+                    .is_err()
+                {
                     // The browser disconnected. Stop the run rather than leaving it orphaned.
                     let _ = child.start_kill();
                     return;
@@ -467,7 +475,13 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
         std::fs::read_to_string(root.join(path))
             .map(|content| {
                 let n = content.lines().count();
-                format!("@@ -0,0 +1,{n} @@\n{}", content.lines().map(|l| format!("+{l}\n")).collect::<String>())
+                format!(
+                    "@@ -0,0 +1,{n} @@\n{}",
+                    content
+                        .lines()
+                        .map(|l| format!("+{l}\n"))
+                        .collect::<String>()
+                )
             })
             .unwrap_or_default()
     } else {
@@ -480,7 +494,10 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
     for line in raw.lines() {
         if line.starts_with("@@") {
             // @@ -old,count +new,count @@
-            let nums: Vec<&str> = line.split(['-', '+', ',', ' ']).filter(|s| !s.is_empty()).collect();
+            let nums: Vec<&str> = line
+                .split(['-', '+', ',', ' '])
+                .filter(|s| !s.is_empty())
+                .collect();
             old_no = nums.first().and_then(|s| s.parse().ok()).unwrap_or(1);
             new_no = nums.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
             hunks.push(Hunk {
@@ -489,7 +506,9 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
             });
             continue;
         }
-        let Some(hunk) = hunks.last_mut() else { continue };
+        let Some(hunk) = hunks.last_mut() else {
+            continue;
+        };
 
         let (kind, text) = match line.chars().next() {
             Some('+') => ("add", &line[1..]),

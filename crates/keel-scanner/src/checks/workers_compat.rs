@@ -137,7 +137,9 @@ impl WorkersCompat {
             .iter()
             .filter(|e| {
                 e.has_flag("nodejs_compat")
-                    && e.date.as_deref().is_some_and(|d| d < NODEJS_COMPAT_MIN_DATE)
+                    && e.date
+                        .as_deref()
+                        .is_some_and(|d| d < NODEJS_COMPAT_MIN_DATE)
             })
             .map(|e| e.name.clone())
             .collect();
@@ -422,7 +424,10 @@ mod tests {
     fn flags_a_builtin_workers_will_never_provide() {
         let (_dir, ctx) = fixture(&[
             ("wrangler.jsonc", MAIN),
-            ("src/index.ts", "import fs from 'node:fs'\nexport default {}"),
+            (
+                "src/index.ts",
+                "import fs from 'node:fs'\nexport default {}",
+            ),
         ]);
         let findings = WorkersCompat.run(&ctx);
         assert!(ids(&findings).contains(&"workers/unsupported-node-builtin"));
@@ -465,10 +470,7 @@ mod tests {
                   "compatibility_flags": ["nodejs_compat"]
                 }"#,
             ),
-            (
-                "src/index.ts",
-                r#"import { Buffer } from "node:buffer""#,
-            ),
+            ("src/index.ts", r#"import { Buffer } from "node:buffer""#),
         ]);
         assert!(WorkersCompat.run(&ctx).is_empty());
     }
@@ -591,6 +593,10 @@ mod tests {
         assert!(found.contains("node:fs"));
         assert!(found.contains("node:path"));
         assert!(found.contains("node:crypto"));
-        assert_eq!(found.len(), 3, "the URL fragment is not a specifier: {found:?}");
+        assert_eq!(
+            found.len(),
+            3,
+            "the URL fragment is not a specifier: {found:?}"
+        );
     }
 }

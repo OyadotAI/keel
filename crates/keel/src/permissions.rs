@@ -56,10 +56,18 @@ fn save(repo: &Utf8Path, allow: &BTreeSet<String>) -> Result<(), String> {
 /// Seeding these is not Keel deciding on the user's behalf: running the build and test commands the
 /// project itself defines is the reason the agent is here. Anything beyond them still needs asking.
 pub fn defaults(repo: &Utf8Path) -> Vec<String> {
-    let mut out = vec!["Bash(git status *)".into(), "Bash(git diff *)".into(), "Bash(git log *)".into()];
+    let mut out = vec![
+        "Bash(git status *)".into(),
+        "Bash(git diff *)".into(),
+        "Bash(git log *)".into(),
+    ];
     if repo.join("package.json").exists() {
         let bun = repo.join("bun.lock").exists() || repo.join("bun.lockb").exists();
-        out.push(if bun { "Bash(bun *)".into() } else { "Bash(npm *)".into() });
+        out.push(if bun {
+            "Bash(bun *)".into()
+        } else {
+            "Bash(npm *)".into()
+        });
         out.push("Bash(npx *)".into());
     }
     if repo.join("Cargo.toml").exists() {
@@ -94,7 +102,12 @@ pub struct PermissionsView {
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<PermissionsView> {
     let repo = state.repo();
     let project = load(&repo);
-    let session: Vec<String> = session_rules().lock().expect("rules lock").iter().cloned().collect();
+    let session: Vec<String> = session_rules()
+        .lock()
+        .expect("rules lock")
+        .iter()
+        .cloned()
+        .collect();
     let suggested = defaults(&repo)
         .into_iter()
         .filter(|d| !project.contains(d) && !session.contains(d))
@@ -122,10 +135,7 @@ fn valid_rule(rule: &str) -> bool {
     !rule.is_empty()
         && rule.len() <= 200
         && !rule.contains('\n')
-        && rule
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
+        && rule.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 pub async fn add(
@@ -134,12 +144,17 @@ pub async fn add(
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     let bad = |m: &str| (axum::http::StatusCode::BAD_REQUEST, m.to_string());
     if !valid_rule(&body.rule) {
-        return Err(bad("That does not look like a permission rule, e.g. `Bash(bun *)`."));
+        return Err(bad(
+            "That does not look like a permission rule, e.g. `Bash(bun *)`.",
+        ));
     }
 
     match body.scope.as_str() {
         "session" => {
-            session_rules().lock().expect("rules lock").insert(body.rule);
+            session_rules()
+                .lock()
+                .expect("rules lock")
+                .insert(body.rule);
         }
         "project" => {
             let repo = state.repo();
@@ -157,13 +172,15 @@ pub async fn remove(
     Json(body): Json<RuleBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     if body.scope == "session" {
-        session_rules().lock().expect("rules lock").remove(&body.rule);
+        session_rules()
+            .lock()
+            .expect("rules lock")
+            .remove(&body.rule);
     } else {
         let repo = state.repo();
         let mut rules = load(&repo);
         rules.remove(&body.rule);
-        save(&repo, &rules)
-            .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+        save(&repo, &rules).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
     }
     Ok(Json(true))
 }
@@ -216,7 +233,7 @@ mod tests {
     fn malformed_rules_are_refused() {
         assert!(valid_rule("Bash(bun *)"));
         assert!(valid_rule("Edit"));
-        assert!(!valid_rule("bun install"));   // a shell command, not a rule
+        assert!(!valid_rule("bun install")); // a shell command, not a rule
         assert!(!valid_rule(""));
         assert!(!valid_rule("Bash(x)\nBash(y)"));
     }

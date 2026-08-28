@@ -207,7 +207,10 @@ pub async fn list(Query(q): Query<CatalogQuery>) -> axum::Json<CatalogResponse> 
         markers.iter().any(|m| {
             root.join(m).exists()
                 || std::fs::read_dir(root).is_ok_and(|entries| {
-                    entries.flatten().take(64).any(|e| e.path().join(m).exists())
+                    entries
+                        .flatten()
+                        .take(64)
+                        .any(|e| e.path().join(m).exists())
                 })
         })
     };
@@ -296,7 +299,10 @@ pub async fn details(Query(q): Query<DetailsQuery>) -> axum::Json<Details> {
         });
     }
 
-    axum::Json(parse_details(&q.name, &String::from_utf8_lossy(&out.stdout)))
+    axum::Json(parse_details(
+        &q.name,
+        &String::from_utf8_lossy(&out.stdout),
+    ))
 }
 
 /// Parse the human-readable inventory.
@@ -409,7 +415,9 @@ pub async fn marketplaces() -> axum::Json<Vec<Marketplace>> {
 ///
 /// The action set is closed rather than passed through, so a crafted request cannot reach an
 /// arbitrary `claude plugin` subcommand.
-pub async fn action(Query(q): Query<ActionQuery>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+pub async fn action(
+    Query(q): Query<ActionQuery>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let verb = match q.action.as_str() {
         "uninstall" => "uninstall",
         "enable" => "enable",
@@ -434,11 +442,7 @@ pub async fn action(Query(q): Query<ActionQuery>) -> Sse<ReceiverStream<Result<E
                 .event("line")
                 .data(format!("$ claude plugin {verb} {target}"))))
             .await;
-        let code = pipe(
-            Command::new("claude").args(["plugin", verb, &target]),
-            &tx,
-        )
-        .await;
+        let code = pipe(Command::new("claude").args(["plugin", verb, &target]), &tx).await;
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
@@ -474,14 +478,18 @@ fn valid(s: &str) -> bool {
 }
 
 /// Install a plugin, adding its marketplace first when Keel knows one is needed.
-pub async fn install(Query(q): Query<InstallQuery>) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+pub async fn install(
+    Query(q): Query<InstallQuery>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
     if !valid(&q.name) || !valid(&q.marketplace) {
         let t = tx.clone();
         tokio::spawn(async move {
             let _ = t
-                .send(Ok(Event::default().event("fatal").data("invalid plugin id")))
+                .send(Ok(Event::default()
+                    .event("fatal")
+                    .data("invalid plugin id")))
                 .await;
         });
         return Sse::new(ReceiverStream::new(rx));
@@ -527,7 +535,9 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let message = message.to_string();
     tokio::spawn(async move {
-        let _ = tx.send(Ok(Event::default().event("fatal").data(message))).await;
+        let _ = tx
+            .send(Ok(Event::default().event("fatal").data(message)))
+            .await;
     });
     Sse::new(ReceiverStream::new(rx))
 }
@@ -540,7 +550,9 @@ async fn pipe(
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let Ok(mut child) = command.spawn() else {
         let _ = tx
-            .send(Ok(Event::default().event("line").data("could not run `claude`")))
+            .send(Ok(Event::default()
+                .event("line")
+                .data("could not run `claude`")))
             .await;
         return -1;
     };
@@ -552,7 +564,11 @@ async fn pipe(
         crate::clitools::pump(out, tx.clone()),
         crate::clitools::pump(err, tx.clone())
     );
-    child.wait().await.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1)
+    child
+        .wait()
+        .await
+        .map(|s| s.code().unwrap_or(-1))
+        .unwrap_or(-1)
 }
 
 #[cfg(test)]

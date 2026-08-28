@@ -5,16 +5,16 @@
 //! credential.
 
 mod api;
+mod clitools;
 mod connect;
 mod dev;
-mod clitools;
 mod permissions;
 mod plugins;
 mod project;
 mod render;
+mod serve;
 mod term;
 mod verify;
-mod serve;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
@@ -139,7 +139,11 @@ fn main() -> Result<()> {
             }
         }
 
-        Command::Serve { path, port, no_open } => {
+        Command::Serve {
+            path,
+            port,
+            no_open,
+        } => {
             let repo = path
                 .canonicalize_utf8()
                 .with_context(|| format!("resolving {path}"))?;

@@ -105,7 +105,11 @@ mod tests {
             r#"{"plugins":{"a@m":[{"scope":"user"}],"b@m":[{"scope":"user"}]}}"#,
         )
         .unwrap();
-        std::fs::write(home.join("settings.json"), r#"{"enabledPlugins":{"a@m":false}}"#).unwrap();
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"enabledPlugins":{"a@m":false}}"#,
+        )
+        .unwrap();
 
         let plugins = discover_plugins(&home);
         let a = plugins.iter().find(|p| p.name == "a").expect("a");

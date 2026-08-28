@@ -67,7 +67,11 @@ pub async fn repos(token: &str) -> Result<Vec<Repo>, String> {
         .get(format!("{API}/user/repos"))
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
-        .query(&[("sort", "updated"), ("per_page", "100"), ("affiliation", "owner,collaborator")])
+        .query(&[
+            ("sort", "updated"),
+            ("per_page", "100"),
+            ("affiliation", "owner,collaborator"),
+        ])
         .send()
         .await
         .map_err(|e| format!("could not reach GitHub: {e}"))?;

@@ -67,9 +67,10 @@ pub fn github_from_gh_cli() -> Option<String> {
         .args(["auth", "token"])
         .output()
         .ok()?;
-    out.status.success().then(|| {
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }).filter(|t| !t.is_empty())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 /// The GitHub token to use: an explicitly connected one first, then `gh`.

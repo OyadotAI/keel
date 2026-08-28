@@ -132,6 +132,14 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .modal .foot2{display:flex;gap:var(--s2);justify-content:flex-end;padding:var(--s4) var(--s5);
   border-top:1px solid var(--n6);background:var(--n2)}
 .modal .why2{font:11.5px/1.5 var(--sans);color:var(--n10);margin-top:var(--s3)}
+/* What the template actually lays down. A name and a radio button say nothing about the shape of
+   the project; three rows do, and they cost nothing to read. */
+.np-layout{display:grid;grid-template-columns:max-content 1fr;gap:var(--s2) var(--s3);
+  margin-top:var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--n6);
+  border-radius:var(--r2);background:var(--n2)}
+.np-layout b{font:11.5px var(--mono);color:var(--n11);font-weight:500}
+.np-layout span{font:11.5px/1.4 var(--sans);color:var(--n10)}
+.np-layout[hidden]{display:none}
 .browser{border:1px solid var(--n7);border-radius:var(--r2);background:var(--n2);
   max-height:260px;overflow-y:auto;margin-top:var(--s2)}
 .browser .b{display:flex;align-items:center;gap:var(--s3);padding:5px var(--s4);cursor:pointer;
@@ -2658,17 +2666,20 @@ addEventListener('click',closeMenu);
 function newProjectDialog(){
   const parent=(state?.repo??'~').replace(/\/[^/]*$/,'')||'~';
   modal('New project',
-    '<label>Name</label><input type="text" id="np-name" placeholder="my-worker" spellcheck="false">'+
+    '<label>Name</label><input type="text" id="np-name" placeholder="my-app" spellcheck="false">'+
     '<label>Location</label><input type="text" id="np-parent" value="'+esc(parent)+'" spellcheck="false">'+
     '<label>Template</label><span class="seg" style="display:inline-flex">'+
-    '<button id="np-worker" aria-current="true">Cloudflare Worker</button>'+
-    '<button id="np-empty">Empty</button></span>',
+    '<button id="np-worker" aria-current="true">Full stack</button>'+
+    '<button id="np-empty">Empty</button></span>'+
+    '<div class="np-layout"><b>frontend/</b><span>Next.js + React, deployed as a Worker</span>'+
+    '<b>backend/</b><span>Go, deployed as a Cloudflare Container</span>'+
+    '<b>infra/</b><span>how both halves reach dev and prod</span></div>',
     'Create',
     async()=>{
       const r=await fetch('/api/project/new',{method:'POST',
         headers:{'content-type':'application/json'},
         body:JSON.stringify({name:el('np-name').value.trim(),parent:el('np-parent').value.trim(),
-          template:el('np-worker').getAttribute('aria-current')==='true'?'worker':'empty'})});
+          template:el('np-worker').getAttribute('aria-current')==='true'?'app':'empty'})});
       if(!r.ok) return await r.text();
       const {path}=await r.json();
       remember(path);
@@ -2676,10 +2687,11 @@ function newProjectDialog(){
       await refresh(); emptyLog(); setPanel('files'); draw();
       return null;
     },
-    'The Worker template starts with two isolated environments, a health route, a failing-capable '+
-    'test and a CI workflow — so a new project begins at a passing readiness score.');
+    'Two isolated environments, a service binding from the frontend to the backend, Go tests that '+
+    'can fail, and a CI workflow — a new project starts at a passing readiness score.');
   const pick=w=>{ el('np-worker').setAttribute('aria-current',String(w));
-                  el('np-empty').setAttribute('aria-current',String(!w)); };
+                  el('np-empty').setAttribute('aria-current',String(!w));
+                  document.querySelector('.np-layout').hidden=!w; };
   el('np-worker').onclick=()=>pick(true);
   el('np-empty').onclick=()=>pick(false);
 }

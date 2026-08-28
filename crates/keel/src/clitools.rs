@@ -46,7 +46,15 @@ const TOOLS: &[Tool] = &[
         whoami: &["auth", "status"],
         install: &[("brew", &["install", "gh"])],
         // --web is the device flow; https keeps the credential usable for cloning with no SSH key.
-        login: &["auth", "login", "--web", "--git-protocol", "https", "--hostname", "github.com"],
+        login: &[
+            "auth",
+            "login",
+            "--web",
+            "--git-protocol",
+            "https",
+            "--hostname",
+            "github.com",
+        ],
         identity: &["api", "user", "--jq", ".login"],
         manual: "https://github.com/cli/cli#installation",
     },
@@ -76,7 +84,14 @@ const TOOLS: &[Tool] = &[
         // and cannot be driven from here, so Keel detects profiles and says so rather than running
         // a command that will fail.
         login: &["sso", "login", "--profile", "{profile}"],
-        identity: &["sts", "get-caller-identity", "--query", "Arn", "--output", "text"],
+        identity: &[
+            "sts",
+            "get-caller-identity",
+            "--query",
+            "Arn",
+            "--output",
+            "text",
+        ],
         manual: "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html",
     },
 ];
@@ -125,7 +140,14 @@ fn condense(id: &str, raw: &str) -> String {
             let account = raw
                 .lines()
                 .filter(|l| l.starts_with('│'))
-                .map(|l| l.trim_matches('│').split('│').next().unwrap_or("").trim().to_string())
+                .map(|l| {
+                    l.trim_matches('│')
+                        .split('│')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                })
                 .find(|c| !c.is_empty() && c != "Account Name");
             match (email, account) {
                 (Some(e), Some(a)) => format!("{e} · {a}"),
@@ -213,7 +235,11 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             })
             .flatten();
 
-        let profiles = if t.id == "aws" { aws_profiles() } else { Vec::new() };
+        let profiles = if t.id == "aws" {
+            aws_profiles()
+        } else {
+            Vec::new()
+        };
         let blocked = (t.id == "aws" && version.is_some() && profiles.is_empty()).then(|| {
             "No AWS profile is configured. Run `aws configure sso` in a terminal — it is an \
              interactive prompt Keel cannot drive — then reload."
@@ -252,7 +278,9 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
         let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.send(Ok(Event::default().event("fatal").data(e.to_string()))).await;
+                let _ = tx
+                    .send(Ok(Event::default().event("fatal").data(e.to_string())))
+                    .await;
                 return;
             }
         };
@@ -261,8 +289,14 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
         let (out, err) = (child.stdout.take(), child.stderr.take());
         tokio::join!(pump(out, tx.clone()), pump(err, tx.clone()));
 
-        let code = child.wait().await.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        let _ = tx.send(Ok(Event::default().event("done").data(code.to_string()))).await;
+        let code = child
+            .wait()
+            .await
+            .map(|s| s.code().unwrap_or(-1))
+            .unwrap_or(-1);
+        let _ = tx
+            .send(Ok(Event::default().event("done").data(code.to_string())))
+            .await;
     });
 
     Sse::new(ReceiverStream::new(rx))
@@ -279,7 +313,11 @@ pub(crate) async fn pump<R: tokio::io::AsyncRead + Unpin>(
     let Some(pipe) = pipe else { return };
     let mut lines = BufReader::new(pipe).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        if tx.send(Ok(Event::default().event("line").data(line))).await.is_err() {
+        if tx
+            .send(Ok(Event::default().event("line").data(line)))
+            .await
+            .is_err()
+        {
             return;
         }
     }
@@ -289,7 +327,9 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let message = message.to_string();
     tokio::spawn(async move {
-        let _ = tx.send(Ok(Event::default().event("fatal").data(message))).await;
+        let _ = tx
+            .send(Ok(Event::default().event("fatal").data(message)))
+            .await;
     });
     Sse::new(ReceiverStream::new(rx))
 }
@@ -299,7 +339,10 @@ pub async fn install(Query(q): Query<ToolQuery>) -> Sse<ReceiverStream<Result<Ev
         return refuse("unknown tool");
     };
     let Some((mgr, args)) = t.install.iter().find(|(mgr, _)| exists(mgr)) else {
-        return refuse(&format!("no supported package manager found — see {}", t.manual));
+        return refuse(&format!(
+            "no supported package manager found — see {}",
+            t.manual
+        ));
     };
     let mut c = Command::new(mgr);
     c.args(*args);
@@ -321,7 +364,10 @@ pub async fn login(Query(q): Query<ToolQuery>) -> Sse<ReceiverStream<Result<Even
             let Some(p) = q.profile.as_deref().filter(|p| !p.is_empty()) else {
                 return refuse("pick a profile first");
             };
-            if !p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+            if !p
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            {
                 return refuse("that profile name is not valid");
             }
             args.push(p.to_string());
@@ -371,7 +417,11 @@ mod tests {
         for t in TOOLS {
             assert!(!t.install.is_empty(), "{} has no installer", t.id);
             assert!(!t.login.is_empty(), "{} has no login flow", t.id);
-            assert!(t.manual.starts_with("https://"), "{} needs a fallback link", t.id);
+            assert!(
+                t.manual.starts_with("https://"),
+                "{} needs a fallback link",
+                t.id
+            );
         }
     }
 
