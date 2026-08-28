@@ -25,3 +25,12 @@ scan: build
 
 clean:
 	cargo clean
+
+# ── macOS packaging ──────────────────────────────────────────────────────────
+app:
+	@packaging/build-app.sh
+
+dmg: app
+	@packaging/build-dmg.sh
+
+.PHONY: app dmg

@@ -107,7 +107,14 @@ pub async fn clone(
     Json(body): Json<CloneBody>,
 ) -> ApiResult<OpenedRepo> {
     let parent = match &body.parent {
-        Some(p) => Utf8PathBuf::from(p),
+        // `~/Dev` is what a person types; expanding it here means every caller gets it right
+        // rather than each one remembering to.
+        Some(p) => Utf8PathBuf::from(match p.strip_prefix('~') {
+            Some(rest) => std::env::var("HOME")
+                .map(|h| format!("{h}{rest}"))
+                .unwrap_or_else(|_| p.clone()),
+            None => p.clone(),
+        }),
         None => state
             .repo()
             .parent()

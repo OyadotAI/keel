@@ -55,7 +55,7 @@ impl Scope {
 }
 
 /// Everything Keel found for one repository.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Workspace {
     pub repo: Utf8PathBuf,
     pub sessions: Vec<Session>,

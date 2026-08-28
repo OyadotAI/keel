@@ -509,6 +509,58 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .ask .opts .btn{font-size:11.5px;padding:4px var(--s3)}
 .ask .settled{font:11.5px var(--mono);color:var(--n10)}
 
+/* ── the welcome screen ────────────────────────────────────────────────────
+   Shown when nothing is open: a first launch, or an application opened from the
+   Dock whose remembered project has moved. One screen rather than a wizard —
+   there are exactly two things to know and one decision to make, and clicking
+   Next three times to reach it is not respect for anybody's time. */
+.welcome{position:fixed;inset:0;z-index:80;background:var(--n1);
+  overflow-y:auto;display:grid;align-items:start;justify-items:center}
+.welcome.hidden{display:none}
+.wsheet{width:min(680px,calc(100% - 48px));padding:14vh 0 80px}
+.wmark{font:600 11px var(--mono);letter-spacing:.22em;color:var(--accent)}
+.wsheet h1{margin:var(--s4) 0 0;font:500 30px/1.15 var(--sans);letter-spacing:-.025em;
+  color:var(--n12)}
+.wlede{margin:var(--s4) 0 0;max-width:56ch;font:13.5px/1.65 var(--sans);color:var(--n10)}
+
+.wstep{margin-top:var(--s7);border-top:1px solid var(--n6);padding-top:var(--s5)}
+.wstep .wh{display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s4)}
+.wstep h2{margin:0;font:600 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--n10)}
+.wstep .wh .note2{font:11.5px var(--sans);color:var(--n9)}
+
+/* A status line reads as a fact, so it is set as one: the state, then what it is about. */
+.wrow{display:flex;align-items:baseline;gap:var(--s3);padding:var(--s2) 0;font:13px/1.6 var(--sans)}
+.wrow .dot2{width:7px;height:7px;border-radius:50%;flex:none;transform:translateY(-2px)}
+.wrow .dot2.on{background:var(--add)} .wrow .dot2.off{background:var(--warn)}
+.wrow b{font-weight:500;color:var(--n12)}
+.wrow span{color:var(--n10)}
+.wrow code{font:11.5px var(--mono);color:var(--n11);background:var(--n3);
+  border-radius:3px;padding:1px 5px}
+.wfix{margin:var(--s3) 0 0;padding:var(--s3) var(--s4);border-radius:var(--r2);
+  border:1px solid color-mix(in srgb,var(--warn) 34%,transparent);
+  background:color-mix(in srgb,var(--warn) 8%,transparent);
+  font:12.5px/1.6 var(--sans);color:var(--n11)}
+.wfix code{background:var(--n1)}
+
+.wgrid{display:grid;gap:var(--s3)}
+.wgrid button{all:unset;cursor:pointer;display:block;padding:var(--s4) var(--s5);
+  border:1px solid var(--n6);border-radius:var(--r2);background:var(--n2)}
+.wgrid button:hover{border-color:var(--accent);background:var(--n3)}
+.wgrid button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wgrid button b{display:block;font:500 13.5px var(--sans);color:var(--n12);margin-bottom:3px}
+.wgrid button span{display:block;font:12.5px/1.55 var(--sans);color:var(--n10)}
+
+.wfoot{margin-top:var(--s6);font:12px/1.6 var(--sans);color:var(--n9)}
+
+/* Cloning lands inline rather than sending someone into Settings before they have a project. */
+.wrepos{max-height:280px;overflow-y:auto;border:1px solid var(--n6);border-radius:var(--r2)}
+.wrepos .r2{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);
+  border-bottom:1px solid var(--n6);font:12.5px var(--sans);color:var(--n11);cursor:pointer}
+.wrepos .r2:last-child{border-bottom:0}
+.wrepos .r2:hover{background:var(--n3);color:var(--n12)}
+.wrepos .r2 .m3{margin-left:auto;font:11px var(--mono);color:var(--n9)}
+
 .err{font:12px/1.55 var(--sans);color:var(--crit);background:color-mix(in srgb,var(--crit) 8%,transparent);
   border:1px solid color-mix(in srgb,var(--crit) 26%,transparent);border-radius:var(--r2);
   padding:var(--s3) var(--s4)}
@@ -2945,8 +2997,20 @@ async function openPath(path){
   if(!r.ok) return await r.text();
   remember((await r.json()).path);
   tabs.length=0; active=null; sessionId=null; turn=null;
-  await refresh(); emptyLog(); setPanel('files'); draw();
+  await enterProject();
   return null;
+}
+
+/** Land in the IDE, whether this is the first project ever opened or the fourth switch today. */
+async function enterProject(){
+  if(!el('welcome').classList.contains('hidden')){
+    // Arriving from the welcome screen means the rest of the app has never been started.
+    leaveWelcome();
+    await bootProject();
+    setPanel('files');
+    return;
+  }
+  await refresh(); emptyLog(); setPanel('files'); draw();
 }
 
 /** Where a new file goes when the menu bar asks rather than a folder's own menu: beside whatever
@@ -3073,7 +3137,7 @@ function newProjectDialog(){
       const {path}=await r.json();
       remember(path);
       tabs.length=0; active=null; sessionId=null;
-      await refresh(); emptyLog(); setPanel('files'); draw();
+      await enterProject();
       return null;
     },
     'Two isolated environments, a typed service binding from the frontend to the backend, tests '+
@@ -3838,15 +3902,121 @@ async function refresh(){
   drawStatus();
 }
 
-wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
-(async()=>{
+/* ════ welcome ═══════════════════════════════════════════════════════════
+   The first screen, and the screen an application launched from the Dock lands on when its
+   remembered project has moved. It asks for one thing — a project — and reports one thing: whether
+   the `claude` it is about to drive is actually usable. Everything else waits until there is
+   something to work on. */
+async function drawWelcome(){
+  el('welcome').classList.remove('hidden');
+  el('app').setAttribute('aria-hidden','true');
+
+  const c=await fetch('/api/claude').then(r=>r.json()).catch(()=>({}));
+  const row=(ok,label,detail)=>'<div class="wrow"><span class="dot2 '+(ok?'on':'off')+'"></span>'+
+    '<b>'+esc(label)+'</b><span>'+detail+'</span></div>';
+
+  let fix='';
+  if(!c.installed){
+    fix='<div class="wfix">Keel runs your own <code>claude</code> and has nothing to run without '+
+        'it. Install it with <code>npm i -g @anthropic-ai/claude-code</code>, then reload this '+
+        'page.</div>';
+  } else if(!c.authenticated){
+    // The sign-in is a browser handshake the CLI drives itself. Keel cannot do it on your behalf,
+    // and pretending otherwise would just fail later inside a chat.
+    fix='<div class="wfix">Run <code>claude</code> once in a terminal and sign in — it opens a '+
+        'browser and Keel cannot drive that for you. Then reload this page.</div>';
+  }
+
+  el('w-claude').innerHTML=
+    '<div class="wh"><h2>Claude Code</h2><span class="note2">Keel drives the CLI you already '+
+    'have. No API key, and nothing billed to Keel.</span></div>'+
+    row(!!c.installed,'Installed', c.installed?esc(c.version??''):'not found on your PATH')+
+    row(!!c.authenticated,'Signed in',
+        c.authenticated?esc(c.account??'')+(c.plan?' · '+esc(c.plan):''):'no account on this machine')+
+    fix;
+}
+
+function leaveWelcome(){
+  el('welcome').classList.add('hidden');
+  el('app').removeAttribute('aria-hidden');
+}
+
+/** Everything that has to happen once a project exists — shared by every way of getting one. */
+async function bootProject(){
   await Promise.all([loadConn(), loadClis(), loadCheck(), loadDev()]);
   await refresh();
   try{ wirePanel(); setPanelTab('terminal'); }
   catch(e){ console.error('panel',e); }
   PANELS._skillsCta?.();
-  emptyLog();   // suggestions are drawn from the scan and git status, so it waits for them
+  emptyLog();
   draw();
+}
+
+/* Cloning is offered here rather than behind Settings, because "open the repo I already have on
+   GitHub" is the most common way anyone arrives — and Settings is not reachable without a project
+   open, which is exactly the state this screen exists for. */
+async function welcomeClone(){
+  const host=el('w-claude').parentElement.querySelector('.wgrid');
+  const clis=await fetch('/api/cli').then(r=>r.json()).catch(()=>[]);
+  const gh=clis.find(c=>c.id==='gh');
+
+  if(!gh?.installed||!gh?.authenticated){
+    modal('Connect GitHub',
+      '<div class="why2">Cloning uses the GitHub CLI. '+
+      (gh?.installed
+        ? 'It is installed but not signed in — run <code>gh auth login</code> in a terminal, then '+
+          'try again. It is a browser handshake Keel cannot drive for you.'
+        : 'Install it with <code>'+esc(gh?.install_cmd??'brew install gh')+'</code>, sign in with '+
+          '<code>gh auth login</code>, then try again.')+
+      '</div>','Open a folder instead',async()=>{ openFolderDialog(); return null; });
+    return;
+  }
+
+  const repos=await fetch('/api/github/repos').then(r=>r.json()).catch(()=>[]);
+  if(!repos.length){ toast('No repositories came back from GitHub.'); return; }
+
+  const m=modal('Clone from GitHub',
+    '<label>Repository</label><div class="wrepos" id="w-repos">'+
+    repos.map((r,i)=>'<div class="r2" data-i="'+i+'">'+esc(r.full_name??r.name)+
+      (r.private?'<span class="m3">private</span>':'')+
+      '<span class="m3">'+esc((r.updated_at??'').slice(0,10))+'</span></div>').join('')+'</div>'+
+    '<label>Clone into</label><input type="text" id="w-parent" spellcheck="false" value="~/Dev">',
+    'Pick a repository above', async()=>'Choose a repository from the list.',
+    'It is cloned with your <code>gh</code> credentials, over HTTPS, so no SSH key is needed.');
+
+  m.querySelectorAll('[data-i]').forEach(row=>row.onclick=async()=>{
+    const r=repos[+row.dataset.i];
+    el('m-ok').textContent='Cloning '+r.name+'…';
+    el('m-ok').disabled=true;
+    const res=await fetch('/api/github/clone',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({clone_url:r.clone_url,name:r.name,parent:el('w-parent').value.trim()})});
+    if(!res.ok){
+      el('modal-err').textContent=await res.text();
+      el('modal-err').classList.remove('hidden');
+      el('m-ok').textContent='Pick a repository above';
+      return;
+    }
+    m.remove();
+    remember((await res.json()).path);
+    await enterProject();
+  });
+}
+
+document.querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{
+  if(b.dataset.w==='open') openFolderDialog();
+  if(b.dataset.w==='new') newProjectDialog();
+  if(b.dataset.w==='clone') welcomeClone();
+});
+
+wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
+(async()=>{
+  // One cheap request decides which of the two screens this is, before anything expensive runs:
+  // with nothing open there is no tree to walk, no scan to run and no session list to read.
+  const first=await fetch('/api/state').then(r=>r.json()).catch(()=>({project_open:true}));
+  if(!first.project_open){ await drawWelcome(); return; }
+
+  await bootProject();
   const qs=new URLSearchParams(location.search);
   if(qs.get('panel')) setPanel(qs.get('panel'));
   if(qs.get('mode')==='diff'){ view='diff'; syncView(); }
@@ -3859,5 +4029,31 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
   if(qs.get('preview')) openPreview(qs.get('preview')==='1'?null:qs.get('preview'));
 })();
 </script>
+<div class="welcome hidden" id="welcome">
+  <div class="wsheet">
+    <div class="wmark">&#9095; KEEL</div>
+    <h1>Make a repository shippable.</h1>
+    <p class="wlede">Keel drives the Claude Code already installed on this machine, against a
+      repository already on this disk. Your subscription, your files, your terminal — nothing is
+      uploaded and there is no account to make.</p>
+
+    <section class="wstep" id="w-claude"></section>
+
+    <section class="wstep">
+      <div class="wh"><h2>Open something</h2></div>
+      <div class="wgrid">
+        <button data-w="open"><b>Open a folder</b><span>A repository you already have. Keel scans
+          it and tells you what is missing.</span></button>
+        <button data-w="clone"><b>Clone from GitHub</b><span>Pick a repository from your account
+          and Keel clones it locally.</span></button>
+        <button data-w="new"><b>New project</b><span>Next.js and Hono on Cloudflare, two
+          environments, green from the first commit.</span></button>
+      </div>
+    </section>
+
+    <p class="wfoot">Cloudflare, AWS, skills and plugins are in Settings when you want them. None
+      of them are needed to start.</p>
+  </div>
+</div>
 </body>
 </html>

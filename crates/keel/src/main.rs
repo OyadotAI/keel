@@ -9,7 +9,9 @@ mod clitools;
 mod connect;
 mod dev;
 mod fsops;
+mod gui;
 mod permissions;
+mod prefs;
 mod plugins;
 mod project;
 mod render;
@@ -27,8 +29,10 @@ use keel_workspace::Workspace;
 #[derive(Parser)]
 #[command(name = "keel", version, about = "Make a repo shippable")]
 struct Cli {
+    /// Absent when launched from the Dock, where a bundle's executable is run with no arguments.
+    /// That is the application, so that is what a bare `keel` does.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -86,6 +90,20 @@ enum Command {
         no_open: bool,
     },
 
+    /// Open Keel as an application, in its own window.
+    ///
+    /// What the macOS bundle runs, and what a bare `keel` does. Launched from the Dock there is no
+    /// working directory worth inferring a project from, so the last one is reopened — and on a
+    /// first run, the welcome screen is shown instead.
+    App {
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+
+        /// Serve without a window, and open a browser tab instead. For a machine with no display.
+        #[arg(long)]
+        headless: bool,
+    },
+
     /// Move repository-supplied agent configuration out of the way.
     ///
     /// Run before pointing any agent at a repository you did not write. Claude Code loads a repo's
@@ -121,9 +139,15 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    // macOS hands a bundled process a `-psn_0_…` serial number on some launches. It is not an
+    // argument anyone typed, and clap would reject it and take the application down on start.
+    let args = std::env::args_os().filter(|a| !a.to_string_lossy().starts_with("-psn_"));
+    let cli = Cli::parse_from(args);
 
-    match cli.command {
+    match cli.command.unwrap_or(Command::App {
+        port: 7777,
+        headless: false,
+    }) {
         Command::Scan { path, json, strict } => {
             let ctx = RepoContext::load(&path)
                 .with_context(|| format!("reading repository at {path}"))?;
@@ -153,6 +177,20 @@ fn main() -> Result<()> {
                 .build()
                 .context("starting the async runtime")?
                 .block_on(serve::run(repo, port, !no_open))?;
+        }
+
+        Command::App { port, headless } => {
+            if headless {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .context("starting the async runtime")?
+                    .block_on(serve::run_app(port, true))?;
+            } else {
+                // Takes over this thread and never returns: AppKit's run loop has to be the main
+                // one, so the server is what moves to a thread, not the window.
+                gui::run(port)?;
+            }
         }
 
         Command::Workspace { path, json } => {
