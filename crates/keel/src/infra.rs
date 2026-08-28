@@ -48,6 +48,9 @@ pub struct Cluster {
     pub problem: Option<String>,
     pub workloads: Vec<Workload>,
     pub namespaces: usize,
+    /// The namespace the current context defaults to. Empty means `default`, which is what
+    /// kubectl assumes and therefore what the agent's commands will hit.
+    pub namespace: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +103,15 @@ pub async fn cluster() -> Json<Cluster> {
         return Json(out);
     };
     out.reachable = true;
+    out.namespace = run(
+        "kubectl",
+        &["config", "view", "--minify", "--output", "jsonpath={..namespace}"],
+        None,
+    )
+    .await
+    .map(|n| n.trim().to_string())
+    .filter(|n| !n.is_empty())
+    .or_else(|| Some("default".into()));
 
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Json(out);
@@ -339,6 +351,44 @@ pub async fn workload(
     }
 
     Json(out)
+}
+
+/// Point the current context at a namespace.
+///
+/// Not a filter. kubectl defaults to whatever this says, so it changes what every unqualified
+/// command does — including the ones the agent runs. That is the point: "work in this namespace"
+/// should be one decision, not a `-n` on every command that has to be remembered.
+pub async fn set_namespace(
+    axum::extract::Query(q): axum::extract::Query<NamespaceQuery>,
+) -> Json<serde_json::Value> {
+    // A Kubernetes name, and nothing that could be read as a flag.
+    let ok = !q.name.is_empty()
+        && q.name.len() <= 63
+        && !q.name.starts_with('-')
+        && q
+            .name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !ok {
+        return Json(serde_json::json!({ "ok": false, "error": "that is not a namespace" }));
+    }
+
+    let arg = format!("--namespace={}", q.name);
+    match run(
+        "kubectl",
+        &["config", "set-context", "--current", &arg],
+        None,
+    )
+    .await
+    {
+        Some(_) => Json(serde_json::json!({ "ok": true, "namespace": q.name })),
+        None => Json(serde_json::json!({ "ok": false, "error": "kubectl refused" })),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct NamespaceQuery {
+    pub name: String,
 }
 
 // ═══ pipelines ═══════════════════════════════════════════════════════════════════════════════
