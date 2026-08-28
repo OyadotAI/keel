@@ -9,3 +9,4 @@ dist/
 .env
 .env.*
 !.env.example
+ui/node_modules/

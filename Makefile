@@ -34,3 +34,11 @@ dmg: app
 	@packaging/build-dmg.sh
 
 .PHONY: app dmg
+
+# Render the side panels in a headless DOM against a running Keel. Every UI bug in this project so
+# far has been "the code did not run" rather than "it looked wrong", and that is what this catches.
+# Needs `keel serve` on :7777 and `bun install` in ui/.
+ui:
+	@bun ui/check.mjs
+
+.PHONY: ui

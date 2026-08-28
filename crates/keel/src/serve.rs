@@ -262,6 +262,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/plugins/refresh",
             get(crate::plugins::refresh_marketplaces),
         )
+        .route("/api/mcp/add", get(crate::mcp::add))
+        .route("/api/mcp/remove", get(crate::mcp::remove))
         .route("/api/claude", get(crate::clitools::claude_status))
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))
