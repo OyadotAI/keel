@@ -3828,7 +3828,7 @@ function send(text){
   const full=withCtx?withCtx+'\n\n'+prompt:prompt;
 
   turn=newTurn(full); started=Date.now();
-  agentEdits=new Set(); collapsedDiffs.clear();
+  agentEdits=new Set(); diffChoice.clear();
   agentActs=[]; consoleNodes.clear(); sessionTrimmed=false;
   pendingCalls.clear(); actNodes.clear(); askedFor.clear();
   box.value=''; autoGrow(); attached.clear(); drawCtx();
@@ -5215,7 +5215,22 @@ let agentActs=[];
 let agentView='console';
 const consoleNodes=new Map();
 const WRITE_TOOLS=new Set(['Edit','Write','MultiEdit','NotebookEdit','Update']);
-const collapsedDiffs=new Set();
+/* Which diffs you have opened or closed by hand. A Set of "collapsed" could not express "you
+   have not said", and the default depends on how many files there are — so this records the
+   choice and `diffOpen` decides everything else. */
+const diffChoice=new Map();
+
+/** Whether one file's diff is expanded.
+ *
+ *  One file has nothing to choose between, so it opens. Several stack shut, because a 180-line
+ *  diff at the top means the other five are below the fold and the list stops being a list — you
+ *  scroll through the first change to discover the second. Small ones still open, since folding a
+ *  four-line diff hides nothing and costs a click. */
+function diffOpen(name,total,lines){
+  if(diffChoice.has(name)) return diffChoice.get(name);
+  if(total<=1) return true;
+  return lines<=24;
+}
 
 const paneHidden=()=>el('agent-pane').classList.contains('hidden');
 
@@ -5528,7 +5543,7 @@ async function drawChanges(host){
     const hunks=d?.hunks??[];
     const plus=hunks.reduce((n,h)=>n+h.lines.filter(l=>l.kind==='add').length,0);
     const minus=hunks.reduce((n,h)=>n+h.lines.filter(l=>l.kind==='del').length,0);
-    const shut=collapsedDiffs.has(f);
+    const shut=!diffOpen(f,files.length,plus+minus);
     return '<div class="fdiff'+(shut?' shut':'')+'" data-f="'+esc(f)+'">'+
       '<div class="fh"><span class="caret2">'+(shut?'\u25b8':'\u25be')+'</span>'+
       '<span class="pathn">'+esc(f)+'</span>'+
@@ -5550,10 +5565,22 @@ async function drawChanges(host){
   const totalMinus=parts.reduce((n,{d})=>n+(d?.hunks??[]).reduce((m,h)=>
     m+h.lines.filter(l=>l.kind==='del').length,0),0);
 
+  const sizeOf=d=>(d?.hunks??[]).reduce((n,h)=>
+    n+h.lines.filter(l=>l.kind==='add'||l.kind==='del').length,0);
+  const anyOpen=parts.some(({f,d})=>diffOpen(f,files.length,sizeOf(d)));
   host.innerHTML=
     '<div class="live-head"><h2>'+files.length+' file'+(files.length===1?'':'s')+'</h2>'+
     '<span class="n2"><span style="color:var(--add)">+'+totalPlus+'</span> '+
-    '<span style="color:var(--del)">\u2212'+totalMinus+'</span></span></div>'+body;
+    '<span style="color:var(--del)">\u2212'+totalMinus+'</span></span>'+
+    (files.length>1?'<span class="sp"></span><button id="fd-all">'+
+      (anyOpen?'collapse all':'expand all')+'</button>':'')+
+    '</div>'+body;
+
+  const all=el('fd-all');
+  if(all) all.onclick=()=>{
+    for(const {f} of parts) diffChoice.set(f,!anyOpen);
+    drawChanges(host);
+  };
 
   host.querySelectorAll('.fdiff').forEach(n=>{
     const f=n.dataset.f;
@@ -5561,7 +5588,7 @@ async function drawChanges(host){
       // The filename opens the file; anywhere else folds the diff.
       if(e.target.classList.contains('pathn')){ open(f); return; }
       n.classList.toggle('shut');
-      collapsedDiffs.has(f)?collapsedDiffs.delete(f):collapsedDiffs.add(f);
+      diffChoice.set(f,!n.classList.contains('shut'));
       n.querySelector('.caret2').textContent=n.classList.contains('shut')?'\u25b8':'\u25be';
     };
   });
