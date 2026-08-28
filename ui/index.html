@@ -569,6 +569,14 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .picker #sess-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font:500 11.5px var(--sans)}
 .picker .cv{font-size:8px;flex:none;color:var(--n9)}
+#sess-meta{font:10px var(--mono);color:var(--n9);white-space:nowrap;flex:none}
+
+/* A word in the corner reading "new" was not a control anybody found. Starting fresh is one of
+   two things you do to a conversation, so it looks like one of two things you can do. */
+.newsess{all:unset;cursor:pointer;margin-left:auto;flex:none;
+  padding:3px var(--s3);border:1px solid var(--n7);border-radius:var(--r1);
+  font:11px var(--mono);color:var(--n10);transition:all var(--t-hover)}
+.newsess:hover{border-color:var(--accent);color:var(--accent)}
 .sesslist{max-height:46%;overflow-y:auto;border-bottom:1px solid var(--n6);background:var(--n2)}
 .sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
 
@@ -1132,8 +1140,9 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
     <div class="rz right" id="rz2"></div>
     <div class="ph">
       <button class="picker" id="sess-btn"><span id="sess-name">New session</span><span class="cv">▾</span></button>
+      <span class="n" id="sess-meta"></span>
       <span class="n" id="agent-model"></span>
-      <button class="act" id="a-new">new</button>
+      <button class="newsess" id="a-new" title="Start a fresh conversation">+ New</button>
     </div>
     <div class="sesslist hidden" id="sess-list"></div>
     <div class="log" id="log"></div>
@@ -3054,10 +3063,25 @@ function emptyLog(){
 }
 
 /* ── sessions ──────────────────────────────────────────────────────────── */
-function setSessionName(t){ el('sess-name').textContent=t; }
+function setSessionName(t,meta){
+  el('sess-name').textContent=t;
+  // What you are continuing, so that sending into a resumed session is never a surprise.
+  el('sess-meta').textContent=meta??'';
+}
+
+/** "2h ago", because a timestamp is a thing you have to do arithmetic on. */
+function ago(iso){
+  const then=Date.parse(iso); if(!then) return '';
+  const mins=Math.round((Date.now()-then)/60000);
+  if(mins<1) return 'just now';
+  if(mins<60) return mins+'m ago';
+  const hrs=Math.round(mins/60);
+  if(hrs<24) return hrs+'h ago';
+  return Math.round(hrs/24)+'d ago';
+}
 
 el('a-new').onclick=()=>{
-  sessionId=null; cost=null; turn=null; setSessionName('New session');
+  sessionId=null; cost=null; turn=null; setSessionName('New session','');
   el('sess-list').classList.add('hidden'); emptyLog(); drawStatus();
 };
 
@@ -3080,7 +3104,8 @@ async function openSession(id){
   el('sess-list').classList.add('hidden');
   const meta=(state?.workspace.sessions??[]).find(s=>s.id===id);
   sessionId=id; cost=null; turn=null;
-  setSessionName(meta?.title??id.split('-')[0]);
+  setSessionName(meta?.title??id.split('-')[0],
+    meta ? meta.messages+' msgs · '+ago(meta.last_active) : '');
   el('log').innerHTML='<div class="start"><p>Loading…</p></div>';
 
   const turns=await (await fetch('/api/session?id='+encodeURIComponent(id))).json();
@@ -3104,9 +3129,23 @@ async function openSession(id){
     }
   }
   turn=null;
-  pinned=true; el('log').scrollTop=el('log').scrollHeight;
+  landAtEnd();
   drawStatus();
   loadSessionWork(id);
+}
+
+/* Getting to the bottom of something that was just built, rather than something that just grew.
+   One assignment reads `scrollHeight` before the browser has laid the content out, and a replayed
+   session is the worst case for that: hundreds of turns, markdown rendered into each one, fonts
+   still settling. So it is re-applied as the layout arrives rather than guessed at once. */
+function landAtEnd(){
+  setPinned(true);
+  const l=el('log');
+  const go=()=>{ if(pinned) l.scrollTop=l.scrollHeight; };
+  go();
+  requestAnimationFrame(go);
+  setTimeout(go,0);
+  setTimeout(go,80);
 }
 
 /* Opening a session should show what it did, not only what was said about it. The transcript holds
@@ -3620,6 +3659,19 @@ async function enterProject(){
     return;
   }
   await refresh(); emptyLog(); setPanel('files'); draw();
+  resumeLast();
+}
+
+/* Opening a project drops you back into its most recent conversation rather than a blank one.
+   Sessions are per-project and sorted by last activity, so this is "carry on where I was", which
+   is what opening a project you were working on yesterday means.
+
+   The header has to make that obvious, because a resumed session and a fresh one look identical
+   until you have sent something into the wrong one. */
+function resumeLast(){
+  const last=(state?.workspace.sessions??[])[0];
+  if(!last||sessionId) return;
+  openSession(last.id);
 }
 
 /** Where a new file goes when the menu bar asks rather than a folder's own menu: beside whatever
@@ -4931,6 +4983,7 @@ async function bootProject(){
   PANELS._skillsCta?.();
   emptyLog();
   draw();
+  resumeLast();
 }
 
 /* Cloning is offered here rather than behind Settings, because "open the repo I already have on
