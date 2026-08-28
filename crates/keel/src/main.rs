@@ -13,6 +13,7 @@ mod dev;
 mod fsops;
 mod gui;
 mod mcp;
+mod names;
 mod permissions;
 mod prefs;
 mod plugins;
