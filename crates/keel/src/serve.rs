@@ -476,6 +476,86 @@ mod ui_tests {
         );
     }
 
+    /// A CSS variable that was never defined takes its whole declaration with it.
+    ///
+    /// `var(--acc)` where the token is `--accent` did not fail loudly: the background it was set
+    /// on was simply dropped, the `color: #fff` beside it was not, and every context menu turned
+    /// white text on a white background. `var(--s7)` where the scale stops at `--s6` silently
+    /// removed the spacing between the welcome screen's sections. Both are invisible until someone
+    /// looks at the right pixel.
+    ///
+    /// A `var(--x, fallback)` is deliberate and allowed — that is how the runtime-set ones work.
+    #[test]
+    fn every_css_variable_is_defined() {
+        let html = include_str!("../../../ui/index.html");
+        let css = html
+            .split_once("<style>")
+            .and_then(|(_, tail)| tail.split_once("</style>"))
+            .map(|(body, _)| body)
+            .expect("the UI has a stylesheet");
+
+        let defined: std::collections::HashSet<&str> = css
+            .match_indices("--")
+            .filter_map(|(at, _)| {
+                let rest = &css[at..];
+                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-')?;
+                rest[end..].starts_with(':').then(|| &rest[..end])
+            })
+            .collect();
+
+        let mut missing: Vec<&str> = html
+            .match_indices("var(--")
+            .filter_map(|(at, _)| {
+                let rest = &html[at + 4..];
+                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-')?;
+                // A comma means a fallback was supplied on purpose.
+                rest[end..].starts_with(')').then(|| &rest[..end])
+            })
+            .filter(|name| !defined.contains(name))
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+
+        assert!(
+            missing.is_empty(),
+            "these CSS variables are used with no definition and no fallback, so their whole \
+             declaration is silently dropped: {missing:?}"
+        );
+    }
+
+    /// Two top-level functions with the same name is legal JavaScript and the second one wins.
+    ///
+    /// `drawPreview` was declared twice — once for rendering a Markdown file, once for the dev
+    /// server's browser pane — so every Markdown file opened into the browser pane instead. No
+    /// error, no warning, and `node --check` is perfectly happy with it.
+    #[test]
+    fn no_function_is_declared_twice() {
+        let html = include_str!("../../../ui/index.html");
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+        for line in html.lines() {
+            let Some(rest) = line.strip_prefix("function ") else {
+                continue;
+            };
+            let Some(name) = rest.split('(').next() else {
+                continue;
+            };
+            *seen.entry(name.trim()).or_default() += 1;
+        }
+
+        let mut dupes: Vec<&str> = seen
+            .iter()
+            .filter(|(_, n)| **n > 1)
+            .map(|(name, _)| *name)
+            .collect();
+        dupes.sort_unstable();
+
+        assert!(
+            dupes.is_empty(),
+            "declared more than once at the top level, so only the last one exists: {dupes:?}"
+        );
+    }
+
     /// Markup has to precede the script that reaches for it.
     ///
     /// The welcome screen's markup was appended after the closing `</script>`, so the top-level
