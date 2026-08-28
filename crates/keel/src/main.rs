@@ -12,6 +12,7 @@ mod permissions;
 mod plugins;
 mod project;
 mod render;
+mod term;
 mod verify;
 mod serve;
 

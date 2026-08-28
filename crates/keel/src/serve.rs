@@ -84,6 +84,7 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/permissions", get(crate::permissions::list))
         .route("/api/permissions/add", axum::routing::post(crate::permissions::add))
         .route("/api/permissions/remove", axum::routing::post(crate::permissions::remove))
+        .route("/api/term/ws", get(crate::term::ws))
         .route("/api/dev", get(crate::dev::status))
         .route("/api/dev/start", axum::routing::post(crate::dev::start))
         .route("/api/dev/stop", axum::routing::post(crate::dev::stop))
