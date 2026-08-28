@@ -473,4 +473,27 @@ mod ui_tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// Markup has to precede the script that reaches for it.
+    ///
+    /// The welcome screen's markup was appended after the closing `</script>`, so the top-level
+    /// `querySelectorAll('[data-w]')` that wired its buttons matched nothing and every button on
+    /// the first screen anyone sees did nothing. The handlers now bind inside the function that
+    /// draws the screen, which makes order irrelevant — this keeps it that way for the markup too.
+    #[test]
+    fn body_markup_comes_before_the_script_that_uses_it() {
+        let html = include_str!("../../../ui/index.html");
+        let script = html.find("<script").expect("the UI loads scripts");
+        for id in ["welcome", "app", "surface", "prompt", "tabs"] {
+            let marker = format!("id=\"{id}\"");
+            let at = html
+                .find(&marker)
+                .unwrap_or_else(|| panic!("no element with id {id}"));
+            assert!(
+                at < script,
+                "#{id} is declared after the first <script>, so anything binding to it at parse \
+                 time silently finds nothing"
+            );
+        }
+    }
 }
