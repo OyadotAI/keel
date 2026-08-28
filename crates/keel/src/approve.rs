@@ -112,6 +112,20 @@ fn is_assignment(token: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Whether a token could be the name of a program.
+///
+/// A binary name is letters, digits and a little punctuation. Requiring that is what stops a
+/// heredoc body turning into permission rules: `assert`, `def`, `print(f`, `}` and `1"))` all
+/// arrive looking like the first word of a command, and only some of them are even close.
+fn looks_like_a_program(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 40
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+}
+
 /// The program a single shell segment actually invokes.
 ///
 /// Leading environment assignments and wrappers are stepped over rather than treated as the
@@ -139,7 +153,7 @@ fn program_of(segment: &str) -> Option<String> {
         if BUILTINS.contains(&name.as_str()) {
             return None;
         }
-        return Some(name);
+        return looks_like_a_program(&name).then_some(name);
     }
 }
 
@@ -157,8 +171,14 @@ pub fn rules_for(tool: &str, input: &serde_json::Value) -> Vec<String> {
         .and_then(|c| c.as_str())
         .unwrap_or_default();
 
+    // Not split on newlines. A tool call's `command` is one shell invocation, and a newline inside
+    // it is nearly always a heredoc or an inline script — not a second command to get approved. It
+    // used to split on them, so `python3 - <<'PY' … PY` became one fake command per line of
+    // Python, and clicking "always allow" stored a rule for each: `Bash(assert *)`, `Bash(def *)`,
+    // `Bash(the *)`. Two hundred rules in one real project, most of them meaningless, which is an
+    // allowlist that has stopped meaning anything.
     let mut out: Vec<String> = Vec::new();
-    for segment in command.split(['\n', ';']).flat_map(|s| s.split("&&")) {
+    for segment in command.split(';').flat_map(|s| s.split("&&")) {
         for part in segment.split("||").flat_map(|s| s.split('|')) {
             let Some(program) = program_of(part) else {
                 continue;
@@ -167,10 +187,18 @@ pub fn rules_for(tool: &str, input: &serde_json::Value) -> Vec<String> {
             if !out.contains(&rule) {
                 out.push(rule);
             }
+            // A command that needs five different programs approved is one to think about as a
+            // whole rather than to shred into rules.
+            if out.len() >= MAX_RULES {
+                return out;
+            }
         }
     }
     out
 }
+
+/// How many programs one command may contribute.
+const MAX_RULES: usize = 4;
 
 /// Whether the allowlist already covers this call, in which case nobody is asked.
 ///
@@ -413,5 +441,42 @@ mod tests {
     #[test]
     fn nothing_to_check_is_not_the_same_as_allowed() {
         assert!(!already_allowed(&[], &["Bash(make *)".to_string()]));
+    }
+
+    /// A heredoc is one command, not one command per line.
+    ///
+    /// Splitting on newlines turned an inline Python script into a rule for every line of it, and
+    /// clicking "always allow" stored them: two hundred rules in one real project, including
+    /// `Bash(assert *)`, `Bash(def *)` and `Bash(the *)`.
+    #[test]
+    fn a_script_does_not_become_one_rule_per_line() {
+        let command = "python3 - <<'PY'\n\
+                       import json\n\
+                       assert 1 == 1\n\
+                       def go():\n\
+                       print(\"ok\")\n\
+                       PY";
+        let rules = rules_for("Bash", &serde_json::json!({ "command": command }));
+        assert_eq!(rules, vec!["Bash(python3 *)".to_string()], "got {rules:?}");
+    }
+
+    /// And a token that is not shaped like a binary never becomes one.
+    #[test]
+    fn only_things_that_look_like_programs_become_rules() {
+        for junk in ["} && x", "1\")) && y", "# comment && z", "-flag && w"] {
+            let rules = rules_for("Bash", &serde_json::json!({ "command": junk }));
+            assert!(
+                rules.iter().all(|r| !r.contains('}') && !r.contains('#') && !r.contains('"')),
+                "{junk} produced {rules:?}"
+            );
+        }
+    }
+
+    /// A command needing five different programs is one to consider whole.
+    #[test]
+    fn rules_are_capped() {
+        let command = "a && b && c && d && e && f && g";
+        let rules = rules_for("Bash", &serde_json::json!({ "command": command }));
+        assert!(rules.len() <= MAX_RULES, "got {rules:?}");
     }
 }
