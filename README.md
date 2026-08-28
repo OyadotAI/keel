@@ -37,6 +37,11 @@ the wrong thing.
 
 Deploy output is watched the same way, so finishing a deploy offers the URL it just printed.
 
+The server's output is always on screen underneath, resizable by dragging its header, and the height
+is remembered. While the preview is open Keel polls the server: if it restarts on a different port
+the preview follows it, and after a turn edits files the frame reloads so you see the result rather
+than the page from before.
+
 The pane has width presets, a reload, and an open-in-browser escape hatch for anything that refuses
 to be framed.
 
