@@ -286,8 +286,9 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .nshead .nsn b{color:var(--crit);font-weight:600}
 .nshead .cur{flex:none;font-size:10px;color:var(--accent)}
 .nshead .use{all:unset;cursor:pointer;flex:none;font-size:10px;color:var(--n9);
-  padding:1px 5px;border:1px solid var(--n6);border-radius:3px;opacity:0}
-.nshead:hover .use{opacity:1}
+  padding:1px 5px;border:1px solid var(--n6);border-radius:3px;
+  transition:color var(--t-hover),border-color var(--t-hover)}
+.nshead:hover .use{color:var(--n11)}
 .nshead .use:hover{border-color:var(--accent);color:var(--accent)}
 .ns.shut .nsbody{display:none}
 
@@ -441,9 +442,13 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .card{position:relative}
 .card .rowtop{display:flex;align-items:flex-start;gap:var(--s3)}
 .card .rowtop .t{flex:1;min-width:0}
-.card .kebab{all:unset;cursor:pointer;color:var(--n9);padding:0 var(--s2);line-height:1;
-  font-size:15px;opacity:0;flex:none;transition:opacity var(--t-hover),color var(--t-hover)}
-.card:hover .kebab,.card .kebab[aria-expanded=true]{opacity:1}
+/* Present, not summoned. Everything a card can do lives behind this glyph, so hiding it until the
+   pointer happens to cross the card hid the actions themselves — the same complaint as the session
+   rename and the console close button, three times over. Dimmed to var(--n8) so it stays quieter
+   than the row's own content. */
+.card .kebab{all:unset;cursor:pointer;color:var(--n8);padding:0 var(--s2);line-height:1;
+  font-size:15px;flex:none;transition:color var(--t-hover)}
+.card:hover .kebab,.card .kebab[aria-expanded=true]{color:var(--n11)}
 .card .kebab:hover{color:var(--n12)}
 .card.off .t{color:var(--n9)}
 .card.off .t::after{content:" disabled";font:9.5px var(--mono);color:var(--n9)}
@@ -666,7 +671,12 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   font:11px var(--mono);color:var(--n10);transition:all var(--t-hover)}
 .newsess:hover{border-color:var(--accent);color:var(--accent)}
 .sesslist{max-height:46%;overflow-y:auto;border-bottom:1px solid var(--n6);background:var(--n2)}
-/* A row you can click, and a rename you can reach without one hiding the other. */
+/* A row you can click, and a rename you can reach without one hiding the other.
+ *
+ * The rename used to be `opacity:0` until the row was hovered, which means it existed only for
+ * someone who already knew it was there — and the reason it was added was that nobody could find
+ * it. So it stands there dimmed instead: readable enough to notice, quiet enough that it does not
+ * compete with the session title, and it lights up on hover like any other control. */
 .srow{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);
   border-bottom:1px solid var(--n6);cursor:pointer}
 .srow:last-child{border-bottom:0}
@@ -677,10 +687,11 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .m{font:10.5px var(--mono);color:var(--n9);margin-top:2px}
 .srow .ren{all:unset;cursor:pointer;flex:none;padding:2px var(--s2);border-radius:3px;
-  font:10px var(--mono);color:var(--n9);opacity:0;transition:opacity var(--t-hover)}
-.srow:hover .ren{opacity:1}
-.srow .ren:hover{background:var(--n6);color:var(--n12)}
-.srow .ren:focus-visible{opacity:1;outline:2px solid var(--accent)}
+  font:10px var(--mono);color:var(--n8);border:1px solid transparent;
+  transition:color var(--t-hover),background var(--t-hover),border-color var(--t-hover)}
+.srow:hover .ren{color:var(--n10)}
+.srow .ren:hover{background:var(--n6);border-color:var(--n7);color:var(--n12)}
+.srow .ren:focus-visible{outline:2px solid var(--accent)}
 .sesslist .card.on{box-shadow:inset 2px 0 0 var(--accent);background:var(--n4)}
 
 /* `min-height:0` is not decoration. A flex item defaults to `min-height:auto`, which resolves to
