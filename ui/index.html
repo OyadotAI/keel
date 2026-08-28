@@ -147,7 +147,14 @@ body{margin:0;background:var(--n3);color:var(--n12);
   text-overflow:ellipsis;white-space:nowrap}
 .card .m{font:10.5px var(--mono);color:var(--n9);margin-top:var(--s1);
   font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.card .d{font:11.5px/1.45 var(--sans);color:var(--n11);margin-top:var(--s2)}
+.card .d{font:11.5px/1.45 var(--sans);color:var(--n11);margin-top:var(--s2);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.panel-cta{margin:var(--s4) var(--s4) var(--s5);padding:var(--s4);border-radius:var(--r2);
+  background:var(--n4);border:1px solid var(--n6);cursor:pointer;
+  transition:border-color var(--t-hover)}
+.panel-cta:hover{border-color:var(--n8)}
+.panel-cta b{display:block;font:500 12.5px var(--sans);color:var(--n12);margin-bottom:2px}
+.panel-cta span{font:11.5px/1.45 var(--sans);color:var(--n10)}
 .card.risk{box-shadow:inset 2px 0 0 var(--crit)}
 
 .chip{display:inline-block;font:9.5px var(--mono);padding:1px 5px;border-radius:var(--r1);
@@ -371,6 +378,81 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 .ment .m .dim{color:var(--n9)}
 .ment .m.on{background:var(--n5);color:var(--n12);box-shadow:inset 2px 0 0 var(--accent)}
 
+/* ── settings ──────────────────────────────────────────────────────────────
+   Settings opens in the editor area, not the sidebar. Connection cards, install
+   consoles and preference rows need room; a 274px column is why the old one
+   felt like a form squeezed into a drawer. */
+.sets{position:absolute;inset:0;display:grid;grid-template-columns:186px 1fr;overflow:hidden}
+.sets nav{border-right:1px solid var(--n6);padding:var(--s5) 0;overflow-y:auto;background:var(--n2)}
+.sets nav button{all:unset;display:block;width:100%;box-sizing:border-box;
+  padding:6px var(--s5);cursor:pointer;font:12.5px var(--sans);color:var(--n10);
+  transition:color var(--t-hover),background var(--t-hover)}
+.sets nav button:hover{background:var(--n3);color:var(--n12)}
+.sets nav button[aria-current=true]{color:var(--n12);background:var(--n3);
+  box-shadow:inset 2px 0 0 var(--accent)}
+.sets .pane{overflow-y:auto;padding:var(--s6) 40px 80px}
+.sets .pane>section{max-width:660px}
+.sets h1{font:600 20px/1.2 var(--sans);letter-spacing:-.015em;margin:0 0 var(--s2);color:var(--n12)}
+.sets .lede{font:13px/1.55 var(--sans);color:var(--n10);margin:0 0 var(--s6)}
+.sets h2{font:600 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--n10);
+  margin:var(--s6) 0 var(--s4)}
+.sets h2:first-of-type{margin-top:0}
+
+/* One card per connectable thing. */
+.card2{border:1px solid var(--n6);border-radius:var(--r3);background:var(--n2);
+  padding:var(--s4) var(--s5);margin-bottom:var(--s4)}
+.card2 .top{display:flex;align-items:flex-start;gap:var(--s4)}
+.card2 .who2{flex:1;min-width:0}
+.card2 .nm2{font:600 13.5px var(--sans);color:var(--n12);display:flex;align-items:center;
+  gap:var(--s3)}
+.card2 .sub2{font:12px/1.5 var(--sans);color:var(--n10);margin-top:2px}
+.card2 .sub2 code{font:11.5px var(--mono);background:var(--n4);padding:1px 4px;border-radius:var(--r1)}
+.card2 .acts2{display:flex;gap:var(--s2);flex:none;align-items:center}
+.pip{width:7px;height:7px;border-radius:50%;flex:none}
+.pip.on{background:var(--ok)} .pip.off{background:var(--n8)} .pip.warn{background:var(--warn)}
+.ident{font:11.5px var(--mono);color:var(--n11);margin-top:var(--s3);
+  background:var(--n3);border-radius:var(--r1);padding:var(--s2) var(--s3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console{margin-top:var(--s3);padding:var(--s3);background:var(--n1);border:1px solid var(--n6);
+  border-radius:var(--r2);font:10.5px/1.5 var(--mono);color:var(--n11);white-space:pre-wrap;
+  word-break:break-word;max-height:240px;overflow:auto}
+.picksel{background:var(--n3);border:1px solid var(--n7);color:var(--n12);border-radius:var(--r2);
+  padding:4px var(--s3);font:11.5px var(--mono);outline:none}
+
+/* Preference rows. */
+.pref{display:flex;align-items:center;gap:var(--s4);padding:var(--s3) 0;
+  border-bottom:1px solid var(--n6)}
+.pref:last-child{border-bottom:0}
+.pref .lbl{flex:1;min-width:0}
+.pref .lbl b{display:block;font:500 13px var(--sans);color:var(--n12)}
+.pref .lbl span{font:12px/1.45 var(--sans);color:var(--n10)}
+.pref input[type=range]{width:150px;accent-color:var(--accent)}
+.pref .val{font:11.5px var(--mono);color:var(--n11);width:42px;text-align:right;
+  font-variant-numeric:tabular-nums}
+.sw{all:unset;width:34px;height:19px;border-radius:10px;background:var(--n6);cursor:pointer;
+  position:relative;flex:none;transition:background var(--t-state)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;
+  background:var(--n11);transition:transform var(--t-state),background var(--t-state)}
+.sw[aria-checked=true]{background:var(--accent)}
+.sw[aria-checked=true]::after{transform:translateX(15px);background:#fff}
+
+/* Plugin rows. */
+.plug{display:flex;gap:var(--s4);padding:var(--s4) 0;border-bottom:1px solid var(--n6)}
+.plug:last-child{border-bottom:0}
+.plug .body2{flex:1;min-width:0}
+.plug .nm3{font:600 13px var(--sans);color:var(--n12)}
+.plug .ds3{font:12px/1.5 var(--sans);color:var(--n10);margin-top:2px}
+.plug .why{font:12px/1.5 var(--sans);color:var(--n11);margin-top:var(--s3);
+  border-left:2px solid var(--accent);padding-left:var(--s3)}
+.plug .done{font:11.5px var(--mono);color:var(--ok);flex:none;align-self:flex-start;
+  padding-top:var(--s1)}
+/* Buttons in a row must not stretch to its height. */
+.plug>.btn{flex:none;align-self:flex-start}
+.searchbox{width:100%;background:var(--n2);border:1px solid var(--n7);color:var(--n12);
+  border-radius:var(--r2);padding:7px var(--s4);font:12.5px var(--sans);outline:none;
+  margin-bottom:var(--s4)}
+.searchbox:focus{border-color:var(--accent)}
+
 /* ── status rail — the instrument readout ───────────────────────────────── */
 .status{grid-column:2/5;grid-row:2/3;display:flex;align-items:center;gap:var(--s5);
   padding:0 var(--s4);background:var(--n3);border-top:1px solid var(--n6);
@@ -425,7 +507,10 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.2l5.8 2.5v3.9c0 3.5-2.4 6.4-5.8 7.2-3.4-.8-5.8-3.7-5.8-7.2V3.7L8 1.2zm2.8 4.4L7.35 9.05 5.5 7.2 4.45 8.25l2.9 2.9 4.5-4.5-1.05-1.05z"/></svg>
       <span class="badge hidden" data-b="ready">0</span></button>
     <div class="grow"></div>
-    <button class="ic" data-p="connections" title="Connections">
+    <button class="ic" id="ic-settings" title="Settings ⌘,">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 5.4a2.6 2.6 0 100 5.2 2.6 2.6 0 000-5.2zm5.9 2.6c0 .35-.03.7-.09 1.03l1.42 1.1-1.4 2.42-1.7-.6a5.9 5.9 0 01-1.78 1.03L10.1 15H7.3l-.25-1.99a5.9 5.9 0 01-1.78-1.03l-1.7.6-1.4-2.42 1.42-1.1a6 6 0 010-2.06L2.17 5.9l1.4-2.42 1.7.6A5.9 5.9 0 017.05 3.05L7.3 1h2.8l.25 2.05c.64.23 1.24.58 1.78 1.03l1.7-.6 1.4 2.42-1.42 1.1c.06.33.09.68.09 1z"/></svg>
+      <span class="badge hidden" data-b="conn">!</span></button>
+    <button class="ic hidden" data-p="connections" title="Connections">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M9.4 2.6a3.4 3.4 0 014.8 4.8l-2 2a3.4 3.4 0 01-4.85 0l1.08-1.08a1.9 1.9 0 002.7 0l2-2a1.9 1.9 0 10-2.7-2.7l-.78.78-1.08-1.08.83-.72zM6.6 13.4a3.4 3.4 0 01-4.8-4.8l2-2a3.4 3.4 0 014.85 0L7.57 7.68a1.9 1.9 0 00-2.7 0l-2 2a1.9 1.9 0 102.7 2.7l.78-.78 1.08 1.08-.83.72z"/></svg>
       <span class="badge hidden" data-b="conn">!</span></button>
   </nav>
@@ -795,9 +880,17 @@ async function draw(){
     drawStatus(); return;
   }
 
-  el('v-prev').classList.toggle('hidden',!previewable(tab.path));
+  el('v-prev').classList.toggle('hidden',!!tab.settings||!previewable(tab.path));
+  // Source/Diff is meaningless on a settings tab.
+  el('v-src').classList.toggle('hidden',!!tab.settings);
+  el('v-diff').classList.toggle('hidden',!!tab.settings);
   if(view==='prev'&&!previewable(tab.path)) view='src';
   if(view==='prev'){ syncView(); drawPreview(tab); return; }
+  if(tab.settings){
+    if(mon){ mon.dispose(); mon=null; ready=false; }
+    if(monDiff){ monDiff.dispose(); monDiff=null; }
+    drawSettings(); return;
+  }
   if(view==='diff'){ await drawDiff(tab); return; }
 
   if(monDiff){ monDiff.dispose(); monDiff=null; el('surface').innerHTML=''; }
@@ -899,9 +992,12 @@ const PANELS={
       grp('Subagents',w.agents,named)+grp('Commands',w.commands,named)+
       grp('Hooks',w.hooks,h=>'<div class="card'+(h.scope==='project'?' risk':'')+'"><div class="t">'+esc(h.event)+
         '<span class="chip '+h.scope+'">'+esc(h.scope)+'</span></div><div class="m">'+esc(h.command)+'</div></div>')+
+      '<div class="panel-cta" id="cta-plugins"><b>Add a skill or plugin</b>'+
+      '<span>Recommendations for this repository, and the full marketplace.</span></div>'+
       grp('MCP servers',w.mcp_servers,m=>'<div class="card'+(m.scope==='project'?' risk':'')+'"><div class="t">'+esc(m.name)+
         '<span class="chip '+m.scope+'">'+esc(m.scope)+'</span></div><div class="m">'+esc(m.endpoint??'')+'</div></div>');
   },
+  _skillsCta(){ el('cta-plugins')&&(el('cta-plugins').onclick=()=>{ setsTab='plugins'; openSettings(); }); },
   readiness(){
     const s=state?.scan; if(!s) return;
     el('side').innerHTML=H('Readiness',s.score+'/100','<button class="act" id="a-rescan">rescan</button>')+
@@ -931,7 +1027,8 @@ function setPanel(p,fromClick){
   el('side').append(frag('<div class="rz left" id="rz1"></div>'));
   wireResize(el('rz1'),'--side','keel.side',190,540,false);
 }
-document.querySelectorAll('.ic').forEach(b=>b.onclick=()=>setPanel(b.dataset.p,true));
+document.querySelectorAll('.ic[data-p]').forEach(b=>b.onclick=()=>setPanel(b.dataset.p,true));
+el('ic-settings').onclick=openSettings;
 
 /* ════ CLI setup ═════════════════════════════════════════════════════════
    Keel drives the first-party CLIs rather than asking for long-lived tokens.
@@ -942,10 +1039,11 @@ let clis=null;
 async function loadClis(){ clis=await (await fetch('/api/cli')).json(); }
 
 /** Run an install or login, streaming its output into a live console block. */
-function runCli(kind,id,host){
-  host.innerHTML='<pre class="cli-out" id="cli-out"></pre>';
+function runCli(kind,id,host,profile){
+  host.innerHTML='<pre class="console" id="cli-out"></pre>';
   const out=el('cli-out');
-  const es=new EventSource('/api/cli/'+kind+'?id='+encodeURIComponent(id));
+  const es=new EventSource('/api/cli/'+kind+'?id='+encodeURIComponent(id)+
+    (profile?'&profile='+encodeURIComponent(profile):''));
   const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
   es.addEventListener('line',e=>write(e.data));
   es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
@@ -953,7 +1051,7 @@ function runCli(kind,id,host){
     es.close();
     write(e.data==='0' ? '\n✓ done' : '\nexited '+e.data);
     await loadClis(); await loadConn();
-    if(panel==='connections') setPanel('connections');
+    if(active===SETTINGS) drawSettings();
   });
 }
 
@@ -1408,6 +1506,294 @@ async function openSession(id){
   drawStatus();
 }
 
+/* ════ preferences ═══════════════════════════════════════════════════════
+   Kept in localStorage and applied to Monaco on change, so the editor obeys
+   them immediately rather than on reload. */
+const PREF_DEFAULTS={theme:'system',fontSize:12.5,tabSize:2,minimap:true,wordWrap:false,
+  lineNumbers:true,stickyScroll:true,defaultMode:'acceptEdits'};
+let prefs={...PREF_DEFAULTS,...JSON.parse(localStorage.getItem('keel.prefs')||'{}')};
+
+function savePrefs(){
+  localStorage.setItem('keel.prefs',JSON.stringify(prefs));
+  applyPrefs();
+}
+function applyPrefs(){
+  document.documentElement.dataset.theme = prefs.theme==='system' ? '' : prefs.theme;
+  if(prefs.theme==='system') delete document.documentElement.dataset.theme;
+  Object.assign(EDITOR_OPTS,{
+    fontSize:prefs.fontSize,
+    tabSize:prefs.tabSize,
+    minimap:{...EDITOR_OPTS.minimap,enabled:prefs.minimap},
+    wordWrap:prefs.wordWrap?'on':'off',
+    lineNumbers:prefs.lineNumbers?'on':'off',
+    stickyScroll:{enabled:prefs.stickyScroll},
+  });
+  if(window.monaco&&mon){ mon.updateOptions(EDITOR_OPTS); defineTheme(); }
+  if(window.monaco&&monDiff){ monDiff.updateOptions(EDITOR_OPTS); }
+}
+
+/* ════ settings ══════════════════════════════════════════════════════════ */
+let setsTab='connections', catalog=null, catalogQuery='';
+
+function openSettings(){
+  if(!tabs.some(t=>t.path===SETTINGS)){ tabs.push({path:SETTINGS,settings:true,dirty:false}); }
+  active=SETTINGS; draw();
+}
+const SETTINGS='\u2699 Settings';
+
+const SET_TABS=[
+  {id:'connections',label:'Connections'},
+  {id:'plugins',    label:'Plugins & skills'},
+  {id:'editor',     label:'Editor'},
+  {id:'appearance', label:'Appearance'},
+  {id:'agent',      label:'Agent'},
+  {id:'about',      label:'About'},
+];
+
+function drawSettings(){
+  el('crumb').textContent='Settings';
+  el('surface').innerHTML='<div class="sets"><nav id="set-nav"></nav><div class="pane" id="set-pane"></div></div>';
+  el('set-nav').innerHTML=SET_TABS.map(t=>
+    '<button data-t="'+t.id+'" aria-current="'+(t.id===setsTab)+'">'+t.label+'</button>').join('');
+  el('set-nav').querySelectorAll('[data-t]').forEach(b=>
+    b.onclick=()=>{ setsTab=b.dataset.t; drawSettings(); });
+  SET_PANES[setsTab]();
+  drawStatus();
+}
+
+const toggle=(id,on)=>'<button class="sw" role="switch" aria-checked="'+!!on+'" data-sw="'+id+'"></button>';
+function wireToggles(){
+  el('set-pane').querySelectorAll('[data-sw]').forEach(b=>b.onclick=()=>{
+    prefs[b.dataset.sw]=!prefs[b.dataset.sw]; savePrefs(); drawSettings();
+  });
+}
+
+const SET_PANES={
+  connections(){
+    const byId=id=>(clis??[]).find(c=>c.id===id);
+    const card=(name,pip,sub,acts,ident,slot)=>
+      '<div class="card2"><div class="top"><div class="who2">'+
+      '<div class="nm2"><span class="pip '+pip+'"></span>'+esc(name)+'</div>'+
+      '<div class="sub2">'+sub+'</div></div>'+
+      '<div class="acts2">'+acts+'</div></div>'+
+      (ident?'<div class="ident">'+esc(ident)+'</div>':'')+
+      (slot?'<div id="'+slot+'"></div>':'')+'</div>';
+
+    let h='<section><h1>Connections</h1>'+
+      '<p class="lede">Keel drives the first-party CLIs rather than storing long-lived tokens. '+
+      'Everything below runs on your machine.</p>';
+
+    h+=card('Claude Code', conn?.claude?'on':'off',
+      conn?.claude ? 'Installed. Your subscription covers the agent — Keel never sees a key.'
+                   : 'Not on PATH. The agent panel needs it.',
+      '', null, null);
+
+    for(const id of ['gh','wrangler','aws']){
+      const t=byId(id); if(!t) continue;
+      const pip=!t.installed?'off':t.authenticated?'on':'warn';
+      let sub, acts='';
+      if(!t.installed){
+        sub = t.install_cmd
+          ? 'Not installed. Keel will run <code>'+esc(t.install_cmd)+'</code>.'
+          : 'Not installed, and no supported package manager found.';
+        if(t.install_cmd) acts+='<button class="btn" data-cli="install" data-id="'+t.id+'">Install</button>';
+        else acts+='<a class="btn quiet" href="'+esc(t.manual)+'" target="_blank" rel="noopener">Instructions</a>';
+      } else if(t.blocked){
+        sub = esc(t.blocked).replace(/`([^`]+)`/g,'<code>$1</code>');
+      } else if(!t.authenticated){
+        sub = 'Installed, not signed in.';
+        if(t.profiles.length){
+          acts+='<select class="picksel" id="prof-'+t.id+'">'+
+            t.profiles.map(p=>'<option>'+esc(p)+'</option>').join('')+'</select>';
+        }
+        acts+='<button class="btn" data-cli="login" data-id="'+t.id+'">Sign in</button>';
+      } else {
+        sub = esc(t.version??'Signed in.');
+        acts+='<button class="btn quiet" data-cli="login" data-id="'+t.id+'">Re-authenticate</button>';
+      }
+      h+=card(t.label,pip,sub,acts,t.identity,'cli-'+t.id);
+    }
+
+    h+='<h2>Repository</h2>'+
+      '<div class="card2"><div class="top"><div class="who2">'+
+      '<div class="nm2">Open another repository</div>'+
+      '<div class="sub2">Keel switches without restarting.</div></div></div>'+
+      '<div style="display:flex;gap:8px;margin-top:12px">'+
+      '<input type="text" id="op" placeholder="~/Dev/my-project" spellcheck="false">'+
+      '<button class="btn" id="op-go" style="flex:none">Open</button></div>'+
+      '<div id="op-msg"></div>'+
+      (conn?.github?'<div style="margin-top:12px"><button class="btn quiet" id="gh-repos">Browse GitHub repos</button></div>':'')+
+      '</div><div id="repos"></div></section>';
+
+    el('set-pane').innerHTML=h;
+    el('set-pane').querySelectorAll('[data-cli]').forEach(b=>b.onclick=()=>{
+      const prof=el('prof-'+b.dataset.id)?.value;
+      runCli(b.dataset.cli,b.dataset.id,el('cli-'+b.dataset.id),prof);
+    });
+    wireRepoActions();
+  },
+
+  plugins(){
+    if(!catalog){
+      el('set-pane').innerHTML='<section><h1>Plugins &amp; skills</h1><p class="lede">Loading catalog…</p></section>';
+      loadCatalog().then(()=>{ if(setsTab==='plugins') SET_PANES.plugins(); });
+      return;
+    }
+    const row=p=>'<div class="plug"><div class="body2">'+
+      '<div class="nm3">'+esc(p.name)+'</div>'+
+      (p.description?'<div class="ds3">'+esc(p.description)+'</div>':'')+
+      (p.reason?'<div class="why">'+esc(p.reason)+'</div>':'')+
+      '<div id="pi-'+esc(p.name)+'"></div></div>'+
+      (p.installed
+        ? '<span class="done">installed</span>'
+        : '<button class="btn" data-plug="'+esc(p.name)+'" data-mk="'+esc(p.marketplace)+'">Install</button>')+
+      '</div>';
+
+    const q=catalogQuery.toLowerCase();
+    const matches=q
+      ? catalog.all.filter(p=>p.name.toLowerCase().includes(q)||p.description.toLowerCase().includes(q)).slice(0,60)
+      : [];
+
+    el('set-pane').innerHTML='<section><h1>Plugins &amp; skills</h1>'+
+      '<p class="lede">Installed through Claude Code\'s own marketplace, so anything added here is '+
+      'available in every session — not just in Keel.</p>'+
+      '<h2>Recommended for this repository</h2>'+
+      catalog.suggested.map(row).join('')+
+      '<h2>All plugins <span style="color:var(--n9)">('+catalog.all.length+')</span></h2>'+
+      '<input class="searchbox" id="plug-q" placeholder="Search the catalog…" value="'+esc(catalogQuery)+'">'+
+      (q ? (matches.length?matches.map(row).join(''):'<p class="lede">Nothing matches.</p>')
+         : '<p class="lede">Type to search.</p>')+
+      '</section>';
+
+    const box=el('plug-q');
+    box.oninput=()=>{ catalogQuery=box.value; const at=box.selectionStart;
+      SET_PANES.plugins(); const b2=el('plug-q'); b2.focus(); b2.setSelectionRange(at,at); };
+    el('set-pane').querySelectorAll('[data-plug]').forEach(b=>b.onclick=()=>
+      installPlugin(b.dataset.plug,b.dataset.mk,el('pi-'+b.dataset.plug)));
+  },
+
+  editor(){
+    el('set-pane').innerHTML='<section><h1>Editor</h1>'+
+      '<p class="lede">Applied immediately. Stored in this browser.</p>'+
+      '<div class="pref"><div class="lbl"><b>Font size</b><span>Editor text only. The interface is fixed.</span></div>'+
+      '<input type="range" min="10" max="20" step="0.5" value="'+prefs.fontSize+'" data-rg="fontSize">'+
+      '<span class="val">'+prefs.fontSize+'px</span></div>'+
+      '<div class="pref"><div class="lbl"><b>Tab size</b><span>Spaces per indent level.</span></div>'+
+      '<input type="range" min="2" max="8" step="2" value="'+prefs.tabSize+'" data-rg="tabSize">'+
+      '<span class="val">'+prefs.tabSize+'</span></div>'+
+      '<div class="pref"><div class="lbl"><b>Minimap</b><span>The overview strip on the right.</span></div>'+
+      toggle('minimap',prefs.minimap)+'</div>'+
+      '<div class="pref"><div class="lbl"><b>Word wrap</b><span>Off keeps long lines on one row.</span></div>'+
+      toggle('wordWrap',prefs.wordWrap)+'</div>'+
+      '<div class="pref"><div class="lbl"><b>Line numbers</b></div>'+toggle('lineNumbers',prefs.lineNumbers)+'</div>'+
+      '<div class="pref"><div class="lbl"><b>Sticky scroll</b><span>Pins the enclosing scope to the top.</span></div>'+
+      toggle('stickyScroll',prefs.stickyScroll)+'</div></section>';
+    wireToggles();
+    el('set-pane').querySelectorAll('[data-rg]').forEach(r=>r.oninput=()=>{
+      prefs[r.dataset.rg]=parseFloat(r.value);
+      r.nextElementSibling.textContent=r.dataset.rg==='fontSize'?r.value+'px':r.value;
+      savePrefs();
+    });
+  },
+
+  appearance(){
+    const opt=(v,label,note)=>'<div class="pref"><div class="lbl"><b>'+label+'</b><span>'+note+'</span></div>'+
+      '<button class="btn'+(prefs.theme===v?'':' quiet')+'" data-th="'+v+'">'+
+      (prefs.theme===v?'Selected':'Use')+'</button></div>';
+    el('set-pane').innerHTML='<section><h1>Appearance</h1>'+
+      '<p class="lede">The editor is the darkest surface and the chrome sits forward of it, so the '+
+      'thing you read recedes rather than glares.</p>'+
+      opt('system','Match system','Follows your OS setting.')+
+      opt('dark','Dark','Warm neutral, not the usual blue-grey.')+
+      opt('light','Light','Same palette, mirrored.')+
+      '</section>';
+    el('set-pane').querySelectorAll('[data-th]').forEach(b=>b.onclick=()=>{
+      prefs.theme=b.dataset.th; savePrefs(); drawSettings();
+    });
+  },
+
+  agent(){
+    el('set-pane').innerHTML='<section><h1>Agent</h1>'+
+      '<p class="lede">Keel runs your installed <code>claude</code> in this repository.</p>'+
+      '<div class="pref"><div class="lbl"><b>Default mode</b>'+
+      '<span>Plan explores and proposes. Auto edits files and runs commands.</span></div>'+
+      '<span class="seg"><button data-dm="plan" aria-current="'+(prefs.defaultMode==='plan')+'">Plan</button>'+
+      '<button data-dm="acceptEdits" aria-current="'+(prefs.defaultMode==='acceptEdits')+'">Auto</button></span></div>'+
+      '<h2>What Auto can do</h2>'+
+      '<p class="lede">Auto passes <code>--permission-mode acceptEdits</code>, so the agent really '+
+      'does edit files and run commands here. That is not the locked-down tool surface described in '+
+      '<code>docs/guardrails.md</code> — that one needs Keel\'s MCP server, which has a tool catalog '+
+      'but no server behind it yet. Plan mode is verified: asked to write a file, the agent is '+
+      'refused and returns a plan instead.</p></section>';
+    el('set-pane').querySelectorAll('[data-dm]').forEach(b=>b.onclick=()=>{
+      prefs.defaultMode=b.dataset.dm; savePrefs(); setMode(b.dataset.dm); drawSettings();
+    });
+  },
+
+  about(){
+    el('set-pane').innerHTML='<section><h1>Keel</h1>'+
+      '<p class="lede">The local IDE that makes a repository shippable.</p>'+
+      '<div class="pref"><div class="lbl"><b>Repository</b><span>'+esc(state?.repo??'')+'</span></div></div>'+
+      '<div class="pref"><div class="lbl"><b>Editor</b><span>Monaco, vendored and compiled into the binary.</span></div></div>'+
+      '<div class="pref"><div class="lbl"><b>Server</b><span>Loopback only, and not configurable.</span></div></div>'+
+      '<h2>Keyboard</h2>'+
+      ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  agent panel','⌘S  save',
+       '⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⇧⇥  Plan / Auto','esc  interrupt']
+        .map(k=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);font-size:12px">'+
+          esc(k)+'</b></div></div>').join('')+
+      '</section>';
+  },
+};
+
+async function loadCatalog(){
+  const r=await fetch('/api/plugins?repo='+encodeURIComponent(state?.repo??''));
+  catalog=await r.json();
+}
+
+function installPlugin(name,marketplace,host){
+  host.innerHTML='<pre class="console" id="pl-out"></pre>';
+  const out=el('pl-out');
+  const es=new EventSource('/api/plugins/install?name='+encodeURIComponent(name)+
+    '&marketplace='+encodeURIComponent(marketplace));
+  const write=t=>{ out.textContent+=t+'\n'; out.scrollTop=1e9; };
+  es.addEventListener('line',e=>write(e.data));
+  es.addEventListener('fatal',e=>{ write(e.data); es.close(); });
+  es.addEventListener('done',async e=>{
+    es.close();
+    write(e.data==='0'?'\n✓ installed — restart the agent session to pick it up':'\nexited '+e.data);
+    catalog=null; await refresh();
+    if(setsTab==='plugins') SET_PANES.plugins();
+  });
+}
+
+function wireRepoActions(){
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)});
+  el('op-go')&&(el('op-go').onclick=async()=>{
+    const r=await post('/api/open',{path:el('op').value});
+    if(!r.ok){ el('op-msg').innerHTML='<div class="note bad">'+esc(await r.text())+'</div>'; return; }
+    tabs.length=0; active=null; await refresh(); setPanel('files');
+  });
+  el('gh-repos')&&(el('gh-repos').onclick=async()=>{
+    el('repos').innerHTML='<p class="lede">Loading…</p>';
+    const r=await fetch('/api/github/repos');
+    if(!r.ok){ el('repos').innerHTML='<p class="lede">'+esc(await r.text())+'</p>'; return; }
+    const list=await r.json();
+    el('repos').innerHTML='<h2>Repositories ('+list.length+')</h2>'+list.map((x,i)=>
+      '<div class="plug"><div class="body2"><div class="nm3">'+esc(x.full_name)+'</div>'+
+      (x.description?'<div class="ds3">'+esc(x.description)+'</div>':'')+
+      '<div id="cl-'+i+'"></div></div>'+
+      '<button class="btn quiet" data-clone="'+i+'">Clone</button></div>').join('');
+    el('repos').querySelectorAll('[data-clone]').forEach(b=>b.onclick=async()=>{
+      const x=list[+b.dataset.clone];
+      el('cl-'+b.dataset.clone).innerHTML='<div class="note dim">cloning…</div>';
+      const res=await post('/api/github/clone',{clone_url:x.clone_url,name:x.name});
+      if(res.ok){ tabs.length=0; active=null; await refresh(); setPanel('files'); }
+      else el('cl-'+b.dataset.clone).innerHTML='<div class="note bad">'+esc(await res.text())+'</div>';
+    });
+  });
+}
+
 /* ════ status rail ═══════════════════════════════════════════════════════ */
 function syncSave(){
   const tab=tabs.find(t=>t.path===active);
@@ -1582,6 +1968,8 @@ addEventListener('keydown',e=>{
   if(cmd&&e.key==='s'){ e.preventDefault(); save(); return; }
   if(cmd&&e.key==='b'){ e.preventDefault(); toggleSide(); return; }
   if(e.ctrlKey&&e.key==='`'){ e.preventDefault(); toggleChat(); return; }
+  // ⌘, is Chrome's own preferences on macOS and cannot be taken, so settings uses ⌘⇧,
+  if(cmd&&e.key===','&&(!MAC||e.shiftKey)){ e.preventDefault(); openSettings(); return; }
 
   // Shift+Tab cycles agent mode — the same gesture Claude Code and Cursor both use.
   if(e.key==='Tab'&&e.shiftKey&&!typing){
@@ -1623,6 +2011,7 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
 (async()=>{
   await Promise.all([loadConn(), loadClis()]);
   await refresh();
+  PANELS._skillsCta?.();
   emptyLog();   // suggestions are drawn from the scan and git status, so it waits for them
   draw();
   const qs=new URLSearchParams(location.search);
@@ -1631,6 +2020,7 @@ wireResize(el('rz2'),'--chat','keel.chat',300,760,true);
   if(qs.get('file')) open(qs.get('file'));
   // ?ask= sends a prompt on load, so a finding or a review link can open straight into a question.
   if(qs.get('ask')) send(qs.get('ask'));
+  if(qs.get('settings')){ setsTab=qs.get('settings'); openSettings(); }
 })();
 </script>
 </body>

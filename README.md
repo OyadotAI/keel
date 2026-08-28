@@ -44,11 +44,29 @@ fight the stream.
 replaces the close × on a dirty tab, and the status rail says `unsaved`. Nothing autosaves — the
 agent writes to disk directly, so an autosave racing it would overwrite work you did not make.
 
+## Settings
+
+`⌘⇧,` or the gear. Settings opens in the editor area rather than the sidebar — connection cards,
+install consoles and preference rows need room, and a 274px column is why the old one read like a
+form squeezed into a drawer.
+
+**Connections** drives the first-party CLIs. **Plugins & skills** reads Claude Code's own marketplace
+catalog and installs through `claude plugin install`, so anything added is available in every
+session, not just in Keel. Recommendations depend on what is actually in the repository — the
+Cloudflare plugin only appears when there is a Wrangler config, `rust-analyzer-lsp` only when there
+is a `Cargo.toml` — and each carries the reason it is being suggested.
+
+**Editor**, **Appearance** and **Agent** are preferences, applied to Monaco immediately rather than
+on reload.
+
 ## Connections
 
 Keel drives the first-party CLIs rather than asking for long-lived tokens: it detects whether `gh`,
 `wrangler` and `aws` are installed, offers to install them with whichever package manager you
-actually have, and runs their own login flows. Install and sign-in both stream their output live,
+actually have, and runs their own login flows. AWS is the awkward one — `aws sso login` needs a
+profile that already exists, and `aws configure sso` is an interactive prompt that cannot be driven
+from a subprocess. So Keel reads `~/.aws/config`, offers a profile picker when there are profiles,
+and says plainly what to run when there are none rather than firing a command destined to fail. Install and sign-in both stream their output live,
 because those commands print things you have to act on — `gh auth login --web` shows a one-time code
 for the browser.
 
