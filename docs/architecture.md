@@ -55,7 +55,14 @@ deliberate constraint: the scan ships and earns trust before Keel is handed a cl
 it stays safe to run against a repository nobody has reviewed.
 
 Findings are ordered deterministically and scoring is a simple total, so two runs over an unchanged
-repo produce byte-identical reports. The corpus tests depend on that.
+repo produce byte-identical reports. The corpus tests depend on that. It is also why platform facts
+with a date — `nodejs_compat` requiring a compatibility date of 2024-09-23 or later — are compiled-in
+constants rather than comparisons against a clock.
+
+The Workers-compatibility check scopes itself to the sources reachable from the Wrangler config's
+`main`, not the whole tree. A monorepo legitimately contains a Node server, build tooling and tests
+that use `node:fs` and never go near the runtime; judging those against Workers would be wrong
+rather than merely noisy.
 
 ## Where state is allowed to live
 

@@ -1,5 +1,6 @@
+use super::wrangler;
 use crate::{Check, Dimension, Finding, Fix, RepoContext, Severity};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,8 +20,6 @@ const STATEFUL: &[(&str, &str)] = &[
     ("queues", "queue"),
 ];
 
-const CONFIG_FILES: &[&str] = &["wrangler.jsonc", "wrangler.json", "wrangler.toml"];
-
 impl Check for SharedBindings {
     fn id(&self) -> &'static str {
         "env/shared-bindings"
@@ -31,7 +30,7 @@ impl Check for SharedBindings {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
-        let configs = find_configs(ctx);
+        let configs = wrangler::find_configs(ctx);
 
         if configs.is_empty() {
             // Not every repository is a Cloudflare service. Telling a Rust CLI or a docs site that
@@ -64,8 +63,8 @@ impl SharedBindings {
     fn analyse(&self, ctx: &RepoContext, path: &Utf8Path) -> Vec<Finding> {
         // TOML support is deliberately deferred: Wrangler's JSON form is the one Keel generates,
         // and reporting a confident "no problems" after failing to parse would be worse than
-        // silence.
-        if path.as_str().ends_with(".toml") {
+        // silence. This is the one place that says so — the other Wrangler checks stay quiet.
+        if wrangler::is_toml(path) {
             return vec![
                 Finding::new(
                     "env/toml-config-not-analysed",
@@ -85,7 +84,7 @@ impl SharedBindings {
         let Some(raw) = ctx.read(path.as_str()) else {
             return Vec::new();
         };
-        let Ok(config) = serde_json::from_str::<Value>(&strip_jsonc_comments(&raw)) else {
+        let Ok(config) = serde_json::from_str::<Value>(&wrangler::strip_jsonc_comments(&raw)) else {
             return vec![
                 Finding::new(
                     "env/unparseable-wrangler-config",
@@ -162,18 +161,6 @@ impl SharedBindings {
     }
 }
 
-/// Every Wrangler config in the tree, not just the one at the root.
-///
-/// Monorepos keep them under `apps/*` or `packages/*` — the layout of every real Cloudflare project
-/// of any size. Looking only at the root reported "no Wrangler configuration" for a repo that had
-/// two. `.example` templates are skipped: they carry placeholder ids by design.
-fn find_configs(ctx: &RepoContext) -> Vec<Utf8PathBuf> {
-    ctx.files()
-        .filter(|p| p.file_name().is_some_and(|n| CONFIG_FILES.contains(&n)))
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 /// Pull the identifying value out of each entry in a Wrangler resource array.
 fn resource_ids(env_config: &Value, array: &str, id_field: &str) -> Vec<String> {
     // `queues` nests its bindings under `producers`/`consumers`; everything else is a flat array.
@@ -192,58 +179,6 @@ fn resource_ids(env_config: &Value, array: &str, id_field: &str) -> Vec<String> 
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Strip `//` and `/* */` comments so a `.jsonc` file can go through `serde_json`.
-///
-/// String literals are tracked so a `//` inside a URL is not mistaken for a comment.
-fn strip_jsonc_comments(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    while let Some(c) = chars.next() {
-        if in_string {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match c {
-            '"' => {
-                in_string = true;
-                out.push(c);
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                for c in chars.by_ref() {
-                    if c == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut prev = '\0';
-                for c in chars.by_ref() {
-                    if prev == '*' && c == '/' {
-                        break;
-                    }
-                    prev = c;
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-
-    out
 }
 
 #[cfg(test)]
@@ -335,14 +270,5 @@ mod tests {
         let (_dir, ctx) = fixture(&[("wrangler.jsonc", r#"{"name":"app"}"#)]);
         let findings = SharedBindings.run(&ctx);
         assert_eq!(findings[0].id, "env/single-environment");
-    }
-
-    #[test]
-    fn strips_comments_but_not_urls() {
-        let stripped =
-            strip_jsonc_comments(r#"{"u":"https://x.dev","a":1 /* note */, "b":2} // end"#);
-        let value: Value = serde_json::from_str(&stripped).expect("parses");
-        assert_eq!(value["u"], "https://x.dev");
-        assert_eq!(value["b"], 2);
     }
 }
