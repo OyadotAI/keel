@@ -54,6 +54,9 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/chat", get(crate::api::chat))
+        .route("/api/git/status", get(api_git_status))
+        .route("/api/git/diff", get(api_git_diff))
+        .route("/api/save", axum::routing::post(api_save))
         .with_state(state);
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -83,6 +86,26 @@ async fn api_file(
 ) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
     crate::api::read_file(&state.repo, &query.path)
         .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
+    Json(crate::api::git_status(&state.repo))
+}
+
+async fn api_git_diff(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<crate::api::FileQuery>,
+) -> Json<crate::api::DiffResponse> {
+    Json(crate::api::git_diff(&state.repo, &query.path))
+}
+
+async fn api_save(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<crate::api::SaveRequest>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    crate::api::write_file(&state.repo, &req)
+        .map(|_| Json(true))
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 

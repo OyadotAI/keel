@@ -6,251 +6,285 @@
 <title>Keel</title>
 <style>
   :root {
-    --bg: #0d1117; --panel: #12181f; --panel-2: #161d26; --line: #232c38;
-    --text: #e3e8ef; --dim: #8b98a9; --faint: #5c6774;
-    --accent: #4cc2ff; --crit: #ff6b6b; --high: #ffa657; --med: #e3c565; --low: #7d8ba1;
-    --ok: #56d364;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    --bg:#0d1117; --panel:#0f151c; --panel-2:#161d26; --panel-3:#1b2430; --line:#222b37;
+    --text:#e3e8ef; --dim:#8b98a9; --faint:#5c6774;
+    --accent:#4cc2ff; --crit:#ff6b6b; --high:#ffa657; --med:#e3c565; --low:#7d8ba1; --ok:#56d364;
+    --add-bg:rgba(63,185,80,.13); --add-mark:#3fb950;
+    --del-bg:rgba(248,81,73,.13); --del-mark:#f85149;
+    --k:#c678dd; --s:#98c379; --c:#5c6774; --num:#d19a66; --fn:#61afef;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
   }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg: #f6f8fa; --panel: #fff; --panel-2: #f0f3f6; --line: #d8dee6;
-      --text: #1c2128; --dim: #57606a; --faint: #8b949e;
-      --accent: #0969da; --crit: #cf222e; --high: #bc4c00; --med: #9a6700; --low: #6e7781;
-      --ok: #1a7f37;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
-  }
-  .app { display: grid; grid-template-columns: 232px 260px 1fr 420px; height: 100vh; overflow: hidden; }
-  @media (max-width: 1500px) { .app { grid-template-columns: 200px 220px 1fr 380px; } }
+  @media (prefers-color-scheme:light){:root:not([data-theme=dark]){
+    --bg:#fff; --panel:#f7f9fb; --panel-2:#eef2f6; --panel-3:#e6ecf2; --line:#d8dee6;
+    --text:#1c2128; --dim:#57606a; --faint:#8b949e;
+    --accent:#0969da; --crit:#cf222e; --high:#bc4c00; --med:#9a6700; --low:#6e7781; --ok:#1a7f37;
+    --add-bg:rgba(74,194,107,.16); --del-bg:rgba(255,129,130,.18);
+    --k:#a626a4; --s:#50a14f; --c:#a0a1a7; --num:#986801; --fn:#4078f2;
+  }}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.55 var(--sans);
+    -webkit-font-smoothing:antialiased;overflow:hidden}
+  .app{display:grid;grid-template-columns:52px 268px 1fr 440px;height:100vh}
+  @media(max-width:1560px){.app{grid-template-columns:52px 240px 1fr 390px}}
 
-  /* file tree */
-  .tree-pane { background: var(--panel); border-right: 1px solid var(--line);
-    overflow-y: auto; padding: 12px 0; }
-  .pane-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--faint); font-weight: 600; padding: 0 14px 8px; }
-  .tnode { display: flex; align-items: center; gap: 6px; padding: 3px 14px; cursor: pointer;
-    font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; font-family: var(--mono); }
-  .tnode:hover { background: var(--panel-2); color: var(--text); }
-  .tnode.sel { background: var(--panel-2); color: var(--accent); }
-  .tnode .caret { width: 9px; flex: none; color: var(--faint); font-size: 9px; }
-  .tkids.collapsed { display: none; }
+  /* activity bar */
+  .bar{background:var(--panel);border-right:1px solid var(--line);display:flex;
+    flex-direction:column;align-items:center;padding:12px 0;gap:3px}
+  .bar .logo{margin-bottom:14px;color:var(--text)}
+  .ic{all:unset;width:34px;height:34px;display:grid;place-items:center;border-radius:8px;
+    cursor:pointer;color:var(--faint);position:relative}
+  .ic:hover{background:var(--panel-2);color:var(--text)}
+  .ic[aria-current=true]{background:var(--panel-2);color:var(--accent)}
+  .ic .badge{position:absolute;top:1px;right:1px;min-width:15px;height:15px;border-radius:8px;
+    background:var(--crit);color:#fff;font:600 9.5px/15px var(--mono);text-align:center;padding:0 3px}
+  .bar .spacer{flex:1}
+
+  /* side panel */
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;
+    display:flex;flex-direction:column}
+  .side-head{padding:12px 14px 8px;display:flex;align-items:center;gap:8px;flex:none}
+  .side-head h3{margin:0;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--faint);font-weight:600}
+  .side-head .act{margin-left:auto;font:11px var(--mono);color:var(--faint);cursor:pointer}
+  .side-head .act:hover{color:var(--accent)}
+  .repo{padding:0 14px 12px;font-family:var(--mono);font-size:11px;color:var(--faint);
+    word-break:break-all;line-height:1.4}
+  .grp{border-top:1px solid var(--line)}
+  .tnode{display:flex;align-items:center;gap:6px;padding:3px 14px;cursor:pointer;font-size:12.5px;
+    color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
+  .tnode:hover{background:var(--panel-2);color:var(--text)}
+  .tnode.sel{background:var(--panel-2);color:var(--accent)}
+  .tnode .caret{width:9px;flex:none;color:var(--faint);font-size:9px}
+  .tnode .st{margin-left:auto;font-size:10px;font-weight:700;flex:none;padding-left:8px}
+  .st.modified{color:var(--med)} .st.added,.st.untracked{color:var(--ok)}
+  .st.deleted{color:var(--crit)} .st.renamed{color:var(--accent)}
+  .tkids.collapsed{display:none}
+  .side .empty{padding:12px 14px;color:var(--faint);font-size:12px;text-align:left}
 
   /* editor */
-  .editor-pane { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
-  .tabbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 38px;
-    border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
-  .tabbar .fname { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
-  .tabbar .meta { font-size: 11px; color: var(--faint); margin-left: auto; }
-  .code { flex: 1; overflow: auto; margin: 0; padding: 14px 0; }
-  .code table { border-collapse: collapse; width: 100%; }
-  .code td { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; vertical-align: top; }
-  .code td.ln { text-align: right; color: var(--faint); user-select: none;
-    width: 1%; padding: 0 14px 0 16px; white-space: nowrap; }
-  .code td.src { white-space: pre-wrap; word-break: break-word; padding-right: 20px; }
-  .k { color: #c678dd; } .s { color: #98c379; } .c { color: var(--faint); font-style: italic; }
-  .n { color: #d19a66; } .f { color: #61afef; }
-  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .k { color: #a626a4; }
-    :root:not([data-theme="dark"]) .s { color: #50a14f; }
-    :root:not([data-theme="dark"]) .n { color: #986801; }
-    :root:not([data-theme="dark"]) .f { color: #4078f2; } }
+  .ed{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);min-width:0}
+  .tabs{display:flex;align-items:stretch;height:36px;border-bottom:1px solid var(--line);
+    background:var(--panel);flex:none;overflow-x:auto}
+  .tab{display:flex;align-items:center;gap:7px;padding:0 11px 0 13px;cursor:pointer;
+    border-right:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--dim);
+    white-space:nowrap;flex:none}
+  .tab:hover{background:var(--panel-2)}
+  .tab.on{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+  .tab .x{opacity:.45;font-size:14px;line-height:1}
+  .tab .x:hover{opacity:1;color:var(--crit)}
+  .tab .dirty{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .subbar{display:flex;align-items:center;gap:12px;padding:0 14px;height:32px;flex:none;
+    border-bottom:1px solid var(--line);background:var(--panel);font-size:11.5px;color:var(--faint)}
+  .seg{display:flex;background:var(--panel-2);border-radius:6px;padding:2px}
+  .seg button{all:unset;padding:2.5px 11px;border-radius:4px;cursor:pointer;font-size:11.5px;
+    color:var(--dim)}
+  .seg button[aria-current=true]{background:var(--panel-3);color:var(--text)}
+  .subbar .right{margin-left:auto;display:flex;gap:10px;align-items:center;overflow:hidden}
+  .subbar .right span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel-2);padding:1px 5px;
+    border-radius:4px;color:var(--faint);flex:none}
+
+  .surface{flex:1;overflow:auto;position:relative;padding:12px 0}
+  .lines{display:table;width:100%;border-collapse:collapse;font-family:var(--mono);
+    font-size:12.5px;line-height:1.62}
+  .ln-row{display:table-row}
+  .ln-no,.ln-src{display:table-cell;vertical-align:top}
+  .ln-no{text-align:right;color:var(--faint);user-select:none;width:1%;white-space:nowrap;
+    padding:0 14px 0 16px}
+  .ln-src{white-space:pre-wrap;word-break:break-word;padding-right:24px}
+  .k{color:var(--k)}.s{color:var(--s)}.c{color:var(--c);font-style:italic}
+  .n{color:var(--num)}.f{color:var(--fn)}
+
+  /* editable overlay: a transparent textarea sits exactly over the highlighted layer */
+  .edit-wrap{position:relative}
+  .edit-wrap textarea,.edit-wrap .hl{font-family:var(--mono);font-size:12.5px;line-height:1.62;
+    padding:0;margin:0;border:0;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
+  .edit-wrap .hl{pointer-events:none;min-height:1.62em}
+  .edit-wrap textarea{position:absolute;inset:0;width:100%;height:100%;background:transparent;
+    color:transparent;caret-color:var(--accent);resize:none;outline:none;overflow:hidden}
+  .edit-wrap textarea::selection{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+
+  /* diff — flex rows, not a CSS table: a table row with one cell cannot span the gutter
+     columns, which trapped every hunk header inside the narrow line-number column. */
+  .diff{font-family:var(--mono);font-size:12.5px;line-height:1.62}
+  .dline{display:flex}
+  .dno{width:46px;flex:none;text-align:right;color:var(--faint);user-select:none;
+    padding:0 8px;font-size:11.5px}
+  .dsrc{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;padding:0 24px 0 20px;
+    position:relative}
+  .dline.add{background:var(--add-bg)}
+  .dline.del{background:var(--del-bg)}
+  .dsrc .mk{position:absolute;left:6px;font-weight:700}
+  .dline.add .mk{color:var(--add-mark)}
+  .dline.del .mk{color:var(--del-mark)}
+  .hunk{color:var(--accent);background:var(--panel-2);padding:5px 14px;font-size:11.5px;
+    border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:6px 0 0;
+    white-space:pre-wrap;word-break:break-word}
 
   /* chat */
-  .chat-pane { background: var(--panel); border-left: 1px solid var(--line);
-    display: flex; flex-direction: column; overflow: hidden; }
-  .chat-head { padding: 11px 16px; border-bottom: 1px solid var(--line); flex: none;
-    display: flex; align-items: center; gap: 9px; }
-  .chat-head b { font-size: 13px; font-weight: 600; }
-  .chat-log { flex: 1; overflow-y: auto; padding: 16px; display: flex;
-    flex-direction: column; gap: 14px; }
-  .msg { font-size: 13px; line-height: 1.6; }
-  .msg.user { background: var(--panel-2); border-radius: 9px; padding: 10px 13px; }
-  .msg.user .who { color: var(--accent); }
-  .who { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--faint); font-weight: 600; margin-bottom: 5px; }
-  .msg .txt { white-space: pre-wrap; word-break: break-word; }
-  .tool { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono);
-    font-size: 11.5px; color: var(--dim); padding: 5px 9px; background: var(--panel-2);
-    border-radius: 6px; border-left: 2px solid var(--accent); }
-  .tool .tn { color: var(--accent); font-weight: 600; }
-  .tool .ta { color: var(--faint); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; }
-  .chat-input { border-top: 1px solid var(--line); padding: 12px; flex: none; }
-  .chat-input textarea { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
-    color: var(--text); border-radius: 8px; padding: 10px 12px; font: 13px/1.5 var(--sans);
-    resize: none; min-height: 66px; outline: none; }
-  .chat-input textarea:focus { border-color: var(--accent); }
-  .chat-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-  .chat-foot .hint { font-size: 11px; color: var(--faint); margin-right: auto; }
-  .btn { all: unset; background: var(--accent); color: #fff; padding: 6px 15px;
-    border-radius: 7px; font-size: 12.5px; font-weight: 560; cursor: pointer; }
-  .btn:hover { filter: brightness(1.1); }
-  .btn[disabled] { opacity: .45; cursor: default; }
-  .btn.ghost { background: var(--panel-2); color: var(--dim); }
-  .perm { font-size: 11px; color: var(--high); padding: 7px 16px;
-    background: color-mix(in srgb, var(--high) 10%, transparent);
-    border-bottom: 1px solid var(--line); flex: none; }
+  .chat{background:var(--panel);border-left:1px solid var(--line);display:flex;
+    flex-direction:column;overflow:hidden}
+  .chat-head{padding:10px 14px;border-bottom:1px solid var(--line);flex:none;display:flex;
+    align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+  .chat-head .meta{margin-left:auto;font:11px var(--mono);color:var(--faint);font-weight:400}
+  .perm{font-size:11px;color:var(--high);padding:6px 14px;flex:none;
+    background:color-mix(in srgb,var(--high) 10%,transparent);border-bottom:1px solid var(--line)}
+  .log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:11px}
+  .msg .who{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);
+    font-weight:600;margin-bottom:4px}
+  .msg.user{background:var(--panel-2);border-radius:9px;padding:9px 12px}
+  .msg.user .who{color:var(--accent)}
+  .txt{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6}
+  .txt code{font-family:var(--mono);font-size:12px;background:var(--panel-2);padding:1px 5px;
+    border-radius:4px}
+  .txt strong{font-weight:640}
+  .think{font-size:12px;color:var(--faint);font-style:italic;border-left:2px solid var(--line);
+    padding-left:10px;white-space:pre-wrap}
+  .tool{display:flex;gap:8px;align-items:baseline;font-family:var(--mono);font-size:11.5px;
+    color:var(--dim);padding:5px 9px;background:var(--panel-2);border-radius:6px;
+    border-left:2px solid var(--accent)}
+  .tool .tn{color:var(--accent);font-weight:600;flex:none}
+  .tool .ta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--faint)}
+  .composer{border-top:1px solid var(--line);padding:11px;flex:none}
+  .composer textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);
+    color:var(--text);border-radius:8px;padding:9px 11px;font:13px/1.5 var(--sans);resize:none;
+    min-height:62px;outline:none}
+  .composer textarea:focus{border-color:var(--accent)}
+  .foot{display:flex;align-items:center;gap:9px;margin-top:7px}
+  .foot .hint{font:11px var(--mono);color:var(--faint);margin-right:auto;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .btn{all:unset;background:var(--accent);color:#fff;padding:5.5px 14px;border-radius:7px;
+    font-size:12.5px;font-weight:560;cursor:pointer}
+  .btn:hover{filter:brightness(1.1)} .btn[disabled]{opacity:.4;cursor:default}
+  .btn.ghost{background:var(--panel-2);color:var(--dim)}
 
-  /* inspector slide-over */
-  .drawer { position: fixed; inset: 0 0 0 auto; width: min(880px, 78vw); background: var(--bg);
-    border-left: 1px solid var(--line); z-index: 20; overflow-y: auto;
-    box-shadow: -24px 0 60px rgba(0,0,0,.30); }
-  .drawer.hidden { display: none; }
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 19; }
-  .scrim.hidden { display: none; }
-  .drawer-close { position: absolute; top: 18px; right: 22px; }
+  /* palette */
+  .pal{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(620px,88vw);
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;z-index:40;
+    box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden}
+  .pal input{all:unset;display:block;width:100%;padding:14px 17px;font:14px var(--sans);
+    color:var(--text);border-bottom:1px solid var(--line);box-sizing:border-box}
+  .pal .res{max-height:44vh;overflow-y:auto}
+  .pal .r{padding:8px 17px;font-family:var(--mono);font-size:12.5px;color:var(--dim);cursor:pointer;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pal .r.on{background:var(--panel-2);color:var(--accent)}
 
-  /* ── rail ── */
-  .rail { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 0; }
-  .brand {
-    display: flex; align-items: center; gap: 9px; padding: 0 18px 18px;
-    font-weight: 620; letter-spacing: -.01em; font-size: 15px;
-  }
-  .mark { width: 20px; height: 20px; flex: none; }
-  .repo {
-    padding: 0 18px 18px; font-family: var(--mono); font-size: 11.5px;
-    color: var(--dim); word-break: break-all; line-height: 1.45;
-  }
-  nav { display: flex; flex-direction: column; gap: 1px; padding: 0 10px; }
-  nav button {
-    all: unset; display: flex; justify-content: space-between; align-items: center;
-    padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--dim);
-    font-size: 13px; transition: background .12s, color .12s;
-  }
-  nav button:hover { background: var(--panel-2); color: var(--text); }
-  nav button[aria-current="true"] { background: var(--panel-2); color: var(--text); font-weight: 560; }
-  nav .n { font-family: var(--mono); font-size: 11px; color: var(--faint); }
-  nav .n.warn { color: var(--crit); }
+  /* drawer */
+  .drawer{position:fixed;inset:0 0 0 auto;width:min(900px,80vw);background:var(--bg);
+    border-left:1px solid var(--line);z-index:30;overflow-y:auto;
+    box-shadow:-24px 0 60px rgba(0,0,0,.35)}
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:29}
+  .hidden{display:none!important}
+  .empty{padding:26px 16px;text-align:center;color:var(--faint);font-size:12.5px}
 
-  .conns { margin-top: 22px; padding: 14px 18px 0; border-top: 1px solid var(--line); }
-  .conns h4 { margin: 0 0 9px; font-size: 10.5px; text-transform: uppercase;
-    letter-spacing: .07em; color: var(--faint); font-weight: 600; }
-  .conn { display: flex; align-items: center; gap: 7px; padding: 3px 0;
-    font-size: 12px; color: var(--dim); }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
-  .dot.on { background: var(--ok); }
-
-  /* ── main ── */
-  main { padding: 26px 30px 60px; max-width: 1000px; }
-  .head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
-  h1 { font-size: 19px; margin: 0; font-weight: 620; letter-spacing: -.015em; }
-  .sub { color: var(--dim); font-size: 13px; margin-bottom: 24px; }
-
-  /* score */
-  .score-row { display: flex; align-items: center; gap: 22px; margin-bottom: 26px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
-  .score { font-family: var(--mono); font-size: 40px; font-weight: 600;
-    line-height: 1; letter-spacing: -.03em; }
-  .score small { font-size: 15px; color: var(--faint); font-weight: 400; }
-  .verdict { font-size: 14px; font-weight: 560; margin-bottom: 3px; }
-  .bar { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden;
-    margin-top: 11px; width: 260px; }
-  .bar i { display: block; height: 100%; border-radius: 3px; transition: width .5s ease; }
-
-  .sect { margin-bottom: 26px; }
-  .sect h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
-    color: var(--faint); font-weight: 600; margin: 0 0 10px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    overflow: hidden; }
-  .row { display: flex; gap: 13px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
-  .row:last-child { border-bottom: 0; }
-  .sev { font-family: var(--mono); font-size: 10px; text-transform: uppercase;
-    letter-spacing: .05em; padding: 2.5px 7px; border-radius: 4px; height: fit-content;
-    flex: none; width: 62px; text-align: center; font-weight: 600; }
-  .sev.critical { color: var(--crit); background: color-mix(in srgb, var(--crit) 14%, transparent); }
-  .sev.high { color: var(--high); background: color-mix(in srgb, var(--high) 14%, transparent); }
-  .sev.medium { color: var(--med); background: color-mix(in srgb, var(--med) 14%, transparent); }
-  .sev.low, .sev.info { color: var(--low); background: color-mix(in srgb, var(--low) 14%, transparent); }
-  .body { min-width: 0; flex: 1; }
-  .title { font-weight: 545; margin-bottom: 3px; }
-  .title code { font-family: var(--mono); font-size: 12.5px;
-    background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
-  .detail { color: var(--dim); font-size: 12.5px; margin-bottom: 7px; }
-  .fix { font-size: 12.5px; color: var(--dim); display: flex; gap: 7px; }
-  .fix b { color: var(--accent); font-weight: 560; flex: none; }
-  .path { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
-
-  /* lists */
-  .item { display: grid; grid-template-columns: 1fr auto; gap: 14px;
-    padding: 10px 16px; border-bottom: 1px solid var(--line); align-items: baseline; }
-  .item:last-child { border-bottom: 0; }
-  /* Grid children default to min-width:auto, so a long nowrap description refuses to shrink and
-     pushes the scope tag off the edge. This is what lets the ellipsis engage instead. */
-  .item > div:first-child { min-width: 0; }
-  .item .nm { font-family: var(--mono); font-size: 12.5px; font-weight: 550; }
-  .item .ds { color: var(--dim); font-size: 12.5px; margin-top: 2px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 4px;
-    background: var(--panel-2); color: var(--faint); white-space: nowrap; }
-  .tag.project { color: var(--high); background: color-mix(in srgb, var(--high) 13%, transparent); }
-  .danger { border-left: 2px solid var(--crit); }
-  .danger .nm::before { content: "! "; color: var(--crit); font-weight: 700; }
-
-  .warn-banner { display: flex; gap: 11px; padding: 13px 16px; border-radius: 9px;
-    background: color-mix(in srgb, var(--crit) 9%, transparent);
-    border: 1px solid color-mix(in srgb, var(--crit) 28%, transparent); margin-bottom: 14px; }
-  .warn-banner b { color: var(--crit); }
-  .warn-banner code { font-family: var(--mono); font-size: 12px;
-    background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
-
-  .empty { padding: 30px 16px; text-align: center; color: var(--faint); font-size: 13px; }
-  .pane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 17px 18px; }
-  .pane h3 { margin: 0 0 3px; font-size: 13px; font-weight: 600; }
-  .pane .st { font-size: 12.5px; color: var(--faint); }
-  .hidden { display: none; }
-  a { color: var(--accent); }
+  main{padding:24px 28px 60px;max-width:960px}
+  h1{font-size:18px;margin:0 0 3px;font-weight:620;letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:12.5px;margin-bottom:20px}
+  .sect{margin-bottom:22px}
+  .sect h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);
+    font-weight:600;margin:0 0 9px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .row{display:flex;gap:12px;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .sev{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;
+    padding:2.5px 7px;border-radius:4px;height:fit-content;flex:none;width:60px;text-align:center;
+    font-weight:600}
+  .sev.critical{color:var(--crit);background:color-mix(in srgb,var(--crit) 14%,transparent)}
+  .sev.high{color:var(--high);background:color-mix(in srgb,var(--high) 14%,transparent)}
+  .sev.medium{color:var(--med);background:color-mix(in srgb,var(--med) 14%,transparent)}
+  .sev.low,.sev.info{color:var(--low);background:color-mix(in srgb,var(--low) 14%,transparent)}
+  .body{min-width:0;flex:1}
+  .title{font-weight:545;margin-bottom:3px}
+  .title code,.sub code,.detail code,.fix code{font-family:var(--mono);font-size:12px;
+    background:var(--panel-2);padding:1px 5px;border-radius:4px}
+  .detail{color:var(--dim);font-size:12.5px;margin-bottom:6px}
+  .fix{font-size:12.5px;color:var(--dim);display:flex;gap:7px}
+  .fix b{color:var(--accent);font-weight:560;flex:none}
+  .path{font-family:var(--mono);font-size:11px;color:var(--faint);margin-bottom:5px}
+  .item{display:grid;grid-template-columns:1fr auto;gap:14px;padding:9px 15px;
+    border-bottom:1px solid var(--line);align-items:baseline}
+  .item:last-child{border-bottom:0}
+  .item>div:first-child{min-width:0}
+  .item .nm{font-family:var(--mono);font-size:12.5px;font-weight:550}
+  .item .ds{color:var(--dim);font-size:12.5px;margin-top:2px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:4px;
+    background:var(--panel-2);color:var(--faint);white-space:nowrap}
+  .tag.project{color:var(--high);background:color-mix(in srgb,var(--high) 13%,transparent)}
+  .danger{border-left:2px solid var(--crit)}
+  .danger .nm::before{content:"! ";color:var(--crit);font-weight:700}
+  .warn{display:flex;gap:10px;padding:12px 15px;border-radius:9px;margin-bottom:13px;
+    background:color-mix(in srgb,var(--crit) 9%,transparent);
+    border:1px solid color-mix(in srgb,var(--crit) 28%,transparent)}
+  .warn b{color:var(--crit)}
+  .score-row{display:flex;align-items:center;gap:20px;margin-bottom:22px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .score{font-family:var(--mono);font-size:38px;font-weight:600;line-height:1;letter-spacing:-.03em}
+  .score small{font-size:14px;color:var(--faint);font-weight:400}
+  .bar-m{height:5px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin-top:10px;
+    width:240px}
+  .bar-m i{display:block;height:100%;border-radius:3px}
+  .pane-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+  .pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 17px}
+  .pane h3{margin:0 0 3px;font-size:12.5px;font-weight:600}
+  .pane .st2{font-size:12px;color:var(--faint)}
 </style>
 </head>
 <body>
 <div class="app">
-  <aside class="rail">
-    <div class="brand">
-      <svg class="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
-              stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-      </svg>
-      Keel
+  <div class="bar">
+    <svg class="logo" width="21" height="21" viewBox="0 0 20 20" fill="none">
+      <path d="M10 1.5v17M10 18.5c-3.6 0-6.4-1.9-7.6-4.3M10 18.5c3.6 0 6.4-1.9 7.6-4.3"
+        stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <button class="ic" id="ic-files" title="Files" aria-current="true">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 011-1h3.6l1.2 1.5H13a1 1 0 011 1V13a1 1 0 01-1 1H3a1 1 0 01-1-1V3z"/></svg>
+    </button>
+    <button class="ic" id="ic-changes" title="Changes">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2v8.2a2.8 2.8 0 105 1.8h3V2h-2v8H8.9A2.8 2.8 0 006 10.2V2H4z"/></svg>
+      <span class="badge hidden" id="badge-changes">0</span>
+    </button>
+    <div class="spacer"></div>
+    <button class="ic" id="ic-insp" title="Inspector">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M7 1a6 6 0 104.2 10.3l3.3 3.2 1-1-3.2-3.3A6 6 0 007 1zm0 2a4 4 0 110 8 4 4 0 010-8z"/></svg>
+      <span class="badge hidden" id="badge-trust">0</span>
+    </button>
+  </div>
+
+  <aside class="side">
+    <div class="side-head"><h3>Repository</h3><span class="act" id="refresh">refresh</span></div>
+    <div class="repo" id="repo">loading…</div>
+    <div id="changes-grp" class="grp hidden">
+      <div class="side-head"><h3>Changes</h3><span class="act" id="branch"></span></div>
+      <div id="changes"></div>
     </div>
-    <div class="repo" id="repo">…</div>
-    <nav id="nav"></nav>
-    <div class="conns">
-      <h4>Connections</h4>
-      <div id="conns"></div>
-    </div>
+    <div class="grp"><div class="side-head"><h3>Files</h3></div><div id="tree"></div></div>
   </aside>
 
-  <aside class="tree-pane">
-    <div class="pane-title">Files</div>
-    <div id="tree"></div>
-  </aside>
-
-  <section class="editor-pane">
-    <div class="tabbar">
-      <span class="fname" id="fname">No file open</span>
-      <span class="meta" id="fmeta"></span>
+  <section class="ed">
+    <div class="tabs" id="tabs"></div>
+    <div class="subbar">
+      <div class="seg">
+        <button id="m-src" aria-current="true">Source</button>
+        <button id="m-diff">Diff</button>
+      </div>
+      <div class="right">
+        <span id="fmeta"></span>
+        <span class="kbd">&#8984;P</span><span class="kbd">&#8984;S</span>
+      </div>
     </div>
-    <div class="code" id="code"><div class="empty">Select a file to view it.</div></div>
+    <div class="surface" id="surface"><div class="empty">Open a file &mdash; press &#8984;P</div></div>
   </section>
 
-  <section class="chat-pane">
-    <div class="chat-head">
-      <span class="dot on"></span><b>Claude Code</b>
-      <span class="meta" id="chatstatus" style="margin-left:auto;font-size:11px;color:var(--faint)"></span>
-    </div>
-    <div class="perm" id="perm">acceptEdits — the agent can edit files and run commands here.</div>
-    <div class="chat-log" id="chatlog">
-      <div class="empty" style="padding:24px 0">Ask Claude Code to change this repository.</div>
-    </div>
-    <div class="chat-input">
-      <textarea id="prompt" placeholder="Describe a change…  (⌘⏎ to send)"></textarea>
-      <div class="chat-foot">
+  <section class="chat">
+    <div class="chat-head"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>
+      Claude Code<span class="meta" id="chat-meta"></span></div>
+    <div class="perm">acceptEdits &mdash; the agent can edit files and run commands here.</div>
+    <div class="log" id="log"><div class="empty">Ask Claude Code to change this repository.</div></div>
+    <div class="composer">
+      <textarea id="prompt" placeholder="Describe a change…   ⌘⏎ to send"></textarea>
+      <div class="foot">
         <span class="hint" id="hint"></span>
         <button class="btn ghost hidden" id="stop">Stop</button>
         <button class="btn" id="send">Send</button>
@@ -260,410 +294,481 @@
 </div>
 
 <div class="scrim hidden" id="scrim"></div>
-<div class="drawer hidden" id="drawer">
-  <button class="btn ghost drawer-close" id="drawer-close">Close</button>
-  <main id="main"><div class="empty">Loading…</div></main>
+<div class="drawer hidden" id="drawer"><main id="main"></main></div>
+<div class="pal hidden" id="pal">
+  <input id="pal-q" placeholder="Go to file…" spellcheck="false">
+  <div class="res" id="pal-res"></div>
 </div>
 
 <script>
-const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-// Findings and titles wrap identifiers in backticks; render those as code without trusting the rest.
-const md = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+const $ = h => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+const el = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
-let state = null;
-let tab = (location.hash || '#overview').slice(1);
+let state = null, flat = [], mode = 'src';
+const tabs = [];
+let active = null;
 
-const TABS = [
-  { id: 'overview',  label: 'Overview'  },
-  { id: 'findings',  label: 'Readiness' },
-  { id: 'sessions',  label: 'Sessions'  },
-  { id: 'skills',    label: 'Skills'    },
-  { id: 'trust',     label: 'Trust'     },
-];
+// ── syntax highlighting ──────────────────────────────────────────────────────
+const KW = /\b(fn|let|mut|pub|use|mod|struct|enum|impl|trait|match|if|else|for|while|loop|return|const|static|async|await|move|where|as|dyn|self|Self|crate|super|type|ref|in|break|continue|unsafe|extern|function|var|class|export|import|from|default|new|try|catch|throw|typeof|instanceof|def|elif|except|lambda|with|yield|None|True|False|null|true|false|undefined)\b/g;
 
-function counts(s) {
-  const w = s.workspace;
-  return {
-    overview: null,
-    findings: s.scan.findings.length,
-    sessions: w.sessions.length,
-    skills: w.skills.length + w.plugins.length + w.agents.length + w.commands.length,
-    trust: w.hooks.filter(h => h.scope === 'project').length
-         + w.mcp_servers.filter(m => m.scope === 'project').length,
-  };
-}
-
-function renderNav() {
-  const c = counts(state);
-  document.getElementById('nav').innerHTML = '';
-  for (const t of TABS) {
-    const n = c[t.id];
-    const warn = t.id === 'trust' && n > 0;
-    const el = $(`<button aria-current="${t.id === tab}">
-      <span>${t.label}</span>
-      ${n === null ? '' : `<span class="n ${warn ? 'warn' : ''}">${n}</span>`}
-    </button>`).firstElementChild;
-    el.onclick = () => { tab = t.id; openDrawer(); render(); };
-    document.getElementById('nav').append(el);
-  }
-}
-
-function scoreColor(n) {
-  return n >= 90 ? 'var(--ok)' : n >= 70 ? 'var(--med)' : n >= 40 ? 'var(--high)' : 'var(--crit)';
-}
-
-function findingRow(f) {
-  return `<div class="row">
-    <span class="sev ${f.severity}">${f.severity}</span>
-    <div class="body">
-      <div class="title">${md(f.title)}</div>
-      <div class="detail">${md(f.detail)}</div>
-      ${f.path ? `<div class="path">${esc(f.path)}</div>` : ''}
-      <div class="fix"><b>fix</b><span>${esc(f.fix.description)}</span></div>
-    </div>
-  </div>`;
-}
-
-function listCard(items, render, emptyText) {
-  if (!items.length) return `<div class="card"><div class="empty">${esc(emptyText)}</div></div>`;
-  return `<div class="card">${items.map(render).join('')}</div>`;
-}
-
-const views = {
-  overview() {
-    const s = state.scan, w = state.workspace;
-    const top = s.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
-    const untrusted = counts(state).trust;
-    return `
-      <div class="head"><h1>Overview</h1></div>
-      <div class="sub">Readiness, and everything Claude Code knows about this repository.</div>
-
-      <div class="score-row">
-        <div class="score" style="color:${scoreColor(s.score)}">${s.score}<small>/100</small></div>
-        <div>
-          <div class="verdict">${s.findings.some(f => ['critical','high'].includes(f.severity))
-            ? 'Not ready to deploy' : 'No blocking issues'}</div>
-          <div class="detail">${s.findings.length} finding${s.findings.length === 1 ? '' : 's'} ·
-            ${s.findings.filter(f => f.fix.kind === 'automatic').length} fixable automatically</div>
-          <div class="bar"><i style="width:${s.score}%;background:${scoreColor(s.score)}"></i></div>
-        </div>
-      </div>
-
-      ${untrusted > 0 ? `<div class="warn-banner">
-        <b>!</b><div><b>${untrusted} item${untrusted === 1 ? '' : 's'} came with this repository and will execute.</b>
-        Hooks run shell commands at session start and MCP servers connect automatically.
-        Review them under Trust, or run <code>keel trust</code> to quarantine them.</div>
-      </div>` : ''}
-
-      <div class="sect">
-        <h2>Environments</h2>
-        <div class="pane-grid">
-          <div class="pane"><h3>dev</h3><div class="st">Not connected — no Cloudflare account linked</div></div>
-          <div class="pane"><h3>prod</h3><div class="st">Not connected — no Cloudflare account linked</div></div>
-        </div>
-      </div>
-
-      ${top.length ? `<div class="sect"><h2>Blocking</h2>
-        <div class="card">${top.map(findingRow).join('')}</div></div>` : ''}
-
-      <div class="sect">
-        <h2>Recent sessions</h2>
-        ${listCard(w.sessions.slice(0, 4), s => `<div class="item">
-          <div><div class="nm">${esc(s.title ?? '(untitled)')}</div>
-            <div class="ds">${s.messages} messages · ${esc((s.last_active ?? '').slice(0, 16).replace('T', ' '))}</div></div>
-          <span class="tag">${esc(s.id.split('-')[0])}</span>
-        </div>`, 'No sessions recorded for this repository yet.')}
-      </div>`;
-  },
-
-  findings() {
-    const s = state.scan;
-    const groups = {};
-    for (const f of s.findings) (groups[f.dimension] ??= []).push(f);
-    const label = d => d.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
-    return `
-      <div class="head"><h1>Readiness</h1></div>
-      <div class="sub">Can an agent safely work here, and can this run on Cloudflare?</div>
-      ${s.findings.length === 0
-        ? `<div class="card"><div class="empty">Nothing to report. This repository is ready.</div></div>`
-        : Object.entries(groups).map(([dim, fs]) => `<div class="sect">
-            <h2>${esc(label(dim))}</h2>
-            <div class="card">${fs.map(findingRow).join('')}</div>
-          </div>`).join('')}`;
-  },
-
-  sessions() {
-    const w = state.workspace;
-    return `
-      <div class="head"><h1>Sessions</h1></div>
-      <div class="sub">Recorded Claude Code conversations. Titles and counts only — message
-        contents never leave the transcript.</div>
-      ${listCard(w.sessions, s => `<div class="item">
-        <div>
-          <div class="nm">${esc(s.title ?? '(untitled)')}</div>
-          <div class="ds">${s.messages} messages · ${esc((s.last_active ?? '').slice(0, 16).replace('T', ' '))}
-            ${s.branch ? ' · ' + esc(s.branch) : ''}${s.version ? ' · v' + esc(s.version) : ''}</div>
-        </div>
-        <span class="tag">claude --resume ${esc(s.id.split('-')[0])}</span>
-      </div>`, 'No sessions recorded for this repository yet.')}`;
-  },
-
-  skills() {
-    const w = state.workspace;
-    const named = (x) => `<div class="item ${x.scope === 'project' ? '' : ''}">
-      <div><div class="nm">${esc(x.name)}</div>
-        ${x.description ? `<div class="ds">${esc(x.description)}</div>` : ''}</div>
-      <span class="tag ${x.scope}">${esc(x.scope)}</span>
-    </div>`;
-    return `
-      <div class="head"><h1>Skills &amp; extensions</h1></div>
-      <div class="sub">What the agent can do here. <code>project</code> means it arrived with the
-        repository.</div>
-      <div class="sect"><h2>Skills</h2>${listCard(w.skills, named, 'No skills.')}</div>
-      <div class="sect"><h2>Plugins</h2>${listCard(w.plugins, p => `<div class="item">
-        <div><div class="nm">${esc(p.name)}</div>
-          <div class="ds">${esc(p.marketplace ?? '')}</div></div>
-        <span class="tag">${esc(p.scope ?? '')}</span></div>`, 'No plugins installed.')}</div>
-      <div class="sect"><h2>Subagents</h2>${listCard(w.agents, named, 'No subagents.')}</div>
-      <div class="sect"><h2>Commands</h2>${listCard(w.commands, named, 'No custom commands.')}</div>`;
-  },
-
-  trust() {
-    const w = state.workspace;
-    const n = counts(state).trust;
-    const row = (x, primary, secondary) => `<div class="item ${x.scope === 'project' ? 'danger' : ''}">
-      <div><div class="nm">${esc(primary)}</div>
-        <div class="ds">${esc(secondary)}</div></div>
-      <span class="tag ${x.scope}">${esc(x.scope)}</span>
-    </div>`;
-    return `
-      <div class="head"><h1>Trust</h1></div>
-      <div class="sub">Configuration that executes. Anything marked <code>project</code> was written
-        by whoever wrote the repository — not necessarily by you.</div>
-      ${n > 0 ? `<div class="warn-banner"><b>!</b><div>
-        <b>${n} item${n === 1 ? '' : 's'} will run when a session starts.</b>
-        Claude Code loads repository hooks with no trust prompt. Run <code>keel trust</code> to move
-        them aside for review.</div></div>` : ''}
-      <div class="sect"><h2>Hooks</h2>${listCard(w.hooks,
-        h => row(h, h.event, h.command), 'No hooks configured.')}</div>
-      <div class="sect"><h2>MCP servers</h2>${listCard(w.mcp_servers,
-        m => row(m, m.name, m.endpoint ?? ''), 'No MCP servers configured.')}</div>`;
-  },
-};
-
-addEventListener('hashchange', () => {
-  const next = location.hash.slice(1);
-  if (views[next]) { tab = next; render(); }
-});
-
-function render() {
-  if (!views[tab]) tab = 'overview';
-  renderNav();
-  document.getElementById('main').innerHTML = views[tab]();
-}
-
-
-// -- inspector drawer --------------------------------------------------------
-function openDrawer() {
-  document.getElementById('drawer').classList.remove('hidden');
-  document.getElementById('scrim').classList.remove('hidden');
-}
-function closeDrawer() {
-  document.getElementById('drawer').classList.add('hidden');
-  document.getElementById('scrim').classList.add('hidden');
-}
-document.getElementById('scrim').onclick = closeDrawer;
-document.getElementById('drawer-close').onclick = closeDrawer;
-addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
-
-// -- file tree ---------------------------------------------------------------
-let openFile = null;
-
-function treeNode(n, depth) {
-  const pad = 14 + depth * 11;
-  if (!n.dir) {
-    const el = $(`<div class="tnode" style="padding-left:${pad + 15}px" data-p="${esc(n.path)}">${esc(n.name)}</div>`).firstElementChild;
-    el.onclick = () => loadFile(n.path);
-    return el;
-  }
-  const wrap = document.createElement('div');
-  // Collapse nested directories by default so the pane stays scannable on a large repo.
-  const collapsed = depth > 0;
-  const head = $(`<div class="tnode" style="padding-left:${pad}px">
-    <span class="caret">${collapsed ? '▸' : '▾'}</span>${esc(n.name)}</div>`).firstElementChild;
-  const kids = document.createElement('div');
-  kids.className = 'tkids' + (collapsed ? ' collapsed' : '');
-  for (const c of n.children ?? []) kids.append(treeNode(c, depth + 1));
-  head.onclick = () => {
-    kids.classList.toggle('collapsed');
-    head.querySelector('.caret').textContent =
-      kids.classList.contains('collapsed') ? '▸' : '▾';
-  };
-  wrap.append(head, kids);
-  return wrap;
-}
-
-async function loadTree() {
-  const nodes = await (await fetch('/api/tree')).json();
-  const host = document.getElementById('tree');
-  host.innerHTML = '';
-  for (const n of nodes) host.append(treeNode(n, 0));
-}
-
-// Minimal highlighter. Deliberately not a parser -- it colours strings, comments, keywords and
-// numbers well enough to read code, and gets out of the way when it cannot tell.
-const KEYWORDS = /\b(fn|let|mut|pub|use|mod|struct|enum|impl|trait|match|if|else|for|while|loop|return|const|static|async|await|move|where|as|dyn|self|Self|crate|super|type|ref|in|break|continue|unsafe|extern|function|var|class|export|import|from|default|new|try|catch|throw|typeof|instanceof|def|elif|except|lambda|with|yield|None|True|False|null|true|false|undefined)\b/g;
-
-function highlight(src) {
+function hl(src) {
   let out = esc(src);
   const stash = [];
-  // A digit-free sentinel. An index-based placeholder gets mangled by the number rule
-  // below before it can be restored, which rendered every comment line as a bare number.
+  // A digit-free sentinel. An index-based placeholder gets mangled by the number rule below
+  // before it can be restored, which rendered every comment line as a bare number.
   const MARK = '\uE000';
-  const keep = (html) => { stash.push(html); return MARK; };
-  // Strings and comments first, stashed so keyword matching cannot reach inside them.
-  out = out.replace(/\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\//g, m => keep(`<span class="c">${m}</span>`));
-  out = out.replace(/(&quot;|&#39;|`)(?:\\.|(?!\1)[^\\])*\1/g, m => keep(`<span class="s">${m}</span>`));
-  out = out.replace(KEYWORDS, '<span class="k">$&</span>');
+  const keep = h => { stash.push(h); return MARK; };
+  // One pass, so the stash order matches the order the sentinels appear in. Two separate
+  // passes stashed every comment first and every string second while the sentinels stayed
+  // interleaved, which spliced doc comments into the middle of code lines.
+  // `#` starts a comment only when not followed by `[`, so Rust attributes survive.
+  out = out.replace(
+    /(\/\/[^\n]*|#(?!\[)[^\n]*|\/\*[\s\S]*?\*\/)|((&quot;|&#39;|`)(?:\\.|(?!\3)[^\\])*\3)/g,
+    (m, comment, string) => keep(comment
+      ? '<span class="c">' + comment + '</span>'
+      : '<span class="s">' + string + '</span>'));
+  out = out.replace(KW, '<span class="k">$&</span>');
   out = out.replace(/\b\d[\d_.]*\b/g, '<span class="n">$&</span>');
   out = out.replace(/\b([a-zA-Z_]\w*)(?=\()/g, '<span class="f">$1</span>');
   let i = 0;
   return out.replace(/\uE000/g, () => stash[i++]);
 }
 
-async function loadFile(path) {
-  document.querySelectorAll('.tnode').forEach(e => e.classList.toggle('sel', e.dataset.p === path));
-  const r = await fetch('/api/file?path=' + encodeURIComponent(path));
-  const code = document.getElementById('code');
-  document.getElementById('fname').textContent = path;
-  if (!r.ok) {
-    document.getElementById('fmeta').textContent = '';
-    code.innerHTML = `<div class="empty">${esc(await r.text())}</div>`;
+// ── tabs ─────────────────────────────────────────────────────────────────────
+function renderTabs() {
+  const host = el('tabs');
+  host.innerHTML = '';
+  for (const t of tabs) {
+    const node = $('<div class="tab ' + (t.path === active ? 'on' : '') + '">' +
+      '<span>' + esc(t.path.split('/').pop()) + '</span>' +
+      (t.dirty ? '<span class="dirty" title="unsaved"></span>' : '<span class="x">&times;</span>') +
+      '</div>').firstElementChild;
+    node.onclick = e => {
+      if (e.target.classList.contains('x')) { closeTab(t.path); return; }
+      active = t.path; paint();
+    };
+    host.append(node);
+  }
+}
+
+function closeTab(path) {
+  const i = tabs.findIndex(t => t.path === path);
+  if (i < 0) return;
+  tabs.splice(i, 1);
+  if (active === path) active = tabs.at(-1)?.path ?? null;
+  paint();
+}
+
+async function open(path) {
+  if (!tabs.some(t => t.path === path)) {
+    const r = await fetch('/api/file?path=' + encodeURIComponent(path));
+    if (!r.ok) { el('surface').innerHTML = '<div class="empty">' + esc(await r.text()) + '</div>'; return; }
+    const f = await r.json();
+    tabs.push({ path, content: f.content, dirty: false, truncated: f.truncated });
+  }
+  active = path;
+  paint();
+}
+
+// ── editor surface ───────────────────────────────────────────────────────────
+function paint() {
+  renderTabs();
+  document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
+  const tab = tabs.find(t => t.path === active);
+  const surface = el('surface');
+
+  if (!tab) {
+    el('fmeta').textContent = '';
+    surface.innerHTML = '<div class="empty">Open a file &mdash; press &#8984;P</div>';
     return;
   }
-  const f = await r.json();
-  openFile = path;
-  const lines = f.content.split('\n');
-  document.getElementById('fmeta').textContent =
-    `${lines.length} lines${f.truncated ? ' · truncated' : ''}`;
-  code.innerHTML = `<table>${lines.map((l, i) =>
-    `<tr><td class="ln">${i + 1}</td><td class="src">${highlight(l) || '&nbsp;'}</td></tr>`).join('')}</table>`;
-  code.scrollTop = 0;
+  if (mode === 'diff') { paintDiff(tab); return; }
+
+  const lines = tab.content.split('\n');
+  el('fmeta').textContent = tab.path + ' · ' + lines.length + ' lines' + (tab.truncated ? ' · truncated' : '');
+
+  surface.innerHTML =
+    '<div class="lines"><div class="ln-row">' +
+      '<div class="ln-no" id="gutter"></div>' +
+      '<div class="ln-src"><div class="edit-wrap">' +
+        '<div class="hl" id="hl"></div><textarea id="ta" spellcheck="false"></textarea>' +
+      '</div></div>' +
+    '</div></div>';
+
+  const repaint = text => {
+    el('hl').innerHTML = hl(text) + '\n';
+    el('gutter').innerHTML = text.split('\n').map((_, i) => i + 1).join('<br>');
+  };
+  repaint(tab.content);
+
+  const ta = el('ta');
+  ta.value = tab.content;
+  ta.oninput = () => {
+    tab.content = ta.value;
+    tab.dirty = true;
+    repaint(ta.value);
+    renderTabs();
+  };
 }
 
-// -- chat --------------------------------------------------------------------
-let stream = null, sessionId = null, liveText = null;
-const log = document.getElementById('chatlog');
-
-function append(html) {
-  const el = $(html).firstElementChild;
-  log.append(el);
-  log.scrollTop = log.scrollHeight;
-  return el;
-}
-
-function setRunning(on) {
-  document.getElementById('send').disabled = on;
-  document.getElementById('stop').classList.toggle('hidden', !on);
-  document.getElementById('chatstatus').textContent = on ? 'working...' : '';
-}
-
-/** Render one stream-json record. The browser interprets the shape so there is one place to change. */
-function handleRecord(rec) {
-  if (rec.type === 'system' && rec.subtype === 'init') {
-    sessionId = rec.session_id ?? sessionId;
-    document.getElementById('hint').textContent =
-      `${rec.model ?? ''}${sessionId ? ' · ' + sessionId.split('-')[0] : ''}`;
+async function paintDiff(tab) {
+  const d = await (await fetch('/api/git/diff?path=' + encodeURIComponent(tab.path))).json();
+  el('fmeta').textContent = tab.path + ' · ' + (d.untracked ? 'new file' : 'diff');
+  if (!d.hunks.length) {
+    el('surface').innerHTML = '<div class="empty">No uncommitted changes in this file.</div>';
     return;
   }
+  const mark = k => k === 'add' ? '+' : k === 'del' ? '-' : ' ';
+  el('surface').innerHTML = '<div class="diff">' + d.hunks.map(h =>
+    '<div class="hunk">' + esc(h.header) + '</div>' +
+    h.lines.map(l =>
+      '<div class="dline ' + l.kind + '">' +
+        '<div class="dno">' + (l.old ?? '') + '</div>' +
+        '<div class="dno">' + (l.new ?? '') + '</div>' +
+        '<div class="dsrc"><span class="mk">' + mark(l.kind) + '</span>' + (hl(l.text) || '&nbsp;') + '</div>' +
+      '</div>').join('')
+  ).join('') + '</div>';
+}
 
-  // Incremental assistant text.
-  if (rec.type === 'stream_event' && rec.event?.delta?.type === 'text_delta') {
-    if (!liveText) {
-      liveText = append('<div class="msg"><div class="who">Claude</div><div class="txt"></div></div>')
-        .querySelector('.txt');
+async function save() {
+  const tab = tabs.find(t => t.path === active);
+  if (!tab || !tab.dirty) return;
+  const r = await fetch('/api/save', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: tab.path, content: tab.content }),
+  });
+  if (r.ok) { tab.dirty = false; renderTabs(); loadGit(); loadState(); }
+}
+
+function syncMode() {
+  el('m-src').setAttribute('aria-current', mode === 'src');
+  el('m-diff').setAttribute('aria-current', mode === 'diff');
+}
+el('m-src').onclick = () => { mode = 'src'; syncMode(); paint(); };
+el('m-diff').onclick = () => { mode = 'diff'; syncMode(); paint(); };
+
+// ── file tree ────────────────────────────────────────────────────────────────
+function node(n, depth) {
+  const pad = 14 + depth * 11;
+  if (!n.dir) {
+    const e = $('<div class="tnode" style="padding-left:' + (pad + 15) + 'px" data-p="' +
+      esc(n.path) + '">' + esc(n.name) + '</div>').firstElementChild;
+    e.onclick = () => open(n.path);
+    return e;
+  }
+  const wrap = document.createElement('div');
+  const collapsed = depth > 0;
+  const head = $('<div class="tnode" style="padding-left:' + pad + 'px"><span class="caret">' +
+    (collapsed ? '&#9656;' : '&#9662;') + '</span>' + esc(n.name) + '</div>').firstElementChild;
+  const kids = document.createElement('div');
+  kids.className = 'tkids' + (collapsed ? ' collapsed' : '');
+  for (const c of n.children ?? []) kids.append(node(c, depth + 1));
+  head.onclick = () => {
+    kids.classList.toggle('collapsed');
+    head.querySelector('.caret').innerHTML = kids.classList.contains('collapsed') ? '&#9656;' : '&#9662;';
+  };
+  wrap.append(head, kids);
+  return wrap;
+}
+
+function flatten(nodes, out = []) {
+  for (const n of nodes) n.dir ? flatten(n.children ?? [], out) : out.push(n.path);
+  return out;
+}
+
+async function loadTree() {
+  const nodes = await (await fetch('/api/tree')).json();
+  flat = flatten(nodes);
+  const host = el('tree');
+  host.innerHTML = '';
+  for (const n of nodes) host.append(node(n, 0));
+  document.querySelectorAll('.tnode').forEach(n => n.classList.toggle('sel', n.dataset.p === active));
+}
+
+// ── git ──────────────────────────────────────────────────────────────────────
+async function loadGit() {
+  const g = await (await fetch('/api/git/status')).json();
+  const grp = el('changes-grp');
+  if (!g.is_repo) { grp.classList.add('hidden'); return; }
+  grp.classList.remove('hidden');
+  el('branch').textContent = g.branch ?? '';
+
+  const badge = el('badge-changes');
+  badge.textContent = g.changes.length;
+  badge.classList.toggle('hidden', g.changes.length === 0);
+
+  const host = el('changes');
+  host.innerHTML = '';
+  if (!g.changes.length) { host.innerHTML = '<div class="empty">Working tree clean</div>'; return; }
+  for (const c of g.changes) {
+    const e = $('<div class="tnode" data-p="' + esc(c.path) + '" title="' + esc(c.path) + '">' +
+      esc(c.path.split('/').pop()) +
+      '<span class="st ' + esc(c.label) + '">' + esc(c.status.trim() || '?') + '</span></div>').firstElementChild;
+    // Opening from Changes goes straight to the diff — that is the question being asked.
+    e.onclick = () => { mode = 'diff'; syncMode(); open(c.path); };
+    host.append(e);
+  }
+}
+
+// ── command palette ──────────────────────────────────────────────────────────
+let palIdx = 0, palHits = [];
+function openPal() { el('pal').classList.remove('hidden'); el('pal-q').value = ''; el('pal-q').focus(); palFilter(''); }
+function closePal() { el('pal').classList.add('hidden'); }
+function palFilter(q) {
+  const needle = q.toLowerCase();
+  // Subsequence match, the way an editor's file finder behaves: "khtr" finds keel-harness/trust.rs.
+  palHits = flat.filter(p => {
+    const s = p.toLowerCase();
+    let i = 0;
+    for (const ch of needle) { i = s.indexOf(ch, i) + 1; if (i === 0) return false; }
+    return true;
+  }).slice(0, 60);
+  palIdx = 0;
+  renderPal();
+}
+function renderPal() {
+  el('pal-res').innerHTML = palHits.map((p, i) =>
+    '<div class="r ' + (i === palIdx ? 'on' : '') + '" data-i="' + i + '">' + esc(p) + '</div>').join('');
+  el('pal-res').querySelectorAll('.r').forEach(r =>
+    r.onclick = () => { open(palHits[+r.dataset.i]); closePal(); });
+  el('pal-res').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+el('pal-q').oninput = e => palFilter(e.target.value);
+el('pal-q').onkeydown = e => {
+  if (e.key === 'ArrowDown') { palIdx = Math.min(palIdx + 1, palHits.length - 1); renderPal(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { palIdx = Math.max(palIdx - 1, 0); renderPal(); e.preventDefault(); }
+  if (e.key === 'Enter' && palHits[palIdx]) { open(palHits[palIdx]); closePal(); }
+  if (e.key === 'Escape') closePal();
+};
+
+addEventListener('keydown', e => {
+  const cmd = e.metaKey || e.ctrlKey;
+  if (cmd && e.key === 'p') { e.preventDefault(); openPal(); }
+  if (cmd && e.key === 's') { e.preventDefault(); save(); }
+  if (e.key === 'Escape') { closePal(); closeDrawer(); }
+});
+
+// ── chat ─────────────────────────────────────────────────────────────────────
+let stream = null, sessionId = null, live = null;
+const log = () => el('log');
+
+function push(html) {
+  const n = $(html).firstElementChild;
+  log().append(n);
+  log().scrollTop = log().scrollHeight;
+  return n;
+}
+function running(on) {
+  el('send').disabled = on;
+  el('stop').classList.toggle('hidden', !on);
+  el('chat-meta').textContent = on ? 'working…' : '';
+}
+
+/** Render one stream-json record. The browser interprets the shape, so there is one place to change. */
+function record(r) {
+  if (r.type === 'system' && r.subtype === 'init') {
+    sessionId = r.session_id ?? sessionId;
+    el('hint').textContent = (r.model ?? '') + ' · ' + (sessionId ?? '').split('-')[0];
+    return;
+  }
+  const d = r.event?.delta;
+  if (r.type === 'stream_event' && d?.type === 'text_delta') {
+    if (!live || live.dataset.kind !== 'text') {
+      live = push('<div class="msg"><div class="who">Claude</div><div class="txt" data-kind="text"></div></div>').querySelector('.txt');
+      live.dataset.raw = '';
     }
-    liveText.textContent += rec.event.delta.text;
-    log.scrollTop = log.scrollHeight;
+    live.dataset.raw += d.text;
+    live.innerHTML = md(live.dataset.raw);
+    log().scrollTop = log().scrollHeight;
     return;
   }
-
-  if (rec.type === 'assistant') {
-    for (const block of rec.message?.content ?? []) {
-      if (block.type === 'tool_use') {
-        liveText = null;
-        const arg = block.input?.file_path ?? block.input?.command ?? block.input?.pattern ?? '';
-        append(`<div class="tool"><span class="tn">${esc(block.name)}</span><span class="ta">${esc(arg)}</span></div>`);
+  if (r.type === 'stream_event' && d?.type === 'thinking_delta') {
+    if (!live || live.dataset.kind !== 'think') {
+      live = push('<div class="think" data-kind="think"></div>');
+    }
+    live.textContent += d.thinking;
+    return;
+  }
+  if (r.type === 'assistant') {
+    for (const b of r.message?.content ?? []) {
+      if (b.type === 'tool_use') {
+        live = null;
+        const arg = b.input?.file_path ?? b.input?.command ?? b.input?.pattern ?? b.input?.path ?? '';
+        push('<div class="tool"><span class="tn">' + esc(b.name) + '</span><span class="ta">' + esc(arg) + '</span></div>');
       }
     }
     return;
   }
-
-  if (rec.type === 'result') {
-    liveText = null;
-    sessionId = rec.session_id ?? sessionId;
-    const cost = rec.total_cost_usd;
-    document.getElementById('hint').textContent =
-      (cost != null ? `$${cost.toFixed(4)}` : '') +
-      (sessionId ? ` · ${sessionId.split('-')[0]}` : '');
-    // The tree and the open file may have changed underneath us.
-    loadTree();
-    if (openFile) loadFile(openFile);
-    loadState();
+  if (r.type === 'result') {
+    live = null;
+    sessionId = r.session_id ?? sessionId;
+    el('hint').textContent =
+      (r.total_cost_usd != null ? '$' + r.total_cost_usd.toFixed(4) : '') +
+      ' · ' + (sessionId ?? '').split('-')[0];
+    // The agent has just changed the tree, the open files and the score. Refresh all of it.
+    loadTree(); loadGit(); loadState();
+    for (const t of tabs) if (!t.dirty) reload(t);
   }
 }
 
-function send() {
-  const box = document.getElementById('prompt');
-  const prompt = box.value.trim();
-  if (!prompt || stream) return;
-
-  log.querySelector('.empty')?.remove();
-  append(`<div class="msg user"><div class="who">You</div><div class="txt">${esc(prompt)}</div></div>`);
-  box.value = '';
-  liveText = null;
-  setRunning(true);
-
-  const url = '/api/chat?prompt=' + encodeURIComponent(prompt) +
-    (sessionId ? '&session=' + encodeURIComponent(sessionId) : '');
-  stream = new EventSource(url);
-
-  stream.addEventListener('msg', e => {
-    try { handleRecord(JSON.parse(e.data)); } catch { /* a partial line is not worth surfacing */ }
-  });
-  stream.addEventListener('fatal', e => {
-    append(`<div class="msg"><div class="who">Error</div><div class="txt">${esc(e.data)}</div></div>`);
-  });
-  stream.addEventListener('done', () => { stream.close(); stream = null; setRunning(false); });
-  stream.onerror = () => { if (stream) { stream.close(); stream = null; setRunning(false); } };
+async function reload(tab) {
+  const r = await fetch('/api/file?path=' + encodeURIComponent(tab.path));
+  if (!r.ok) return;
+  tab.content = (await r.json()).content;
+  if (tab.path === active) paint();
 }
 
-document.getElementById('send').onclick = send;
-document.getElementById('stop').onclick = () => {
-  if (stream) { stream.close(); stream = null; setRunning(false); }
-};
-document.getElementById('prompt').addEventListener('keydown', e => {
+function send() {
+  const box = el('prompt');
+  const prompt = box.value.trim();
+  if (!prompt || stream) return;
+  log().querySelector('.empty')?.remove();
+  push('<div class="msg user"><div class="who">You</div><div class="txt">' + esc(prompt) + '</div></div>');
+  box.value = ''; live = null; running(true);
+
+  stream = new EventSource('/api/chat?prompt=' + encodeURIComponent(prompt) +
+    (sessionId ? '&session=' + encodeURIComponent(sessionId) : ''));
+  stream.addEventListener('msg', e => { try { record(JSON.parse(e.data)); } catch (_) {} });
+  stream.addEventListener('fatal', e =>
+    push('<div class="msg"><div class="who">Error</div><div class="txt">' + esc(e.data) + '</div></div>'));
+  const end = () => { if (stream) { stream.close(); stream = null; running(false); } };
+  stream.addEventListener('done', end);
+  stream.onerror = end;
+}
+el('send').onclick = send;
+el('stop').onclick = () => { if (stream) { stream.close(); stream = null; running(false); } };
+el('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
 });
 
+// ── inspector ────────────────────────────────────────────────────────────────
+let view = 'overview';
+const VIEWS = [
+  { id: 'overview', label: 'Overview' }, { id: 'findings', label: 'Readiness' },
+  { id: 'sessions', label: 'Sessions' }, { id: 'skills', label: 'Skills' },
+  { id: 'trust', label: 'Trust' },
+];
+function openDrawer() { el('drawer').classList.remove('hidden'); el('scrim').classList.remove('hidden'); renderDrawer(); }
+function closeDrawer() { el('drawer').classList.add('hidden'); el('scrim').classList.add('hidden'); }
+el('scrim').onclick = closeDrawer;
+el('ic-insp').onclick = openDrawer;
+el('refresh').onclick = () => { loadTree(); loadGit(); loadState(); };
+el('ic-changes').onclick = () => el('changes-grp').scrollIntoView({ behavior: 'smooth' });
+el('ic-files').onclick = () => el('tree').scrollIntoView({ behavior: 'smooth' });
+
+const trustCount = w =>
+  w.hooks.filter(h => h.scope === 'project').length +
+  w.mcp_servers.filter(m => m.scope === 'project').length;
+const scoreColor = n => n >= 90 ? 'var(--ok)' : n >= 70 ? 'var(--med)' : n >= 40 ? 'var(--high)' : 'var(--crit)';
+
+const fRow = f =>
+  '<div class="row"><span class="sev ' + f.severity + '">' + f.severity + '</span><div class="body">' +
+  '<div class="title">' + md(f.title) + '</div><div class="detail">' + md(f.detail) + '</div>' +
+  (f.path ? '<div class="path">' + esc(f.path) + '</div>' : '') +
+  '<div class="fix"><b>fix</b><span>' + md(f.fix.description) + '</span></div></div></div>';
+
+const listCard = (items, r, empty) => items.length
+  ? '<div class="card">' + items.map(r).join('') + '</div>'
+  : '<div class="card"><div class="empty">' + esc(empty) + '</div></div>';
+
+const views = {
+  overview() {
+    const s = state.scan, w = state.workspace, u = trustCount(w);
+    const top = s.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
+    return '<h1>Overview</h1><div class="sub">Readiness, and everything Claude Code knows about this repository.</div>' +
+      '<div class="score-row"><div class="score" style="color:' + scoreColor(s.score) + '">' + s.score +
+      '<small>/100</small></div><div><div style="font-weight:560">' +
+      (top.length ? 'Not ready to deploy' : 'No blocking issues') + '</div>' +
+      '<div class="detail">' + s.findings.length + ' findings · ' +
+      s.findings.filter(f => f.fix.kind === 'automatic').length + ' fixable automatically</div>' +
+      '<div class="bar-m"><i style="width:' + s.score + '%;background:' + scoreColor(s.score) + '"></i></div></div></div>' +
+      (u ? '<div class="warn"><b>!</b><div><b>' + u + ' item(s) came with this repository and will execute.</b> ' +
+        'Review them under Trust, or run <code>keel trust</code>.</div></div>' : '') +
+      '<div class="sect"><h2>Environments</h2><div class="pane-grid">' +
+      '<div class="pane"><h3>dev</h3><div class="st2">Not connected — no Cloudflare account linked</div></div>' +
+      '<div class="pane"><h3>prod</h3><div class="st2">Not connected — no Cloudflare account linked</div></div>' +
+      '</div></div>' +
+      (top.length ? '<div class="sect"><h2>Blocking</h2><div class="card">' + top.map(fRow).join('') + '</div></div>' : '');
+  },
+  findings() {
+    const g = {};
+    for (const f of state.scan.findings) (g[f.dimension] ??= []).push(f);
+    const lbl = d => d.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+    return '<h1>Readiness</h1><div class="sub">Can an agent safely work here, and can this run on Cloudflare?</div>' +
+      (state.scan.findings.length
+        ? Object.entries(g).map(([d, fs]) =>
+            '<div class="sect"><h2>' + esc(lbl(d)) + '</h2><div class="card">' + fs.map(fRow).join('') + '</div></div>').join('')
+        : '<div class="card"><div class="empty">Nothing to report.</div></div>');
+  },
+  sessions() {
+    return '<h1>Sessions</h1><div class="sub">Titles and counts only — message contents never leave the transcript.</div>' +
+      listCard(state.workspace.sessions, s =>
+        '<div class="item"><div><div class="nm">' + esc(s.title ?? '(untitled)') + '</div>' +
+        '<div class="ds">' + s.messages + ' messages · ' +
+        esc((s.last_active ?? '').slice(0, 16).replace('T', ' ')) +
+        (s.branch ? ' · ' + esc(s.branch) : '') + '</div></div>' +
+        '<span class="tag">claude --resume ' + esc(s.id.split('-')[0]) + '</span></div>', 'No sessions yet.');
+  },
+  skills() {
+    const w = state.workspace;
+    const named = x => '<div class="item"><div><div class="nm">' + esc(x.name) + '</div>' +
+      (x.description ? '<div class="ds">' + esc(x.description) + '</div>' : '') + '</div>' +
+      '<span class="tag ' + x.scope + '">' + esc(x.scope) + '</span></div>';
+    return '<h1>Skills &amp; extensions</h1><div class="sub"><code>project</code> means it arrived with the repository.</div>' +
+      '<div class="sect"><h2>Skills</h2>' + listCard(w.skills, named, 'No skills.') + '</div>' +
+      '<div class="sect"><h2>Plugins</h2>' + listCard(w.plugins, p =>
+        '<div class="item"><div><div class="nm">' + esc(p.name) + '</div><div class="ds">' +
+        esc(p.marketplace ?? '') + '</div></div><span class="tag">' + esc(p.scope ?? '') + '</span></div>',
+        'No plugins.') + '</div>' +
+      '<div class="sect"><h2>Subagents</h2>' + listCard(w.agents, named, 'No subagents.') + '</div>' +
+      '<div class="sect"><h2>Commands</h2>' + listCard(w.commands, named, 'No custom commands.') + '</div>';
+  },
+  trust() {
+    const w = state.workspace, u = trustCount(w);
+    const row = (x, a, b) => '<div class="item ' + (x.scope === 'project' ? 'danger' : '') + '">' +
+      '<div><div class="nm">' + esc(a) + '</div><div class="ds">' + esc(b) + '</div></div>' +
+      '<span class="tag ' + x.scope + '">' + esc(x.scope) + '</span></div>';
+    return '<h1>Trust</h1><div class="sub">Configuration that executes. <code>project</code> was written by ' +
+      'whoever wrote the repository — not necessarily by you.</div>' +
+      (u ? '<div class="warn"><b>!</b><div><b>' + u + ' item(s) will run when a session starts.</b> ' +
+        'Claude Code loads repository hooks with no trust prompt. Run <code>keel trust</code> to move them aside.</div></div>' : '') +
+      '<div class="sect"><h2>Hooks</h2>' + listCard(w.hooks, h => row(h, h.event, h.command), 'No hooks.') + '</div>' +
+      '<div class="sect"><h2>MCP servers</h2>' +
+        listCard(w.mcp_servers, m => row(m, m.name, m.endpoint ?? ''), 'No MCP servers.') + '</div>';
+  },
+};
+
+function renderDrawer() {
+  if (!state) return;
+  el('main').innerHTML =
+    '<div style="display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap">' +
+    VIEWS.map(v => '<button class="btn ' + (v.id === view ? '' : 'ghost') + '" data-v="' + v.id + '">' +
+      v.label + '</button>').join('') + '</div>' + views[view]();
+  el('main').querySelectorAll('[data-v]').forEach(b =>
+    b.onclick = () => { view = b.dataset.v; renderDrawer(); });
+}
+
+// ── boot ─────────────────────────────────────────────────────────────────────
 async function loadState() {
-  const r = await fetch('/api/state');
-  state = await r.json();
-  document.getElementById('repo').textContent = state.repo;
-  document.getElementById('conns').innerHTML = [
-    ['Claude Code', state.connections.claude],
-    ['GitHub', state.connections.github],
-    ['Cloudflare', state.connections.cloudflare],
-  ].map(([n, on]) => `<div class="conn"><span class="dot ${on ? 'on' : ''}"></span>${n}${on ? '' : ' — not connected'}</div>`).join('');
-  render();
+  state = await (await fetch('/api/state')).json();
+  el('repo').textContent = state.repo;
+  const u = trustCount(state.workspace);
+  const b = el('badge-trust');
+  b.textContent = u;
+  b.classList.toggle('hidden', u === 0);
+  if (!el('drawer').classList.contains('hidden')) renderDrawer();
 }
 
 loadState();
+loadGit();
 loadTree().then(() => {
   // ?file= opens a file directly, which makes a view shareable and a screenshot reproducible.
-  const wanted = new URLSearchParams(location.search).get('file');
-  if (wanted) loadFile(wanted);
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('mode') === 'diff') { mode = 'diff'; syncMode(); }
+  const want = qs.get('file');
+  if (want) open(want);
 });
 </script>
 </body>

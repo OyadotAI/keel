@@ -252,3 +252,197 @@ pub async fn chat(
 
     Sse::new(ReceiverStream::new(rx))
 }
+
+// ── git ──────────────────────────────────────────────────────────────────────
+
+/// One file with uncommitted changes.
+#[derive(Debug, Serialize)]
+pub struct Change {
+    pub path: String,
+    /// Two-character porcelain code, e.g. ` M`, `??`, `A `.
+    pub status: String,
+    /// Human label for the status.
+    pub label: String,
+    pub staged: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GitStatus {
+    pub is_repo: bool,
+    pub branch: Option<String>,
+    pub changes: Vec<Change>,
+}
+
+fn git(root: &Utf8Path, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Uncommitted changes, which after an agent run is the answer to "what did it just do".
+pub fn git_status(root: &Utf8Path) -> GitStatus {
+    let Some(raw) = git(root, &["status", "--porcelain=v1", "-z"]) else {
+        return GitStatus {
+            is_repo: false,
+            branch: None,
+            changes: Vec::new(),
+        };
+    };
+
+    let branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|b| b.trim().to_string());
+
+    // NUL-separated so paths containing spaces or quotes survive intact.
+    let changes = raw
+        .split('\0')
+        .filter(|entry| entry.len() > 3)
+        .map(|entry| {
+            let (status, path) = entry.split_at(2);
+            let staged = !status.starts_with([' ', '?']);
+            Change {
+                path: path.trim_start().to_string(),
+                status: status.to_string(),
+                label: label_for(status).to_string(),
+                staged,
+            }
+        })
+        .collect();
+
+    GitStatus {
+        is_repo: true,
+        branch,
+        changes,
+    }
+}
+
+fn label_for(status: &str) -> &'static str {
+    match status.trim() {
+        "M" | "MM" => "modified",
+        "A" => "added",
+        "D" => "deleted",
+        "R" => "renamed",
+        "??" => "untracked",
+        "C" => "copied",
+        "U" | "UU" => "conflicted",
+        _ => "changed",
+    }
+}
+
+#[derive(Serialize)]
+pub struct DiffResponse {
+    pub path: String,
+    pub hunks: Vec<Hunk>,
+    /// True when the file is untracked, so there is no baseline to diff against.
+    pub untracked: bool,
+}
+
+#[derive(Serialize)]
+pub struct Hunk {
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Serialize)]
+pub struct DiffLine {
+    /// `add`, `del`, or `ctx`.
+    pub kind: &'static str,
+    pub old: Option<u32>,
+    pub new: Option<u32>,
+    pub text: String,
+}
+
+/// Parse `git diff` for one path into hunks the browser can render side by side with line numbers.
+pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
+    // An untracked file has no baseline; show it as entirely added rather than an empty diff.
+    let untracked = git(root, &["ls-files", "--error-unmatch", path]).is_none();
+
+    let raw = if untracked {
+        std::fs::read_to_string(root.join(path))
+            .map(|content| {
+                let n = content.lines().count();
+                format!("@@ -0,0 +1,{n} @@\n{}", content.lines().map(|l| format!("+{l}\n")).collect::<String>())
+            })
+            .unwrap_or_default()
+    } else {
+        git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default()
+    };
+
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let (mut old_no, mut new_no) = (0u32, 0u32);
+
+    for line in raw.lines() {
+        if line.starts_with("@@") {
+            // @@ -old,count +new,count @@
+            let nums: Vec<&str> = line.split(['-', '+', ',', ' ']).filter(|s| !s.is_empty()).collect();
+            old_no = nums.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+            new_no = nums.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+            hunks.push(Hunk {
+                header: line.to_string(),
+                lines: Vec::new(),
+            });
+            continue;
+        }
+        let Some(hunk) = hunks.last_mut() else { continue };
+
+        let (kind, text) = match line.chars().next() {
+            Some('+') => ("add", &line[1..]),
+            Some('-') => ("del", &line[1..]),
+            Some(' ') => ("ctx", &line[1..]),
+            _ => continue,
+        };
+
+        let (old, new) = match kind {
+            "add" => (None, Some(new_no)),
+            "del" => (Some(old_no), None),
+            _ => (Some(old_no), Some(new_no)),
+        };
+        if kind != "add" {
+            old_no += 1;
+        }
+        if kind != "del" {
+            new_no += 1;
+        }
+
+        hunk.lines.push(DiffLine {
+            kind,
+            old,
+            new,
+            text: text.to_string(),
+        });
+    }
+
+    DiffResponse {
+        path: path.to_string(),
+        hunks,
+        untracked,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SaveRequest {
+    pub path: String,
+    pub content: String,
+}
+
+/// Write a file from the editor, bounded to the repository like [`read_file`].
+pub fn write_file(root: &Utf8Path, req: &SaveRequest) -> Result<(), String> {
+    let joined = root.join(&req.path);
+    let root_canonical = root
+        .canonicalize_utf8()
+        .map_err(|_| "repository unavailable".to_string())?;
+
+    // Canonicalise the parent: the file itself may legitimately not exist yet.
+    let parent = joined.parent().ok_or("invalid path")?;
+    let parent_canonical = parent
+        .canonicalize_utf8()
+        .map_err(|_| "no such directory".to_string())?;
+    if !parent_canonical.starts_with(&root_canonical) {
+        return Err("path escapes the repository".to_string());
+    }
+
+    std::fs::write(&joined, &req.content).map_err(|e| e.to_string())
+}
