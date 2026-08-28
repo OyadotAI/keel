@@ -259,7 +259,7 @@ body{margin:0;background:var(--n3);color:var(--n12);
   word-break:break-word;font:10.5px/1.5 var(--mono);color:var(--n11);
   background:var(--n1);border:1px solid var(--n6);border-radius:var(--r1);padding:var(--s2)}
 .rec .line{margin-top:var(--s2)}
-#gke .console,#gke-out .console{margin-top:var(--s3);max-height:240px;overflow:auto;
+#gke .console,.gke-out .console{margin-top:var(--s3);max-height:240px;overflow:auto;
   white-space:pre-wrap;word-break:break-word;font:10.5px/1.5 var(--mono);color:var(--n11);
   background:var(--n1);border:1px solid var(--n6);border-radius:var(--r1);padding:var(--s2)}
 #gke .prow .btn{font-size:10.5px;padding:2px var(--s2);flex:none}
@@ -2572,6 +2572,7 @@ const PANELS={
       '<div class="sub"><span class="livedot"></span>every 10s · <code>'+esc(c.context??'')+
       '</code> · '+c.namespaces+' namespace'+(c.namespaces===1?'':'s')+
       (bad?' · <b style="color:var(--crit)">'+bad+' not ready</b>':' · all ready')+'</div>'+
+      '<div id="gke"></div>'+
       (c.workloads.length
         ? c.workloads.map((x,i)=>'<div class="wl" data-w="'+i+'">'+
             '<div class="prow click">'+
@@ -2580,6 +2581,10 @@ const PANELS={
             '<span class="meta">'+esc(x.namespace)+' · '+x.ready+'/'+x.wanted+'</span></div></div>').join('')
         : '<div class="prow off">No deployments</div>');
     el('a-k8s').onclick=()=>{ clusterState=null; loadCluster(); };
+    // Shown whether or not kubectl is currently connected. Only rendering it when nothing is
+    // reachable meant that once you were on a cluster there was no way to see the others, let
+    // alone move between them.
+    drawGke();
 
     // "2/3 ready" is where the question starts. The answer is in the pods — their phase, their
     // restarts, and whichever of ImagePullBackOff or CrashLoopBackOff is on them.
@@ -2834,8 +2839,8 @@ async function openExternal(url){
  * make and minutes to remove. So it names the cost and asks for the cluster's name typed back,
  * the same shape as deleting a repository.
  */
-async function drawGke(){
-  const host=el('gke'); if(!host) return;
+async function drawGke(hostId){
+  const host=el(hostId??'gke'); if(!host) return;
   let g;
   try{ g=await (await fetch('/api/gcp')).json(); }catch(_){ return; }
 
@@ -2853,10 +2858,10 @@ async function drawGke(){
         (c.context===g.current_context
           ? '<span class="meta">current</span>'
           : '<button class="btn quiet" data-conn="'+i+'">Connect</button>')+'</div>').join('')+
-      '<div id="gke-out"></div>';
+      '<div class="gke-out"></div>';
     host.querySelectorAll('[data-conn]').forEach(b=>b.onclick=()=>{
       const c=g.clusters[+b.dataset.conn];
-      gkeRun('/api/gcp/connect?name='+encodeURIComponent(c.name)+
+      gkeRun(host,'/api/gcp/connect?name='+encodeURIComponent(c.name)+
              '&location='+encodeURIComponent(c.location));
     });
     return;
@@ -2877,7 +2882,7 @@ async function drawGke(){
     '<label>Type the name again to confirm</label>'+
     '<input id="gk-confirm" spellcheck="false" autocomplete="off">'+
     '<div class="acts"><button class="btn" id="gk-go">Create cluster</button></div>'+
-    '<div id="gke-out"></div></div>';
+    '<div class="gke-out"></div></div>';
 
   el('gk-region').querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>
     el('gk-region').querySelectorAll('[data-r]').forEach(x=>
@@ -2886,17 +2891,20 @@ async function drawGke(){
   el('gk-go').onclick=()=>{
     const name=el('gk-name').value.trim();
     const region=el('gk-region').querySelector('[aria-current=true]')?.dataset.r??'us-central1';
-    gkeRun('/api/gcp/create?name='+encodeURIComponent(name)+
+    gkeRun(host,'/api/gcp/create?name='+encodeURIComponent(name)+
            '&region='+encodeURIComponent(region)+
            '&confirm='+encodeURIComponent(el('gk-confirm').value.trim()));
   };
 }
 
-/** Stream a gcloud command into the panel, and re-read the cluster when it finishes. */
-function gkeRun(url){
-  const out=el('gke-out'); if(!out) return;
-  out.innerHTML='<pre class="console" id="gke-log"></pre>';
-  const log=el('gke-log');
+/** Stream a gcloud command into the panel that raised it, and re-read the cluster after.
+ *
+ *  Scoped to a host rather than an id: the picker now appears in two places at once, and two
+ *  elements sharing an id means output landing in whichever the DOM found first. */
+function gkeRun(host,url){
+  const out=host.querySelector('.gke-out'); if(!out) return;
+  out.innerHTML='<pre class="console"></pre>';
+  const log=out.querySelector('.console');
   const write=t=>{ log.textContent+=t+'\n'; log.scrollTop=1e9; };
   const es=new EventSource(url);
   es.addEventListener('line',e=>write(e.data));
@@ -2906,6 +2914,9 @@ function gkeRun(url){
     write('\nDone.');
     clusterState=null;
     await loadCluster();
+    // Refresh whichever surface asked, so the newly connected cluster is marked as current.
+    if(panel==='cluster') PANELS.cluster();
+    else if(el('gke-conn')) drawGke('gke-conn');
   });
   es.onerror=()=>{ es.close(); write('\nThe connection dropped.'); };
 }
@@ -3071,6 +3082,12 @@ function drawConnections(){
     if(t) h+=cliBlock(t);
   }
 
+  // The kubectl card said "point kubectl at one — `gcloud container clusters get-credentials
+  // <name>`" and offered a terminal. That is a command to compose, from a name you have to already
+  // know, for a thing Google can simply list. The list goes here.
+  if(byId('kubectl')?.installed) h+='<div class="field"><label>Clusters</label>'+
+    '<div id="gke-conn"></div></div>';
+
   const aws=byId('aws');
   if(aws){
     // The profile list is the whole state of AWS auth: one that exists can be signed into, and
@@ -3105,6 +3122,8 @@ function drawConnections(){
     '<div class="line"><button class="btn" id="op-go">Open</button></div><div id="op-msg"></div></div>'+
     '<div id="repos"></div>';
   el('side').innerHTML=h;
+  if(el('gke-conn')) drawGke('gke-conn');
+
   const all=el('cli-all');
   if(all) all.onclick=()=>{
     all.disabled=true;
