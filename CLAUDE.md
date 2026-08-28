@@ -89,10 +89,16 @@ first `make check`.
 
 ## The editor
 
-Monaco is vendored in `ui/vendor` and embedded with `rust-embed`. It is the full `min/vs` bundle on
-purpose: the AMD graph in `editor/editor.main.js` depends on `language/*`, and trimming those
-modules makes the loader fail silently with a blank editor and nothing in the console. If you need
-to shrink it, drop files under `assets/*.worker.js` (language services) — never `language/`.
+Monaco is vendored in `ui/vendor/vs` (14 MB) and embedded with `rust-embed`. It is the whole build
+on purpose: `editor/editor.main.js` is a 2 KB AMD entry that pulls in `basic-languages/`,
+`language/` and a hashed `editor.api-*.js` chunk, and trimming any of those makes the loader fail
+silently — a blank editor, nothing in the console. That happened once.
+
+The layout is a Vite build with content-hashed chunk names, not the classic `min/vs` tree, so the
+public API lives in `editor.api-<hash>.js` rather than anywhere predictable. Grep the whole
+directory rather than one file when checking whether an API exists — and do check. This build has
+`getLineChanges` and `revealLineNearTop`; it does not have `getDiffComputationResult`, which newer
+Monaco does.
 
 ## Conventions
 

@@ -1670,7 +1670,7 @@ async function draw(){
   }
   if(view==='diff'){ await drawDiff(tab); return; }
 
-  if(monDiff){ monDiff.dispose(); monDiff=null; el('surface').innerHTML=''; }
+  if(monDiff){ monDiff.dispose(); monDiff=null; diffNav=null; el('surface').innerHTML=''; }
   if(!mon||!ready){ el('surface').innerHTML=''; await initMonaco(); }
 
   el('crumb').textContent=tab.path+(tab.truncated?'  ·  truncated':'');
@@ -1688,18 +1688,68 @@ async function drawDiff(tab){
   await new Promise(res=>require(['vs/editor/editor.main'],res));
   defineTheme();
   if(monDiff){ monDiff.dispose(); monDiff=null; }
+  diffNav=null;
   monDiff=monaco.editor.createDiffEditor(el('surface'),{
     ...EDITOR_OPTS, readOnly:true, renderSideBySide:false, ignoreTrimWhitespace:false,
-    renderOverviewRuler:false, minimap:{enabled:false},
+    // The ruler is the map: on a thousand-line file it is the only thing that says the changes are
+    // three quarters of the way down. It was off, so the answer to "where is it" was "scroll".
+    renderOverviewRuler:true, minimap:{enabled:false},
   });
   const lang=langOf(tab.path);
   monDiff.setModel({
     original: monaco.editor.createModel(orig.content,lang),
     modified: modelFor(tab.path,tab.content),
   });
-  el('crumb').textContent=tab.path+(orig.content?'  ·  vs HEAD':'  ·  new file');
+
+  const label=tab.path+(orig.content?'  ·  vs HEAD':'  ·  new file');
+  el('crumb').textContent=label;
+
+  // Opening a diff at line 1 asks the reader to go and find the thing they opened it for. The diff
+  // is computed asynchronously, so the jump waits for it rather than guessing.
+  let changes=[], at=0;
+  const goTo=i=>{
+    if(!changes.length||!monDiff) return;
+    at=(i+changes.length)%changes.length;
+    const c=changes[at];
+    const line=Math.max(1,c.modifiedStartLineNumber||c.modifiedEndLineNumber||1);
+    const ed=monDiff.getModifiedEditor();
+    // Near the top rather than centred: a change is read downwards, so the room belongs below it.
+    ed.revealLineNearTop(line, monaco.editor.ScrollType.Immediate);
+    ed.setPosition({lineNumber:line,column:1});
+    el('crumb').textContent=label+'  ·  change '+(at+1)+' of '+changes.length;
+  };
+
+  // `getLineChanges` is the surface this vendored build actually exposes — checked, rather than
+  // assumed: `getDiffComputationResult` is in newer Monaco and is not in this bundle at all.
+  // Called through `?.` so a future re-vendor that drops it degrades to no jump rather than a
+  // thrown error inside a diff view.
+  const lineChanges=()=>monDiff.getLineChanges?.() ?? [];
+
+  let landed=false;
+  monDiff.onDidUpdateDiff(()=>{
+    changes=lineChanges();
+    if(!changes.length) return;
+    // Only the first computation moves the view. Monaco recomputes as the file is edited, and a
+    // diff that yanks you back to the top on every keystroke is worse than one that never moved.
+    if(landed){ el('crumb').textContent=label+'  ·  '+changes.length+' change'+
+      (changes.length===1?'':'s'); return; }
+    landed=true;
+    goTo(0);
+  });
+
+  diffNav=goTo;
+  diffAt=()=>at;
   drawStatus();
 }
+
+/* F7 and Shift+F7, which is what every editor uses for this, and reachable while the diff has
+   focus rather than only from a button nobody finds. */
+let diffNav=null, diffAt=()=>0;
+addEventListener('keydown',e=>{
+  if(e.key!=='F7'||!diffNav||view!=='diff') return;
+  e.preventDefault();
+  diffNav(diffAt()+(e.shiftKey?-1:1));
+},true);
 
 async function save(){
   const tab=tabs.find(t=>t.path===active);
@@ -3208,7 +3258,7 @@ const SET_PANES={
       '<h2>Keyboard</h2>'+
       ['⌘P  find a file','⌘⇧P  commands','⌘B  sidebar','⌃`  terminal','⌘⇧A  agent panel',
        '⌘S  save','⌘,  settings','⌘K W  close tab','⌘K ←/→  switch tab','⌘I  explain the selection',
-       'F2  rename',(MAC?'⌘⌫':'Del')+'  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
+       'F7  next change','F2  rename',(MAC?'⌘⌫':'Del')+'  move to Trash','⇧⇥  Plan / Auto','esc  interrupt',
        'right-click  files, tabs and the editor all have menus']
         .map(k=>'<div class="pref"><div class="lbl"><b style="font-family:var(--mono);font-size:12px">'+
           esc(k)+'</b></div></div>').join('')+
