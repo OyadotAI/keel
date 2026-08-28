@@ -475,6 +475,33 @@ async fn run_install(
         .unwrap_or(-1)
 }
 
+/// What is on this machine, for the agent's system prompt.
+///
+/// Returns (package manager, present, absent). The agent cannot see any of this: it discovers a
+/// missing tool by running something that fails, and then either works around the gap or gives up
+/// — both of which are worse than installing it, which it will not think to do if it does not know
+/// there is a package manager.
+pub fn toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+    let manager = ["brew", "apt-get", "dnf"]
+        .into_iter()
+        .find(|m| exists(m));
+
+    // Runtimes and version-control the agent reaches for constantly, alongside the CLIs Keel
+    // manages. `git` is here because a repository without it changes what the agent can do.
+    let extra = ["git", "node", "npm", "bun", "cargo", "go", "python3", "uv"];
+
+    let mut present = Vec::new();
+    let mut absent = Vec::new();
+    for name in TOOLS.iter().map(|t| t.binary).chain(extra) {
+        if exists(name) {
+            present.push(name)
+        } else {
+            absent.push(name)
+        }
+    }
+    (manager, present, absent)
+}
+
 /// Status of every CLI Keel knows about.
 pub async fn status() -> axum::Json<Vec<ToolStatus>> {
     let mut out = Vec::new();
