@@ -30,3 +30,6 @@ open.workspace = true
 ignore.workspace = true
 keyring.workspace = true
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+
+[dev-dependencies]
+tempfile = "3"

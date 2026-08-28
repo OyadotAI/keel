@@ -10,6 +10,7 @@ mod clitools;
 mod plugins;
 mod project;
 mod render;
+mod verify;
 mod serve;
 
 use anyhow::{Context, Result};

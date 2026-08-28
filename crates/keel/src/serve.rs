@@ -81,6 +81,8 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
         .route("/api/git/status", get(api_git_status))
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/save", axum::routing::post(api_save))
+        .route("/api/verify", get(crate::verify::run))
+        .route("/api/verify/plan", get(crate::verify::plan))
         .route("/api/connections", get(crate::connect::status))
         .route("/api/connect/github", axum::routing::post(crate::connect::connect_github))
         .route("/api/connect/cloudflare", axum::routing::post(crate::connect::connect_cloudflare))
