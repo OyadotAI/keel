@@ -16,6 +16,7 @@ mod gui;
 mod infra;
 mod mcp;
 mod names;
+mod path;
 mod permissions;
 mod plugins;
 mod prefs;
@@ -156,6 +157,10 @@ fn main() -> Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
+
+    // Before anything is spawned. A Dock launch inherits launchd's PATH, which has none of the
+    // places these tools install to, and every `Command::new` after this point depends on it.
+    path::adopt_shell_path();
 
     // macOS hands a bundled process a `-psn_0_…` serial number on some launches. It is not an
     // argument anyone typed, and clap would reject it and take the application down on start.

@@ -796,6 +796,11 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
   font:12.5px/1.6 var(--sans);color:var(--n11)}
 .wfix code{background:var(--n1)}
 .wfix .wact{margin-top:var(--s3);display:flex;gap:var(--s2)}
+
+/* Not hidden — dimmed and inert. Removing the section entirely would leave the screen looking
+   like a setup wizard with one step, rather than like a thing with a next step in it. */
+.wstep.waiting .wgrid{opacity:.4;pointer-events:none;filter:saturate(.4)}
+.wstep.waiting .wgrid button{cursor:default}
 .wfix .console{margin-top:var(--s3);max-height:200px;overflow:auto;
   font:11px/1.5 var(--mono);color:var(--n11);background:var(--n1);
   border-radius:var(--r1);padding:var(--s3);white-space:pre-wrap}
@@ -1291,7 +1296,7 @@ kbd{font:10px var(--mono);background:var(--n4);border:1px solid var(--n6);
 
     <section class="wstep" id="w-claude"></section>
 
-    <section class="wstep">
+    <section class="wstep" id="w-open">
       <div class="wh"><h2>Open something</h2></div>
       <div class="wgrid">
         <button data-w="open"><b>Open a folder</b><span>A repository you already have. Keel scans
@@ -5553,13 +5558,17 @@ async function drawWelcome(){
     const write=t=>{ log.textContent+=t+'\n'; log.scrollTop=1e9; };
     es.addEventListener('line',e=>write(e.data));
     es.addEventListener('fatal',e=>{ write(e.data); es.close(); install.disabled=false; });
-    es.addEventListener('done',e=>{
+    es.addEventListener('done',async e=>{
       es.close();
       install.disabled=false;
-      // Re-read rather than assume: the installer can succeed and still leave `claude` off PATH
-      // for this process, and claiming otherwise is the failure people would find later.
-      if(e.data==='0') drawWelcome();
-      else write('\nExited '+e.data+'.');
+      if(e.data!=='0'){ write('\nExited '+e.data+'.'); return; }
+      // Re-read rather than assume. An installer can succeed and still leave the binary somewhere
+      // this process cannot see — which is exactly what used to happen, and it looked like the
+      // button had done nothing at all.
+      const now=await fetch('/api/claude').then(r=>r.json()).catch(()=>({}));
+      if(now.installed){ drawWelcome(); return; }
+      write('\nInstalled, but Keel still cannot see it. Quit and reopen Keel — it reads your '+
+            'shell\u2019s PATH at startup.');
     });
   };
 
@@ -5616,6 +5625,15 @@ async function drawWelcome(){
     row(!!c.authenticated,'Signed in',
         c.authenticated?esc(c.account??'')+(c.plan?' · '+esc(c.plan):''):'no account on this machine')+
     fix;
+
+  // Opening a project before Claude Code works gets you a readiness scan and a chat box that
+  // cannot answer. Offering it anyway is offering a dead end, so the section waits.
+  const ready=c.installed&&c.authenticated;
+  el('w-open').classList.toggle('waiting',!ready);
+  el('w-open').querySelector('.wh').innerHTML=ready
+    ? '<h2>Open something</h2>'
+    : '<h2>Open something</h2><span class="note2">After Claude Code — Keel has nothing to drive '+
+      'until then.</span>';
 }
 
 function leaveWelcome(){
