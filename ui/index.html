@@ -288,9 +288,14 @@ body{margin:0;background:var(--n3);color:var(--n12);
 .avhead{display:flex;align-items:center;gap:var(--s2);padding:var(--s3) var(--s4);
   border-bottom:1px solid var(--n6);background:var(--n2);position:sticky;top:0;z-index:3}
 .avhead .seg2{display:flex;gap:2px}
-.avhead .seg2 button{all:unset;cursor:pointer;padding:3px var(--s3);border-radius:var(--r1);
-  font:11px var(--mono);color:var(--n9)}
+.avhead .seg2 button{all:unset;cursor:pointer;display:flex;align-items:center;gap:5px;
+  padding:3px var(--s3);border-radius:var(--r1);font:11px var(--mono);color:var(--n9)}
 .avhead .seg2 button[aria-current=true]{background:var(--n5);color:var(--n12)}
+.avhead .seg2 .c{font-variant-numeric:tabular-nums;color:var(--n9)}
+.avhead .seg2 button[aria-current=true] .c{color:var(--n11)}
+.avhead .seg2 .c:empty{display:none}
+.avhead .seg2 .f{font-variant-numeric:tabular-nums;color:var(--crit)}
+.avhead .seg2 .f:not(.on){display:none}
 .avhead .sp{flex:1}
 .avhead .n2{font:11px var(--mono);color:var(--n9);font-variant-numeric:tabular-nums}
 .avhead button.act{all:unset;cursor:pointer;font:10px var(--mono);color:var(--n9)}
@@ -4095,11 +4100,14 @@ const paneHidden=()=>el('agent-pane').classList.contains('hidden');
 
 /** Just the counts, so appending one block does not cost a rebuild of all of them. */
 function avCount(){
-  const n=el('av-n'); if(!n) return;
+  const nc=el('av-nc'); if(!nc) return;
   const fails=agentActs.filter(a=>a.err).length;
-  n.textContent=agentView==='console'
-    ? agentActs.length+' call'+(agentActs.length===1?'':'s')+(fails?' · '+fails+' failed':'')
-    : agentEdits.size+' file'+(agentEdits.size===1?'':'s');
+  nc.textContent=agentActs.length||'';
+  // A failure count is the one number worth its own colour: it is the reason to look.
+  const nf=el('av-nf');
+  nf.textContent=fails?'\u2715'+fails:'';
+  nf.classList.toggle('on',fails>0);
+  el('av-nd').textContent=agentEdits.size||'';
 }
 
 /** A tool call started. */
@@ -4183,18 +4191,20 @@ function fillBlock(n,act){
 function drawAgent(){
   const pane=el('agent-pane');
   if(pane.classList.contains('hidden')) return;
-  const fails=agentActs.filter(a=>a.err).length;
+  // The counts belong on the tabs. One shared number in the corner told you how much of whichever
+  // view you were already looking at — and said nothing about the one you were not, which is the
+  // only reason to put a number there at all.
   pane.innerHTML=
     '<div class="avhead"><div class="seg2">'+
-      '<button data-av="console" aria-current="'+(agentView==='console')+'">Console</button>'+
-      '<button data-av="changes" aria-current="'+(agentView==='changes')+'">Changes</button>'+
+      '<button data-av="console" aria-current="'+(agentView==='console')+'">Console'+
+        '<span class="c" id="av-nc"></span><span class="f" id="av-nf"></span></button>'+
+      '<button data-av="changes" aria-current="'+(agentView==='changes')+'">Changes'+
+        '<span class="c" id="av-nd"></span></button>'+
     '</div><span class="sp"></span>'+
-    '<span class="n2" id="av-n">'+(agentView==='console'
-      ? agentActs.length+' call'+(agentActs.length===1?'':'s')+(fails?' · '+fails+' failed':'')
-      : agentEdits.size+' file'+(agentEdits.size===1?'':'s'))+'</span>'+
     '<button class="act" id="av-clear">clear</button>'+
     '<button class="act" id="av-hide" title="Hide  \u2318\u21e7E">\u00d7</button></div>'+
     '<div class="avbody" id="av-body"></div>';
+  avCount();
 
   el('av-hide').onclick=()=>toggleAgentPane(false);
   pane.querySelectorAll('[data-av]').forEach(b=>b.onclick=()=>{
