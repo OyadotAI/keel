@@ -13,3 +13,7 @@ ui/node_modules/
 
 # SwiftPM's build directory: four thousand files, and the Changes panel counts every one of them.
 app/.build/
+
+# Sparkle command-line tools, fetched by make sparkle-tools
+packaging/sparkle/
+.env

@@ -139,7 +139,7 @@ struct QuestionCard: View {
                 VStack(alignment: .leading, spacing: K.S.xs) {
                     Text(q.text).font(K.F.body).foregroundStyle(K.C.text)
                         .fixedSize(horizontal: false, vertical: true)
-                    ForEach(Array(q.options.enumerated()), id: \.element) { i, o in
+                    ForEach(Array(q.options.enumerated()), id: \.offset) { i, o in
                         let on = chosen[q.id, default: []].contains(o)
                         Button {
                             if q.multiSelect {

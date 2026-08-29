@@ -108,6 +108,11 @@ enum Command {
         #[arg(long)]
         exit_with_parent: bool,
 
+        /// Report panics to Sentry. Passed by the app from its own configuration, so the
+        /// daemon reports under the same key with `component=daemon`.
+        #[arg(long)]
+        sentry_dsn: Option<String>,
+
         /// Reopen the last project instead of reading `path`.
         ///
         /// For a GUI launch, which has no working directory worth inferring a project from — from
@@ -212,8 +217,25 @@ fn main() -> Result<()> {
             port,
             no_open,
             exit_with_parent,
+            sentry_dsn,
             resume_last,
         } => {
+            // Held for the life of the process: dropping the guard flushes and stops reporting.
+            let _sentry = sentry_dsn.filter(|d| !d.is_empty()).map(|dsn| {
+                let guard = sentry::init((
+                    dsn,
+                    sentry::ClientOptions {
+                        release: Some(format!("keel@{}", env!("CARGO_PKG_VERSION")).into()),
+                        ..Default::default()
+                    },
+                ));
+                sentry::configure_scope(|s| {
+                    s.set_tag("app", "keel");
+                    s.set_tag("component", "daemon");
+                    s.set_tag("version", env!("CARGO_PKG_VERSION"));
+                });
+                guard
+            });
             if exit_with_parent {
                 watch_parent();
             }

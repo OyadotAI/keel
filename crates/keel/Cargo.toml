@@ -9,6 +9,7 @@ name = "keel"
 path = "src/main.rs"
 
 [dependencies]
+sentry.workspace = true
 keel-harness.workspace = true
 keel-mcp.workspace = true
 keel-scanner.workspace = true

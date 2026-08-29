@@ -52,6 +52,8 @@ private struct LaneRow: View {
     @State private var finishing = false
     @State private var message = ""
     @State private var discarding: String?
+    @State private var renaming = false
+    @State private var newTitle = ""
 
     private var selected: Bool { lanes.activeID == lane.id }
     private var checkout: Wire.Worktree? { lanes.worktree(of: lane) }
@@ -79,14 +81,30 @@ private struct LaneRow: View {
                 activityLine
                 if let wt = checkout { branchLine(wt) }
             }
+            if hovering {
+                Button { newTitle = lane.title; renaming = true } label: {
+                    Image(systemName: "pencil").font(.system(size: 10))
+                        .frame(width: 16, height: 16).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(K.C.faint)
+                .hint("Rename this lane (double-click also works)")
+            }
             if hovering && lanes.lanes.count > 1 && lane.worktree == nil {
                 CloseButton(size: 10) { lanes.close(lane) }
                     .help("Close this lane")
             }
         }
+        .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
+        .alert("Rename lane", isPresented: $renaming) {
+            TextField("Name", text: $newTitle)
+            Button("Rename") { lane.rename(to: newTitle) }
+            Button("Cancel", role: .cancel) {}
+        }
         .contextMenu {
+            Button("Rename…") { newTitle = lane.title; renaming = true }
+            Divider()
             if lane.worktree != nil {
-                Button("Finish lane — merge into \(lanes.active?.branch ?? "the project")…") {
+                Button("Finish lane — merge into \(lanes.active.branch ?? "the project")…") {
                     message = lane.title
                     finishing = true
                 }

@@ -66,6 +66,18 @@ else
   echo "        --apple-id <your-apple-id> --team-id <team> --password <app-specific-password>"
 fi
 
+# The appcast Sparkle reads. `generate_appcast` signs the image with the EdDSA key in the
+# keychain and writes appcast.xml beside it; `make release` uploads both to the GitHub release
+# the feed URL points at.
+if [ -x packaging/sparkle/bin/generate_appcast ]; then
+  echo "==> writing the appcast"
+  rm -f dist/appcast.xml
+  packaging/sparkle/bin/generate_appcast \
+    --download-url-prefix "https://github.com/OyadotAI/keel/releases/download/v$version/" \
+    -o dist/appcast.xml dist/ >/dev/null
+  echo "    dist/appcast.xml"
+fi
+
 echo
 echo "    dist/Keel.dmg"
 spctl --assess --type open --context context:primary-signature -v dist/Keel.dmg 2>&1 | sed 's/^/    /' || true

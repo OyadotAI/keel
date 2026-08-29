@@ -102,8 +102,14 @@ final class Lanes {
         activeID = restored[min(saved.active, restored.count - 1)].id
     }
 
-    var active: SessionModel? {
-        lanes.first { $0.id == activeID } ?? lanes.first
+    /// Never nil: `close` refills an emptied list, and the window reads this on every pass.
+    var active: SessionModel {
+        if let found = lanes.first(where: { $0.id == activeID }) ?? lanes.first { return found }
+        let m = SessionModel(client: client, port: port)
+        m.lanes = self
+        lanes = [m]
+        activeID = m.id
+        return m
     }
 
     /// How many lanes are doing something right now — the number the window title and the Dock
@@ -175,7 +181,10 @@ final class Lanes {
         let m = SessionModel(client: client, port: port, sessionId: id)
         m.lanes = self
         m.isolated = isolated
-        if let a = active { m.adopt(project: a) }
+        Telemetry.track("lane_created", ["isolated": isolated, "resumed": id != nil])
+        // From whichever lane exists, not from `active` — which would refill an emptied list
+        // with a lane of its own on the way to making this one.
+        if let a = lanes.first(where: { $0.id == activeID }) ?? lanes.first { m.adopt(project: a) }
         lanes.append(m)
         activeID = m.id
         return m
@@ -211,7 +220,7 @@ final class Lanes {
     /// Nothing retried, so the app sat on an empty lane with a nameless project until you opened
     /// something by hand.
     func refreshShared() async {
-        guard let a = active else { return }
+        let a = active
 
         for attempt in 0..<40 where a.repoPath.isEmpty {
             await a.refreshState()

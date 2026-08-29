@@ -113,6 +113,29 @@ by trust, because a question is not a permission. Every turn is preceded by a sn
 snapshots first so it can be undone. Tokens and context size come from the stream's own `usage`
 fields; Keel makes no usage API calls and shows tokens rather than a guessed percentage.
 
+## Shipping it: never crash, know when it does, update itself
+
+Testers crash the app on machines with no logs. Three answers, in order of how little they need:
+a bar on the next launch that offers the `.ips` macOS already wrote (`Crashes.swift`); Sentry in
+both halves — the app via `sentry-cocoa`, the daemon via `keel serve --sentry-dsn` — tagged
+`app=keel`, `component=app|daemon`, sharing A2ABase's project; PostHog for usage counts, same
+project, same tag. Both sit behind `Telemetry.swift` so the two switches in Settings › Privacy
+actually silence them, and no call site ever passes a prompt, path or repository name. Keys are
+read at build time by `packaging/build-app.sh` from the environment or a gitignored `.env`
+(`KEEL_SENTRY_DSN`, `KEEL_POSTHOG_KEY/HOST`); PostHog falls back to A2ABase's public client key.
+A build with no key has that SDK off.
+
+Updates are Sparkle. `make sparkle-keys` once per release machine (private key in the keychain,
+public key read by the build); `make release` builds, signs, notarises, writes `appcast.xml` and
+publishes a GitHub release — the feed is `releases/latest/download/appcast.xml`, so nothing is
+hosted. The version is the workspace version in `Cargo.toml`; bump it before `make release`.
+
+Two rules the crashes taught: **WebKit's `takeSnapshot` returns nil for a rect outside the view
+and its async import force-unwraps it** — always the completion form, always clamped to bounds
+(`Preview.swift`); and **a `GeometryReader` proposes zero mid-animation** — never divide by a
+size, never draw until there is room. `RenderTests` lays every pane out at 0×0, 1×1 and 2×400 so
+the next one of these fails a test instead of a tester.
+
 ## Design turns and the live canvas
 
 Click an element in the preview and the turn that follows carries a **pixel column**: the same rect

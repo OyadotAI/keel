@@ -16,6 +16,9 @@ final class Turn: Identifiable {
 
     /// Prose from the agent, accumulated from `text_delta`s.
     var text = ""
+    /// Whether any of it arrived as deltas; when none did, the whole `assistant` message is
+    /// the only copy and is taken instead.
+    var streamedText = false
     var thinking = ""
 
     /// Files written, in the order first touched. Order matters: it is the shape of the work.

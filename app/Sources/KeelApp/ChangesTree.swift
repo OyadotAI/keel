@@ -16,7 +16,8 @@ enum ChangeTree {
         let isDir: Bool
         var children: [Node] = []
         var change: Wire.Change?
-        var id: String { path }
+        /// A collapsed directory can share its path with a file sibling; the kind keeps them apart.
+        var id: String { (isDir ? "d:" : "f:") + path }
 
         init(name: String, path: String, isDir: Bool, change: Wire.Change? = nil) {
             self.name = name
@@ -85,7 +86,6 @@ enum ChangeTree {
 
 struct ChangesTreeView: View {
     let model: SessionModel
-    @State private var openingPR = false
 
     var body: some View {
         if !model.isRepo {
@@ -99,7 +99,7 @@ struct ChangesTreeView: View {
     private var repoContents: some View {
         // First, not last. Shipping the change is what the panel is for; the file list is how you
         // check it before you do. A quiet text link under forty rows is a link nobody finds.
-        Button { openingPR = true } label: {
+        Button { model.sheet = .pr } label: {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "arrow.triangle.pull").font(.system(size: 11, weight: .medium))
                 VStack(alignment: .leading, spacing: 0) {
@@ -121,9 +121,6 @@ struct ChangesTreeView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, K.S.sm)
         .padding(.bottom, K.S.sm)
-        .sheet(isPresented: $openingPR) {
-            PullRequest(model: model) { openingPR = false }
-        }
 
         if let err = model.lastError {
             Text(err).font(K.F.micro).foregroundStyle(K.C.del)
@@ -269,6 +266,7 @@ struct PullRequest: View {
     let model: SessionModel
     let done: () -> Void
 
+    @State private var attempt = 0
     @State private var title = ""
     @State private var body_ = ""
     @State private var draft = false
@@ -328,6 +326,7 @@ struct PullRequest: View {
         .padding(K.S.xl)
         .frame(width: 520)
         .background(K.C.bg)
+        .task(id: attempt) { if attempt > 0 { await run() } }
     }
 
     private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
@@ -353,12 +352,17 @@ struct PullRequest: View {
         }
     }
 
+    /// Bumped by Create. The work runs in `.task(id:)`, so closing the sheet cancels it
+    /// rather than leaving a stream writing into state that no longer has a view.
     private func create() {
+        attempt += 1
+    }
+
+    private func run() async {
         running = true
         log = ""
         failed = false
-        Task {
-            defer { running = false }
+        defer { running = false }
             do {
                 for try await e in model.client.events("/api/github/pr", [
                     "title": title, "body": body_, "draft": draft ? "true" : "false",
@@ -378,15 +382,17 @@ struct PullRequest: View {
                         failed = true
                     case "done":
                         if e.data != "0" { failed = true }
+                        Telemetry.track("pr_opened", ["ok": e.data == "0", "draft": draft])
                         await model.refreshGit()
                     default: break
                     }
                 }
+            } catch is CancellationError {
+                // The sheet closed. Nothing to say.
             } catch {
                 log += error.localizedDescription
                 failed = true
             }
-        }
     }
 }
 

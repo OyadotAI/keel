@@ -19,6 +19,17 @@
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>
   </dict>
+  <!-- Written by packaging/build-app.sh from the environment. Empty means off. -->
+  <key>KeelSentryDSN</key><string>__SENTRY_DSN__</string>
+  <key>KeelPostHogKey</key><string>__POSTHOG_KEY__</string>
+  <key>KeelPostHogHost</key><string>__POSTHOG_HOST__</string>
+  <!-- Sparkle. The feed is the latest GitHub release's appcast; the public key pairs with the
+       private one on the release machine's keychain. Empty key = updater never starts. -->
+  <key>SUFeedURL</key><string>https://github.com/OyadotAI/keel/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>__SU_PUBLIC_KEY__</string>
+  <key>SUEnableInstallerLauncherService</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
   <key>NSHumanReadableCopyright</key><string>Keel</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>

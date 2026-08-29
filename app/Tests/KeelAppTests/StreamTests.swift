@@ -499,3 +499,36 @@ final class LongTextTests: XCTestCase {
         XCTAssertEqual(m.prompt, "just a sentence")
     }
 }
+
+// MARK: - Paragraphs
+
+@MainActor
+final class ParagraphTests: XCTestCase {
+    private func model() -> SessionModel { SessionModel(client: Client(port: 0)) }
+    private func feed(_ json: String, _ m: SessionModel, _ t: Turn) { m.record(Data(json.utf8), into: t) }
+
+    /// A second text block — after a tool call — starts a new paragraph, not a new word on the
+    /// end of the old one.
+    func testANewTextBlockIsANewParagraph() {
+        let m = model(), t = Turn(prompt: "hi")
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Let me look."}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use"}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done."}}}"#, m, t)
+        XCTAssertEqual(t.text, "Let me look.\n\nDone.")
+    }
+
+    /// Without partial messages, the whole assistant message is the only copy of the prose.
+    func testWholeMessagesAreTakenWhenNothingStreamed() {
+        let m = model(), t = Turn(prompt: "hi")
+        feed(#"{"type":"assistant","message":{"content":[{"type":"text","text":"First."}]}}"#, m, t)
+        feed(#"{"type":"assistant","message":{"content":[{"type":"text","text":"Second."}]}}"#, m, t)
+        XCTAssertEqual(t.text, "First.\n\nSecond.")
+        // But when deltas streamed it, the whole message is not appended a second time.
+        let t2 = Turn(prompt: "hi")
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Streamed."}}}"#, m, t2)
+        feed(#"{"type":"assistant","message":{"content":[{"type":"text","text":"Streamed."}]}}"#, m, t2)
+        XCTAssertEqual(t2.text, "Streamed.")
+    }
+}

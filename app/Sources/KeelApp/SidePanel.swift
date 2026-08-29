@@ -3,7 +3,7 @@ import SwiftUI
 /// The panel the activity rail opens. One surface, five contents.
 struct SidePanel: View {
     let panel: SessionWindow.Panel
-    let model: SessionModel
+    @Bindable var model: SessionModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +33,28 @@ struct SidePanel: View {
             }
         }
         .background(K.C.surface)
+        // Every sheet the panels open, anchored here on a view that is never recycled.
+        .sheet(item: $model.sheet) { which in
+            switch which {
+            case .pr:
+                PullRequest(model: model) { model.sheet = nil }
+            case .skills:
+                SkillCatalog(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState(); await model.refreshSuggestions() }
+                }
+            case .subagent:
+                NewSubagent(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState() }
+                }
+            case .mcp:
+                AddMCP(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState() }
+                }
+            }
+        }
     }
 
     private var count: String? {

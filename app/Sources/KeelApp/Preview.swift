@@ -104,9 +104,24 @@ struct PreviewPane: NSViewRepresentable {
         // coordinator that owns it lends the model both. Cleared when the pane goes away, which is
         // what makes an un-photographable comparison report `unstable` instead of passing.
         let coordinator = context.coordinator
-        model.resnapshot = { [weak coordinator] rect in await coordinator?.snapshot(rect) }
-        model.canvas = { [weak coordinator] message in coordinator?.send(message) }
+        let model = self.model
+        // Off the update pass: writing observed state while SwiftUI is installing the view is
+        // an invalidation loop, and one it does not always survive.
+        Task { @MainActor in
+            model.resnapshot = { [weak coordinator] rect in await coordinator?.snapshot(rect) }
+            model.canvas = { [weak coordinator] message in coordinator?.send(message) }
+        }
         return view
+    }
+
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        let model = coordinator.model
+        Task { @MainActor in
+            model.resnapshot = nil
+            model.canvas = nil
+        }
+        view.navigationDelegate = nil
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "keel")
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
@@ -124,7 +139,8 @@ struct PreviewPane: NSViewRepresentable {
         // the page to load again, which is what everyone pressing it meant.
         if context.coordinator.reloaded != model.reloadTick {
             context.coordinator.reloaded = model.reloadTick
-            model.previewProblem = nil
+            let model = self.model
+            Task { @MainActor in model.previewProblem = nil }
             view.reload()
         }
 
@@ -210,12 +226,24 @@ struct PreviewPane: NSViewRepresentable {
             }
         }
 
-        /// A rect of the page, as it is right now.
+        /// A rect of the page, as it is right now — or nothing, never a trap.
+        ///
+        /// Two things about `takeSnapshot` that crashed the app on other people's machines:
+        /// its result is declared `_Nullable` rather than `_Nullable_result`, so the async
+        /// import is a non-optional `NSImage` and the generated thunk force-unwraps the nil
+        /// WebKit hands back; and WebKit hands back nil for any rect outside the view's bounds,
+        /// which a viewport-relative rect from a scrolled page routinely is. So: the completion
+        /// form, through our own continuation, on a rect clamped to the bounds.
         func snapshot(_ rect: Picked.Rect) async -> NSImage? {
-            guard let web, rect.width > 1, rect.height > 1 else { return nil }
+            guard let web else { return nil }
+            let wanted = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+            let clamped = wanted.intersection(web.bounds)
+            guard !clamped.isNull, clamped.width > 1, clamped.height > 1 else { return nil }
             let config = WKSnapshotConfiguration()
-            config.rect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
-            return try? await web.takeSnapshot(configuration: config)
+            config.rect = clamped
+            return await withCheckedContinuation { (k: CheckedContinuation<NSImage?, Never>) in
+                web.takeSnapshot(with: config) { image, _ in k.resume(returning: image) }
+            }
         }
 
         /// The before image, cropped to the element.
@@ -278,13 +306,21 @@ struct PreviewSurface: View {
                 // into the pane. The pane is 340–720pt, so a responsive site was correctly
                 // rendering its phone layout — and there was no way to ask for anything else.
                 GeometryReader { geo in
-                    let target = model.previewWidth.points
-                    let scale = min(1, (geo.size.width - 2) / target)
-                    PreviewPane(url: url, model: model, picking: $model.picking)
-                        .frame(width: target, height: geo.size.height / scale)
-                        .scaleEffect(scale, anchor: .top)
-                        .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
-                        .clipped()
+                    // A zero-width proposal arrives on the first layout and mid-animation. It
+                    // made `scale` zero, the height infinite, and the layer geometry invalid —
+                    // the crash on the way into the Designer. Nothing is drawn until there is
+                    // room to draw it in, and the scale never reaches zero.
+                    if geo.size.width > 8, geo.size.height > 8 {
+                        let target = model.previewWidth.points
+                        let scale = max(0.05, min(1, (geo.size.width - 2) / target))
+                        PreviewPane(url: url, model: model, picking: $model.picking)
+                            .frame(width: target, height: geo.size.height / scale)
+                            .scaleEffect(scale, anchor: .top)
+                            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                            .clipped()
+                    } else {
+                        Color.clear
+                    }
                 }
                 .background(K.C.well)
             } else if starting {
