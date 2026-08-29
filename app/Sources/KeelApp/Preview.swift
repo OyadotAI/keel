@@ -87,8 +87,7 @@ struct PreviewPane: NSViewRepresentable {
         // The whole trick: `forMainFrameOnly: false` puts the picker inside the dev server's frame
         // regardless of its origin. A page script cannot reach across that boundary; a user script
         // is installed by the host and does not have to.
-        if let js = Bundle.module.url(forResource: "Picker", withExtension: "js"),
-           let source = try? String(contentsOf: js, encoding: .utf8) {
+        if let source = Resources.text("Picker", "js") {
             config.userContentController.addUserScript(
                 WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
         }
