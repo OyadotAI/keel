@@ -261,10 +261,11 @@ struct ReadinessPanel: View {
                     Button {
                         Task { saved = await model.saveReview() }
                     } label: {
-                        Label(saved == nil ? "Save review to docs/REVIEW.md" : "Saved \(saved!)", systemImage: saved == nil ? "doc.badge.plus" : "checkmark")
+                        Label(saved == nil ? "Save as the contract" : "Saved", systemImage: saved == nil ? "doc.badge.plus" : "checkmark")
                             .font(K.F.small)
                     }
                     .buttonStyle(QuietButton(tone: saved == nil ? K.C.accent : K.C.add)).disabled(saved != nil)
+                    .help("Writes docs/REVIEW.md and .claude/agents/contract.md. The contract's top half is the team's — correct a rule there and it stays; the review under it is replaced each save. Every turn reads it; run it as the `contract` agent before a merge.")
                     Button {
                         busy = true
                         Task { await model.fixDocs(); busy = false }

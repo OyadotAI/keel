@@ -237,7 +237,7 @@ pub fn repo_map(repo: &Utf8Path, profile: Option<&Profile>) -> String {
         loc_total
     ));
     let mut dirs: Vec<_> = by_dir.into_iter().collect();
-    dirs.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.1.1));
     for (d, (n, loc)) in dirs.iter().take(18) {
         out.push_str(&format!("- `{d}` — {n} files, {loc} lines\n"));
     }
@@ -837,7 +837,88 @@ pub async fn api_review_save(
         b.text.trim()
     );
     std::fs::write(&path, body).map_err(err)?;
-    Ok(Json("docs/REVIEW.md".into()))
+    write_contract(&repo, &today, b.text.trim()).map_err(err)?;
+    Ok(Json("docs/REVIEW.md and .claude/agents/contract.md".into()))
+}
+
+const CONTRACT_MARK: &str = "## Latest review";
+
+/// The contract subagent: a part the team owns and edits, and a part the review refreshes.
+/// The first save seeds the owned part from the review's scorecard, five things and plan;
+/// later saves leave it alone and replace only the review below the mark.
+pub fn write_contract(repo: &Utf8Path, today: &str, review: &str) -> std::io::Result<()> {
+    let dir = repo.join(".claude/agents");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("contract.md");
+    let owned = match std::fs::read_to_string(&path) {
+        Ok(existing) => existing
+            .split(CONTRACT_MARK)
+            .next()
+            .unwrap_or("")
+            .trim_end()
+            .to_string(),
+        Err(_) => seed_contract(today, review),
+    };
+    let body = format!(
+        "{owned}\n\n{CONTRACT_MARK}\n\n_{today}. Replaced on every save; the sections above are yours and are never touched._\n\n{review}\n"
+    );
+    std::fs::write(path, body)
+}
+
+/// Pull the sections that read as rules out of the review, under a frontmatter that makes the
+/// file a subagent Claude Code can run.
+fn seed_contract(today: &str, review: &str) -> String {
+    let mut out = String::from(
+        "---\nname: contract\ndescription: The engineering contract for this repository — invariants, rules and the plan, first written by the staff-engineer review and since corrected by the team. Run before a change merges; it reports what the change breaks in the contract, and nothing else.\ntools: Read, Grep, Glob, Bash\n---\n\n",
+    );
+    out.push_str(&format!(
+        "# Contract\n\nSeeded {today} from the review below. **This part is the team's**: correct a rule here and it stays corrected — the review section under `{CONTRACT_MARK}` is replaced on every save, this is not. When you run as the `contract` agent, read the change, then report each rule below it breaks as `rule — path:line — what breaks — the fix`, and stop.\n\n"
+    ));
+    for (heading, take) in [
+        ("Scorecard", "Scorecard"),
+        ("The five things", "The five things"),
+        ("Security", "Security posture"),
+        ("Tests", "Test quality"),
+        ("Agent instructions", "Agent instructions"),
+        ("The plan", "The plan"),
+    ] {
+        if let Some(section) = section_of(review, take) {
+            out.push_str(&format!("## {heading}\n\n{}\n\n", section.trim()));
+        }
+    }
+    if out.matches("\n## ").count() == 0 {
+        out.push_str("## Rules\n\n- (the review had no headed sections to seed from; write the rules here)\n\n");
+    }
+    out.trim_end().to_string()
+}
+
+/// The body under a heading whose text (after `#`, numbers and bold marks) starts with `key`,
+/// up to the next heading.
+fn section_of<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let needle = key.to_lowercase();
+    let is_heading = |l: &str| l.starts_with('#');
+    let title = |l: &str| {
+        l.trim_start_matches(|c: char| {
+            c == '#' || c == ' ' || c.is_ascii_digit() || c == '.' || c == '*'
+        })
+        .to_lowercase()
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| is_heading(l) && title(l).starts_with(&needle))?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| is_heading(l))
+        .map(|i| start + 1 + i)
+        .unwrap_or(lines.len());
+    let from: usize = lines[..=start].iter().map(|l| l.len() + 1).sum();
+    let to: usize = lines[..end]
+        .iter()
+        .map(|l| l.len() + 1)
+        .sum::<usize>()
+        .min(text.len());
+    text.get(from..to)
 }
 
 fn humantime_date(t: std::time::SystemTime) -> String {
@@ -1123,6 +1204,27 @@ mod tests {
         assert!(!md.contains("Hono"));
         assert!(!md.contains("bun"));
         assert!(md.contains("## Where it stands"));
+    }
+
+    #[test]
+    fn the_contract_keeps_the_teams_part_and_refreshes_the_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let review = "## Scorecard\n\n| a | 3 |\n\n## 3. **The five things that will hurt first**\n\n1. x\n\n## The plan\n\n1. PR one\n";
+        write_contract(&root, "2026-08-29", review).unwrap();
+        let path = root.join(".claude/agents/contract.md");
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.starts_with("---\nname: contract"), "{first}");
+        assert!(first.contains("## The five things\n\n1. x"), "{first}");
+        assert!(first.contains("## Latest review"));
+        let edited = first.replace("1. x", "1. x — corrected by the team");
+        std::fs::write(&path, edited).unwrap();
+        write_contract(&root, "2026-09-01", "## Scorecard\n\n| a | 4 |\n").unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert!(second.contains("corrected by the team"));
+        assert!(second.contains("| a | 4 |"));
+        assert_eq!(second.matches("## Latest review").count(), 1);
+        assert!(second.contains("_2026-09-01."));
     }
 
     #[test]
