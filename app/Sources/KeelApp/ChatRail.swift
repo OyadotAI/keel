@@ -18,9 +18,27 @@ struct ChatRail: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript
+            // A question holds the turn, so it sits where you are about to type — not in a
+            // stage that may have switched to the preview while you were reading.
+            if !model.pending.isEmpty {
+                Hairline()
+                VStack(spacing: K.S.sm) {
+                    ForEach(model.pending) { p in
+                        if p.isQuestion {
+                            QuestionCard(pending: p, model: model)
+                        } else {
+                            ApprovalCard(pending: p, model: model)
+                        }
+                    }
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                .background(K.C.accent.opacity(0.06))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             Hairline()
             Composer(model: model, focused: $composerFocused)
         }
+        .animation(K.M.quick, value: model.pending.count)
         .background(K.C.surface)
         // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
         // Focus is the one thing only this view can do, so it watches a counter.

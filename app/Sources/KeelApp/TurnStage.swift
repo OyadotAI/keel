@@ -210,15 +210,9 @@ struct TurnCard: View {
                 ProblemList(problems: problems, model: model)
             }
 
-            // On the newest card only: the same card body is rendered once per turn, and a
-            // question rendered N times registers its shortcuts N times.
-            ForEach(turn.id == model.turns.last?.id ? model.pending : []) { p in
-                if p.isQuestion {
-                    QuestionCard(pending: p, model: model)
-                } else {
-                    ApprovalCard(pending: p, model: model)
-                }
-            }
+            // Questions and approvals live in the conversation pane, above the composer —
+            // the one place on screen whatever the stage is showing. Rendering them here too
+            // would register every shortcut twice.
 
             TurnFooter(turn: turn)
         }
