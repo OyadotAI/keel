@@ -278,6 +278,14 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/init", axum::routing::post(api_git_init))
         .route("/api/git/log", get(api_git_log))
         .route("/api/git/commit/diff", get(api_git_commit_diff))
+        .route("/api/git/branches", get(api_git_branches))
+        .route("/api/git/branch", axum::routing::post(api_git_branch))
+        .route("/api/git/remote", axum::routing::post(api_git_remote))
+        .route("/api/git/stage-all", axum::routing::post(api_git_stage_all))
+        .route(
+            "/api/git/commit-staged",
+            axum::routing::post(api_git_commit_staged),
+        )
         .route("/api/git/push", axum::routing::post(api_git_push))
         .route("/api/git/uncommit", axum::routing::post(api_git_uncommit))
         .route(
@@ -554,6 +562,91 @@ async fn api_git_log(
     Query(q): Query<LogQuery>,
 ) -> Json<Vec<crate::api::Commit>> {
     Json(blocking(move || crate::api::git_log(&repo, q.n.min(100)), Vec::new()).await)
+}
+
+async fn api_git_branches(Checkout(repo): Checkout) -> Json<crate::api::Branches> {
+    Json(
+        blocking(
+            move || crate::api::git_branches(&repo),
+            crate::api::Branches {
+                current: None,
+                local: Vec::new(),
+                remote: Vec::new(),
+                remotes: Vec::new(),
+                staged: 0,
+                unstaged: 0,
+            },
+        )
+        .await,
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct BranchBody {
+    action: String,
+    name: String,
+}
+
+async fn api_git_branch(
+    Checkout(repo): Checkout,
+    Json(b): Json<BranchBody>,
+) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_branch_act(&repo, &b.action, &b.name),
+        Err("timed out".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteBody {
+    action: String,
+}
+
+async fn api_git_remote(
+    Checkout(repo): Checkout,
+    Json(b): Json<RemoteBody>,
+) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_remote_act(&repo, &b.action),
+        Err("timed out".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(serde::Deserialize)]
+struct StageAllBody {
+    stage: bool,
+}
+
+async fn api_git_stage_all(
+    Checkout(repo): Checkout,
+    Json(b): Json<StageAllBody>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_stage_all(&repo, b.stage),
+        Err("timed out".into()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+async fn api_git_commit_staged(
+    Checkout(repo): Checkout,
+    Json(b): Json<crate::worktree::CommitBody>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_commit_staged(&repo, &b.message),
+        Err("timed out".into()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(serde::Deserialize)]
