@@ -307,6 +307,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/adopt", axum::routing::post(crate::review::api_adopt))
         .route("/api/git/stage-all", axum::routing::post(api_git_stage_all))
         .route(
+            "/api/git/discard-all",
+            axum::routing::post(api_git_discard_all),
+        )
+        .route(
             "/api/git/commit-staged",
             axum::routing::post(api_git_commit_staged),
         )
@@ -650,6 +654,18 @@ async fn api_git_remote(
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
     blocking(
         move || crate::api::git_remote_act(&repo, &b.action, b.url.as_deref()),
+        Err("timed out".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+async fn api_git_discard_all(
+    Checkout(repo): Checkout,
+) -> Result<Json<(u32, u32)>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_discard_all(&repo),
         Err("timed out".into()),
     )
     .await
