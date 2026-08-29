@@ -35,19 +35,28 @@ struct WorkingBar: View {
             }
             .padding(.horizontal, K.S.md)
             .padding(.vertical, 6)
-            .background(K.C.accent.opacity(0.10))
+            .background(waiting ? K.C.warn.opacity(0.14) : K.C.accent.opacity(0.10))
             .overlay(alignment: .bottom) { Hairline() }
         }
     }
 
     /// What it is doing, named. "Working" says nothing; `Bash cargo test` says everything.
+    /// And the two states that used to read as "thinking…" for ten minutes: waiting on the
+    /// person, and a command that has gone quiet.
     private var activity: String {
         guard let turn = model.current else { return "starting…" }
-        if let call = turn.calls.last(where: \.running) ?? turn.calls.last {
-            return call.subject.isEmpty ? call.tool : "\(call.tool)  \(call.subject)"
+        if !model.pending.isEmpty {
+            return "waiting for you — answer below"
         }
+        let quiet = Int(Date().timeIntervalSince(model.lastEventAt))
+        if let call = turn.calls.last(where: \.running) ?? turn.calls.last {
+            let name = call.subject.isEmpty ? call.tool : "\(call.tool)  \(call.subject)"
+            return quiet > 90 ? "\(name) — no output for \(quiet / 60)m \(quiet % 60)s; a server that never exits? Stop and run it from the terminal" : name
+        }
+        if quiet > 90 { return "no output for \(quiet / 60)m \(quiet % 60)s — stop and try again, or ask in the terminal" }
         return turn.text.isEmpty ? "thinking…" : "writing…"
     }
+    private var waiting: Bool { !model.pending.isEmpty }
 
     private func elapsed(at now: Date) -> String {
         guard let started = model.current?.started else { return "0s" }
