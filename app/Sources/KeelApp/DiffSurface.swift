@@ -92,17 +92,31 @@ struct DiffSurface: View {
                                 DiffLineRow(line: line, mark: marks[li], path: path, model: model)
                             }
                         }
+                        // Say where it ends. A pane that stops mid-table with nothing after it
+                        // reads as cut off, whether or not it was.
+                        let n = diff.hunks.reduce(0) { $0 + $1.lines.count }
+                        HStack(spacing: K.S.sm) {
+                            Rectangle().fill(K.C.line).frame(height: 1)
+                            Text(diff.untracked ? "end of file · \(n) lines" : "end of changes · \(diff.hunks.count) hunk\(diff.hunks.count == 1 ? "" : "s")")
+                                .font(K.F.micro).foregroundStyle(K.C.faint).fixedSize()
+                            Rectangle().fill(K.C.line).frame(height: 1)
+                        }
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.md)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // ⌥↓ / ⌥↑ walk the hunks; ⌘⌥↓ / ⌘⌥↑ walk the changed files. The keys every
-                // review tool grows an extension for, built in.
-                .focusable()
-                .onKeyPress(keys: [.downArrow, .upArrow], phases: .down) { press in
-                    guard press.modifiers.contains(.option) else { return .ignored }
-                    let by = press.key == .downArrow ? 1 : -1
-                    return press.modifiers.contains(.command)
-                        ? nextFile(by) : jump(proxy, by, of: diff.hunks.count)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // ⌥↓ / ⌥↑ walk the hunks; ⌘⌥↓ / ⌘⌥↑ walk the changed files — on the pane, not
+                // the scroll view, so the wheel is never contested.
+                .background {
+                    Color.clear
+                        .focusable()
+                        .onKeyPress(keys: [.downArrow, .upArrow], phases: .down) { press in
+                            guard press.modifiers.contains(.option) else { return .ignored }
+                            let by = press.key == .downArrow ? 1 : -1
+                            return press.modifiers.contains(.command)
+                                ? nextFile(by) : jump(proxy, by, of: diff.hunks.count)
+                        }
                 }
             }
         } else {
