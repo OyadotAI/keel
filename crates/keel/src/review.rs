@@ -34,6 +34,7 @@ Rules: quote real paths and symbols; if you did not read a file, do not describe
 #[derive(Serialize)]
 pub struct ReviewPrompt {
     pub system: &'static str,
+    pub evidence: String,
     pub prompt: String,
 }
 
@@ -50,16 +51,16 @@ pub async fn api_review(
     .await
     .unwrap_or_else(|_| Report::new(Vec::new()));
     let _ = &state;
+    // The persona and the evidence travel as system prompt; the conversation shows one line.
     Json(ReviewPrompt {
         system: STAFF_ENGINEER,
-        prompt: prompt(&report),
+        evidence: prompt(&report),
+        prompt: "Review this repository as a staff engineer would: read the code first — routes, data access, queues and workers, Dockerfile and CI, tests — then give the review in the structure you were given. Change nothing.".into(),
     })
 }
 
 pub fn prompt(report: &Report) -> String {
-    let mut p = String::from(
-        "Review this repository as a staff engineer would, following the structure you were given. Read the code first: the routes, the data access, the queues and workers, the Dockerfile and CI, the tests. Do not edit anything.\n\n",
-    );
+    let mut p = String::from("\n\n# Evidence for this review\n\n");
     if let Some(prof) = &report.profile {
         p.push_str("## What the scan saw\n\n");
         if prof.template != "blank" {
@@ -197,6 +198,7 @@ mod tests {
         assert!(p.contains("Closest Keel template: **REST API service**"));
         assert!(p.contains("Request bodies are not validated"));
         assert!(p.contains("Go beyond this list"));
+        assert!(p.starts_with("\n\n# Evidence"));
         assert!(STAFF_ENGINEER.contains("The five things that will hurt first"));
     }
 }

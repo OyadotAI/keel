@@ -42,7 +42,7 @@ struct FileTree: View {
                         .font(K.F.mono(11))
                         .lineLimit(1).truncationMode(.head)
                     } action: {
-                        model.viewingFile = path
+                        model.show(file: path)
                     }
                 }
             }
@@ -81,7 +81,7 @@ private struct TreeRow: View {
             if node.dir { withAnimation(K.M.quick) { open.toggle() } } else {
                 // Open it. Attaching is the menu; a click that silently added context looked
                 // like a click that did nothing.
-                model.viewingFile = node.path
+                model.show(file: node.path)
             }
         }
         .contextMenu {

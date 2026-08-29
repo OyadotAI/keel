@@ -830,7 +830,7 @@ private struct SplitHandle: View {
         Rectangle()
             .fill(hovering ? K.C.accent.opacity(0.6) : K.C.line)
             .frame(width: 1)
-            .padding(.horizontal, 3)
+            .padding(.horizontal, 4)
             .contentShape(Rectangle())
             .onHover { over in
                 hovering = over
@@ -839,14 +839,18 @@ private struct SplitHandle: View {
                 if !over, pushed { NSCursor.pop(); pushed = false }
             }
             .gesture(
-                DragGesture(minimumDistance: 1)
+                // Global coordinates: the handle moves with the pane it sizes, so a
+                // translation measured in its own space shifted under the pointer every
+                // frame and the drag stuttered. Whole points, so the layout does not
+                // re-solve for sub-pixel changes.
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { g in
                         if start == nil { start = width }
                         // The stage is on the right, so dragging left makes it wider; a pane
                         // on the left is the other way round.
                         let delta = leading ? g.translation.width : -g.translation.width
-                        width = min(max((start ?? width) + delta, range.lowerBound),
-                                    range.upperBound)
+                        let next = min(max((start ?? width) + delta, range.lowerBound), range.upperBound).rounded()
+                        if next != width { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { width = next } }
                     }
                     .onEnded { _ in start = nil }
             )

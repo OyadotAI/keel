@@ -241,6 +241,9 @@ pub struct ChatQuery {
     /// The directory a resumed session was launched from, when that was not the repository.
     /// `--resume` only finds a transcript in the project of the directory it runs in.
     pub cwd: Option<String>,
+    /// Extra system prompt for this turn — a persona and its evidence — so the conversation
+    /// shows the ask, not the instructions behind it.
+    pub system: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -627,7 +630,17 @@ pub async fn chat(
                 query.session.as_deref(),
             ))
             .arg("--append-system-prompt")
-            .arg(system_prompt(&cwd))
+            .arg(
+                match query
+                    .system
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(extra) => format!("{}\n\n{extra}", system_prompt(&cwd)),
+                    None => system_prompt(&cwd),
+                },
+            )
             // Note what is deliberately *not* in that prompt: an instruction to avoid shell
             // expansion. It was tried, and with and without it the first command out was
             // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the

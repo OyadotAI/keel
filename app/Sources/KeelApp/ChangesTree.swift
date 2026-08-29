@@ -199,9 +199,7 @@ struct CommitList: View {
                         }
                     }
                 } action: {
-                    model.viewingCommit = c
-                    model.viewingDiff = nil
-                    model.inspecting = nil
+                    model.show(commit: c)
                 }
                 .contextMenu {
                     if i == 0, model.commits.count > 1 {
@@ -456,8 +454,7 @@ private struct ChangeRow: View {
                 }
                 .padding(.leading, CGFloat(depth) * 10)
             } action: {
-                model.viewingDiff = node.path
-                model.inspecting = nil
+                model.show(diff: node.path)
             }
             .help(node.path)
             .contextMenu {
