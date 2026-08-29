@@ -80,6 +80,9 @@ struct DiffSurface: View {
             centred("Reading…")
         } else if let diff, !diff.hunks.isEmpty {
             ScrollViewReader { proxy in
+                // At least as wide as the pane, so short lines fill it and only a genuinely
+                // long line makes it scroll sideways.
+                GeometryReader { geo in
                 ScrollView([.vertical, .horizontal], showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
@@ -91,7 +94,8 @@ struct DiffSurface: View {
                             }
                         }
                     }
-                    .frame(minWidth: 0, alignment: .leading)
+                    .frame(minWidth: max(geo.size.width, 1), alignment: .leading)
+                }
                 }
                 // ⌥↓ / ⌥↑ walk the hunks; ⌘⌥↓ / ⌘⌥↑ walk the changed files. The keys every
                 // review tool grows an extension for, built in.
