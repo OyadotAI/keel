@@ -231,16 +231,10 @@ struct ReadinessPanel: View {
                 busy = true
                 Task { await model.requestReview(); busy = false }
             } label: {
-                HStack(spacing: K.S.xs) {
-                    Image(systemName: "person.crop.rectangle.stack").font(.system(size: 10, weight: .semibold))
-                    Text(model.lastReview == nil ? "Staff-engineer review" : "Review again")
-                        .font(K.F.small.weight(.semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, K.S.sm).padding(.vertical, 5)
-                .background(K.C.accent, in: RoundedRectangle(cornerRadius: K.R.sm))
+                Label(model.lastReview == nil ? "Staff-engineer review" : "Review again",
+                      systemImage: "person.crop.rectangle.stack")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(FilledButton())
             .disabled(busy || (model.reviewLane?.running ?? false))
             .help("Runs in its own lane, beside this one. Reads the code the way a staff engineer would — hot path, threat model, tests, pipeline, docs — and ranks what hurts first. Plan mode: changes nothing. Runs on its own once a day.")
             if reviewed {
