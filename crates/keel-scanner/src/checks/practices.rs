@@ -415,6 +415,8 @@ impl Check for ProductionPractices {
                 "validator",
                 "garde",
                 "serde_valid",
+                // axum and actix deserialise bodies into typed structs: validation at the boundary.
+                "serde",
             ];
             if !validators.iter().any(|v| has_dep(v)) {
                 out.push(Finding::new(
