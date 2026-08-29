@@ -11,27 +11,53 @@
 //! fires when the evidence is there (a service with routes, a Dockerfile, a database
 //! dependency), so a docs site or a Rust CLI is left alone.
 
-use crate::profile::{dependencies, package_jsons};
+use crate::profile::{dependencies, languages, other_dependencies, package_jsons};
 use crate::{Check, Dimension, Finding, Fix, RepoContext, Severity};
 use camino::Utf8Path;
 
 pub struct ProductionPractices;
 
-/// Source files that look like a server: routes, handlers, an app.
+/// Source files that look like a server: routes, handlers, an app — in any of the languages.
 fn server_files(ctx: &RepoContext) -> Vec<&Utf8Path> {
     ctx.files()
         .filter(|p| {
             let s = p.as_str();
-            !s.contains("node_modules")
-                && (s.ends_with(".ts") || s.ends_with(".js") || s.ends_with(".mjs"))
-                && !s.contains(".test.")
-                && !s.contains(".spec.")
-                && !s.contains("/__tests__/")
+            if s.contains("node_modules")
+                || s.contains("/vendor/")
+                || s.contains("_test.go")
+                || s.contains(".test.")
+                || s.contains(".spec.")
+                || s.contains("/__tests__/")
+                || s.contains("/tests/")
+            {
+                return false;
+            }
+            let js = (s.ends_with(".ts") || s.ends_with(".js") || s.ends_with(".mjs"))
                 && (s.contains("route.")
                     || s.contains("server")
                     || s.contains("/api/")
                     || s.contains("app.")
-                    || s.contains("index."))
+                    || s.contains("index."));
+            let go = s.ends_with(".go")
+                && (s.contains("main.go")
+                    || s.contains("server")
+                    || s.contains("handler")
+                    || s.contains("router")
+                    || s.contains("/api/")
+                    || s.contains("http"));
+            let py = s.ends_with(".py")
+                && (s.contains("main.py")
+                    || s.contains("app.py")
+                    || s.contains("server")
+                    || s.contains("routes")
+                    || s.contains("views")
+                    || s.contains("/api/"));
+            let rs = s.ends_with(".rs")
+                && (s.contains("main.rs")
+                    || s.contains("server")
+                    || s.contains("routes")
+                    || s.contains("handlers"));
+            js || go || py || rs
         })
         .collect()
 }
@@ -53,11 +79,16 @@ impl Check for ProductionPractices {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
-        let pkgs = package_jsons(ctx);
-        if pkgs.is_empty() {
+        let langs = languages(ctx);
+        if langs.is_empty() {
             return Vec::new();
         }
-        let deps = dependencies(ctx);
+        let pkgs = package_jsons(ctx);
+        let mut deps = dependencies(ctx);
+        deps.extend(other_dependencies(ctx));
+        let go = langs.contains(&"go");
+        let py = langs.contains(&"python");
+        let rs = langs.contains(&"rust");
         let has_dep = |n: &str| deps.contains(n);
         let has_file = |n: &str| {
             ctx.files()
@@ -71,15 +102,33 @@ impl Check for ProductionPractices {
             .collect();
         let has_script = |n: &str| scripts.iter().any(|s| s == n);
         let servers = server_files(ctx);
-        let has_routes = !servers.is_empty()
-            && (has_dep("hono")
-                || has_dep("express")
-                || has_dep("fastify")
-                || has_dep("@nestjs/core")
-                || has_dep("koa")
-                || ctx
-                    .files()
-                    .any(|p| p.as_str().ends_with("route.ts") || p.as_str().ends_with("route.js")));
+        let js_router = has_dep("hono")
+            || has_dep("express")
+            || has_dep("fastify")
+            || has_dep("@nestjs/core")
+            || has_dep("koa")
+            || ctx
+                .files()
+                .any(|p| p.as_str().ends_with("route.ts") || p.as_str().ends_with("route.js"));
+        let go_router = go
+            && (has_dep("github.com/go-chi/chi/v5")
+                || has_dep("github.com/gin-gonic/gin")
+                || has_dep("github.com/labstack/echo/v4")
+                || has_dep("github.com/gofiber/fiber/v2")
+                || has_dep("github.com/gorilla/mux")
+                || any_file_contains(
+                    ctx,
+                    &servers,
+                    &["http.ListenAndServe", "http.Server{", "&http.Server"],
+                ));
+        let py_router = py
+            && (has_dep("fastapi")
+                || has_dep("flask")
+                || has_dep("django")
+                || has_dep("starlette"));
+        let rs_router =
+            rs && (has_dep("axum") || has_dep("actix-web") || has_dep("rocket") || has_dep("warp"));
+        let has_routes = !servers.is_empty() && (js_router || go_router || py_router || rs_router);
         let has_db = [
             "postgres",
             "pg",
@@ -91,6 +140,21 @@ impl Check for ProductionPractices {
             "mysql2",
             "better-sqlite3",
             "@supabase/supabase-js",
+            "github.com/jackc/pgx/v5",
+            "github.com/lib/pq",
+            "gorm.io/gorm",
+            "github.com/jmoiron/sqlx",
+            "go.mongodb.org/mongo-driver",
+            "sqlalchemy",
+            "psycopg",
+            "psycopg2",
+            "asyncpg",
+            "django",
+            "pymongo",
+            "sqlx",
+            "tokio-postgres",
+            "diesel",
+            "sea-orm",
         ]
         .iter()
         .any(|d| has_dep(d));
@@ -104,15 +168,25 @@ impl Check for ProductionPractices {
         let mut out = Vec::new();
 
         // ── the gate ────────────────────────────────────────────────────────────────────
-        let makefile_check = ctx
-            .read("Makefile")
-            .is_some_and(|m| m.lines().any(|l| l.starts_with("check:")));
+        let makefile_check = ctx.read("Makefile").is_some_and(|m| {
+            m.lines()
+                .any(|l| l.starts_with("check:") || l.starts_with("test:") || l.starts_with("ci:"))
+        });
         let has_test = has_script("test") || has_script("test:unit");
         let has_typecheck = has_script("typecheck")
             || has_script("type-check")
             || has_script("tsc")
             || has_script("lint");
-        if !(makefile_check || has_test && has_typecheck) {
+        // Go, Rust and Python carry their test runner with the toolchain; a test file is the
+        // evidence that anyone runs it.
+        let native_tests = (go && ctx.files().any(|p| p.as_str().ends_with("_test.go")))
+            || (rs && ctx.files().any(|p| p.as_str().contains("/tests/")))
+            || (py
+                && ctx.files().any(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.starts_with("test_") && n.ends_with(".py"))
+                }));
+        if !(makefile_check || has_test && has_typecheck || native_tests && pkgs.is_empty()) {
             out.push(Finding::new(
                 "verify/no-gate",
                 Dimension::Verifiability,
@@ -167,17 +241,39 @@ impl Check for ProductionPractices {
                 || l.contains("wrangler")
                 || l.contains("vercel")
         });
+        // Dev and prod apart: kustomize overlays, Helm values per env, Wrangler envs, Terraform
+        // environments or per-env tfvars, or a deploy workflow per environment.
+        let tf_envs = ctx.files().any(|p| {
+            let s = p.as_str();
+            (s.contains("terraform/")
+                || s.contains("infra/")
+                || s.ends_with(".tf")
+                || s.ends_with(".tfvars"))
+                && (s.contains("/environments/")
+                    || s.contains("/envs/")
+                    || s.contains("/env/")
+                    || s.contains("/prod")
+                    || s.contains("/production")
+                    || s.contains("prod.tfvars")
+                    || s.contains("production.tfvars")
+                    || s.contains("/staging"))
+        });
         let has_envs = has_dir("k8s/overlays/")
             || has_dir("kustomize/overlays/")
             || has_dir("helm/")
+            || has_dir("charts/")
             || has_file("wrangler.jsonc")
             || has_file("wrangler.toml")
             || has_file("wrangler.json")
+            || tf_envs
             || ctx.files().any(|p| {
                 p.as_str().contains("environments/")
                     || p.file_name().is_some_and(|n| {
-                        n.contains("prod") && n.ends_with(".yml")
-                            || n.contains("prod") && n.ends_with(".yaml")
+                        (n.contains("prod") || n.contains("staging"))
+                            && (n.ends_with(".yml")
+                                || n.ends_with(".yaml")
+                                || n.ends_with(".env")
+                                || n.ends_with(".tfvars"))
                     })
             });
         if has_routes || !dockerfiles.is_empty() {
@@ -263,7 +359,7 @@ impl Check for ProductionPractices {
         // ── the server's behaviour ──────────────────────────────────────────────────────
         if has_routes {
             let srv: Vec<&Utf8Path> = servers.clone();
-            if !any_file_contains(
+            let drains = any_file_contains(
                 ctx,
                 &srv,
                 &[
@@ -272,9 +368,16 @@ impl Check for ProductionPractices {
                     "gracefulShutdown",
                     "onShutdown",
                     "enableShutdownHooks",
+                    "signal.Notify",
+                    ".Shutdown(",
+                    "signal.NotifyContext",
+                    "with_graceful_shutdown",
+                    "tokio::signal",
+                    "lifespan",
+                    "on_event(\"shutdown\")",
                 ],
-            ) && !has_dep("next")
-            {
+            );
+            if !drains && !has_dep("next") && !has_dep("fastapi") && !has_dep("django") {
                 out.push(Finding::new(
                     "reliability/no-graceful-shutdown",
                     Dimension::RuntimeContract,
@@ -302,6 +405,16 @@ impl Check for ProductionPractices {
                 "@sinclair/typebox",
                 "arktype",
                 "superstruct",
+                "github.com/go-playground/validator/v10",
+                "github.com/go-ozzo/ozzo-validation/v4",
+                "github.com/swaggo/swag",
+                "pydantic",
+                "fastapi",
+                "django",
+                "marshmallow",
+                "validator",
+                "garde",
+                "serde_valid",
             ];
             if !validators.iter().any(|v| has_dep(v)) {
                 out.push(Finding::new(
@@ -329,12 +442,28 @@ impl Check for ProductionPractices {
                 "@upstash/ratelimit",
                 "@nestjs/throttler",
                 "bottleneck",
+                "golang.org/x/time",
+                "github.com/go-chi/httprate",
+                "github.com/ulule/limiter/v3",
+                "github.com/didip/tollbooth/v7",
+                "github.com/sethvargo/go-limiter",
+                "slowapi",
+                "django-ratelimit",
+                "tower_governor",
+                "governor",
             ];
             if !limiters.iter().any(|v| has_dep(v))
                 && !any_file_contains(
                     ctx,
                     &srv,
-                    &["RateLimit-", "rateLimit", "ratelimit", "rate_limit"],
+                    &[
+                        "RateLimit-",
+                        "rateLimit",
+                        "ratelimit",
+                        "rate_limit",
+                        "rate.NewLimiter",
+                        "httprate.",
+                    ],
                 )
             {
                 out.push(Finding::new(
@@ -361,10 +490,30 @@ impl Check for ProductionPractices {
                 "@vercel/otel",
                 "@sentry/node",
                 "@sentry/nextjs",
+                "github.com/rs/zerolog",
+                "go.uber.org/zap",
+                "github.com/sirupsen/logrus",
+                "go.opentelemetry.io/otel",
+                "github.com/getsentry/sentry-go",
+                "structlog",
+                "loguru",
+                "python-json-logger",
+                "tracing",
+                "tracing-subscriber",
             ];
-            if !loggers.iter().any(|v| has_dep(v))
-                && any_file_contains(ctx, &srv, &["console.log("])
-            {
+            let bare = any_file_contains(
+                ctx,
+                &srv,
+                &[
+                    "console.log(",
+                    "log.Printf(",
+                    "log.Println(",
+                    "fmt.Println(",
+                    "print(",
+                    "println!(",
+                ],
+            ) && !any_file_contains(ctx, &srv, &["slog."]);
+            if !loggers.iter().any(|v| has_dep(v)) && bare {
                 out.push(Finding::new(
                     "observability/no-structured-logs",
                     Dimension::Observability,
@@ -385,12 +534,19 @@ impl Check for ProductionPractices {
         // ── the database ────────────────────────────────────────────────────────────────
         if has_db {
             let has_migrations = has_dir("migrations/")
+                || has_dir("alembic/")
                 || ctx.files().any(|p| {
                     p.as_str().contains("/migrations/")
                         || p.as_str().contains("prisma/migrations")
                         || p.as_str().contains("drizzle/") && p.as_str().ends_with(".sql")
                         || p.as_str().starts_with("supabase/migrations")
-                });
+                })
+                || has_dep("github.com/golang-migrate/migrate/v4")
+                || has_dep("github.com/pressly/goose/v3")
+                || has_dep("ariga.io/atlas")
+                || has_dep("alembic")
+                || has_dep("sqlx-cli")
+                || has_dep("refinery");
             if !has_migrations {
                 out.push(Finding::new(
                     "reliability/no-migrations",
@@ -405,6 +561,89 @@ impl Check for ProductionPractices {
                         description: "Add `migrations/0001_init.sql` from the current schema (`pg_dump \
                                       --schema-only`), a `migrate` script that applies unapplied files \
                                       in a transaction, and run it before the server starts."
+                            .to_string(),
+                    },
+                ));
+            }
+        }
+
+        // ── the instructions' substance ─────────────────────────────────────────────────
+        // A CLAUDE.md that says "be careful" is not instructions. The templates' name the gate,
+        // the architecture, the invariants and how to extend; a short one with none of that
+        // leaves the agent guessing exactly as no file would.
+        if let Some(md) = ctx
+            .read("CLAUDE.md")
+            .or_else(|| ctx.read("AGENTS.md"))
+            .or_else(|| ctx.read(".claude/CLAUDE.md"))
+        {
+            let l = md.to_lowercase();
+            let names_gate = [
+                "make check",
+                "make test",
+                "npm test",
+                "bun test",
+                "go test",
+                "cargo test",
+                "pytest",
+                "typecheck",
+                "## check",
+                "## gate",
+                "## test",
+            ]
+            .iter()
+            .any(|k| l.contains(k));
+            let has_layout = [
+                "## architecture",
+                "## layout",
+                "## structure",
+                "## key paths",
+                "## files",
+                "| area",
+                "## where",
+            ]
+            .iter()
+            .any(|k| l.contains(k));
+            let has_rules = [
+                "## rules",
+                "## invariants",
+                "## conventions",
+                "## non-negotiable",
+                "never ",
+                "always ",
+                "must ",
+            ]
+            .iter()
+            .any(|k| l.contains(k));
+            let lines = md.lines().filter(|l| !l.trim().is_empty()).count();
+            if lines < 12 || !names_gate || !(has_layout || has_rules) {
+                let mut missing = Vec::new();
+                if !names_gate {
+                    missing.push("the command that checks the project");
+                }
+                if !has_layout {
+                    missing.push("where things are");
+                }
+                if !has_rules {
+                    missing.push("the rules and invariants");
+                }
+                if lines < 12 {
+                    missing.push("more than a few lines");
+                }
+                out.push(Finding::new(
+                    "agent/thin-instructions",
+                    Dimension::AgentLegibility,
+                    Severity::Medium,
+                    "The agent instructions are thin",
+                    format!(
+                        "CLAUDE.md exists but lacks {}. Every Keel template's CLAUDE.md names the gate, \
+                         maps the files, states the invariants with the tests that guard them, and gives \
+                         recipes for extending — so the agent works the way the team does.",
+                        missing.join(", ")
+                    ),
+                    Fix::Assisted {
+                        description: "Rewrite CLAUDE.md from the code: the gate, a file map, the request \
+                                      path, the invariants (with the tests), how to extend, how to run. \
+                                      The review does this when asked to fix the docs."
                             .to_string(),
                     },
                 ));
@@ -499,6 +738,56 @@ mod tests {
             ("backend/src/app.ts", "app.get('/api/health')"),
         ]);
         assert!(ids(&ctx).is_empty(), "{:?}", ids(&ctx));
+    }
+
+    #[test]
+    fn a_go_service_is_read_in_its_own_terms() {
+        let (_d, ctx) = fixture(&[
+            (
+                "go.mod",
+                "module x\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.1.0\n\tgorm.io/gorm v1.25.12\n)\n",
+            ),
+            (
+                "cmd/api/main.go",
+                "package main\nfunc main() { r := chi.NewRouter(); log.Printf(\"up\"); http.ListenAndServe(\":8080\", r) }",
+            ),
+            ("Dockerfile", "FROM golang:1.25\nCOPY . .\nCMD [\"/app\"]"),
+        ]);
+        let got = ids(&ctx);
+        for want in [
+            "verify/no-gate",
+            "reliability/no-graceful-shutdown",
+            "security/no-input-validation",
+            "security/no-rate-limit",
+            "observability/no-structured-logs",
+            "reliability/no-migrations",
+            "security/image-runs-as-root",
+        ] {
+            assert!(got.contains(&want), "missing {want} in {got:?}");
+        }
+        let (_d2, ok) = fixture(&[
+            (
+                "go.mod",
+                "module x\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.1.0\n\tgorm.io/gorm v1.25.12\n\tgithub.com/golang-migrate/migrate/v4 v4.18.1\n\tgithub.com/go-playground/validator/v10 v10.0.0\n\tgithub.com/go-chi/httprate v0.9.0\n\tgithub.com/rs/zerolog v1.33.0\n)\n",
+            ),
+            (
+                "cmd/api/main.go",
+                "package main\nfunc main() { signal.NotifyContext(ctx); srv.Shutdown(ctx) }",
+            ),
+            ("cmd/api/main_test.go", "package main"),
+            ("Makefile", "test:\n\tgo test ./...\n"),
+            ("README.md", "# x"),
+            (
+                "CLAUDE.md",
+                "# x\n\n## Gate\nmake test\n\n## Architecture\n| Area | Path |\n|---|---|\n| api | cmd/api |\n\n## Rules\n- never log secrets\n- always migrate first\n1\n2\n3\n4\n",
+            ),
+            (".dockerignore", ".git"),
+            (".claude/agents/reviewer.md", ""),
+            (".github/workflows/deploy.yml", "name: deploy"),
+            ("terraform/environments/prod/main.tf", ""),
+            ("Dockerfile", "FROM golang\nUSER app\nCMD [\"/app\"]"),
+        ]);
+        assert!(ids(&ok).is_empty(), "{:?}", ids(&ok));
     }
 
     #[test]

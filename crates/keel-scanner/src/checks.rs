@@ -8,6 +8,7 @@ mod agent_instructions;
 mod ci;
 mod env_hygiene;
 mod hosting;
+mod pipeline;
 mod practices;
 mod production_shape;
 mod secrets;
@@ -31,5 +32,6 @@ pub fn default_checks() -> Vec<Box<dyn Check>> {
         Box::new(production_shape::ProductionShape),
         Box::new(practices::ProductionPractices),
         Box::new(hosting::HostingFit),
+        Box::new(pipeline::PipelineQuality),
     ]
 }

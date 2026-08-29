@@ -898,6 +898,37 @@ final class SessionModel: Identifiable {
         }
     }
 
+    /// Rewrite the agent instructions to the template standard, in a mode that may edit. The
+    /// same persona and evidence as the review, so the docs match what it found.
+    func fixDocs() async {
+        await attempt {
+            let r: ReviewPrompt = try await client.get("/api/review", q())
+            mode = "acceptEdits"
+            nextSystem = r.system + r.evidence
+            prompt = "Rewrite CLAUDE.md and AGENTS.md (and README.md if it misleads) so they are the documents an engineer joining tomorrow and an agent working unsupervised need — derived from the code, not from a template: the gate command and what it runs; a file map of every important directory and entry point; the request path in numbered steps; the invariants this codebase actually has, each with the test that guards it or a note that none does; how to extend it (add a route, a table, a job, a page — files to touch in order); how to run it locally and how it deploys; the ceilings and known problems, honestly. Keep anything true that is already there; delete anything false. Read the code before writing each section. Then run the gate."
+            send()
+        }
+    }
+
+    /// Save the review that just ran into docs/REVIEW.md.
+    func saveReview() async -> String? {
+        guard let text = turns.last?.text, !text.isEmpty else { return nil }
+        var path: String?
+        await attempt { path = try await client.post("/api/review/save", body: SaveBody(text: text), q(), as: String.self) }
+        await refreshTree()
+        return path
+    }
+    struct SaveBody: Encodable { var text: String }
+
+    /// A visible rescan: the count after, so the click is seen to do something.
+    var scanning = false
+    func rescan() async {
+        scanning = true
+        await refreshState()
+        scanning = false
+        Telemetry.track("rescanned")
+    }
+
     private var reviewKey: String { "keel.lastReview." + repoPath }
     var lastReview: Date? {
         get { UserDefaults.standard.object(forKey: reviewKey) as? Date }
