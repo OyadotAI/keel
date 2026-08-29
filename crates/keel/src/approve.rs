@@ -100,13 +100,13 @@ pub struct Decision {
 
 type Waiters = Mutex<HashMap<String, tokio::sync::oneshot::Sender<Decision>>>;
 
-fn waiters() -> &'static Waiters {
+pub fn waiters() -> &'static Waiters {
     static W: OnceLock<Waiters> = OnceLock::new();
     W.get_or_init(Default::default)
 }
 
 /// Requests the UI has not yet been shown, so a page that reloads mid-question still sees it.
-fn queue() -> &'static Mutex<Vec<Pending>> {
+pub fn queue() -> &'static Mutex<Vec<Pending>> {
     static Q: OnceLock<Mutex<Vec<Pending>>> = OnceLock::new();
     Q.get_or_init(Default::default)
 }

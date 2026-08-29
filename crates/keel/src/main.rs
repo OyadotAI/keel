@@ -7,6 +7,7 @@
 mod agents;
 mod api;
 mod approve;
+mod askmcp;
 mod aws;
 mod clitools;
 mod connect;

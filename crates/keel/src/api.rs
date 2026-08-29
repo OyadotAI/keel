@@ -244,6 +244,8 @@ pub struct ChatQuery {
     /// Extra system prompt for this turn — a persona and its evidence — so the conversation
     /// shows the ask, not the instructions behind it.
     pub system: Option<String>,
+    /// The window's own id, so a question asked through `ask_user` lands in its lane.
+    pub lane: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -294,7 +296,11 @@ fn system_prompt(repo: &Utf8Path) -> String {
     out.push('\n');
 
     out.push_str(
-        "- Permissions: a command outside the allowed set comes back refused; Keel shows the person          the refusal with a button to allow it, so say what you needed. `AskUserQuestion` is          answered in the UI and returned as the tool's result.\n         - MCP servers: use `claude mcp add --scope local`, not `.mcp.json` — Keel quarantines that          file as repository content. Keel also quarantines `.claude/settings.json` hooks.\n",
+        "- Permissions: a command outside the allowed set comes back refused; Keel shows the person \
+         the refusal with a button to allow it, so say what you needed.\n\
+         - To ask the person a question with options, call the `ask_user` tool (server `keel`); \
+         the answer is returned as its result. `AskUserQuestion` does not exist in this session.\n\
+         - MCP servers: use `claude mcp add --scope local`, not `.mcp.json` — Keel quarantines that          file as repository content. Keel also quarantines `.claude/settings.json` hooks.\n",
     );
 
     // A blank project ships the template catalogue as patterns; an agent that has them and
@@ -546,6 +552,9 @@ pub async fn chat(
                 port,
                 query.session.as_deref(),
             ))
+            // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
+            .arg("--mcp-config")
+            .arg(crate::askmcp::config(port, query.lane.as_deref()))
             .arg("--append-system-prompt")
             .arg(
                 match query

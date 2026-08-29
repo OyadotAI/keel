@@ -299,6 +299,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/branches", get(api_git_branches))
         .route("/api/git/branch", axum::routing::post(api_git_branch))
         .route("/api/git/remote", axum::routing::post(api_git_remote))
+        .route(
+            "/mcp",
+            axum::routing::post(crate::askmcp::post).get(crate::askmcp::get),
+        )
         .route("/api/review", get(crate::review::api_review))
         .route(
             "/api/review/save",
