@@ -98,6 +98,11 @@ pub struct Profile {
     pub stack: Vec<&'static str>,
     /// True when `package.json` exists somewhere: a JavaScript/TypeScript service or app.
     pub is_js: bool,
+    /// The languages with a manifest in the tree: `typescript`, `go`, `rust`, `python`.
+    pub languages: Vec<&'static str>,
+    /// The gate this repository already has, if one can be seen: `make check`, `make test`,
+    /// `go test ./...`, `npm test` …
+    pub gate: Option<String>,
 }
 
 /// A dependency name and the weight it lends to each template.
@@ -167,6 +172,51 @@ const DEP_SIGNALS: &[(&str, &[(&str, u32)])] = &[
     ("prisma", &[("fullstack", 1)]),
     ("@prisma/client", &[("fullstack", 1)]),
     ("drizzle-orm", &[("fullstack", 1)]),
+    // Go
+    ("github.com/go-chi/chi/v5", &[("api", 3)]),
+    ("github.com/gin-gonic/gin", &[("api", 3)]),
+    ("github.com/labstack/echo/v4", &[("api", 3)]),
+    ("github.com/gofiber/fiber/v2", &[("api", 3)]),
+    ("google.golang.org/grpc", &[("api", 2), ("dataplane", 1)]),
+    ("github.com/swaggo/swag", &[("api", 2)]),
+    ("github.com/hibiken/asynq", &[("jobs", 4)]),
+    ("github.com/riverqueue/river", &[("jobs", 4)]),
+    ("github.com/gorilla/websocket", &[("realtime", 3)]),
+    ("nhooyr.io/websocket", &[("realtime", 3)]),
+    ("github.com/segmentio/kafka-go", &[("pipeline", 3)]),
+    ("k8s.io/client-go", &[("controlplane", 4)]),
+    ("sigs.k8s.io/controller-runtime", &[("controlplane", 5)]),
+    (
+        "github.com/envoyproxy/go-control-plane",
+        &[("dataplane", 5)],
+    ),
+    ("github.com/stripe/stripe-go", &[("tenant", 3)]),
+    ("github.com/sashabaranov/go-openai", &[("agent", 3)]),
+    ("github.com/anthropics/anthropic-sdk-go", &[("agent", 3)]),
+    ("github.com/docker/docker", &[("sandbox", 3)]),
+    // Python
+    ("fastapi", &[("api", 3)]),
+    ("flask", &[("api", 2)]),
+    ("django", &[("fullstack", 3)]),
+    ("celery", &[("jobs", 4)]),
+    ("dramatiq", &[("jobs", 3)]),
+    ("langgraph", &[("graph", 5)]),
+    ("langchain", &[("agent", 2)]),
+    ("smolagents", &[("loop", 5)]),
+    ("crewai", &[("orchestrator", 5)]),
+    ("litellm", &[("llmproxy", 5)]),
+    ("promptfoo", &[("evals", 4)]),
+    ("inspect-ai", &[("evals", 4)]),
+    ("apache-airflow", &[("dag", 5)]),
+    ("dagster", &[("dag", 5)]),
+    ("prefect", &[("dag", 4)]),
+    ("websockets", &[("realtime", 2)]),
+    ("kopf", &[("controlplane", 4)]),
+    // Rust
+    ("axum", &[("api", 3)]),
+    ("actix-web", &[("api", 3)]),
+    ("tonic", &[("api", 2), ("dataplane", 1)]),
+    ("kube", &[("controlplane", 5)]),
 ];
 
 /// Dependencies whose presence changes the advice, whatever the template.
@@ -206,6 +256,46 @@ const STACK_DEPS: &[(&str, &str)] = &[
     ("vitest", "vitest"),
     ("jest", "jest"),
     ("typescript", "typescript"),
+    // Go
+    ("github.com/go-chi/chi/v5", "chi"),
+    ("github.com/gin-gonic/gin", "gin"),
+    ("github.com/labstack/echo/v4", "echo"),
+    ("github.com/gofiber/fiber/v2", "fiber"),
+    ("github.com/jackc/pgx/v5", "postgres"),
+    ("github.com/lib/pq", "postgres"),
+    ("gorm.io/gorm", "gorm"),
+    ("github.com/jmoiron/sqlx", "sqlx"),
+    ("github.com/redis/go-redis/v9", "redis"),
+    ("github.com/golang-migrate/migrate/v4", "golang-migrate"),
+    ("github.com/pressly/goose/v3", "goose"),
+    ("github.com/rs/zerolog", "zerolog"),
+    ("go.uber.org/zap", "zap"),
+    ("github.com/sirupsen/logrus", "logrus"),
+    ("go.opentelemetry.io/otel", "otel"),
+    ("github.com/getsentry/sentry-go", "sentry"),
+    ("github.com/golang-jwt/jwt/v5", "jwt"),
+    ("github.com/go-playground/validator/v10", "validator"),
+    ("github.com/swaggo/swag", "swagger"),
+    ("github.com/stretchr/testify", "testify"),
+    // Python
+    ("fastapi", "fastapi"),
+    ("django", "django"),
+    ("flask", "flask"),
+    ("sqlalchemy", "sqlalchemy"),
+    ("psycopg", "postgres"),
+    ("psycopg2", "postgres"),
+    ("asyncpg", "postgres"),
+    ("alembic", "alembic"),
+    ("pydantic", "pydantic"),
+    ("redis", "redis"),
+    ("structlog", "structlog"),
+    ("pytest", "pytest"),
+    // Rust
+    ("axum", "axum"),
+    ("actix-web", "actix"),
+    ("sqlx", "sqlx"),
+    ("tokio-postgres", "postgres"),
+    ("tracing", "tracing"),
 ];
 
 pub(crate) const TEMPLATES: &[(&str, &str, &str)] = &[
@@ -236,6 +326,145 @@ pub(crate) const TEMPLATES: &[(&str, &str, &str)] = &[
     ("blank", "Blank project", ""),
 ];
 
+/// Module paths from every `go.mod`, requirement names from `pyproject.toml` /
+/// `requirements*.txt`, crate names from every `Cargo.toml` — one flat set, so a check can ask
+/// "is gorm here" the way it asks "is prisma here".
+pub(crate) fn other_dependencies(ctx: &RepoContext) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for p in ctx.files() {
+        let name = p.file_name().unwrap_or("");
+        if p.as_str().contains("node_modules") || p.as_str().contains("/vendor/") {
+            continue;
+        }
+        let Some(text) = (match name {
+            "go.mod" | "Cargo.toml" | "pyproject.toml" => ctx.read(p.as_str()),
+            n if n.starts_with("requirements") && n.ends_with(".txt") => ctx.read(p.as_str()),
+            _ => None,
+        }) else {
+            continue;
+        };
+        match name {
+            "go.mod" => {
+                for l in text.lines() {
+                    let l = l
+                        .trim()
+                        .trim_start_matches("require ")
+                        .trim_start_matches('(')
+                        .trim();
+                    if let Some(m) = l.split_whitespace().next()
+                        && m.contains('/')
+                        && !l.contains("// indirect")
+                    {
+                        out.insert(m.to_string());
+                    }
+                }
+            }
+            "Cargo.toml" => {
+                let mut in_deps = false;
+                for l in text.lines() {
+                    if l.starts_with('[') {
+                        in_deps = l.contains("dependencies");
+                        continue;
+                    }
+                    if in_deps && let Some((k, _)) = l.split_once('=') {
+                        out.insert(k.trim().trim_matches('"').to_string());
+                    }
+                }
+            }
+            _ => {
+                for l in text.lines() {
+                    let l = l
+                        .trim()
+                        .trim_start_matches('"')
+                        .trim_start_matches('-')
+                        .trim();
+                    let name: String = l
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+                        .collect();
+                    let dep_line = !l.starts_with('[')
+                        && (!l.contains('=') || l.contains(">=") || l.contains("=="));
+                    if !name.is_empty() && dep_line {
+                        out.insert(name.to_lowercase().replace('_', "-"));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn languages(ctx: &RepoContext) -> Vec<&'static str> {
+    let has = |n: &str| {
+        ctx.files().any(|p| {
+            p.file_name() == Some(n)
+                && !p.as_str().contains("node_modules")
+                && !p.as_str().contains("/vendor/")
+        })
+    };
+    let mut v = Vec::new();
+    if has("package.json") {
+        v.push(
+            if ctx.files().any(|p| p.file_name() == Some("tsconfig.json")) {
+                "typescript"
+            } else {
+                "javascript"
+            },
+        );
+    }
+    if has("go.mod") {
+        v.push("go");
+    }
+    if has("Cargo.toml") {
+        v.push("rust");
+    }
+    if has("pyproject.toml") || has("requirements.txt") || has("setup.py") {
+        v.push("python");
+    }
+    v
+}
+
+/// The one command that checks the project, if the repository names it.
+pub(crate) fn gate(ctx: &RepoContext, langs: &[&str]) -> Option<String> {
+    if let Some(m) = ctx.read("Makefile") {
+        for target in ["check", "test", "ci", "verify", "lint"] {
+            if m.lines().any(|l| l.starts_with(&format!("{target}:"))) {
+                return Some(format!("make {target}"));
+            }
+        }
+    }
+    if let Some(j) = ctx.read("justfile").or_else(|| ctx.read("Justfile"))
+        && j.lines().any(|l| l.starts_with("check"))
+    {
+        return Some("just check".into());
+    }
+    for pkg in package_jsons(ctx) {
+        let scripts = pkg.get("scripts").and_then(|s| s.as_object());
+        if let Some(sc) = scripts {
+            let has = |n: &str| sc.contains_key(n);
+            if has("check") {
+                return Some("npm run check".into());
+            }
+            if has("test") && (has("typecheck") || has("lint")) {
+                return Some("npm run typecheck && npm test".into());
+            }
+            if has("test") {
+                return Some("npm test".into());
+            }
+        }
+    }
+    if langs.contains(&"go") {
+        return Some("go vet ./... && go test ./...".into());
+    }
+    if langs.contains(&"rust") {
+        return Some("cargo clippy -- -D warnings && cargo test".into());
+    }
+    if langs.contains(&"python") && ctx.files().any(|p| p.as_str().contains("test")) {
+        return Some("pytest".into());
+    }
+    None
+}
+
 /// Every `package.json` in the tree that is not under `node_modules`, root first.
 pub(crate) fn package_jsons(ctx: &RepoContext) -> Vec<serde_json::Value> {
     let mut paths: Vec<_> = ctx
@@ -264,7 +493,9 @@ pub(crate) fn dependencies(ctx: &RepoContext) -> BTreeSet<String> {
 }
 
 pub fn detect(ctx: &RepoContext) -> Profile {
-    let deps = dependencies(ctx);
+    let mut deps = dependencies(ctx);
+    deps.extend(other_dependencies(ctx));
+    let langs = languages(ctx);
     let is_js = ctx
         .files()
         .any(|p| p.file_name() == Some("package.json") && !p.as_str().contains("node_modules"));
@@ -335,7 +566,17 @@ pub fn detect(ctx: &RepoContext) -> Profile {
         hosting: hosting(ctx, &deps),
         stack,
         is_js,
+        gate: gate(ctx, &langs),
+        languages: langs,
     }
+}
+
+/// Terraform names its cloud in `provider "aws"` / `provider "google"`.
+fn tf_mentions(ctx: &RepoContext, needle: &str) -> bool {
+    ctx.files()
+        .filter(|p| p.extension() == Some("tf"))
+        .take(40)
+        .any(|p| ctx.read(p.as_str()).is_some_and(|t| t.contains(needle)))
 }
 
 fn hosting(ctx: &RepoContext, deps: &BTreeSet<String>) -> Vec<Hosting> {
@@ -378,11 +619,14 @@ fn hosting(ctx: &RepoContext, deps: &BTreeSet<String>) -> Vec<Hosting> {
         || has_file("samconfig.toml")
         || has_file("template.yaml") && has_dep("aws-sdk")
         || has_file("cdk.json")
-        || has_dir("terraform/aws")
+        || tf_mentions(ctx, "\"aws\"")
         || deps.iter().any(|d| d.starts_with("@aws-sdk/"))
         || has_dep("aws-sdk")
     {
         out.insert(Hosting::Aws);
+    }
+    if tf_mentions(ctx, "\"google\"") {
+        out.insert(Hosting::Gcp);
     }
     if has_file("cloudbuild.yaml")
         || has_file("app.yaml")
@@ -451,6 +695,26 @@ mod tests {
         assert_eq!(p.template, "graph");
         assert_eq!(p.like, "LangGraph");
         assert_eq!(p.hosting, vec![Hosting::Kubernetes, Hosting::Containers]);
+    }
+
+    #[test]
+    fn a_go_service_is_read_from_its_go_mod() {
+        let (_d, ctx) = fixture(&[
+            (
+                "go.mod",
+                "module x\n\ngo 1.25\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.1.0\n\tgorm.io/gorm v1.25.12\n\tgithub.com/jackc/pgx/v5 v5.5.5\n\tgithub.com/davecgh/go-spew v1.1.1 // indirect\n)\n",
+            ),
+            ("Makefile", "test:\n\tgo test ./...\n"),
+            ("terraform/main.tf", "provider \"aws\" {}"),
+        ]);
+        let p = detect(&ctx);
+        assert_eq!(p.template, "api");
+        assert_eq!(p.languages, vec!["go"]);
+        assert!(
+            p.stack.contains(&"chi") && p.stack.contains(&"gorm") && p.stack.contains(&"postgres")
+        );
+        assert_eq!(p.gate.as_deref(), Some("make test"));
+        assert!(!p.is_js);
     }
 
     #[test]

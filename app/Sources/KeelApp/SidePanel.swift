@@ -154,6 +154,7 @@ struct SessionsPanel: View {
 struct ReadinessPanel: View {
     let model: SessionModel
     @State private var adopted: [String]?
+    @State private var saved: String?
     @State private var busy = false
 
     var body: some View {
@@ -187,10 +188,16 @@ struct ReadinessPanel: View {
                 Spacer()
                 // The checklist re-runs on every read of the project; this is for the person
                 // who just fixed something and wants to see it gone now.
-                Button { Task { await model.refreshState() } } label: {
-                    Label("Scan again", systemImage: "arrow.clockwise").font(K.F.micro)
+                if model.scanning {
+                    ProgressView().controlSize(.mini)
+                    Text("scanning…").font(K.F.micro).foregroundStyle(K.C.faint)
+                } else {
+                    Button { Task { await model.rescan() } } label: {
+                        Label("Scan again", systemImage: "arrow.clockwise").font(K.F.micro)
+                    }
+                    .buttonStyle(QuietButton())
+                    .help("Re-reads the repository and re-runs every check. \(model.findings.count) findings now.")
                 }
-                .buttonStyle(QuietButton()).help("The scan also re-runs whenever the project is re-read.")
             }
             if p.template != "blank" {
                 HStack(spacing: K.S.xs) {
@@ -247,6 +254,40 @@ struct ReadinessPanel: View {
             .buttonStyle(QuietButton(tone: K.C.accent))
             .disabled(busy || model.running)
             .help("Starts a turn that reviews the repository the way a staff engineer would: what it is, the five things that will hurt first, architecture, security, operability, and the PRs in order.")
+
+            // After a review: keep it, and let it fix the documents it judged.
+            if model.lastReview != nil, let last = model.turns.last, !last.text.isEmpty, !model.running {
+                HStack(spacing: K.S.xs) {
+                    Button {
+                        Task { saved = await model.saveReview() }
+                    } label: {
+                        Label(saved == nil ? "Save review to docs/REVIEW.md" : "Saved \(saved!)", systemImage: saved == nil ? "doc.badge.plus" : "checkmark")
+                            .font(K.F.small)
+                    }
+                    .buttonStyle(QuietButton(tone: saved == nil ? K.C.accent : K.C.add)).disabled(saved != nil)
+                    Button {
+                        busy = true
+                        Task { await model.fixDocs(); busy = false }
+                    } label: {
+                        Label("Fix CLAUDE.md and AGENTS.md", systemImage: "doc.text.magnifyingglass").font(K.F.small)
+                    }
+                    .buttonStyle(QuietButton(tone: K.C.accent)).disabled(busy)
+                    .help("Starts an editing turn that rewrites the agent instructions from the code, to the standard the review judged them against, then runs the gate.")
+                }
+            } else if model.findings.contains(where: { $0.id == "agent/thin-instructions" }) {
+                Button {
+                    busy = true
+                    Task { await model.fixDocs(); busy = false }
+                } label: {
+                    HStack(spacing: K.S.xs) {
+                        Image(systemName: "doc.text.magnifyingglass").font(.system(size: 10))
+                        Text("Fix CLAUDE.md and AGENTS.md").font(K.F.small.weight(.semibold))
+                        Spacer()
+                        Text("edits, then runs the gate").font(K.F.micro).foregroundStyle(K.C.faint)
+                    }
+                }
+                .buttonStyle(QuietButton(tone: K.C.accent)).disabled(busy || model.running)
+            }
 
             if model.findings.contains(where: { $0.id == "agent/no-reviewers" }) || adopted != nil {
                 Button {
