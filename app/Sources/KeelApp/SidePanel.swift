@@ -258,7 +258,7 @@ struct ReadinessPanel: View {
         HoverRow {
             HStack(spacing: K.S.xs) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(K.C.faint).frame(width: 10)
+                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(K.C.faint).frame(width: 10)
                 Text("\(i + 1). \(phase.title)").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                 Spacer()
                 Text("\(phase.findings.count)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
