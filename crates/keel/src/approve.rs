@@ -261,7 +261,7 @@ pub fn is_edit(tool: &str) -> bool {
 /// An edit inside the repository (or one of its lane checkouts) is what `acceptEdits` already
 /// covers; the hook has nothing to ask. Anything else — `/tmp`, the home directory, another
 /// project — is a question.
-pub fn edit_is_inside(repo: &Utf8Path, input: &serde_json::Value) -> bool {
+pub fn edit_is_inside(repo: &camino::Utf8Path, input: &serde_json::Value) -> bool {
     let Some(path) = input.get("file_path").and_then(|p| p.as_str()) else {
         return false;
     };
