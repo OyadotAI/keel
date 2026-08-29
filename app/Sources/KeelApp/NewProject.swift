@@ -35,7 +35,7 @@ struct StartProject: View {
         var id: String { full_name ?? name }
     }
 
-    struct NewProject: Encodable { var parent: String; var name: String; var template: String; var notes: String }
+    struct NewProject: Encodable { var parent: String; var name: String; var template: String; var notes: String; var pack: String; var patterns: String }
     struct CloneBody: Encodable { var clone_url: String; var name: String; var parent: String? }
     struct Created: Decodable { var path: String }
 
@@ -356,7 +356,9 @@ struct StartProject: View {
                     body: NewProject(parent: parent,
                                      name: name.trimmingCharacters(in: .whitespaces),
                                      template: template.scaffold == "empty" ? "empty" : stack,
-                                     notes: template.components.isEmpty ? "" : template.architecture))
+                                     notes: template.components.isEmpty ? "" : template.architecture,
+                                     pack: template.id,
+                                     patterns: template.scaffold == "empty" ? Template.patternsDoc : ""))
                 Telemetry.track("project_created", ["template": template.id, "stack": stack])
                 onOpened(made.path, template.fullBrief, attachment)
             } catch { self.error = error.localizedDescription }

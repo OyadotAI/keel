@@ -44,6 +44,7 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/server.ts", BACK_SERVER.into()),
         ("backend/src/db.ts", BACK_DB.into()),
         ("backend/src/migrate.ts", BACK_MIGRATE.into()),
+        ("backend/src/seed.ts", f(BACK_SEED)),
         ("backend/src/app.test.ts", BACK_TEST.into()),
         ("backend/migrations/0001_init.sql", MIGRATION.into()),
         // ── k8s ──────────────────────────────────────────────────────────────────────────────
@@ -66,6 +67,14 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("k8s/secrets.example.yaml", f(K8S_SECRETS_EXAMPLE)),
         ("k8s/scripts/env-to-secrets.sh", f(ENV_TO_SECRETS)),
     ]
+}
+
+/// A working feature pack for a template: files laid over the scaffold. Unknown ids get
+/// nothing, so a template without a pack is still the scaffold plus the agent's brief.
+pub fn pack(id: &str, name: &str) -> Vec<(&'static str, String)> {
+    let f = |s: &str| s.replace("{{NAME}}", name);
+    let _ = (id, &f);
+    Vec::new()
 }
 
 /// The CLAUDE.md for this stack: the rules that came from running one for real.
@@ -115,6 +124,14 @@ down:
 
 migrate:
 	cd backend && bun run migrate
+
+# Five minutes to something on screen: infra, migrations, sample data, both halves.
+demo: dev
+	@until docker compose exec -T postgres pg_isready -U app >/dev/null 2>&1; do sleep 1; done
+	$(MAKE) migrate
+	cd backend && bun run seed
+	@echo "open http://localhost:3000 — API on :8000. Ctrl-C stops both."
+	@(cd backend && bun run dev) & (cd frontend && bun run dev); wait
 
 # Secrets are generated from the one env file, per environment, and applied by CI or by you.
 # The output is gitignored; the encrypted env is what gets committed.
@@ -683,7 +700,8 @@ const BACK_PACKAGE: &str = r#"{
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "migrate": "bun src/migrate.ts"
+    "migrate": "bun src/migrate.ts",
+    "seed": "bun src/seed.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
@@ -819,6 +837,17 @@ for (const file of (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort()
   });
   console.log(`applied ${file}`);
 }
+await db.end();
+"#;
+
+const BACK_SEED: &str = r#"import { db } from "./db";
+
+// Sample rows so the first screen is not empty. Idempotent: run it twice, get the same rows.
+const rows = ["Welcome to {{NAME}}", "This came from backend/src/seed.ts", "Delete me when real data arrives"];
+for (const body of rows) {
+  await db`insert into notes (body) select ${body} where not exists (select 1 from notes where body = ${body})`;
+}
+console.log(`seeded ${rows.length} notes`);
 await db.end();
 "#;
 

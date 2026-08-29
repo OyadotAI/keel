@@ -346,6 +346,17 @@ fn system_prompt(repo: &Utf8Path) -> String {
          then ask once, at the point it matters.\n",
     );
 
+    // A blank project ships the template catalogue as patterns; an agent that has them and
+    // does not use them is designing from scratch for no reason.
+    if repo.join("docs/PATTERNS.md").exists() {
+        out.push_str(
+            "\n## Patterns\n\n`docs/PATTERNS.md` holds reference architectures — APIs, job systems, \
+             agents, control and data planes, gateways — with components, flow and the rules that \
+             keep them up. Before designing a component, find the closest pattern and build to it, \
+             and say which one you used.\n",
+        );
+    }
+
     // The scan is Keel's own reading of this repository, and it is on screen next to the
     // conversation. An agent that has to rediscover "there are no tests" wastes a turn on
     // something the person is already looking at.
