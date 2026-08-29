@@ -349,6 +349,20 @@ pub async fn ask(
         _ => {
             waiters().lock().expect("waiters lock").remove(&id);
             queue().lock().expect("queue lock").retain(|p| p.id != id);
+            // A question nobody answered in four minutes is the signature of "stuck on
+            // thinking" — the tool name goes to Sentry, never the command.
+            sentry::with_scope(
+                |scope| {
+                    scope.set_tag("tool", &hook.tool_name);
+                    scope.set_tag("question", is_question.to_string());
+                },
+                || {
+                    sentry::capture_message(
+                        "approval timed out: nobody answered",
+                        sentry::Level::Warning,
+                    )
+                },
+            );
             Ok(Json(Decision {
                 decision: "defer".into(),
                 reason: "nobody answered".into(),

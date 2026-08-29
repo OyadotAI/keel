@@ -60,6 +60,8 @@ final class SessionModel: Identifiable {
     var running = false
     /// When the stream last said anything; the working bar reads silence off it.
     var lastEventAt = Date()
+    /// One stall report per turn.
+    var stallReported = false
     var prompt = ""
     /// Prompts typed while the agent works. Queued visibly rather than refused.
     var queued: [String] = []
@@ -416,7 +418,7 @@ final class SessionModel: Identifiable {
         Telemetry.breadcrumb("turn started")
         let turn = Turn(prompt: full)
         turns.append(turn)
-        running = true
+        stallReported = false; lastEventAt = Date(); running = true
         lastError = nil
         watchApprovals(true)
 
@@ -814,6 +816,17 @@ final class SessionModel: Identifiable {
                 if let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q), !found.isEmpty {
                     self.pending.append(contentsOf: found)
                     Notifications.approvalWaiting(lane: self, found.count)
+                    // So a tester's "it just sat there" can be read against "a question was
+                    // shown and never answered": the tool, not the command.
+                    for p in found { Telemetry.track("approval_shown", ["tool": p.tool, "question": p.isQuestion]) }
+                }
+                // A turn with no output for five minutes is the thing testers describe as
+                // "stuck on thinking". Said once per turn, with what it was doing.
+                if self.running, !self.stallReported, Date().timeIntervalSince(self.lastEventAt) > 300 {
+                    self.stallReported = true
+                    let tool = self.current?.calls.last?.tool ?? (self.pending.isEmpty ? "none" : "waiting-on-person")
+                    Telemetry.track("turn_stalled", ["tool": tool, "pending": self.pending.count, "mode": self.mode])
+                    Telemetry.warn("turn silent for 5 minutes", ["tool": tool, "mode": self.mode, "pending": "\(self.pending.count)"])
                 }
                 try? await Task.sleep(for: .milliseconds(700))
             }

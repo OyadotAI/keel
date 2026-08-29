@@ -111,6 +111,16 @@ enum Telemetry {
         if sentryOn { SentrySDK.flush(timeout: 2) }
     }
 
+    /// Something that is not a crash but is worth knowing happened to a tester: a turn that
+    /// went silent, a question nobody saw. Tags only — a tool name, a count — never content.
+    static func warn(_ message: String, _ tags: [String: String] = [:]) {
+        guard crashReports, sentryOn else { return }
+        SentrySDK.capture(message: message) { scope in
+            scope.setLevel(.warning)
+            for (k, v) in tags { scope.setTag(value: v, key: k) }
+        }
+    }
+
     /// Settings › Privacy › "Send a test report", so the pipeline can be seen working.
     static func sendTest() {
         guard sentryOn else { return }
