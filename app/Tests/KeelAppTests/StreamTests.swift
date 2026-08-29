@@ -479,3 +479,23 @@ final class ReviewUXTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "keel.palette.recent")
     }
 }
+
+
+// MARK: - Long text in the box
+
+@MainActor
+final class LongTextTests: XCTestCase {
+    func testALongBlockLeavesTheBoxAsAChipWithASummary() {
+        let m = SessionModel(client: Client(port: 0))
+        let text = "\n  <html>\n" + String(repeating: "<div>row</div>\n", count: 400)
+        m.prompt = text
+        m.fileLongText()
+        XCTAssertEqual(m.prompt, "", "the box is clear again")
+        XCTAssertEqual(SessionModel.summary(of: text), "<html>", "the first non-empty line")
+        XCTAssertEqual(SessionModel.summary(of: String(repeating: "x", count: 100)).count, 48)
+        // Short text stays where it was typed.
+        m.prompt = "just a sentence"
+        m.fileLongText()
+        XCTAssertEqual(m.prompt, "just a sentence")
+    }
+}

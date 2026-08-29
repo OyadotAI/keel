@@ -276,6 +276,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/git/act", axum::routing::post(api_git_act))
         .route("/api/git/init", axum::routing::post(api_git_init))
+        .route("/api/git/log", get(api_git_log))
+        .route("/api/git/uncommit", axum::routing::post(api_git_uncommit))
         .route(
             "/api/git/commit",
             axum::routing::post(crate::worktree::api_commit),
@@ -536,6 +538,34 @@ struct GitActRequest {
 
 /// Stage, unstage or discard one file, from the Changes panel.
 /// `git init`, for a project that is not one yet.
+#[derive(serde::Deserialize)]
+struct LogQuery {
+    #[serde(default = "twenty")]
+    n: usize,
+}
+fn twenty() -> usize {
+    20
+}
+
+async fn api_git_log(
+    Checkout(repo): Checkout,
+    Query(q): Query<LogQuery>,
+) -> Json<Vec<crate::api::Commit>> {
+    Json(blocking(move || crate::api::git_log(&repo, q.n.min(100)), Vec::new()).await)
+}
+
+async fn api_git_uncommit(
+    Checkout(repo): Checkout,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_uncommit(&repo),
+        Err("timed out".into()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
 async fn api_git_init(
     Checkout(repo): Checkout,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {

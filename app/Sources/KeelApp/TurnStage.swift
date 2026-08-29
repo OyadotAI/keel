@@ -602,6 +602,14 @@ struct TurnFooter: View {
     private var row: some View {
         HStack(spacing: K.S.md) {
             verdict
+            if let sha = turn.commit {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle").font(.system(size: 10))
+                    Text("committed \(sha)").font(K.F.mono(10))
+                }
+                .foregroundStyle(K.C.add)
+                .help("Keel committed this turn's changes. Undo from the Changes panel.")
+            }
             Spacer()
             if let ms = turn.durationMS {
                 Label(duration(ms), systemImage: "clock")

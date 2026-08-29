@@ -362,7 +362,7 @@ struct Composer: View {
                 )
 
             if model.prompt.isEmpty {
-                Text("Describe a change…   ⌘V an image, ⌘↵ to send")
+                Text("Describe a change…   paste or drop files, ⌘↵ to send")
                     .font(K.F.body).foregroundStyle(K.C.faint)
                     .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
                     .allowsHitTesting(false)
@@ -378,6 +378,9 @@ struct Composer: View {
                         model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
                     }
                 }
+                // Whatever route a long block took into the box — a paste the text view took
+                // before the handler above saw it, a drag, dictation — it leaves as a chip.
+                .onChange(of: model.prompt) { if model.prompt.count > SessionModel.longPaste { model.fileLongText() } }
         }
         .frame(height: height)
         .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
@@ -394,6 +397,12 @@ struct Composer: View {
     private var controls: some View {
         HStack(spacing: K.S.sm) {
             ModeToggle(mode: $model.mode)
+            Button { model.chooseAttachments() } label: {
+                Image(systemName: "paperclip").font(.system(size: 11))
+                    .frame(width: 22, height: 20).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(K.C.faint)
+            .hint("Attach files (or paste, drop, or type @)")
             Spacer()
             if model.running {
                 Button("Stop") { model.stop() }

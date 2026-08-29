@@ -32,6 +32,8 @@ final class Turn: Identifiable {
     var cost: Double?
     var durationMS: Int?
     var finished = false
+    /// The commit Keel made of this turn's work, once the gate passed.
+    var commit: String?
 
     /// What the turn spent, from the CLI's own `result`. Cache tokens are counted separately
     /// because they are what makes the cost figure make sense: a turn with 90% cache reads is

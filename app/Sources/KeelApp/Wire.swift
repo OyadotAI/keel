@@ -138,6 +138,16 @@ enum Wire {
         var id: String { path }
     }
 
+    /// One commit on the current branch.
+    struct Commit: Decodable, Identifiable, Sendable {
+        var sha: String
+        var subject: String
+        var when: Int
+        var files: Int
+        var id: String { sha }
+        var date: Date { Date(timeIntervalSince1970: TimeInterval(when)) }
+    }
+
     struct Diff: Decodable {
         var path: String
         var hunks: [Hunk]
