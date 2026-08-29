@@ -12,6 +12,8 @@ struct GitPanel: View {
     @State private var message = ""
     @State private var newBranch = ""
     @State private var creating = false
+    @State private var allBranches = false
+    @State private var allRemote = false
 
     private var b: Wire.Branches? { model.branches }
     private var busy: Bool { model.gitBusy != nil }
@@ -51,19 +53,19 @@ struct GitPanel: View {
                     Pill(text: "NO REMOTE", tone: .neutral)
                 }
             }
-            if let c = current, let up = c.upstream {
-                Text("tracks \(up)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
-            }
             HStack(spacing: K.S.xs) {
-                verb("Fetch", "arrow.down.circle", "fetch", enabled: !(b?.remotes.isEmpty ?? true))
-                verb("Pull", "arrow.down.to.line", "pull",
-                     enabled: (current?.behind ?? 0) > 0)
-                verb("Push", "arrow.up.to.line", "push",
+                verb("Fetch", "arrow.triangle.2.circlepath", "fetch", enabled: !(b?.remotes.isEmpty ?? true))
+                verb("Pull", "arrow.down", "pull", enabled: (current?.behind ?? 0) > 0)
+                verb("Push", "arrow.up", "push",
                      enabled: (current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true))
-                Spacer()
                 if let what = model.gitBusy {
-                    Sweep().scaleEffect(0.7, anchor: .trailing).frame(width: 32, height: 3)
+                    Sweep().scaleEffect(0.7, anchor: .leading).frame(width: 32, height: 3)
                     Text(what + "…").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                Spacer()
+                if let c = current, let up = c.upstream {
+                    Text(up).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                        .truncationMode(.head).help("Tracks \(up)")
                 }
             }
             if let err = model.lastError {
@@ -74,44 +76,62 @@ struct GitPanel: View {
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
     }
 
+    /// An icon, a tooltip, and a count when there is one. The word is in the tooltip.
     private func verb(_ title: String, _ icon: String, _ action: String, enabled: Bool) -> some View {
-        Button { Task { await model.remote(action) } } label: {
-            Label(title, systemImage: icon).labelStyle(.titleAndIcon)
+        let n = action == "pull" ? (current?.behind ?? 0) : action == "push" ? (current?.ahead ?? 0) : 0
+        return Button { Task { await model.remote(action) } } label: {
+            HStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                if n > 0 { Text("\(n)").font(K.F.mono(10)) }
+            }
+            .frame(minWidth: 22, minHeight: 16)
         }
-        .buttonStyle(QuietButton(tone: enabled ? K.C.accent : K.C.dim))
+        .buttonStyle(QuietButton(tone: enabled ? K.C.accent : K.C.faint))
         .disabled(busy || !enabled)
+        .hint(n > 0 ? "\(title) \(n)" : title)
     }
 
     // MARK: Commit
 
+    /// One field, one button. The button commits what is staged when something is, and
+    /// everything when nothing is — which is what the person meant in both cases.
     private var commitBox: some View {
-        VStack(alignment: .leading, spacing: K.S.xs) {
-            RailHeader("Commit", trailing: b.map { "\($0.staged) staged · \($0.unstaged) unstaged" })
-            TextField("What changed, in one line", text: $message)
-                .field().font(K.F.small)
-                .padding(.horizontal, K.S.md)
+        let staged = b?.staged ?? 0, unstaged = b?.unstaged ?? 0
+        let all = staged == 0
+        let n = all ? model.changes.count : staged
+        return VStack(alignment: .leading, spacing: K.S.xs) {
+            RailHeader("Commit", trailing: nil)
             HStack(spacing: K.S.xs) {
-                Button("Stage all") { Task { await model.stageAll(true) } }
-                    .buttonStyle(QuietButton()).disabled(busy || (b?.unstaged ?? 0) == 0)
-                Button("Unstage all") { Task { await model.stageAll(false) } }
-                    .buttonStyle(QuietButton()).disabled(busy || (b?.staged ?? 0) == 0)
-                Spacer()
-                Button("Commit staged") {
-                    Task { await model.commit(message, all: false); if model.lastError == nil { message = "" } }
-                }
-                .buttonStyle(QuietButton(tone: K.C.accent))
-                .disabled(busy || message.trimmingCharacters(in: .whitespaces).isEmpty || (b?.staged ?? 0) == 0)
-                Button("Commit all") {
-                    Task { await model.commit(message, all: true); if model.lastError == nil { message = "" } }
-                }
-                .buttonStyle(QuietButton(tone: K.C.accent))
-                .disabled(busy || message.trimmingCharacters(in: .whitespaces).isEmpty || model.changes.isEmpty)
+                TextField("What changed, in one line", text: $message)
+                    .field().font(K.F.small)
+                    .onSubmit { commit(all: all) }
+                Button(n == 0 ? "Commit" : "Commit \(n)") { commit(all: all) }
+                    .buttonStyle(QuietButton(tone: K.C.accent))
+                    .disabled(busy || message.trimmingCharacters(in: .whitespaces).isEmpty || n == 0)
+                    .help(all ? "Commits every change" : "Commits the \(staged) staged file\(staged == 1 ? "" : "s")")
             }
             .padding(.horizontal, K.S.md)
-            Text("Stage and discard individual files in Changes.")
-                .font(K.F.micro).foregroundStyle(K.C.faint).padding(.horizontal, K.S.md)
+            HStack(spacing: K.S.xs) {
+                Text(n == 0 ? "nothing to commit"
+                     : (all ? "\(unstaged) unstaged — all will be committed" : "\(staged) staged · \(unstaged) unstaged"))
+                    .font(K.F.micro).foregroundStyle(K.C.faint)
+                Spacer()
+                if unstaged > 0 {
+                    Button("stage all") { Task { await model.stageAll(true) } }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
+                }
+                if staged > 0 {
+                    Button("unstage all") { Task { await model.stageAll(false) } }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
+                }
+            }
+            .padding(.horizontal, K.S.md)
         }
         .padding(.bottom, K.S.sm)
+    }
+
+    private func commit(all: Bool) {
+        Task { await model.commit(message, all: all); if model.lastError == nil { message = "" } }
     }
 
     // MARK: Branches
@@ -119,22 +139,22 @@ struct GitPanel: View {
     private var branches: some View {
         VStack(alignment: .leading, spacing: 0) {
             RailHeader("Branches", trailing: b.map { "\($0.local.count)" })
-            ForEach(b?.local ?? []) { br in
+            // The current one first, then the rest; the last commit's subject is the tooltip.
+            let local = (b?.local ?? []).sorted { ($0.current ? 0 : 1, $0.name) < ($1.current ? 0 : 1, $1.name) }
+            ForEach(allBranches ? local : Array(local.prefix(6))) { br in
                 HoverRow(selected: br.current) {
                     HStack(spacing: K.S.sm) {
-                        Image(systemName: br.current ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 10))
+                        Image(systemName: br.current ? "checkmark" : "arrow.triangle.branch")
+                            .font(.system(size: 10, weight: br.current ? .bold : .regular))
                             .foregroundStyle(br.current ? K.C.accent : K.C.faint)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(br.name).font(K.F.small.weight(br.current ? .semibold : .regular))
-                                .foregroundStyle(K.C.text).lineLimit(1)
-                            Text(br.subject).font(K.F.micro).foregroundStyle(K.C.faint).lineLimit(1)
-                        }
+                            .frame(width: 12)
+                        Text(br.name).font(K.F.small.weight(br.current ? .semibold : .regular))
+                            .foregroundStyle(K.C.text).lineLimit(1).truncationMode(.middle)
                         Spacer()
                         if br.ahead > 0 { Text("\(br.ahead)↑").font(K.F.mono(10)).foregroundStyle(K.C.warn) }
                         if br.behind > 0 { Text("\(br.behind)↓").font(K.F.mono(10)).foregroundStyle(K.C.accent) }
-                        if br.upstream == nil { Text("local").font(K.F.mono(10)).foregroundStyle(K.C.faint) }
                     }
+                    .help(br.subject + (br.upstream.map { " — tracks \($0)" } ?? " — not pushed"))
                 } action: {
                     if !br.current { Task { await model.branch("checkout", br.name) } }
                 }
@@ -147,6 +167,12 @@ struct GitPanel: View {
                     }
                 }
                 .disabled(busy)
+            }
+
+            if local.count > 6 {
+                Button(allBranches ? "Show fewer" : "Show all \(local.count)") { allBranches.toggle() }
+                    .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent)
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             }
 
             if creating {
@@ -163,20 +189,30 @@ struct GitPanel: View {
                 PanelAction("New branch from here…", icon: "plus.circle") { creating = true }
             }
 
-            if let remote = b?.remote, !remote.isEmpty {
-                RailHeader("Remote only", trailing: "\(remote.count)")
-                ForEach(remote, id: \.self) { name in
+            // Branches only the remote has, without the remote's name repeated on every row
+            // and without the remote's own HEAD entry.
+            let remote = (b?.remote ?? []).filter { $0.contains("/") }
+            if !remote.isEmpty {
+                RailHeader("On \(b?.remotes.first ?? "the remote") only", trailing: "\(remote.count)")
+                ForEach(allRemote ? remote : Array(remote.prefix(5)), id: \.self) { name in
                     HoverRow {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "cloud").font(.system(size: 10)).foregroundStyle(K.C.faint)
-                            Text(name).font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1)
+                            Image(systemName: "icloud").font(.system(size: 10)).foregroundStyle(K.C.faint)
+                                .frame(width: 12)
+                            Text(name.split(separator: "/", maxSplits: 1).last.map(String.init) ?? name)
+                                .font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1).truncationMode(.middle)
                             Spacer()
-                            Text("check out").font(K.F.micro).foregroundStyle(K.C.faint)
                         }
+                        .help("Check out \(name) as a local branch")
                     } action: {
                         Task { await model.branch("checkout", name) }
                     }
                     .disabled(busy)
+                }
+                if remote.count > 5 {
+                    Button(allRemote ? "Show fewer" : "Show all \(remote.count)") { allRemote.toggle() }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
                 }
             }
         }

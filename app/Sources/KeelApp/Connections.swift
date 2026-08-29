@@ -86,33 +86,28 @@ struct ConnectionsSettings: View {
                 .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
             }
 
+            // Tokens and the one AWS flow Keel can drive, as rows in the same list shape as the
+            // tools above. The explanations are tooltips; the row says connected or not and
+            // offers the one thing to do about it.
             Section {
-                TokenRow(client: client, label: "GitHub", stored: stored?.github != nil,
-                         path: "/api/connect/github",
-                         help: "A personal access token, stored in the login keychain. Only needed "
-                             + "for what `gh` cannot do for you.")
-                TokenRow(client: client, label: "Cloudflare", stored: stored?.cloudflare != nil,
-                         path: "/api/connect/cloudflare",
-                         help: "A scoped, rotatable API token. Cloudflare has no OIDC or keyless "
-                             + "deploy, so this is the only thing there is.")
-            } header: {
-                Text("Tokens")
-            } footer: {
-                Text("Stored in the macOS login keychain, never in the repository and never in "
-                     + "Keel's own files.")
-                    .font(K.F.small).foregroundStyle(K.C.dim)
-            }
-
-            Section {
-                AwsSso(client: client) { Task { await refresh() } }
-            } header: {
-                Text("AWS Identity Center")
-            } footer: {
-                // A profile Keel writes rather than a key it holds: the credential is minted by
-                // `aws sso login` and lives in the CLI's own cache.
-                Text("Writes a named profile and signs in with `aws sso login`. Keel never asks "
-                     + "for an access key and never stores one.")
-                    .font(K.F.small).foregroundStyle(K.C.dim)
+                VStack(spacing: 0) {
+                    TokenRow(client: client, label: "GitHub token", stored: stored?.github != nil,
+                             path: "/api/connect/github",
+                             help: "A personal access token, kept in the login keychain. Only "
+                                 + "needed for what `gh` cannot do for you.")
+                    Hairline()
+                    TokenRow(client: client, label: "Cloudflare token", stored: stored?.cloudflare != nil,
+                             path: "/api/connect/cloudflare",
+                             help: "A scoped, rotatable API token, kept in the login keychain. "
+                                 + "Cloudflare has no keyless deploy, so this is the only way.")
+                    Hairline()
+                    AwsSso(client: client) { Task { await refresh() } }
+                }
+                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+                .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+                Text("Credentials live in the macOS login keychain or the CLI's own cache — never "
+                     + "in the repository, never in Keel's files.")
+                    .font(K.F.micro).foregroundStyle(K.C.faint)
             }
 
             if !log.isEmpty {
@@ -180,34 +175,45 @@ private struct TokenRow: View {
 
     struct TokenBody: Encodable { var token: String }
 
+    @State private var editing = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
-                    .frame(width: 90, alignment: .leading)
-                SecureField(stored ? "stored" : "token", text: $token).field()
-                Button("Connect") { connect() }
+        HStack(spacing: K.S.sm) {
+            Pill(text: stored ? "OK" : "NONE", tone: stored ? .good : .neutral)
+                .frame(width: 58, alignment: .leading)
+            Text(label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
+                .frame(width: 110, alignment: .leading)
+            Text(status ?? (stored ? "in the keychain" : "not connected"))
+                .font(K.F.small)
+                .foregroundStyle(failed ? K.C.del : (stored ? K.C.dim : K.C.faint))
+                .lineLimit(1)
+            Spacer(minLength: K.S.sm)
+            if editing {
+                SecureField("paste the token", text: $token).field().frame(width: 220)
+                    .onSubmit { connect() }
+                Button("Save") { connect() }
                     .buttonStyle(QuietButton(tone: K.C.accent))
                     .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel") { editing = false; token = "" }.buttonStyle(QuietButton())
+            } else {
+                Button(stored ? "Replace" : "Add token") { editing = true }
+                    .buttonStyle(QuietButton(tone: stored ? K.C.dim : K.C.accent))
                 if stored {
-                    // Confirmed: this removes a credential from the keychain, and the button
-                    // beside it is the one that adds one.
+                    // Confirmed: this removes a credential from the keychain.
                     Button("Disconnect") { confirming = true }
                         .buttonStyle(QuietButton(tone: K.C.del))
                         .alert("Disconnect \(label)?", isPresented: $confirming) {
                             Button("Disconnect", role: .destructive) { disconnect() }
                             Button("Cancel", role: .cancel) {}
                         } message: {
-                            Text("Removes the stored token from the login keychain. Anything that "
-                                 + "needed it stops working until a new one is connected.")
+                            Text("Removes the stored token from the login keychain. Anything "
+                                 + "that needed it stops working until a new one is connected.")
                         }
                 }
             }
-            if let status {
-                Text(status).font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.add)
-            }
-            Text(help).font(K.F.small).foregroundStyle(K.C.dim)
         }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .help(help)
     }
 
     struct ProviderBody: Encodable { var provider: String }
@@ -235,6 +241,7 @@ private struct TokenRow: View {
                 status = "Connected."
                 failed = false
                 token = ""
+                editing = false
             } catch {
                 status = error.localizedDescription
                 failed = true
@@ -254,10 +261,10 @@ private struct AwsSso: View {
     let done: () -> Void
 
     @State private var startURL = ""
-    @State private var ssoRegion = "us-east-1"
+    @State private var ssoRegion = ""
     @State private var account = ""
     @State private var role = ""
-    @State private var profile = "keel"
+    @State private var profile = ""
     @State private var status: String?
     @State private var failed = false
 
@@ -271,31 +278,44 @@ private struct AwsSso: View {
     }
     struct Configured: Decodable { var profile: String }
 
+    @State private var open = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.half) {
-            field("Start URL", "https://d-1234567890.awsapps.com/start", $startURL)
-            field("Identity Center region", "us-east-1", $ssoRegion)
-            field("Account", "123456789012", $account)
-            field("Role", "AdministratorAccess", $role)
-            field("Profile", "keel", $profile)
-
-            HStack {
-                Spacer()
-                Button("Set up") { configure() }
-                    .buttonStyle(QuietButton(tone: K.C.accent))
-                    .disabled(startURL.isEmpty || account.isEmpty || role.isEmpty)
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Pill(text: "SSO", tone: .neutral).frame(width: 58, alignment: .leading)
+                Text("AWS Identity Center").font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
+                    .frame(width: 110, alignment: .leading)
+                Text(status ?? "writes a profile, then `aws sso login` signs in")
+                    .font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.faint).lineLimit(1)
+                Spacer(minLength: K.S.sm)
+                Button(open ? "Hide" : "Set up…") { withAnimation(K.M.quick) { open.toggle() } }
+                    .buttonStyle(QuietButton(tone: open ? K.C.dim : K.C.accent))
             }
-            if let status {
-                Text(status).font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.add)
+            if open {
+                // Two columns, the labels inside the fields. Five stacked rows with a label
+                // column each was the tallest thing on the page.
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
+                          alignment: .leading, spacing: K.S.sm) {
+                    TextField("Start URL  (https://d-….awsapps.com/start)", text: $startURL).field()
+                    TextField("Identity Center region  (us-east-1)", text: $ssoRegion).field()
+                    TextField("Account id", text: $account).field()
+                    TextField("Role  (e.g. AdministratorAccess)", text: $role).field()
+                    TextField("Profile name  (keel)", text: $profile).field()
+                    HStack {
+                        Spacer()
+                        Button("Write profile and sign in") { configure() }
+                            .buttonStyle(QuietButton(tone: K.C.accent))
+                            .disabled(startURL.isEmpty || account.isEmpty || role.isEmpty)
+                    }
+                }
+                .font(K.F.small)
+                .padding(.leading, 58 + 110 + 2 * K.S.sm)
             }
         }
-    }
-
-    private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
-        HStack {
-            Text(label).font(K.F.small).foregroundStyle(K.C.dim).frame(width: 150, alignment: .leading)
-            TextField(hint, text: value).field().font(K.F.small)
-        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .help("Keel writes a named AWS profile and signs in with `aws sso login`. It never asks "
+              + "for an access key and never stores one.")
     }
 
     private func configure() {
@@ -303,8 +323,11 @@ private struct AwsSso: View {
             do {
                 let made: Configured = try await client.post(
                     "/api/aws/sso",
-                    body: Setup(start_url: startURL, sso_region: ssoRegion, account: account,
-                                role: role, profile: profile, region: ssoRegion))
+                    body: Setup(start_url: startURL,
+                                sso_region: ssoRegion.isEmpty ? "us-east-1" : ssoRegion,
+                                account: account, role: role,
+                                profile: profile.isEmpty ? "keel" : profile,
+                                region: ssoRegion.isEmpty ? "us-east-1" : ssoRegion))
                 status = "Profile `\(made.profile)` written. Sign in from the row above."
                 failed = false
                 done()

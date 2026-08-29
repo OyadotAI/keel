@@ -362,9 +362,9 @@ struct ActivityRail: View {
     private func badge(_ p: SessionWindow.Panel) -> Int? {
         switch p {
         case .changes: model.changes.count.nonZero
-        case .readiness:
-            model.findings.filter { $0.severity == "critical" || $0.severity == "high" }
-                .count.nonZero
+        // Every finding, not only the blocking ones: a warning in the panel with no number on
+        // the icon read as a panel that had nothing to say.
+        case .readiness: model.findings.count.nonZero
         // Hooks that came with the repository are the one count worth shouting: each is a shell
         // command someone else wrote that runs on this machine.
         case .hooks: model.workspace.hooks.filter(\.fromRepo).count.nonZero
