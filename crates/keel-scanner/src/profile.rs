@@ -306,11 +306,9 @@ pub fn detect(ctx: &RepoContext) -> Profile {
         .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
         .map(|(t, s)| (*t, *s))
         .unwrap_or(("blank", 0));
-    let confidence = if total == 0 {
-        0
-    } else {
-        (best * 100 / total).clamp(25, 95)
-    };
+    let confidence = (best * 100)
+        .checked_div(total)
+        .map_or(0, |c| c.clamp(25, 95));
     let (template, title, like) = TEMPLATES
         .iter()
         .find(|(id, _, _)| *id == template)
