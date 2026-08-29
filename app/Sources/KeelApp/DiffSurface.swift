@@ -80,10 +80,9 @@ struct DiffSurface: View {
             centred("Reading…")
         } else if let diff, !diff.hunks.isEmpty {
             ScrollViewReader { proxy in
-                // At least as wide as the pane, so short lines fill it and only a genuinely
-                // long line makes it scroll sideways.
-                GeometryReader { geo in
-                ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                // Vertical only. Two axes with a lazy stack centred the content in the pane and
+                // let rows size to their own text; long lines truncate, whole line on hover.
+                ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
                             HunkHeader(header: hunk.header, index: hi, path: path,
@@ -94,8 +93,7 @@ struct DiffSurface: View {
                             }
                         }
                     }
-                    .frame(minWidth: max(geo.size.width, 1), alignment: .leading)
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 // ⌥↓ / ⌥↑ walk the hunks; ⌘⌥↓ / ⌘⌥↑ walk the changed files. The keys every
                 // review tool grows an extension for, built in.
@@ -167,8 +165,9 @@ struct DiffLineRow: View {
             Text(Intraline.styled(line.text, mark: mark, kind: line.kind))
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
-                .lineLimit(1)
+                .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(line.text.count > 80 ? line.text : "")
             if model.notes[key] != nil {
                 Image(systemName: "text.bubble.fill")
                     .font(.system(size: 10)).foregroundStyle(K.C.accent)

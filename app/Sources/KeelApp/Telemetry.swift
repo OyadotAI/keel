@@ -45,6 +45,7 @@ enum Telemetry {
         if crashReports, sentryConfigured, !sentryOn {
             SentrySDK.start { o in
                 o.dsn = info["KeelSentryDSN"] as? String
+                o.debug = ProcessInfo.processInfo.environment["KEEL_TELEMETRY_DEBUG"] == "1"
                 o.releaseName = "keel@\(version)"
                 o.environment = "production"
                 o.enableAutoSessionTracking = true
@@ -69,6 +70,13 @@ enum Telemetry {
                 host: info["KeelPostHogHost"] as? String ?? "https://us.i.posthog.com")
             config.captureApplicationLifecycleEvents = false
             config.captureScreenViews = false
+            // A desktop app sends a handful of events an hour and is quit without warning;
+            // batching twenty of them for thirty seconds is how the last ones never arrive.
+            config.flushAt = 1
+            config.flushIntervalSeconds = 5
+            // `KEEL_TELEMETRY_DEBUG=1 dist/Keel.app/Contents/MacOS/KeelApp` prints every event
+            // and every delivery, which is how "is it actually sending" gets answered.
+            config.debug = ProcessInfo.processInfo.environment["KEEL_TELEMETRY_DEBUG"] == "1"
             PostHogSDK.shared.setup(config)
             PostHogSDK.shared.register([
                 "app": "keel", "component": "app", "version": version,
@@ -95,6 +103,12 @@ enum Telemetry {
         let crumb = Breadcrumb(level: .info, category: "ui")
         crumb.message = message
         SentrySDK.addBreadcrumb(crumb)
+    }
+
+    /// Before quitting: whatever is queued goes now.
+    static func flush() {
+        if posthogOn { PostHogSDK.shared.flush() }
+        if sentryOn { SentrySDK.flush(timeout: 2) }
     }
 
     /// Settings › Privacy › "Send a test report", so the pipeline can be seen working.

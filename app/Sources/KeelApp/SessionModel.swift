@@ -38,6 +38,15 @@ final class SessionModel: Identifiable {
         return out
     }
 
+    /// Where a resumed session was launched, when that was a folder above or below the repo.
+    /// Sent with the chat and transcript requests so `--resume` finds it.
+    var sessionCwd: String?
+    private func sq(_ extra: [String: String] = [:]) -> [String: String] {
+        var out = q(extra)
+        if let sessionCwd { out["cwd"] = sessionCwd }
+        return out
+    }
+
     /// Bumped when the composer should take focus. The shortcut is handled by the window, which
     /// stays mounted; the text view is the only thing that can actually focus itself.
     var focusComposerTick = 0
@@ -395,7 +404,7 @@ final class SessionModel: Identifiable {
             if isolated, worktree == nil {
                 await makeWorktree()
             }
-            var query = q(["prompt": full, "mode": mode])
+            var query = sq(["prompt": full, "mode": mode])
             if let sessionId { query["session"] = sessionId }
 
             // Before the agent touches anything: what the tree looked like, so "restore to
@@ -945,12 +954,14 @@ final class SessionModel: Identifiable {
     /// Open an existing conversation in this window: replay what it did, then carry on.
     func open(session id: String) async {
         sessionId = id
-        title = sessions.first { $0.id == id }?.title ?? "Session " + id.prefix(8)
+        let known = sessions.first { $0.id == id }
+        title = known?.title ?? "Session " + id.prefix(8)
+        sessionCwd = known?.elsewhere != nil ? known?.cwd : nil
         turns.removeAll()
         // What the session actually said, and what it did to the repository — two different
         // endpoints, because the daemon deliberately keeps the listing away from the bodies.
-        async let bodies: [Wire.Turn]? = try? client.get("/api/session", q(["id": id]))
-        async let work: SessionWork? = try? client.get("/api/session/work", q(["id": id]))
+        async let bodies: [Wire.Turn]? = try? client.get("/api/session", sq(["id": id]))
+        async let work: SessionWork? = try? client.get("/api/session/work", sq(["id": id]))
         let (said, did) = await (bodies, work)
 
         // The conversation, so a replayed session reads as one rather than as a command log. The
