@@ -25,6 +25,7 @@ mod project;
 mod render;
 mod serve;
 mod snapshot;
+mod stack;
 mod term;
 mod verify;
 mod worktree;

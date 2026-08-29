@@ -227,6 +227,18 @@ surfaces were read-mostly and belonged to a different product than the one the a
 survived of `infra.rs` is `open_url`, which now lives beside `fsops::reveal` — the other handler
 whose whole job is asking the host to do something Keel deliberately will not.
 
+## Two scaffolds
+
+`project.rs` lays down the Cloudflare golden path below. `stack.rs` lays down the production
+shape the team behind Keel actually runs — modelled on A2ABase: bun builds a Next.js standalone
+bundle that a slim Node image runs as a non-root user, Hono on Node the same way, Postgres and
+Redis from compose, nginx for the one-origin split locally, kustomize `base` + `dev`/`prod`
+overlays, secrets rendered from `backend/.env` (committed only as `.env.age`), and workflows that
+test, build to ghcr, decrypt, apply and roll only what changed. What the manifests insist on and
+why is in the generated `k8s/README.md`; the tests in `stack.rs` assert each rule. Both scaffolds
+are verified the same way: generate one, install, run its gate, build it. The Next 16 `eslint`
+key was caught that way, not by a string assertion.
+
 ## What a new project looks like
 
 Three folders, because the halves have genuinely different constraints:

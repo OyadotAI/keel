@@ -49,6 +49,8 @@ pub enum Template {
     App,
     /// Agent scaffolding and nothing else, for a project that brings its own stack.
     Empty,
+    /// Containers: Next.js and Hono in Docker, kustomize to a cluster, CI to ghcr. See `stack.rs`.
+    Stack,
 }
 
 fn expand(path: &str) -> String {
@@ -96,6 +98,7 @@ pub async fn create(
 
     let template = match req.template.as_deref() {
         Some("empty") => Template::Empty,
+        Some("stack") => Template::Stack,
         _ => Template::App,
     };
     for (rel, body) in scaffold(&req.name, template) {
@@ -108,12 +111,14 @@ pub async fn create(
 
     // The deploy script is the one file that is useless without the executable bit.
     #[cfg(unix)]
-    if template == Template::App {
+    {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            root.join("infra/deploy.sh"),
-            std::fs::Permissions::from_mode(0o755),
-        );
+        for script in ["infra/deploy.sh", "k8s/scripts/env-to-secrets.sh"] {
+            let p = root.join(script);
+            if p.exists() {
+                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+            }
+        }
     }
 
     // A repository from the start, so the diff view and the readiness scan both have a baseline.
@@ -132,6 +137,14 @@ pub async fn create(
 /// The files a new project starts with.
 fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
     let f = |s: &str| s.replace("{{NAME}}", name);
+
+    if template == Template::Stack {
+        let mut files = crate::stack::files(name);
+        files.push(("CLAUDE.md", crate::stack::claude_md(name)));
+        files.push(("README.md", f(README_MD)));
+        files.push((".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()));
+        return files;
+    }
 
     let mut files: Vec<(&'static str, String)> = vec![
         ("CLAUDE.md", f(CLAUDE_MD)),
