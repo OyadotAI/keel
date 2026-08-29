@@ -69,6 +69,26 @@ struct SettingsPage: View {
             }
             .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.sm)
 
+            // The way back, first and named. A close button in a corner is a thing you have to
+            // already know about.
+            HoverRow {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: "house").font(.system(size: 11))
+                        .foregroundStyle(K.C.accent).frame(width: 16)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Back to the project").font(K.F.small.weight(.semibold))
+                            .foregroundStyle(K.C.text)
+                        Text("or press Esc").font(K.F.micro).foregroundStyle(K.C.faint)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 3)
+            } action: {
+                onClose()
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+            Hairline().padding(.vertical, K.S.xs)
+
             ForEach(Section.allCases) { s in
                 HoverRow(selected: section == s) {
                     HStack(spacing: K.S.sm) {
