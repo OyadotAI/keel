@@ -1118,6 +1118,28 @@ pub fn git_remote_act(root: &Utf8Path, action: &str, url: Option<&str>) -> Resul
     }
 }
 
+/// Drop every uncommitted change: tracked files go back to HEAD, untracked ones go to the
+/// Trash (not `git clean`, which deletes for good). Ignored files are left alone — a `.env`
+/// is not a change. Returns how many of each it touched.
+pub fn git_discard_all(root: &Utf8Path) -> Result<(u32, u32), String> {
+    let tracked = git(root, &["diff", "--name-only", "HEAD"])
+        .map(|s| s.lines().filter(|l| !l.is_empty()).count() as u32)
+        .unwrap_or(0);
+    git_run(root, &["restore", "--staged", "--worktree", "--", "."])?;
+    let untracked: Vec<String> = git(root, &["ls-files", "--others", "--exclude-standard"])
+        .map(|s| {
+            s.lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    for rel in &untracked {
+        crate::fsops::trash(root.join(rel).as_std_path())?;
+    }
+    Ok((tracked, untracked.len() as u32))
+}
+
 /// Stage or unstage everything.
 pub fn git_stage_all(root: &Utf8Path, stage: bool) -> Result<(), String> {
     if stage {
@@ -1245,6 +1267,34 @@ mod attach_tests {
 #[cfg(test)]
 mod git_tests {
     use super::*;
+
+    #[test]
+    fn discard_all_restores_tracked_and_trashes_untracked_but_keeps_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        std::fs::write(root.join(".gitignore"), ".env\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "seed"]);
+        std::fs::write(root.join("a.txt"), "two").unwrap();
+        std::fs::write(root.join("new.txt"), "x").unwrap();
+        std::fs::write(root.join(".env"), "SECRET=1").unwrap();
+        let (t, u) = git_discard_all(&root).unwrap();
+        assert_eq!((t, u), (1, 1));
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "one");
+        assert!(!root.join("new.txt").exists());
+        assert!(root.join(".env").exists(), "ignored files are not changes");
+    }
 
     #[test]
     fn a_remote_can_be_added_once_and_only_as_a_url() {

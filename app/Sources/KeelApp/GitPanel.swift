@@ -10,6 +10,7 @@ import SwiftUI
 struct GitPanel: View {
     @Bindable var model: SessionModel
     @State private var message = ""
+    @State private var confirmingDiscard = false
     @State private var addingRemote = false
     @State private var remoteURL = ""
     @State private var newBranch = ""
@@ -167,6 +168,17 @@ struct GitPanel: View {
                 if staged > 0 {
                     Button("unstage all") { Task { await model.stageAll(false) } }
                         .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
+                }
+                if n > 0 {
+                    // Destructive, so it asks — and the question says what goes where.
+                    Button("discard all") { confirmingDiscard = true }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.del).disabled(busy)
+                        .confirmationDialog("Discard every uncommitted change?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+                            Button("Discard \(n) file\(n == 1 ? "" : "s")", role: .destructive) { Task { await model.discardAll() } }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Modified files go back to the last commit. New files go to the Trash, where they can be recovered. Ignored files such as .env are left alone. The last commit is untouched.")
+                        }
                 }
             }
             .padding(.horizontal, K.S.md)

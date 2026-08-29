@@ -1309,6 +1309,13 @@ final class SessionModel: Identifiable {
         await git(action) { _ = try await client.post("/api/git/remote", body: RemoteBody(action: action, url: url), q(), as: String.self) }
         if action == "push" { Telemetry.track("pushed") }
     }
+    /// Every uncommitted change, gone: tracked back to HEAD, untracked to the Trash. The
+    /// panel asks first and says the counts.
+    func discardAll() async {
+        await git("discard") { _ = try await client.post("/api/git/discard-all", body: Nothing(), q(), as: [Int].self) }
+        await refreshState()
+        Telemetry.track("discarded_all")
+    }
     func stageAll(_ stage: Bool) async {
         await git(stage ? "stage" : "unstage") { _ = try await client.post("/api/git/stage-all", body: StageAllBody(stage: stage), q(), as: Bool.self) }
     }

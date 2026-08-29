@@ -187,53 +187,18 @@ private struct ChatTurn: View {
     @State private var copied: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            HStack(spacing: K.S.sm) {
-                Button {
-                    model.focusedTurn = turn.id
-                } label: {
-                    HStack(spacing: K.S.xs) {
-                        Text("TURN \(number)")
-                            .font(.system(size: 10, weight: .semibold)).tracking(0.7)
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 7, weight: .bold))
-                    }
-                    .foregroundStyle(K.C.faint)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Show this turn in the trace")
-
-                Spacer()
-
-                // Always laid out, revealed by opacity. Appearing on hover changed the row's
-                // width and shoved the text sideways under the pointer, which is what made
-                // hovering feel like the page was moving.
-                HStack(spacing: K.S.xs) {
-                    if !turn.text.isEmpty {
-                        CopyChip(label: "reply", copied: copied == "reply") {
-                            put(turn.text, "reply")
-                        }
-                    }
-                    CopyChip(label: "both", copied: copied == "both") {
-                        put("> \(turn.prompt)\n\n\(turn.text)", "both")
-                    }
-                }
-                .opacity(hovering || copied != nil ? 1 : 0)
-                .animation(K.M.quick, value: hovering)
-            }
-
-            // The ask, as a message from you: right-aligned, tinted, a bubble. The reply is a
-            // bubble from the other side. Two voices, told apart at a glance.
-            HStack {
-                Spacer(minLength: 48)
+        VStack(alignment: .leading, spacing: 6) {
+            // Yours, on the right, in blue. Nothing above it: a message does not need a title.
+            HStack(alignment: .bottom) {
+                Spacer(minLength: 64)
                 Text(turn.prompt)
                     .font(K.F.body)
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .background(K.C.accent, in: Bubble(tail: .trailing))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Bubble.blue, in: Bubble(tail: .trailing))
+                    .frame(maxWidth: 560, alignment: .trailing)
             }
 
             if !turn.thinking.isEmpty {
@@ -250,17 +215,44 @@ private struct ChatTurn: View {
                 } label: {
                     Text("thinking").font(K.F.micro).foregroundStyle(K.C.faint)
                 }
+                .padding(.leading, K.S.xs)
             }
 
+            // The reply, on the left, in grey. No border: the fill is the shape.
             if !turn.text.isEmpty {
-                HStack {
+                HStack(alignment: .bottom) {
                     Markdown(turn.text)
-                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                        .background(K.C.raised, in: Bubble(tail: .leading))
-                        .overlay(Bubble(tail: .leading).stroke(K.C.line, lineWidth: 1))
-                    Spacer(minLength: 24)
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(Bubble.grey, in: Bubble(tail: .leading))
+                        .frame(maxWidth: 620, alignment: .leading)
+                    Spacer(minLength: 32)
                 }
             }
+
+            // The caption Messages puts under a bubble — here, the turn and the ways to copy
+            // it. Faint, and only under the pointer.
+            HStack(spacing: K.S.sm) {
+                Button {
+                    model.focusedTurn = turn.id
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("Turn \(number)").font(K.F.micro)
+                        Image(systemName: "arrow.right").font(.system(size: 7, weight: .bold))
+                    }
+                    .foregroundStyle(K.C.faint)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show this turn in the trace")
+                if !turn.text.isEmpty {
+                    CopyChip(label: "reply", copied: copied == "reply") { put(turn.text, "reply") }
+                }
+                CopyChip(label: "both", copied: copied == "both") { put("> \(turn.prompt)\n\n\(turn.text)", "both") }
+                Spacer()
+            }
+            .padding(.leading, K.S.xs)
+            .opacity(hovering || copied != nil ? 1 : 0)
+            .animation(K.M.quick, value: hovering)
         }
         .onHover { hovering = $0 }
         // A second route, because a hover target is no use from the keyboard or a trackpad tap.
@@ -483,25 +475,33 @@ struct SendButton: ButtonStyle {
 }
 
 
-/// A message bubble: rounded, with a small tail on the side it came from.
+/// A message bubble with the tail Messages draws: the bottom corner on the speaker's side
+/// sweeps out and back rather than ending in a point.
 struct Bubble: Shape {
     enum Tail { case leading, trailing }
     let tail: Tail
+
+    static let blue = Color(red: 0.05, green: 0.52, blue: 1.0)
+    static var grey: Color { K.C.pair(0xE9E9EB, 0x3B3B3D) }
+
     func path(in r: CGRect) -> Path {
-        let radius: CGFloat = 14
+        let radius: CGFloat = min(18, r.height / 2)
         var p = Path(roundedRect: r, cornerRadius: radius)
-        let y = r.maxY - 1
+        var t = Path()
         switch tail {
         case .trailing:
-            p.move(to: CGPoint(x: r.maxX - radius, y: y))
-            p.addQuadCurve(to: CGPoint(x: r.maxX + 5, y: y), control: CGPoint(x: r.maxX - 2, y: y))
-            p.addQuadCurve(to: CGPoint(x: r.maxX - 4, y: y - 9), control: CGPoint(x: r.maxX - 1, y: y - 3))
+            t.move(to: CGPoint(x: r.maxX - radius, y: r.maxY))
+            t.addLine(to: CGPoint(x: r.maxX - 10, y: r.maxY - 14))
+            t.addQuadCurve(to: CGPoint(x: r.maxX + 6, y: r.maxY), control: CGPoint(x: r.maxX - 1, y: r.maxY - 1))
+            t.addQuadCurve(to: CGPoint(x: r.maxX - radius, y: r.maxY), control: CGPoint(x: r.maxX - 4, y: r.maxY + 1))
         case .leading:
-            p.move(to: CGPoint(x: r.minX + radius, y: y))
-            p.addQuadCurve(to: CGPoint(x: r.minX - 5, y: y), control: CGPoint(x: r.minX + 2, y: y))
-            p.addQuadCurve(to: CGPoint(x: r.minX + 4, y: y - 9), control: CGPoint(x: r.minX + 1, y: y - 3))
+            t.move(to: CGPoint(x: r.minX + radius, y: r.maxY))
+            t.addLine(to: CGPoint(x: r.minX + 10, y: r.maxY - 14))
+            t.addQuadCurve(to: CGPoint(x: r.minX - 6, y: r.maxY), control: CGPoint(x: r.minX + 1, y: r.maxY - 1))
+            t.addQuadCurve(to: CGPoint(x: r.minX + radius, y: r.maxY), control: CGPoint(x: r.minX + 4, y: r.maxY + 1))
         }
-        p.closeSubpath()
+        t.closeSubpath()
+        p.addPath(t)
         return p
     }
 }
