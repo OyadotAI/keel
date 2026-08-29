@@ -227,15 +227,19 @@ final class Lanes {
             if !a.repoPath.isEmpty || a.projectOpenKnown == false { break }
             try? await Task.sleep(for: .milliseconds(attempt < 10 ? 50 : 150))
         }
+        a.stage("reading the repository")
         await a.refreshState()
+        a.stage("reading git")
         await a.refreshGit()
         await a.refreshTree()
         await a.refreshTrust()
         await a.refreshGatePlan()
         await a.refreshDev()
+        a.stage("checking tools and plugins")
         await a.refreshSuggestions()
         await a.refreshTools()
         await refreshWorktrees()
+        a.finishedOpening()
         a.offerSetup()
         // Every lane draws the same project chrome, so they share what the project says about
         // itself rather than each asking.

@@ -78,6 +78,9 @@ struct SessionWindow: View {
         Group {
             if model.projectOpen { workbench } else { Welcome(model: model) { } }
         }
+        .animation(K.M.quick, value: model.opening)
+        .animation(K.M.quick, value: model.justOpened)
+        .animation(K.M.quick, value: model.loaded)
         .background(K.C.bg)
         .task {
             await lanes.refreshShared()
@@ -101,6 +104,13 @@ struct SessionWindow: View {
             // of them.
             LaneTabs(lanes: lanes)
             Hairline()
+            if let o = model.opening {
+                OpeningBar(name: o.name, stage: o.stage, done: false)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let name = model.justOpened {
+                OpeningBar(name: name, stage: "\(model.changes.count) changed · \(model.findings.count) findings", done: true)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             HStack(spacing: 0) {
                 ActivityRail(panel: $panel, model: model, onSettings: {
                     withAnimation(K.M.quick) { showSettings.toggle() }
@@ -124,6 +134,9 @@ struct SessionWindow: View {
                     working
                 }
             }
+            // Dimmed while a switch is in flight, so the old project's content reads as
+            // "going away" rather than as the new one.
+            .opacity(model.opening == nil ? 1 : 0.45)
             // Full width, under both panes: a terminal is where a build's output goes, and a
             // build's output is wider than the composer.
             if showTerminal {
@@ -871,4 +884,31 @@ private struct StageEvents: ViewModifier {
         model.inspecting = nil
     }
 
+}
+
+
+/// The bar that narrates a project switch, then says what it found. A window that goes still
+/// for three seconds and then pops a dialog reads as a hang; this reads as work.
+struct OpeningBar: View {
+    let name: String
+    let stage: String
+    let done: Bool
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            if done {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(K.C.add)
+            } else {
+                ProgressView().controlSize(.small).frame(width: 12, height: 12)
+            }
+            Text(done ? "Opened \(name)" : "Opening \(name)")
+                .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+            Text(done ? stage : "\(stage)…").font(K.F.small).foregroundStyle(K.C.dim)
+                .contentTransition(.opacity)
+            Spacer()
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, 5)
+        .background(done ? K.C.add.opacity(0.08) : K.C.surface)
+        .overlay(alignment: .bottom) { Hairline() }
+    }
 }
