@@ -269,9 +269,16 @@ private struct ChatTurn: View {
                 Spacer()
             }
             .padding(.leading, K.S.xs)
+            .frame(minHeight: 18)
+            .contentShape(Rectangle())
             .opacity(hovering || copied != nil ? 1 : 0)
+            .allowsHitTesting(hovering || copied != nil)
             .animation(K.M.quick, value: hovering)
         }
+        // The whole column is the hover target, gaps included: without a shape, the pointer
+        // leaving a bubble for the transparent space beside the caption ended the hover, and
+        // the chips faded out under the click.
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
         // A second route, because a hover target is no use from the keyboard or a trackpad tap.
         .contextMenu {
