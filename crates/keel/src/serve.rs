@@ -83,6 +83,24 @@ impl AppState {
         }
     }
 
+    /// The directory a session was launched from, when it is not the repository: a parent
+    /// (at most two up, never home) or a subdirectory. Anything else is the repository.
+    pub fn session_dir(&self, cwd: Option<&str>) -> Utf8PathBuf {
+        let repo = self.repo();
+        let Some(cwd) = cwd.filter(|c| !c.is_empty()).map(Utf8PathBuf::from) else {
+            return repo;
+        };
+        let Ok(cwd) = cwd.canonicalize_utf8() else {
+            return repo;
+        };
+        let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+        let allowed = keel_workspace::session_dirs(&repo, &home)
+            .into_iter()
+            .any(|(d, scope)| scope != "below" && d == cwd)
+            || cwd.starts_with(&repo);
+        if allowed { cwd } else { repo }
+    }
+
     pub fn set_repo(&self, path: Utf8PathBuf) {
         crate::prefs::Prefs::remember(&path);
         *self.repo.write().expect("repo lock poisoned") = path;
@@ -501,24 +519,38 @@ async fn api_raw(
 #[derive(serde::Deserialize)]
 struct SessionQuery {
     id: String,
+    /// The directory the session was launched from, when not the repository.
+    cwd: Option<String>,
 }
 
 /// Read one session's transcript, for the session switcher in the agent panel.
 async fn api_session(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Query(query): Query<SessionQuery>,
 ) -> Json<Vec<keel_workspace::Turn>> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    Json(keel_workspace::transcript(&repo, &home, &query.id))
+    let dir = if query.cwd.is_some() {
+        state.session_dir(query.cwd.as_deref())
+    } else {
+        repo
+    };
+    Json(keel_workspace::transcript(&dir, &home, &query.id))
 }
 
 /// What one session changed and ran. Explicit, on a click — see `keel_workspace::session_work`.
 async fn api_session_work(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Query(query): Query<SessionQuery>,
 ) -> Json<keel_workspace::SessionWork> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    Json(keel_workspace::session_work(&repo, &home, &query.id))
+    let dir = if query.cwd.is_some() {
+        state.session_dir(query.cwd.as_deref())
+    } else {
+        repo
+    };
+    Json(keel_workspace::session_work(&dir, &home, &query.id))
 }
 
 async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::api::GitStatus> {

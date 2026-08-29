@@ -238,6 +238,9 @@ pub struct ChatQuery {
     pub mode: Option<String>,
     /// The lane's checkout to run in. Absent means the project itself.
     pub wt: Option<String>,
+    /// The directory a resumed session was launched from, when that was not the repository.
+    /// `--resume` only finds a transcript in the project of the directory it runs in.
+    pub cwd: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -574,6 +577,11 @@ pub async fn chat(
     // different paths on purpose, and `settings_json` below is handed the project.
     let repo = state.repo();
     let cwd = match state.checkout(query.wt.as_deref()) {
+        // A resumed session runs where it was started. Validated: the repository, a parent
+        // within two levels, or a subdirectory — nowhere else.
+        Ok(_) if query.cwd.is_some() && query.session.is_some() => {
+            state.session_dir(query.cwd.as_deref())
+        }
         Ok(p) => p,
         Err(e) => {
             tokio::spawn(async move {
@@ -1361,6 +1369,19 @@ mod git_tests {
         );
     }
 
+    /// The header's numbers, not the header's `@@`.
+    #[test]
+    fn hunk_headers_number_both_sides() {
+        let raw = "@@ -48,6 +48,14 @@ describe(\"x\", () => {\n a\n+b\n c\n@@ -7 +7,2 @@\n x\n+y\n";
+        let hunks = parse_hunks(raw);
+        assert_eq!(hunks[0].lines[0].old, Some(48));
+        assert_eq!(hunks[0].lines[0].new, Some(48));
+        assert_eq!(hunks[0].lines[1].new, Some(49));
+        assert_eq!(hunks[0].lines[2].old, Some(49));
+        assert_eq!(hunks[1].lines[0].old, Some(7));
+        assert_eq!(hunks[1].lines[1].new, Some(8));
+    }
+
     /// Discarding one hunk leaves the other. The reason the action exists at all.
     #[test]
     fn one_hunk_can_be_discarded_on_its_own() {
@@ -1474,13 +1495,26 @@ fn parse_hunks(raw: &str) -> Vec<Hunk> {
 
     for line in raw.lines() {
         if line.starts_with("@@") {
-            // @@ -old,count +new,count @@
-            let nums: Vec<&str> = line
-                .split(['-', '+', ',', ' '])
-                .filter(|s| !s.is_empty())
+            // @@ -old,count +new,count @@ …  — the numbers only. The `@@` used to be the first
+            // token, failed to parse, and every hunk's old side started at line 1.
+            let nums: Vec<u32> = line
+                .split_once(" @@")
+                .map(|(head, _)| head)
+                .unwrap_or(line)
+                .split(['-', '+', ',', ' ', '@'])
+                .filter_map(|s| s.parse().ok())
                 .collect();
-            old_no = nums.first().and_then(|s| s.parse().ok()).unwrap_or(1);
-            new_no = nums.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+            old_no = nums.first().copied().unwrap_or(1);
+            // A hunk with one old line has no count: `-7 +7,2`. Old is first, new is the one
+            // after old's count when there is one.
+            let old_has_count = line
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|t| t.contains(','));
+            new_no = nums
+                .get(if old_has_count { 2 } else { 1 })
+                .copied()
+                .unwrap_or(1);
             hunks.push(Hunk {
                 header: line.to_string(),
                 lines: Vec::new(),

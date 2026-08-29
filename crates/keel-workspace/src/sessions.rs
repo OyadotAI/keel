@@ -10,6 +10,10 @@ use serde_json::Value;
 pub struct Session {
     /// The session UUID, which is what `claude --resume` takes.
     pub id: String,
+    /// Where it was found relative to the repository: `here`, `above` (a parent directory),
+    /// or `below` (a subdirectory). Claude Code keys transcripts by the directory it was
+    /// launched from, and people launch it from the folder above as often as not.
+    pub scope: String,
     /// Claude Code's own generated title, when it has produced one.
     pub title: Option<String>,
     pub cwd: Option<String>,
@@ -282,23 +286,83 @@ pub fn project_key(cwd: &Utf8Path) -> String {
     cwd.as_str().replace('/', "-")
 }
 
-/// Every session recorded for `repo`, most recently active first.
-pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session> {
-    let dir = claude_home.join("projects").join(project_key(repo));
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
+/// The directories whose sessions belong to this repository: itself, up to two parents (never
+/// the home directory), and every subdirectory.
+///
+/// Claude Code keys transcripts by the launch directory, so a person who ran it from the
+/// folder above — the monorepo, the client's folder — has their sessions there, and a Keel that
+/// only looked at the exact path listed one session where they remembered thirteen.
+pub fn session_dirs(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<(Utf8PathBuf, &'static str)> {
+    let home = std::env::var("HOME").map(Utf8PathBuf::from).ok();
+    let mut out = vec![(repo.to_owned(), "here")];
+    let mut up = repo.parent();
+    for _ in 0..2 {
+        let Some(dir) = up else { break };
+        if Some(dir) == home.as_deref() || dir.as_str() == "/" {
+            break;
+        }
+        out.push((dir.to_owned(), "above"));
+        up = dir.parent();
+    }
+    // Subdirectories: every project key that extends this one.
+    let prefix = project_key(repo) + "-";
+    if let Ok(entries) = std::fs::read_dir(claude_home.join("projects")) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(&prefix) {
+                // The key is lossy; the real path is in each transcript's `cwd`, read later.
+                out.push((
+                    Utf8PathBuf::from(format!("{}/{}", claude_home, name)),
+                    "below",
+                ));
+            }
+        }
+    }
+    out
+}
 
-    let mut sessions: Vec<Session> = entries
-        .filter_map(Result::ok)
-        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
-        .filter(|p| p.extension() == Some("jsonl"))
-        .filter_map(|p| parse_session(&p))
-        .collect();
+/// Every session recorded for `repo` and the directories around it, most recently active first.
+pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session> {
+    let mut sessions: Vec<Session> = Vec::new();
+    for (dir, scope) in session_dirs(repo, claude_home) {
+        let project = if scope == "below" {
+            dir
+        } else {
+            claude_home.join("projects").join(project_key(&dir))
+        };
+        let Ok(entries) = std::fs::read_dir(&project) else {
+            continue;
+        };
+        for p in entries
+            .filter_map(Result::ok)
+            .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+            .filter(|p| p.extension() == Some("jsonl"))
+        {
+            if let Some(mut s) = parse_session(&p) {
+                s.scope = scope.to_string();
+                // A session below the repo is only listed if its transcript says where.
+                if scope == "below" && s.cwd.is_none() {
+                    continue;
+                }
+                if scope != "below" && s.cwd.is_none() {
+                    s.cwd = Some(dir_of(&project, claude_home, repo, scope));
+                }
+                sessions.push(s);
+            }
+        }
+    }
 
     // Most recent first: an unstarted session sorts last rather than crashing the ordering.
     sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active));
     sessions
+}
+
+/// The launch directory for a session whose transcript did not record one.
+fn dir_of(_project: &Utf8Path, _home: &Utf8Path, repo: &Utf8Path, scope: &str) -> String {
+    match scope {
+        "here" => repo.to_string(),
+        _ => repo.parent().map(|p| p.to_string()).unwrap_or_default(),
+    }
 }
 
 /// Summarise one transcript.
@@ -312,6 +376,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
 
     let mut session = Session {
         id,
+        scope: "here".into(),
         title: None,
         cwd: None,
         branch: None,

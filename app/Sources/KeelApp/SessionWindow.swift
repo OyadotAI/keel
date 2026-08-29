@@ -124,6 +124,12 @@ struct SessionWindow: View {
                     working
                 }
             }
+            // Full width, under both panes: a terminal is where a build's output goes, and a
+            // build's output is wider than the composer.
+            if showTerminal {
+                Hairline()
+                terminalPane
+            }
             Hairline()
             StatusBar(model: model, terminalOpen: $showTerminal)
         }
@@ -162,14 +168,8 @@ struct SessionWindow: View {
         HStack(spacing: 0) {
             // The conversation is the middle, because it is what you are doing. The record of what
             // the agent changed is a reference you consult, so it sits beside it.
-            VStack(spacing: 0) {
-                ChatRail(model: model)
-                if showTerminal {
-                    Hairline()
-                    terminalPane
-                }
-            }
-            .frame(minWidth: 420)
+            ChatRail(model: model)
+                .frame(minWidth: 420)
 
             SplitHandle(width: $stageWidth, range: 340...720, reset: 460)
 

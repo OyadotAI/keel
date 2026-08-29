@@ -87,13 +87,14 @@ struct KeelApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             }
-            // Lanes are the point of the window, so they get the number keys.
+            // Lanes are the point of the window, so they get the number keys — the lanes that
+            // exist, by name. Nine fixed "Lane n" entries was a menu of things that did nothing.
             CommandMenu("Lanes") {
-                ForEach(1...9, id: \.self) { n in
-                    Button("Lane \(n)") {
-                        NotificationCenter.default.post(name: .keelFocusLane, object: n - 1)
+                ForEach(Array(app.lanes.lanes.prefix(9).enumerated()), id: \.element.id) { i, lane in
+                    Button(lane.title == "Untitled" ? "Lane \(i + 1) (empty)" : lane.title) {
+                        NotificationCenter.default.post(name: .keelFocusLane, object: i)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
                 }
                 Divider()
                 Button("Next lane") {
@@ -126,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @MainActor
     func applicationWillTerminate(_ notification: Notification) {
+        Telemetry.flush()
         app?.shutdown()
     }
 

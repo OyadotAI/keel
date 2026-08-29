@@ -98,10 +98,19 @@ enum Wire {
         var title: String?
         var messages: Int
         var lastActive: String?
+        /// `here`, `above` or `below` the repository.
+        var scope: String?
+        var cwd: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, title, messages
+            case id, title, messages, scope, cwd
             case lastActive = "last_active"
+        }
+
+        /// The folder it was started in, when that is not the repository.
+        var elsewhere: String? {
+            guard scope != nil, scope != "here", let cwd else { return nil }
+            return (cwd as NSString).lastPathComponent
         }
     }
 

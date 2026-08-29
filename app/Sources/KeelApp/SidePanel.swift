@@ -104,6 +104,12 @@ struct SessionsPanel: View {
                     HStack(spacing: K.S.xs) {
                         Text("\(s.messages) msg").font(K.F.mono(10))
                         if let t = s.lastActive { Text(short(t)).font(K.F.mono(10)) }
+                        // Started in the folder above or below: said, because resuming it
+                        // runs the agent there.
+                        if let from = s.elsewhere {
+                            Text("· in \(from)/").font(K.F.mono(10))
+                                .help("Started in \(s.cwd ?? from). Resuming runs the agent there.")
+                        }
                     }
                     .foregroundStyle(K.C.faint)
                 }
