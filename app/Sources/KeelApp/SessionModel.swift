@@ -850,7 +850,6 @@ final class SessionModel: Identifiable {
             }
         } catch { installLog += error.localizedDescription }
         Telemetry.track("plugin_installed", ["recommended": true])
-        await refreshSuggestions()
         await refreshState()
     }
 
@@ -923,6 +922,10 @@ final class SessionModel: Identifiable {
         sessions = s.workspace.sessions
         findings = s.scan.findings
         workspace = s.workspace
+        // The recommendations depend on what is installed, and every path that changes that —
+        // install, uninstall, disable, the catalog closing — comes through here. One place,
+        // so the badge cannot go stale from a caller that forgot.
+        await refreshSuggestions()
     }
 
     /// Open an existing conversation in this window: replay what it did, then carry on.
