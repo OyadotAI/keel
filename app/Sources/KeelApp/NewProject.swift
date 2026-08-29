@@ -68,7 +68,7 @@ struct StartProject: View {
             }
         }
         .padding(K.S.xl)
-        .frame(width: mode == .new ? 960 : 640)
+        .frame(width: mode == .new ? 1180 : 640)
         .background(K.C.bg)
         .task { await loadRepos() }
     }
@@ -93,7 +93,7 @@ struct StartProject: View {
     private var newForm: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             HStack(alignment: .top, spacing: K.S.md) {
-                categories.frame(width: 168)
+                categories.frame(width: 180)
                 VStack(spacing: K.S.sm) {
                     search("Search \(Template.all.count) templates…")
                     ScrollView {
@@ -106,6 +106,10 @@ struct StartProject: View {
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(t.title).font(K.F.small.weight(on ? .semibold : .regular))
                                             .foregroundStyle(K.C.text)
+                                        if !t.like.isEmpty {
+                                            Text("like \(t.like)").font(K.F.micro).foregroundStyle(K.C.accent.opacity(0.9))
+                                                .lineLimit(1)
+                                        }
                                         Text(t.blurb).font(K.F.micro).foregroundStyle(K.C.faint)
                                             .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                                     }
@@ -124,10 +128,10 @@ struct StartProject: View {
                         }
                     }
                 }
-                .frame(width: 260)
+                .frame(width: 300)
                 detail
             }
-            .frame(height: 440)
+            .frame(height: 560)
 
             Hairline()
             footer
@@ -166,7 +170,12 @@ struct StartProject: View {
             VStack(alignment: .leading, spacing: K.S.md) {
                 HStack(spacing: K.S.sm) {
                     Image(systemName: template.icon).font(.system(size: 16)).foregroundStyle(K.C.accent)
-                    Text(template.title).font(K.F.title).foregroundStyle(K.C.text)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(template.title).font(K.F.title).foregroundStyle(K.C.text)
+                        if !template.like.isEmpty {
+                            Text("like \(template.like)").font(K.F.small).foregroundStyle(K.C.accent)
+                        }
+                    }
                     Spacer()
                     Text(template.category.rawValue).font(K.F.micro).foregroundStyle(K.C.faint)
                 }
