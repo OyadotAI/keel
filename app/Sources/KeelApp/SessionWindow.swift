@@ -98,9 +98,12 @@ struct SessionWindow: View {
             LaneTabs(lanes: lanes)
             Hairline()
             HStack(spacing: 0) {
-                ActivityRail(panel: $panel, model: model) {
+                ActivityRail(panel: $panel, model: model, onSettings: {
                     withAnimation(K.M.quick) { showSettings.toggle() }
-                }
+                }, onPanel: {
+                    // Picking a panel is leaving Settings, whatever the gear is showing.
+                    withAnimation(K.M.quick) { showSettings = false }
+                })
 
                 if let panel {
                     SidePanel(panel: panel, model: model)
@@ -266,6 +269,7 @@ struct ActivityRail: View {
     @Binding var panel: SessionWindow.Panel?
     let model: SessionModel
     var onSettings: () -> Void = {}
+    var onPanel: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .center, spacing: K.S.xxs) {
@@ -279,6 +283,7 @@ struct ActivityRail: View {
                     selected: panel == p
                 ) {
                     withAnimation(K.M.quick) { panel = (panel == p) ? nil : p }
+                    onPanel()
                 }
                 if p.endsGroup {
                     Rectangle().fill(K.C.line)
