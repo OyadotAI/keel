@@ -25,18 +25,16 @@ struct FileDiff: View {
             header
             if open, let diff {
                 Hairline()
-                ScrollView(.horizontal, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
-                            HunkHeader(header: hunk.header, index: hi, path: path,
-                                       discardable: !diff.untracked, model: model)
-                            let marks = Intraline.marks(hunk.lines)
-                            ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
-                                row(line, mark: marks[li])
-                            }
-                        }
+                // Full width, long lines truncated with the whole line on hover. A horizontal
+                // scroll view here sized the diff to its longest line, and a diff of short
+                // lines became a narrow strip down the left of the card.
+                ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
+                    HunkHeader(header: hunk.header, index: hi, path: path,
+                               discardable: !diff.untracked, model: model)
+                    let marks = Intraline.marks(hunk.lines)
+                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
+                        row(line, mark: marks[li])
                     }
-                    .frame(minWidth: 0, alignment: .leading)
                 }
             }
         }
@@ -118,8 +116,9 @@ struct FileDiff: View {
             Text(Intraline.styled(line.text, mark: mark, kind: line.kind))
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
-                .lineLimit(1)
+                .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(line.text.count > 80 ? line.text : "")
 
             if noted {
                 Image(systemName: "text.bubble.fill")
