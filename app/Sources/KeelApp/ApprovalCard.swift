@@ -20,7 +20,7 @@ struct ApprovalCard: View {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: 10)).foregroundStyle(K.C.warn)
                 Text("WAITING FOR YOU")
-                    .font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.warn)
                 Spacer()
                 Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
@@ -96,5 +96,124 @@ struct PrimaryChoice: ButtonStyle {
                 RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.warn.opacity(0.4), lineWidth: 1)
             )
             .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Questions
+
+/// A question the agent asked, answered where you are already looking.
+///
+/// Headless `claude -p` has no terminal to ask on, so `AskUserQuestion` waited sixty seconds and
+/// carried on without an answer — the most-upvoted complaint against the CLI, and one Keel can
+/// answer with the same hook that holds a command. The turn is paused here until you pick.
+struct QuestionCard: View {
+    let pending: Wire.Pending
+    let model: SessionModel
+    @State private var chosen: [String: Set<String>] = [:]
+    @State private var other: [String: String] = [:]
+    @State private var appeared = false
+
+    private var questions: [Wire.Question] { pending.questions }
+
+    /// Every question answered, by a choice or by typing.
+    private var complete: Bool {
+        questions.allSatisfy { q in
+            !(chosen[q.id] ?? []).isEmpty
+                || !(other[q.id] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: "questionmark.bubble.fill")
+                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                Text("THE AGENT IS ASKING")
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .foregroundStyle(K.C.warn)
+                Spacer()
+                Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
+            }
+
+            ForEach(questions) { q in
+                VStack(alignment: .leading, spacing: K.S.xs) {
+                    Text(q.text).font(K.F.body).foregroundStyle(K.C.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(q.options.enumerated()), id: \.element) { i, o in
+                        let on = chosen[q.id, default: []].contains(o)
+                        Button {
+                            if q.multiSelect {
+                                if on { chosen[q.id, default: []].remove(o) }
+                                else { chosen[q.id, default: []].insert(o) }
+                            } else {
+                                chosen[q.id] = [o]
+                            }
+                        } label: {
+                            HStack(spacing: K.S.sm) {
+                                Image(systemName: on
+                                      ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
+                                      : (q.multiSelect ? "square" : "circle"))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(on ? K.C.accent : K.C.faint)
+                                Text(o).font(K.F.small).foregroundStyle(K.C.text)
+                                Spacer()
+                                // The first question's options answer to ⌘⌥1…9, and say so.
+                                if questions.first?.id == q.id, i < 9 {
+                                    Text("⌘⌥\(i + 1)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .modifier(OptionKey(index: i, enabled: questions.first?.id == q.id))
+                    }
+                    TextField("Or answer in your own words…",
+                              text: Binding(get: { other[q.id] ?? "" }, set: { other[q.id] = $0 }))
+                        .textFieldStyle(.plain)
+                        .font(K.F.small)
+                        .padding(K.S.xs)
+                        .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Answer  ⌘⌥↩") { model.answer(pending, text: rendered) }
+                    .buttonStyle(SendButton())
+                    .keyboardShortcut(.return, modifiers: [.command, .option])
+                    .disabled(!complete)
+            }
+        }
+        .padding(K.S.md)
+        .background(K.C.warn.opacity(0.07), in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1)
+        )
+        .scaleEffect(appeared ? 1 : 0.99)
+        .opacity(appeared ? 1 : 0)
+        .onAppear { withAnimation(K.M.settle) { appeared = true } }
+    }
+
+    /// The answers as the text the agent reads: one line per question.
+    private var rendered: String {
+        questions.map { q in
+            var parts = Array(chosen[q.id] ?? []).sorted()
+            let typed = (other[q.id] ?? "").trimmingCharacters(in: .whitespaces)
+            if !typed.isEmpty { parts.append(typed) }
+            return "\(q.text): \(parts.joined(separator: ", "))"
+        }.joined(separator: "\n")
+    }
+}
+
+/// ⌘⌥n picks the nth option — on the first question only, so the digits mean one thing.
+private struct OptionKey: ViewModifier {
+    let index: Int
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled, index < 9 {
+            content.keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command, .option])
+        } else {
+            content
+        }
     }
 }

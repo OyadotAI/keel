@@ -236,6 +236,8 @@ pub struct ChatQuery {
     /// edit and run commands. Anything unrecognised falls back to `plan`, because the safe default
     /// is the one that cannot change the repository.
     pub mode: Option<String>,
+    /// The lane's checkout to run in. Absent means the project itself.
+    pub wt: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -320,6 +322,9 @@ fn system_prompt(repo: &Utf8Path) -> String {
          button to allow it. That is the loop working, not a failure. Say plainly what you needed \
          and stop. Do not reach for a different command that happens to be permitted — a \
          substitute they did not approve is worse than a request they can answer in one click.\n\n\
+         `AskUserQuestion` works here: Keel shows the question and holds the turn until they \
+         answer, and the answer arrives as the tool's result. Use it when two readings of the \
+         request would lead to materially different work.\n\n\
          ## Configuring the workspace\n\n\
          Anything the person could set up from a terminal you can set up from here. A subagent is \
          a Markdown file with YAML frontmatter in `.claude/agents/` — write one directly, and make \
@@ -510,7 +515,7 @@ fn sanitise_attachment_name(name: &str) -> String {
 ///   therefore has to survive a URL length limit and then macOS's ~256 KB `ARG_MAX`, and it does
 ///   not. A file dodges both, which is why long text comes through here too rather than inline.
 pub async fn attach(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(checkout): crate::serve::Checkout,
     Query(q): Query<AttachQuery>,
     body: axum::body::Bytes,
 ) -> Result<Json<Attached>, (axum::http::StatusCode, String)> {
@@ -526,7 +531,7 @@ pub async fn attach(
         .map(|d| d.as_millis())
         .unwrap_or_default();
 
-    let dir = state.repo().join(".keel").join("attachments");
+    let dir = checkout.join(".keel").join("attachments");
     std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
 
     // A `.gitignore` inside the directory keeps attachments out of `git status` — and so out of the
@@ -565,13 +570,24 @@ pub async fn chat(
     Query(query): Query<ChatQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    // The agent runs in the lane's checkout; its permissions come from the project. The two are
+    // different paths on purpose, and `settings_json` below is handed the project.
     let repo = state.repo();
+    let cwd = match state.checkout(query.wt.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            tokio::spawn(async move {
+                let _ = tx.send(Ok(Event::default().event("fatal").data(e))).await;
+            });
+            return Sse::new(ReceiverStream::new(rx));
+        }
+    };
     let port = state.port();
 
     tokio::spawn(async move {
         let mut command = Command::new("claude");
         command
-            .current_dir(&repo)
+            .current_dir(&cwd)
             .arg("-p")
             .arg(&query.prompt)
             .arg("--output-format")
@@ -592,7 +608,7 @@ pub async fn chat(
                 query.session.as_deref(),
             ))
             .arg("--append-system-prompt")
-            .arg(system_prompt(&repo))
+            .arg(system_prompt(&cwd))
             // Note what is deliberately *not* in that prompt: an instruction to avoid shell
             // expansion. It was tried, and with and without it the first command out was
             // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
@@ -723,7 +739,12 @@ pub fn git_init(root: &Utf8Path) -> Result<(), String> {
     git_run(root, &["init"]).map(|_| ())
 }
 
-pub fn git_act(root: &Utf8Path, action: &str, path: &str) -> Result<(), String> {
+pub fn git_act(
+    root: &Utf8Path,
+    action: &str,
+    path: &str,
+    hunk: Option<usize>,
+) -> Result<(), String> {
     if path.is_empty() {
         return Err("no file".into());
     }
@@ -733,6 +754,33 @@ pub fn git_act(root: &Utf8Path, action: &str, path: &str) -> Result<(), String> 
     match action {
         "stage" => git_run(root, &["add", "--", path]).map(|_| ()),
         "unstage" => git_run(root, &["restore", "--staged", "--", path]).map(|_| ()),
+        // One hunk, not the file. Reviewing a four-hunk edit and wanting three of them is the
+        // ordinary case, and "discard the file and ask again" throws away the three.
+        "discard-hunk" => {
+            let n = hunk.ok_or("which hunk?")?;
+            let raw = git_run(root, &["diff", "--no-color", "-U3", "--", path])?;
+            let patch = one_hunk(&raw, n).ok_or(format!("no hunk {n} in {path}"))?;
+            let mut child = std::process::Command::new("git")
+                .current_dir(root)
+                .args(["apply", "-R", "--recount", "--unidiff-zero", "-"])
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .ok_or("no stdin")?
+                .write_all(patch.as_bytes())
+                .map_err(|e| e.to_string())?;
+            let out = child.wait_with_output().map_err(|e| e.to_string())?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        }
         "discard" => {
             if tracked(root, path) {
                 git_run(root, &["restore", "--staged", "--worktree", "--", path]).map(|_| ())
@@ -742,6 +790,24 @@ pub fn git_act(root: &Utf8Path, action: &str, path: &str) -> Result<(), String> 
         }
         _ => Err(format!("unknown action: {action}")),
     }
+}
+
+/// The file header and the `n`th `@@` block of a unified diff, as a patch of its own.
+fn one_hunk(raw: &str, n: usize) -> Option<String> {
+    let mut header = String::new();
+    let mut hunks: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        if line.starts_with("@@") {
+            hunks.push(format!("{line}\n"));
+        } else if let Some(last) = hunks.last_mut() {
+            last.push_str(line);
+            last.push('\n');
+        } else {
+            header.push_str(line);
+            header.push('\n');
+        }
+    }
+    hunks.get(n).map(|h| header + h)
 }
 
 /// Uncommitted changes, which after an agent run is the answer to "what did it just do".
@@ -910,12 +976,12 @@ mod git_tests {
         };
         assert_eq!(staged(&root), Some(false), "an edit starts unstaged");
 
-        git_act(&root, "stage", "a.txt").expect("stage");
+        git_act(&root, "stage", "a.txt", None).expect("stage");
         assert_eq!(staged(&root), Some(true));
-        git_act(&root, "unstage", "a.txt").expect("unstage");
+        git_act(&root, "unstage", "a.txt", None).expect("unstage");
         assert_eq!(staged(&root), Some(false));
 
-        git_act(&root, "discard", "a.txt").expect("discard");
+        git_act(&root, "discard", "a.txt", None).expect("discard");
         assert_eq!(
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
             "committed\n"
@@ -926,8 +992,48 @@ mod git_tests {
         );
 
         // A path that is not in the repository never reaches git.
-        assert!(git_act(&root, "discard", "../../etc/hosts").is_err());
-        assert!(git_act(&root, "nonsense", "a.txt").is_err());
+        assert!(git_act(&root, "discard", "../../etc/hosts", None).is_err());
+        assert!(git_act(&root, "nonsense", "a.txt", None).is_err());
+    }
+
+    /// Discarding one hunk leaves the other. The reason the action exists at all.
+    #[test]
+    fn one_hunk_can_be_discarded_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        let body: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(root.join("a.txt"), &body).unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+
+        // Two edits far enough apart to be two hunks.
+        let edited = body
+            .replace("line 2\n", "LINE 2\n")
+            .replace("line 28\n", "LINE 28\n");
+        std::fs::write(root.join("a.txt"), &edited).unwrap();
+        assert_eq!(git_diff(&root, "a.txt").hunks.len(), 2);
+
+        git_act(&root, "discard-hunk", "a.txt", Some(0)).expect("discard the first");
+        let now = std::fs::read_to_string(root.join("a.txt")).unwrap();
+        assert!(now.contains("line 2\n"), "the first edit is gone");
+        assert!(now.contains("LINE 28\n"), "the second survives");
+        assert_eq!(git_diff(&root, "a.txt").hunks.len(), 1);
+
+        assert!(
+            git_act(&root, "discard-hunk", "a.txt", Some(5)).is_err(),
+            "no such hunk"
+        );
+        assert!(git_act(&root, "discard-hunk", "a.txt", None).is_err());
     }
 }
 

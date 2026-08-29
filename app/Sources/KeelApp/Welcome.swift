@@ -65,7 +65,7 @@ struct Welcome: View {
 
     private var claudeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("CLAUDE CODE").font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+            Text("CLAUDE CODE").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                 .foregroundStyle(K.C.faint)
 
             row(ok: claude?.installed == true, "Installed",
@@ -107,7 +107,7 @@ struct Welcome: View {
     private var openSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: K.S.sm) {
-                Text("OPEN SOMETHING").font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                Text("OPEN SOMETHING").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint)
                 if !ready {
                     Text("after the two above — the only things Keel cannot install for you")
@@ -123,17 +123,22 @@ struct Welcome: View {
             .disabled(!ready)
             .opacity(ready ? 1 : 0.45)
 
+            // The three keys that make the window a keyboard tool, said once, here, before
+            // there is a menu bar item to find them in.
+            Text("⌘K for anything · ⌘N for another agent · ⇧⇥ to switch Plan and Auto")
+                .font(K.F.micro).foregroundStyle(K.C.faint)
+
             if let error {
                 Text(error).font(K.F.small).foregroundStyle(K.C.del)
             }
 
             if !Recents.paths.isEmpty {
-                Text("RECENT").font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                Text("RECENT").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint).padding(.top, K.S.sm)
                 ForEach(Recents.paths, id: \.self) { path in
                     HoverRow {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "folder").font(.system(size: 9))
+                            Image(systemName: "folder").font(.system(size: 10))
                                 .foregroundStyle(K.C.faint)
                             Text((path as NSString).lastPathComponent)
                                 .font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)

@@ -6,17 +6,15 @@
 //!
 //! So Keel runs them itself after every turn. The agent does not get to grade its own work.
 
-use axum::extract::State;
 use axum::response::sse::{Event, Sse};
 use camino::Utf8Path;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::process::Stdio;
-use std::sync::Arc;
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::serve::AppState;
+use crate::serve::Checkout;
 
 /// How this repository proves itself.
 #[derive(Debug, Clone, Serialize)]
@@ -221,16 +219,13 @@ pub fn parse_problem(line: &str) -> Option<Problem> {
 }
 
 /// Report which check would run, without running it.
-pub async fn plan(State(state): State<Arc<AppState>>) -> axum::Json<Option<Check>> {
-    axum::Json(detect(&state.repo()))
+pub async fn plan(Checkout(repo): Checkout) -> axum::Json<Option<Check>> {
+    axum::Json(detect(&repo))
 }
 
 /// Run the check and stream its output.
-pub async fn run(
-    State(state): State<Arc<AppState>>,
-) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-    let repo = state.repo();
 
     tokio::spawn(async move {
         let Some(check) = detect(&repo) else {

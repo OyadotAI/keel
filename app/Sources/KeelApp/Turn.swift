@@ -23,6 +23,8 @@ final class Turn: Identifiable {
     /// Tool calls in order, keyed for pairing with the result that answers them.
     private(set) var calls: [Call] = []
     private var callIndex: [String: Int] = [:]
+    /// A subagent's call, by id, to the top-level call it belongs under.
+    private var parentOf: [String: String] = [:]
 
     /// The daemon caps a replay at 300 calls and says so; hiding that would be a quiet lie about
     /// what the session did.
@@ -30,6 +32,35 @@ final class Turn: Identifiable {
     var cost: Double?
     var durationMS: Int?
     var finished = false
+
+    /// What the turn spent, from the CLI's own `result`. Cache tokens are counted separately
+    /// because they are what makes the cost figure make sense: a turn with 90% cache reads is
+    /// cheap in a way its input count alone hides.
+    var tokens: Tokens?
+    /// The last request's input — how much of the context window the conversation now holds.
+    var contextTokens = 0
+
+    struct Tokens: Equatable {
+        var input = 0
+        var output = 0
+        var cacheRead = 0
+        var cacheWrite = 0
+
+        var total: Int { input + output + cacheRead + cacheWrite }
+        /// The share of what was read that came from cache.
+        var cached: Double {
+            let read = input + cacheRead + cacheWrite
+            return read > 0 ? Double(cacheRead) / Double(read) : 0
+        }
+        static func + (a: Tokens, b: Tokens) -> Tokens {
+            Tokens(input: a.input + b.input, output: a.output + b.output,
+                   cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite)
+        }
+    }
+
+    /// The working tree before this turn ran, as a git tree id. `nil` for a replayed turn, or
+    /// when the snapshot could not be taken.
+    var snapshot: String?
 
     /// True for a turn rebuilt from a transcript rather than watched live.
     ///
@@ -52,6 +83,9 @@ final class Turn: Identifiable {
         var after: NSImage?
         var verdict: DesignCheck.Verdict
         var duplicated: Bool
+        /// What the page said moved, and a photograph of all of it together.
+        var regions: [Region] = []
+        var pageAfter: NSImage?
     }
 
     /// The project's own checks, run after the turn — not the agent's opinion of its own work.
@@ -73,6 +107,14 @@ final class Turn: Identifiable {
         var output: String = ""
         var failed = false
         var running = true
+        /// Calls a subagent made on this call's behalf. Only a `Task` has any.
+        var children: [Call] = []
+
+        /// The call doing something right now, however deep.
+        var deepestRunning: Call? {
+            guard running else { return nil }
+            return children.last(where: \.running)?.deepestRunning ?? self
+        }
     }
 
     init(prompt: String) { self.prompt = prompt }
@@ -87,20 +129,37 @@ final class Turn: Identifiable {
         files.append(path)
     }
 
-    func begin(call id: String, tool: String, input: [String: JSONValue]) {
+    /// `parent` is the `Task` call a subagent is working for. Its calls nest under that row
+    /// rather than joining the top-level list: a subagent that reads forty files is one line
+    /// saying so, and forty lines is the transcript nobody could follow in the terminal either.
+    func begin(call id: String, tool: String, input: [String: JSONValue], parent: String? = nil) {
         // The argument worth showing, in the order the tools actually carry it.
         let subject = ["command", "file_path", "path", "pattern", "description"]
             .compactMap { input[$0]?.stringValue }
             .first ?? ""
         let oneLine = subject.split(separator: "\n").first.map(String.init) ?? ""
-        callIndex[id] = calls.count
-        calls.append(Call(id: id, tool: tool, subject: String(oneLine.prefix(160))))
+        let call = Call(id: id, tool: tool, subject: String(oneLine.prefix(160)))
+        if let parent, let pi = callIndex[parent] {
+            parentOf[id] = parent
+            calls[pi].children.append(call)
+        } else {
+            callIndex[id] = calls.count
+            calls.append(call)
+        }
+        // A file a subagent wrote is still a file this turn wrote.
         if Self.writeTools.contains(tool) {
             noteEdit(input["file_path"]?.stringValue ?? input["path"]?.stringValue)
         }
     }
 
     func finish(call id: String, output: String, failed: Bool) {
+        if let parent = parentOf[id], let pi = callIndex[parent],
+           let ci = calls[pi].children.firstIndex(where: { $0.id == id }) {
+            calls[pi].children[ci].output = output
+            calls[pi].children[ci].failed = failed
+            calls[pi].children[ci].running = false
+            return
+        }
         guard let i = callIndex[id] else { return }
         calls[i].output = output
         calls[i].failed = failed
@@ -141,7 +200,7 @@ final class Turn: Identifiable {
 /// Just enough JSON to read a tool call's input.
 ///
 /// `[String: Any]` is not `Sendable` and `AnyCodable` is a dependency for four cases.
-enum JSONValue: Decodable {
+enum JSONValue: Decodable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -165,6 +224,11 @@ enum JSONValue: Decodable {
         case .string(let s): return s.isEmpty ? nil : s
         default: return nil
         }
+    }
+
+    subscript(key: String) -> JSONValue? {
+        if case .object(let o) = self { return o[key] }
+        return nil
     }
 
     /// A `tool_result` is a string on some records and a list of text blocks on others.

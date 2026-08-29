@@ -243,7 +243,7 @@ struct CodeBlock: View {
             if language != nil || true {
                 HStack {
                     if let language {
-                        Text(language).font(K.F.mono(9.5)).foregroundStyle(K.C.faint)
+                        Text(language).font(K.F.mono(10)).foregroundStyle(K.C.faint)
                     }
                     Spacer()
                     Button(copied ? "copied" : "copy") {
@@ -253,7 +253,7 @@ struct CodeBlock: View {
                         Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                     }
                     .buttonStyle(.plain)
-                    .font(K.F.mono(9.5))
+                    .font(K.F.mono(10))
                     .foregroundStyle(copied ? K.C.add : K.C.faint)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .contentShape(Rectangle())
@@ -307,7 +307,7 @@ struct Table: View {
                     HStack(spacing: 0) {
                         ForEach(0..<columns, id: \.self) { c in
                             Text(row.indices.contains(c) ? row[c] : "")
-                                .font(i == 0 ? K.F.mono(10.5, .semibold) : K.F.mono(10.5))
+                                .font(i == 0 ? K.F.mono(11, .semibold) : K.F.mono(11))
                                 .foregroundStyle(i == 0 ? K.C.dim : K.C.text)
                                 .monospacedDigit()
                                 .lineLimit(1)

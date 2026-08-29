@@ -92,7 +92,7 @@ struct Inspector: View {
             field("Event", h.event)
             // The command is the whole story for a hook, so it gets room and a monospace face.
             VStack(alignment: .leading, spacing: K.S.xs) {
-                Text("COMMAND").font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                Text("COMMAND").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint)
                 Text(h.command)
                     .font(K.F.code).foregroundStyle(K.C.text)
@@ -144,7 +144,7 @@ struct Inspector: View {
     private func field(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Text(label.uppercased())
-                .font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                 .foregroundStyle(K.C.faint)
             Text(value)
                 .font(K.F.body).foregroundStyle(K.C.text)
@@ -155,7 +155,7 @@ struct Inspector: View {
 
     private func pathField(_ path: String) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Text("FILE").font(.system(size: 9, weight: .semibold)).tracking(0.7)
+            Text("FILE").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                 .foregroundStyle(K.C.faint)
             Text(path)
                 .font(K.F.code).foregroundStyle(K.C.dim)

@@ -10,9 +10,11 @@ import SwiftUI
 /// Anything that assumes text frames are output will print the word `zsh` into the shell.
 struct TerminalPane: NSViewRepresentable {
     let port: UInt16
+    /// The lane's checkout to open the shell in, if it has one.
+    var worktree: String? = nil
     @Binding var title: String
 
-    func makeCoordinator() -> Coordinator { Coordinator(port: port, title: $title) }
+    func makeCoordinator() -> Coordinator { Coordinator(port: port, worktree: worktree, title: $title) }
 
     func makeNSView(context: Context) -> TerminalView {
         let view = TerminalView(frame: .zero)
@@ -26,18 +28,21 @@ struct TerminalPane: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
         private let port: UInt16
+        private let worktree: String?
         private var socket: URLSessionWebSocketTask?
         private weak var view: TerminalView?
         @Binding private var title: String
 
-        init(port: UInt16, title: Binding<String>) {
+        init(port: UInt16, worktree: String?, title: Binding<String>) {
             self.port = port
+            self.worktree = worktree
             _title = title
         }
 
         func attach(_ view: TerminalView) {
             self.view = view
-            let url = URL(string: "ws://127.0.0.1:\(port)/api/term/ws")!
+            let url = URL(string: "ws://127.0.0.1:\(port)/api/term/ws"
+                          + (worktree.map { "?wt=" + $0 } ?? ""))!
             let task = URLSession.shared.webSocketTask(with: url)
             socket = task
             task.resume()

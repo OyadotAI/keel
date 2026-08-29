@@ -10,13 +10,13 @@ struct FileTree: View {
     @State private var filter = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: K.S.xxs) {
             HStack(spacing: K.S.xs) {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 9)).foregroundStyle(K.C.faint)
+                    .font(.system(size: 10)).foregroundStyle(K.C.faint)
                 TextField("Filter", text: $filter)
                     .textFieldStyle(.plain)
-                    .font(K.F.mono(10.5))
+                    .font(K.F.mono(11))
             }
             .padding(.horizontal, K.S.sm).padding(.vertical, 3)
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
@@ -39,7 +39,7 @@ struct FileTree: View {
                             Text((path as NSString).lastPathComponent)
                                 .foregroundStyle(K.C.dim)
                         }
-                        .font(K.F.mono(10.5))
+                        .font(K.F.mono(11))
                         .lineLimit(1).truncationMode(.head)
                     } action: {
                         model.mention(path)
@@ -67,7 +67,7 @@ private struct TreeRow: View {
                     Spacer().frame(width: 8)
                 }
                 Image(systemName: node.dir ? "folder.fill" : icon(node.name))
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                     .foregroundStyle(node.dir ? K.C.faint : K.C.faint.opacity(0.7))
                     .frame(width: 11)
                 Text(node.name)

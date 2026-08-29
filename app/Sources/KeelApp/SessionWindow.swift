@@ -16,6 +16,8 @@ struct SessionWindow: View {
     @State private var paletteOpen = false
     @State private var starting = false
     @State private var showSettings = false
+    /// How wide the record beside the conversation is. Yours to drag; remembered.
+    @AppStorage("keel.stageWidth") private var stageWidth: Double = 460
 
     /// The two things the right pane can be.
     ///
@@ -101,7 +103,8 @@ struct SessionWindow: View {
                         Spacer()
                     }
                 }
-                .frame(width: 256)
+                // Collapsing the panel gives the width back; the lanes alone need less.
+                .frame(width: panel == nil ? 200 : 256)
                 Rectangle().fill(K.C.line).frame(width: 1)
 
                 if showSettings {
@@ -123,7 +126,7 @@ struct SessionWindow: View {
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal,
-            paletteOpen: $paletteOpen, starting: $starting))
+            paletteOpen: $paletteOpen, starting: $starting, panel: $panel))
         .sheet(isPresented: $starting) {
             StartProject(client: model.client) { path in
                 starting = false
@@ -159,7 +162,7 @@ struct SessionWindow: View {
             }
             .frame(minWidth: 420)
 
-            Rectangle().fill(K.C.line).frame(width: 1)
+            SplitHandle(width: $stageWidth, range: 340...720, reset: 460)
 
             VStack(spacing: 0) {
                 stageBar
@@ -178,7 +181,7 @@ struct SessionWindow: View {
                     }
                 }
             }
-            .frame(minWidth: 340, idealWidth: 460, maxWidth: 720)
+            .frame(width: stageWidth)
         }
     }
 
@@ -201,7 +204,8 @@ struct SessionWindow: View {
                             .fill(on ? K.C.text.opacity(0.07) : .clear)
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture { stage = s; model.viewingDiff = nil; model.inspecting = nil }
+                    .asButton { stage = s; model.viewingDiff = nil; model.inspecting = nil }
+                    .accessibilityAddTraits(on ? .isSelected : [])
             }
             Spacer()
         }
@@ -213,14 +217,15 @@ struct SessionWindow: View {
     private var terminalPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "terminal").font(.system(size: 9)).foregroundStyle(K.C.faint)
+                Image(systemName: "terminal").font(.system(size: 10)).foregroundStyle(K.C.faint)
                 Text(terminalTitle).font(K.F.mono(10)).foregroundStyle(K.C.dim)
                 Spacer()
-                CloseButton(size: 8) { withAnimation(K.M.quick) { showTerminal = false } }
+                CloseButton(size: 10) { withAnimation(K.M.quick) { showTerminal = false } }
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             .background(K.C.surface)
-            TerminalPane(port: model.port, title: $terminalTitle)
+            TerminalPane(port: model.port, worktree: model.worktree, title: $terminalTitle)
+                .id(model.id)
         }
         .frame(minHeight: 140, idealHeight: 220)
     }
@@ -231,13 +236,13 @@ struct SessionWindow: View {
             Button { withAnimation(K.M.quick) { paletteOpen.toggle() } } label: {
                 Image(systemName: "command")
             }
-            .help("Command palette (⌘K)")
+            .hint("Command palette (⌘K)")
         }
         ToolbarItem(placement: .primaryAction) {
             Button { withAnimation(K.M.quick) { showTerminal.toggle() } } label: {
                 Image(systemName: "terminal")
             }
-            .help("Terminal (⌘⌥T)")
+            .hint("Terminal (⌘⌥T)")
         }
     }
 }
@@ -252,7 +257,7 @@ struct ActivityRail: View {
     var onSettings: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .center, spacing: 2) {
+        VStack(alignment: .center, spacing: K.S.xxs) {
             ForEach(SessionWindow.Panel.allCases) { p in
                 RailButton(
                     icon: p.icon,
@@ -281,7 +286,7 @@ struct ActivityRail: View {
                     .overlay(alignment: .topTrailing) {
                         if toolsNeedAttention > 0 {
                             Text("\(toolsNeedAttention)")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(K.C.bg)
                                 .padding(.horizontal, 3).padding(.vertical, 1)
                                 .background(K.C.warn, in: Capsule())
@@ -291,10 +296,10 @@ struct ActivityRail: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(toolsNeedAttention > 0
-                  ? "Settings — \(toolsNeedAttention) tool\(toolsNeedAttention == 1 ? "" : "s") "
+            .hint(toolsNeedAttention > 0
+                  ? "Settings (⌘,) — \(toolsNeedAttention) tool\(toolsNeedAttention == 1 ? "" : "s") "
                     + "not installed or not signed in"
-                  : "Settings")
+                  : "Settings (⌘,)")
         }
         .padding(.vertical, K.S.sm)
         .frame(width: 44)
@@ -378,7 +383,7 @@ struct RailButton: View {
                 .overlay(alignment: .topTrailing) {
                     if let badge {
                         Text("\(badge)")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(K.C.bg)
                             .padding(.horizontal, 3).padding(.vertical, 1)
                             .background(badgeTone, in: Capsule())
@@ -392,7 +397,8 @@ struct RailButton: View {
             if selected { Rectangle().fill(K.C.accent).frame(width: 2) }
         }
         .onHover { hovering = $0 }
-        .help(help)
+        .hint(help)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -411,7 +417,7 @@ struct StatusBar: View {
                 item("arrow.triangle.branch", model.branch ?? "—")
             } else {
                 HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 9))
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
                     Text("no git").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -420,7 +426,7 @@ struct StatusBar: View {
 
             if model.trusted {
                 HStack(spacing: 3) {
-                    Image(systemName: "checkmark.shield.fill").font(.system(size: 9))
+                    Image(systemName: "checkmark.shield.fill").font(.system(size: 10))
                     Text("trusted").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -437,13 +443,35 @@ struct StatusBar: View {
                 item("checkmark.seal", gate)
             } else {
                 HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 9))
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
                     Text("no gate").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
                 .help("This project declares no checks, so Keel cannot verify a turn's claim.")
             }
 
+            // The context window, in tokens. Warm past 150k because that is where compaction
+            // starts to loom on a 200k model, and compaction you did not see coming is how a
+            // four-hour session loses its file paths.
+            if let ctx = model.contextTokens {
+                HStack(spacing: 3) {
+                    Image(systemName: "rectangle.stack").font(.system(size: 10))
+                    Text("ctx \(compact(ctx))").font(K.F.mono(10)).monospacedDigit()
+                }
+                .foregroundStyle(ctx > 150_000 ? K.C.warn : K.C.faint)
+                .help("Tokens in the context window after the last request. Compaction is near "
+                      + "when this is high.")
+            }
+            if let t = model.sessionTokens {
+                Text(compact(t.total) + " tok")
+                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .help("Tokens this session, cache included")
+            }
+            if model.running, let rate = model.burnRate {
+                Text(String(format: "$%.2f/min", rate))
+                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .help("Spend rate, from this session's finished turns")
+            }
             if let cost = model.sessionCost {
                 Text(String(format: "$%.3f", cost))
                     .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
@@ -458,6 +486,7 @@ struct StatusBar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(terminalOpen ? K.C.accent : K.C.faint)
+            .hint("Terminal (⌘⌥T)")
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, 5)
@@ -467,7 +496,7 @@ struct StatusBar: View {
 
     private func item(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: icon).font(.system(size: 9))
+            Image(systemName: icon).font(.system(size: 10))
             Text(text).font(K.F.mono(10)).lineLimit(1)
         }
     }
@@ -507,7 +536,7 @@ struct ProjectMenu: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "folder.fill").font(.system(size: 9))
+                Image(systemName: "folder.fill").font(.system(size: 10))
                 Text((model.repoPath as NSString).lastPathComponent)
                     .font(K.F.mono(10, .medium))
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 6, weight: .bold))
@@ -535,14 +564,21 @@ struct WindowEvents: ViewModifier {
     @Binding var showTerminal: Bool
     @Binding var paletteOpen: Bool
     @Binding var starting: Bool
+    @Binding var panel: SessionWindow.Panel?
+    @State private var confirmingTrust = false
 
     func body(content: Content) -> some View {
         content
+            .modifier(ChatEvents(lanes: lanes, model: model, showSettings: $showSettings))
+            .modifier(LaneEvents(lanes: lanes, panel: $panel))
+            .onReceive(NotificationCenter.default.publisher(for: .keelTrust)) { _ in
+                confirmingTrust = true
+            }
+            .modifier(TrustAlert(model: model, shown: $confirmingTrust))
             .onChange(of: lanes.waitingCount) { Notifications.badge(lanes.waitingCount) }
             .task(id: model.id) { await lanes.refreshShared() }
-            .onChange(of: model.previewURL) { showPreviewIfIdle() }
-            .onChange(of: model.running) { followTheWork() }
-            .onChange(of: model.focusedTurn) { showTrace() }
+            .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
+                                  showSettings: $showSettings))
             .onReceive(NotificationCenter.default.publisher(for: .keelPalette)) { _ in
                 withAnimation(K.M.quick) { paletteOpen.toggle() }
             }
@@ -550,7 +586,7 @@ struct WindowEvents: ViewModifier {
                 withAnimation(K.M.quick) { showSettings.toggle() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelNewLane)) { _ in
-                lanes.newLane()
+                lanes.newLane(isolated: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
                 starting = true
@@ -563,6 +599,171 @@ struct WindowEvents: ViewModifier {
             }
     }
 
+    private func openProject() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Open"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            try? await model.openProject(url.path)
+            Recents.remember(url.path)
+            await lanes.refreshShared()
+        }
+    }
+}
+
+/// ⌘⇧T. Trust is the highest-consequence switch in the app, so the keyboard path confirms and
+/// names what it grants — the same words the approval card uses.
+private struct TrustAlert: ViewModifier {
+    let model: SessionModel
+    @Binding var shown: Bool
+    struct TrustBody: Encodable { var trusted: Bool }
+
+    func body(content: Content) -> some View {
+        content.alert("Trust this project?", isPresented: $shown) {
+            Button("Trust") {
+                Task {
+                    _ = try? await model.client.post("/api/permissions/trust",
+                                                     body: TrustBody(trusted: true), as: Bool.self)
+                    await model.refreshTrust()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The agent runs commands in this repository without asking. Stored in "
+                 + ".keel/permissions.json; withdrawable from the status bar.")
+        }
+    }
+}
+
+/// ⌘1–9, ⌘⇧] / ⌘⇧[, ⌘⇧E, and a click on a banner. Its own modifier because the window's
+/// chain of handlers had grown past what the type-checker finishes in reasonable time.
+private struct LaneEvents: ViewModifier {
+    let lanes: Lanes
+    @Binding var panel: SessionWindow.Panel?
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .keelFocusLane)) { note in
+                focus(note.object)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelNextLane)) { note in
+                step((note.object as? Int) ?? 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelTogglePanel)) { _ in
+                withAnimation(K.M.quick) { panel = panel == nil ? .changes : nil }
+            }
+    }
+
+    /// Either a lane id (from a notification) or an index (from ⌘1–9).
+    private func focus(_ object: Any?) {
+        let all = lanes.lanes
+        if let n = object as? Int {
+            if n < all.count { lanes.activeID = all[n].id }
+        } else if let raw = object as? String, let id = UUID(uuidString: raw),
+                  all.contains(where: { $0.id == id }) {
+            lanes.activeID = id
+        }
+        NSApp.activate()
+    }
+
+    private func step(_ by: Int) {
+        let all = lanes.lanes
+        guard !all.isEmpty, let i = all.firstIndex(where: { $0.id == lanes.activeID }) else { return }
+        let n = (i + by + all.count) % all.count
+        lanes.activeID = all[n].id
+    }
+}
+
+/// ⌘↵ ⌘. ⌘L ⇧⇥ ⌘⇧A ⌘⇧D. Here rather than in `ChatRail`: that view is unmounted while Settings
+/// is open, and with it went Stop, mid-turn.
+private struct ChatEvents: ViewModifier {
+    let lanes: Lanes
+    let model: SessionModel
+    @Binding var showSettings: Bool
+
+    /// The lane a notification named, or the focused one.
+    private func lane(named note: Notification) -> SessionModel {
+        if let raw = note.object as? String, let id = UUID(uuidString: raw),
+           let found = lanes.lanes.first(where: { $0.id == id }) {
+            return found
+        }
+        return model
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .keelSend)) { _ in model.send() }
+            .onReceive(NotificationCenter.default.publisher(for: .keelStop)) { _ in model.stop() }
+            .onReceive(NotificationCenter.default.publisher(for: .keelFocusComposer)) { _ in
+                showSettings = false
+                model.focusComposerTick += 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelToggleMode)) { _ in
+                model.mode = model.mode == "plan" ? "acceptEdits" : "plan"
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelApprove)) { note in
+                let m = lane(named: note)
+                if let p = m.pending.first { m.answer(p, allow: true, scope: "session") }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelDeny)) { note in
+                let m = lane(named: note)
+                if let p = m.pending.first { m.answer(p, allow: false, scope: "session") }
+            }
+    }
+}
+
+/// The divider between the conversation and the record, as something you can drag.
+///
+/// The stage was a fixed ideal width, which is right on the first day and wrong on the second:
+/// reviewing a wide diff wants the record wide, and a long conversation wants it narrow. The
+/// handle is 7pt of hit area drawn as a 1pt line; double-click puts it back.
+private struct SplitHandle: View {
+    @Binding var width: Double
+    let range: ClosedRange<Double>
+    let reset: Double
+    @State private var hovering = false
+    @State private var start: Double?
+
+    var body: some View {
+        Rectangle()
+            .fill(hovering ? K.C.accent.opacity(0.6) : K.C.line)
+            .frame(width: 1)
+            .padding(.horizontal, 3)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0; if $0 { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { g in
+                        if start == nil { start = width }
+                        // The stage is on the right, so dragging left makes it wider.
+                        width = min(max((start ?? width) - g.translation.width, range.lowerBound),
+                                    range.upperBound)
+                    }
+                    .onEnded { _ in start = nil }
+            )
+            .onTapGesture(count: 2) { width = reset }
+            .accessibilityLabel("Resize the record")
+    }
+}
+
+/// What the right pane shows, following the work: a preview URL appearing, the agent editing
+/// the page, a turn starting, a turn being picked in the conversation.
+private struct StageEvents: ViewModifier {
+    let lanes: Lanes
+    let model: SessionModel
+    @Binding var stage: SessionWindow.Stage
+    @Binding var showSettings: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: model.previewURL) { showPreviewIfIdle() }
+            .onChange(of: model.designTick) { followTheEdit() }
+            .onChange(of: model.running) { followTheWork() }
+            .onChange(of: model.focusedTurn) { showTrace() }
+    }
+
     /// Something to look at is worth looking at — unless you are deliberately reading something
     /// else.
     private func showPreviewIfIdle() {
@@ -570,6 +771,18 @@ struct WindowEvents: ViewModifier {
               model.viewingDiff == nil, model.inspecting == nil,
               model.focusedTurn == nil else { return }
         withAnimation(K.M.quick) { stage = .preview }
+    }
+
+    /// The agent is writing the page. Show the page — that is the whole point of having one.
+    private func followTheEdit() {
+        guard model.followEdits, model.editing != nil, model.previewURL != nil,
+              model.id == lanes.activeID else { return }
+        withAnimation(K.M.quick) {
+            stage = .preview
+            showSettings = false
+            model.viewingDiff = nil
+            model.inspecting = nil
+        }
     }
 
     /// Starting a turn means the record is the thing to look at. Never off the Designer: picking
@@ -591,16 +804,4 @@ struct WindowEvents: ViewModifier {
         model.inspecting = nil
     }
 
-    private func openProject() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            try? await model.openProject(url.path)
-            Recents.remember(url.path)
-            await lanes.refreshShared()
-        }
-    }
 }

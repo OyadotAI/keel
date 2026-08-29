@@ -7,23 +7,19 @@
 //! The socket is bidirectional and byte-oriented. Terminal output is not line-structured, and
 //! buffering it into lines would break every progress bar and prompt.
 
-use axum::extract::{
-    State,
-    ws::{Message, WebSocket, WebSocketUpgrade},
-};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use std::sync::Arc;
-
-use crate::serve::AppState;
 
 /// The shell to run. Honour the user's own, since their prompt, aliases and PATH live there.
 fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
 }
 
-pub async fn ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
-    let repo = state.repo();
+pub async fn ws(
+    ws: WebSocketUpgrade,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
+) -> Response {
     ws.on_upgrade(move |socket| session(socket, repo.to_string()))
 }
 

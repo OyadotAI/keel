@@ -7,21 +7,54 @@ struct DesignStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
-            HStack(spacing: K.S.sm) {
-                verdictLabel
-                Text(design.selector)
-                    .font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                    .lineLimit(1).truncationMode(.head)
-                Spacer()
+            if !design.selector.isEmpty {
+                HStack(spacing: K.S.sm) {
+                    verdictLabel
+                    Text(design.selector)
+                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .lineLimit(1).truncationMode(.head)
+                    Spacer()
+                }
+
+                HStack(alignment: .top, spacing: K.S.md) {
+                    shot("before", design.before)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                        .padding(.top, 26)
+                    shot("after", design.after)
+                    Spacer()
+                }
             }
 
-            HStack(alignment: .top, spacing: K.S.md) {
-                shot("before", design.before)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 10)).foregroundStyle(K.C.faint)
-                    .padding(.top, 26)
-                shot("after", design.after)
-                Spacer()
+            // What the page itself said moved — with or without a pin. This is the answer to
+            // "what did that do to the site" for a turn nobody pointed at anything for.
+            if !design.regions.isEmpty {
+                HStack(alignment: .top, spacing: K.S.md) {
+                    VStack(alignment: .leading, spacing: K.S.xs) {
+                        Text("CHANGED ON SCREEN")
+                            .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                            .foregroundStyle(K.C.accent)
+                        ForEach(Array(design.regions.prefix(6).enumerated()), id: \.element.id) { i, r in
+                            HStack(spacing: K.S.xs) {
+                                Text("\(i + 1)").font(K.F.mono(10, .semibold)).foregroundStyle(K.C.accent)
+                                    .frame(width: 14)
+                                Text(r.tag).font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                                Text(r.text.isEmpty ? r.selector : r.text)
+                                    .font(K.F.micro).foregroundStyle(K.C.faint)
+                                    .lineLimit(1).truncationMode(.tail)
+                            }
+                        }
+                    }
+                    if let shot = design.pageAfter {
+                        Image(nsImage: shot)
+                            .resizable().scaledToFit()
+                            .frame(maxWidth: 220, maxHeight: 150)
+                            .background(K.C.raised)
+                            .clipShape(RoundedRectangle(cornerRadius: K.R.sm))
+                            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                    }
+                    Spacer()
+                }
             }
 
             if design.duplicated {
@@ -64,7 +97,7 @@ struct DesignStrip: View {
     private func shot(_ label: String, _ image: NSImage?) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Text(label.uppercased())
-                .font(.system(size: 8.5, weight: .semibold)).tracking(0.6)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
                 .foregroundStyle(K.C.faint)
             if let image {
                 Image(nsImage: image)
@@ -84,54 +117,72 @@ struct DesignStrip: View {
     }
     }
 
-/// The staged pick, above the composer: what you clicked, and where Keel thinks it came from.
+/// The pins, above the composer: each element you pointed at, with a note.
 ///
 /// The candidates are on screen *before* the agent runs. Everyone else resolves this silently and
 /// hopes; showing the ranking is the difference between a guess you can correct and a guess you
 /// find out about from a diff that touched the wrong file.
-struct PickedCard: View {
+struct PinList: View {
     @Bindable var model: SessionModel
 
     var body: some View {
-        if let p = model.picked {
+        if !model.pins.isEmpty {
             VStack(alignment: .leading, spacing: K.S.xs) {
-                HStack(spacing: K.S.sm) {
-                    Image(systemName: "cursorarrow.rays")
-                        .font(.system(size: 9)).foregroundStyle(K.C.accent)
-                    Text("PICKED").font(.system(size: 9, weight: .semibold)).tracking(0.6)
-                        .foregroundStyle(K.C.accent)
-                    Text(p.selector).font(K.F.mono(10)).foregroundStyle(K.C.dim)
-                        .lineLimit(1).truncationMode(.head)
-                    Spacer()
-                    CloseButton(size: 8) { model.picked = nil; model.pickedBefore = nil }
+                ForEach(Array(model.pins.enumerated()), id: \.element.id) { i, pin in
+                    PinRow(model: model, index: i, pin: pin)
                 }
+            }
+        }
+    }
+}
 
-                if p.hints.isEmpty {
-                    Text("No source hint. Say what the element is if you know — otherwise the "
-                         + "agent has to find it, and that is where these go wrong.")
-                        .font(K.F.micro).foregroundStyle(K.C.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    // Ranked, and on screen before the agent runs. A silent guess at the wrong
-                    // file is the failure this whole feature exists to catch.
-                    ForEach(Array(p.hints.enumerated()), id: \.element.id) { i, h in
-                        HStack(spacing: K.S.sm) {
-                            Text(i == 0 ? "best" : h.kind)
-                                .font(.system(size: 8.5, weight: i == 0 ? .semibold : .regular))
-                                .foregroundStyle(i == 0 ? K.C.accent : K.C.faint)
-                                .frame(width: 46, alignment: .leading)
-                            Text(h.value).font(K.F.mono(10)).foregroundStyle(K.C.dim)
-                                .lineLimit(1).truncationMode(.head)
-                        }
+private struct PinRow: View {
+    @Bindable var model: SessionModel
+    let index: Int
+    let pin: SessionModel.Pin
+    @State private var showHints = false
+
+    private var note: Binding<String> {
+        Binding(get: { model.pins.first { $0.id == pin.id }?.note ?? "" },
+                set: { v in if let i = model.pins.firstIndex(where: { $0.id == pin.id }) { model.pins[i].note = v } })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.sm) {
+                Text("\(index + 1)")
+                    .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 18, height: 18).background(K.C.accent, in: Circle())
+                Text(pin.picked.text.isEmpty ? pin.picked.selector : "\(pin.picked.tag) · \(pin.picked.text)")
+                    .font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer()
+                if !pin.picked.hints.isEmpty {
+                    Button(showHints ? "hide source" : "source") { showHints.toggle() }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                CloseButton(size: 10, label: "Remove pin \(index + 1)") { model.removePin(pin.id) }
+            }
+            TextField("What should change here?", text: note)
+                .field().font(K.F.small)
+            if showHints {
+                // Ranked, and on screen before the agent runs. A silent guess at the wrong file
+                // is the failure this whole feature exists to catch.
+                ForEach(Array(pin.picked.hints.enumerated()), id: \.element.id) { i, h in
+                    HStack(spacing: K.S.sm) {
+                        Text(i == 0 ? "best" : h.kind)
+                            .font(.system(size: 10, weight: i == 0 ? .semibold : .regular))
+                            .foregroundStyle(i == 0 ? K.C.accent : K.C.faint)
+                            .frame(width: 46, alignment: .leading)
+                        Text(h.value).font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                            .lineLimit(1).truncationMode(.head)
                     }
                 }
             }
-            .padding(K.S.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(K.C.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.sm))
-            .overlay(
-                RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.accent.opacity(0.3), lineWidth: 1)
-            )
         }
+        .padding(K.S.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(K.C.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.accent.opacity(0.3), lineWidth: 1))
     }
 }

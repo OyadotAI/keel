@@ -40,6 +40,10 @@ final class Lanes {
     private struct Saved: Codable {
         var sessions: [String]
         var active: Int
+        /// Parallel to `sessions`: the lane's checkout, or nothing for one on the project's tree.
+        /// Optional at the top level too, so the file written before lanes had checkouts still
+        /// decodes.
+        var worktrees: [String?]?
     }
 
     /// Save the Claude Code session ids of every lane that has one.
@@ -48,10 +52,12 @@ final class Lanes {
     /// restoring a row of empty lanes would be restoring the appearance of work rather than work.
     func remember(repo: String) {
         guard !repo.isEmpty else { return }
-        let ids = lanes.compactMap(\.sessionId)
+        let with = lanes.filter { $0.sessionId != nil }
+        let ids = with.compactMap(\.sessionId)
         let activeIndex = lanes.firstIndex { $0.id == activeID }
             .map { i in lanes[..<i].count { $0.sessionId != nil } } ?? 0
-        let saved = Saved(sessions: ids, active: min(activeIndex, max(ids.count - 1, 0)))
+        let saved = Saved(sessions: ids, active: min(activeIndex, max(ids.count - 1, 0)),
+                          worktrees: with.map(\.worktree))
         if let data = try? JSONEncoder().encode(saved) {
             UserDefaults.standard.set(data, forKey: Self.key(repo))
         }
@@ -67,19 +73,30 @@ final class Lanes {
               let saved = try? JSONDecoder().decode(Saved.self, from: data),
               !saved.sessions.isEmpty else { return }
 
+        await refreshWorktrees()
+        let checkouts = Set(worktrees.map(\.name))
+
         // Only sessions the daemon can still see: a transcript can be deleted, and a lane pointing
-        // at one that is gone would fail on its first turn rather than on open.
+        // at one that is gone would fail on its first turn rather than on open. A lane in its own
+        // checkout keeps its sessions there, so for those the checkout still existing is the test.
         let known = Set(lanes.first?.sessions.map(\.id) ?? [])
-        let live = saved.sessions.filter { known.isEmpty || known.contains($0) }
+        let pairs = zip(saved.sessions, saved.worktrees ?? Array(repeating: nil, count: saved.sessions.count))
+        let live = pairs.filter { id, wt in
+            if let wt { return checkouts.contains(wt) }
+            return known.isEmpty || known.contains(id)
+        }
         guard !live.isEmpty else { return }
 
         var restored: [SessionModel] = []
-        for id in live {
+        for (id, wt) in live {
             let m = SessionModel(client: client, port: port, sessionId: id)
             m.lanes = self
+            m.worktree = wt
+            m.isolated = wt != nil
             if let a = lanes.first { m.adopt(project: a) }
             restored.append(m)
             await m.open(session: id)
+            if wt != nil { await m.refreshGit(); await m.refreshTree() }
         }
         lanes = restored
         activeID = restored[min(saved.active, restored.count - 1)].id
@@ -98,8 +115,51 @@ final class Lanes {
     /// same working tree can clobber the first.
     var wouldOverlap: Bool { lanes.contains { $0.running } }
 
+    /// Every lane checkout the project has, with how far each has gone.
+    private(set) var worktrees: [Wire.Worktree] = []
+
+    func refreshWorktrees() async {
+        worktrees = (try? await client.get("/api/worktree")) ?? []
+    }
+
+    func worktree(of lane: SessionModel) -> Wire.Worktree? {
+        lane.worktree.flatMap { name in worktrees.first { $0.name == name } }
+    }
+
+    struct FinishBody: Encodable { var name: String; var message: String }
+    struct DiscardBody: Encodable { var name: String; var force: Bool }
+
+    /// Merge a lane's work into the project and close it. The daemon refuses rather than
+    /// guesses — a dirty project, a conflict — and the refusal is shown on the lane.
+    func finish(_ lane: SessionModel, message: String) async {
+        guard let name = lane.worktree else { return }
+        do {
+            _ = try await client.post("/api/worktree/finish",
+                                      body: FinishBody(name: name, message: message), as: Bool.self)
+            close(lane)
+            await refreshShared()
+        } catch {
+            lane.lastError = error.localizedDescription
+        }
+    }
+
+    /// Throw a lane away. Without `force` the daemon refuses when commits would be lost, and
+    /// says how many; the row turns that into the confirmation.
+    func discard(_ lane: SessionModel, force: Bool) async -> String? {
+        guard let name = lane.worktree else { close(lane); return nil }
+        do {
+            _ = try await client.post("/api/worktree/discard",
+                                      body: DiscardBody(name: name, force: force), as: Bool.self)
+            close(lane)
+            await refreshShared()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     @discardableResult
-    func newLane(resuming id: String? = nil) -> SessionModel {
+    func newLane(resuming id: String? = nil, isolated: Bool = false) -> SessionModel {
         // An empty lane you never typed into is not a second agent, it is a second row. Focusing
         // the one that already exists is what the click meant.
         //
@@ -109,10 +169,12 @@ final class Lanes {
         if id == nil,
            let idle = lanes.first(where: { $0.turns.isEmpty && $0.sessionId == nil && !$0.running }) {
             activeID = idle.id
+            idle.isolated = isolated
             return idle
         }
         let m = SessionModel(client: client, port: port, sessionId: id)
         m.lanes = self
+        m.isolated = isolated
         if let a = active { m.adopt(project: a) }
         lanes.append(m)
         activeID = m.id
@@ -164,6 +226,7 @@ final class Lanes {
         await a.refreshDev()
         await a.refreshSuggestions()
         await a.refreshTools()
+        await refreshWorktrees()
         // Every lane draws the same project chrome, so they share what the project says about
         // itself rather than each asking.
         for lane in lanes where lane.id != a.id {

@@ -70,6 +70,9 @@ struct TurnStage: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if let undo = model.undoSnapshot {
+                        UndoBar(model: model, undo: undo)
+                    }
                     if model.turns.isEmpty {
                         EmptyStage(model: model)
                     }
@@ -107,7 +110,7 @@ struct TurnStage: View {
                         }
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "arrow.down").font(.system(size: 9, weight: .bold))
+                            Image(systemName: "arrow.down").font(.system(size: 10, weight: .bold))
                             Text("Jump to latest").font(K.F.micro)
                         }
                         .padding(.horizontal, K.S.sm).padding(.vertical, 5)
@@ -137,7 +140,7 @@ private struct QuietRun: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             Text(first == last ? "Turn \(first)" : "Turns \(first)–\(last)")
-                .font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
             Text("answered in the conversation, changed nothing")
                 .font(K.F.micro)
             Spacer()
@@ -208,7 +211,11 @@ struct TurnCard: View {
             }
 
             ForEach(model.pending) { p in
-                ApprovalCard(pending: p, model: model)
+                if p.isQuestion {
+                    QuestionCard(pending: p, model: model)
+                } else {
+                    ApprovalCard(pending: p, model: model)
+                }
             }
 
             TurnFooter(turn: turn)
@@ -225,13 +232,45 @@ struct TurnCard: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
             Text("TURN \(number)")
-                .font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                 .foregroundStyle(K.C.faint)
             if !turn.finished { Pill(text: "RUNNING", tone: .accent) }
             Spacer(minLength: K.S.sm)
             Text(turn.started, style: .time)
-                .font(K.F.mono(9.5)).foregroundStyle(K.C.faint)
+                .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+            if turn.snapshot != nil, turn.finished {
+                Menu {
+                    Button("Restore files to before this turn") {
+                        Task { await model.restore(to: turn) }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 10))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .foregroundStyle(K.C.faint)
+                .hint("Rewind every file to how it was before this turn. Undoable.")
+            }
         }
+    }
+}
+
+/// After a rewind: the way back, for as long as it is one click away.
+private struct UndoBar: View {
+    let model: SessionModel
+    let undo: String
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            Image(systemName: "clock.arrow.circlepath").font(.system(size: 10))
+                .foregroundStyle(K.C.accent)
+            Text("Files were rewound.").font(K.F.small).foregroundStyle(K.C.text)
+            Button("Undo") { Task { await model.restore(tree: undo); model.undoSnapshot = nil } }
+                .buttonStyle(QuietButton(tone: K.C.accent))
+            Spacer()
+            CloseButton(size: 10, label: "Dismiss") { model.undoSnapshot = nil }
+        }
+        .padding(.horizontal, K.S.xl).padding(.vertical, K.S.sm)
+        .background(K.C.accent.opacity(0.07))
     }
 }
 
@@ -273,7 +312,7 @@ struct SectionBar: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.6))
                 .frame(width: 10)
             Text(title)
@@ -286,7 +325,16 @@ struct SectionBar: View {
         .background(hovering ? K.C.text.opacity(0.03) : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { withAnimation(K.M.quick) { open.toggle() } }
+        .asButton { withAnimation(K.M.quick) { open.toggle() } }
+        .accessibilityLabel("\(title), \(open ? "expanded" : "collapsed")")
+    }
+}
+
+extension View {
+    /// Make a hand-drawn row a real control. A tap gesture on a view is invisible to the keyboard
+    /// and to VoiceOver; wrapping the same view in a plain `Button` changes nothing on screen.
+    func asButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { self }.buttonStyle(.plain)
     }
 }
 
@@ -400,17 +448,23 @@ struct GroupRow: View {
                         .font(K.F.mono(10, .medium)).foregroundStyle(K.C.faint)
                     Subject(group.first.subject)
                 }
+                // A subagent's work, as a count on its row rather than forty rows of its own.
+                let nested = group.calls.reduce(0) { $0 + $1.children.count }
+                if nested > 0 {
+                    Text("\(nested) call\(nested == 1 ? "" : "s")")
+                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                }
 
                 Spacer(minLength: K.S.sm)
                 Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.45))
             }
             .padding(.horizontal, K.S.md).padding(.vertical, 3)
             .background(hovering ? K.C.text.opacity(0.04) : .clear)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .onTapGesture { withAnimation(K.M.quick) { userSet = !open } }
+            .asButton { withAnimation(K.M.quick) { userSet = !open } }
 
             if open {
                 VStack(alignment: .leading, spacing: 0) {
@@ -452,8 +506,9 @@ private struct CallDetail: View {
     @State private var userSet: Bool?
 
     /// Only the newest call shows its output unasked. Keying this off `call.running` meant every
-    /// call in a run opened and closed in turn, which is the same churn one level down.
-    private var open: Bool { userSet ?? (live && !call.output.isEmpty) }
+    /// call in a run opened and closed in turn, which is the same churn one level down. A call
+    /// with children is open while it is live, because the children are what is happening.
+    private var open: Bool { userSet ?? (live && (!call.output.isEmpty || !call.children.isEmpty)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -463,8 +518,23 @@ private struct CallDetail: View {
             }
             .padding(.vertical, 2).padding(.trailing, K.S.md)
             .contentShape(Rectangle())
-            .onTapGesture {
-                if !call.output.isEmpty { withAnimation(K.M.quick) { userSet = !open } }
+            .asButton {
+                if !call.output.isEmpty || !call.children.isEmpty {
+                    withAnimation(K.M.quick) { userSet = !open }
+                }
+            }
+
+            // What the subagent did, indented under the call that started it. The live child
+            // is the newest running one, the same rule as one level up.
+            if open, !call.children.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(call.children) { child in
+                        CallDetail(call: child,
+                                   live: live && child.running
+                                       && child.id == call.children.last(where: \.running)?.id)
+                    }
+                }
+                .padding(.leading, K.S.lg)
             }
 
             if open, !call.output.isEmpty {
@@ -487,13 +557,14 @@ private struct CallDetail: View {
 struct StatusDot: View {
     let failed: Bool
     let running: Bool
+    @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
         let color = failed ? K.C.del : (running ? K.C.accent : K.C.faint.opacity(0.55))
         // `PhaseAnimator` rather than an `onAppear` flag. The flag version restarted its cycle
         // every time the row was rebuilt — which, in a list that rebuilds on every streamed tool
         // call, was most frames — so a column of dots flickered out of step with each other.
-        if running {
+        if running && !still {
             PhaseAnimator([1.0, 0.3]) { phase in
                 Circle().fill(color).frame(width: 5, height: 5).opacity(phase)
             } animation: { _ in
@@ -536,6 +607,12 @@ struct TurnFooter: View {
                 Label(duration(ms), systemImage: "clock")
                     .labelStyle(.titleAndIcon)
                     .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+            }
+            if let t = turn.tokens {
+                Text("\(compact(t.input + t.cacheRead + t.cacheWrite)) in · \(compact(t.output)) out"
+                     + (t.cacheRead > 0 ? String(format: " · %.0f%% cached", t.cached * 100) : ""))
+                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .help("Tokens this turn, as the CLI reported them")
             }
             if let c = turn.cost {
                 Text(String(format: "$%.3f", c))
@@ -602,7 +679,7 @@ struct ProblemList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             HStack {
-                Text("PROBLEMS").font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                Text("PROBLEMS").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.del)
                 Spacer()
                 Button("Hand these to the agent") { model.prompt = prompt }

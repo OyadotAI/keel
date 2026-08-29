@@ -92,3 +92,48 @@ final class ThemeTests: XCTestCase {
         return 0.2126 * ch(c.redComponent) + 0.7152 * ch(c.greenComponent) + 0.0722 * ch(c.blueComponent)
     }
 }
+
+
+/// Nothing meant to be read is set below the platform's floor.
+///
+/// macOS's small-system size is 11 and the HIG's captions stop at 10. The tokens claimed 11 in
+/// their doc comments while one of them was 10, and forty call sites went lower still.
+final class TypeFloorTests: XCTestCase {
+    func testNoNamedSizeIsBelowTheFloor() {
+        for (name, size) in K.F.sizes {
+            XCTAssertGreaterThanOrEqual(size, K.F.floor, "K.F.\(name) is \(size)")
+        }
+    }
+
+    /// The sources themselves: no inline text size under the floor, so the tokens cannot be
+    /// walked around with a literal.
+    func testNoInlineSizeIsBelowTheFloor() throws {
+        var dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        for _ in 0..<4 {
+            let src = dir.appendingPathComponent("app/Sources/KeelApp")
+            let alt = dir.appendingPathComponent("Sources/KeelApp")
+            if let found = [src, alt].first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                try check(found); return
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        throw XCTSkip("sources not found from \(FileManager.default.currentDirectoryPath)")
+    }
+
+    private func check(_ dir: URL) throws {
+        let files = try FileManager.default.subpathsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".swift") }
+        let pattern = try NSRegularExpression(pattern: #"(?:size: |mono\()(\d+(?:\.\d+)?)"#)
+        for f in files {
+            let text = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let n = Double(text[Range(m.range(at: 1), in: text)!])!
+                // Glyph-only sizes (chevrons, dots) are allowed under the floor; text is not.
+                // Below 8 nothing is text, so the test lets those through.
+                if n >= 8 {
+                    XCTAssertGreaterThanOrEqual(n, Double(K.F.floor), "\(f): size \(n)")
+                }
+            }
+        }
+    }
+}

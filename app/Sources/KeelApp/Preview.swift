@@ -30,7 +30,12 @@ struct Picked: Decodable {
     /// they are shown on screen: the failure everyone else has here is a confident guess at the
     /// wrong file, and the fix is to make the guess visible rather than to guess harder.
     func prompt(instruction: String) -> String {
-        var out = "Change this element in the running app:\n\n"
+        "Change this element in the running app:\n\n" + describe() + "\n\n" + instruction
+    }
+
+    /// The element, described — without an instruction, so several can share one.
+    func describe() -> String {
+        var out = ""
         out += "selector: \(selector)\n"
         if !text.isEmpty { out += "text: \(text)\n" }
         if !hints.isEmpty {
@@ -41,8 +46,31 @@ struct Picked: Decodable {
         }
         out += "\ncomputed style:\n"
         for (k, v) in style.sorted(by: { $0.key < $1.key }) { out += "  \(k): \(v)\n" }
-        out += "\nmarkup:\n\(html)\n\n\(instruction)"
+        out += "\nmarkup:\n\(html)"
         return out
+    }
+}
+
+/// A region of the page the agent's last write changed, as the page reported it.
+struct Region: Decodable, Identifiable, Equatable {
+    var selector: String
+    var rect: Picked.Rect
+    var tag: String
+    var text: String
+    var id: String { selector }
+    static func == (a: Region, b: Region) -> Bool { a.selector == b.selector }
+}
+
+extension Picked.Rect: Equatable {
+    /// The smallest rect holding all of these.
+    static func union(_ rects: [Picked.Rect]) -> Picked.Rect? {
+        guard let f = rects.first else { return nil }
+        var x0 = f.x, y0 = f.y, x1 = f.x + f.width, y1 = f.y + f.height
+        for r in rects.dropFirst() {
+            x0 = min(x0, r.x); y0 = min(y0, r.y)
+            x1 = max(x1, r.x + r.width); y1 = max(y1, r.y + r.height)
+        }
+        return Picked.Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 }
 
@@ -67,17 +95,17 @@ struct PreviewPane: NSViewRepresentable {
         config.userContentController.add(context.coordinator, name: "keel")
 
         let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = context.coordinator
         view.load(URLRequest(url: url))
         context.coordinator.web = view
         context.coordinator.loaded = url
 
-        // The after-photo has to come from this live web view, so the coordinator that owns it
-        // lends the model a way back in. Cleared when the pane goes away, which is what makes an
-        // un-photographable comparison report `unstable` instead of quietly passing.
+        // The page is the only thing that can photograph itself or draw on itself, so the
+        // coordinator that owns it lends the model both. Cleared when the pane goes away, which is
+        // what makes an un-photographable comparison report `unstable` instead of passing.
         let coordinator = context.coordinator
-        model.resnapshot = { [weak coordinator] picked in
-            await coordinator?.snapshot(picked)
-        }
+        model.resnapshot = { [weak coordinator] rect in await coordinator?.snapshot(rect) }
+        model.canvas = { [weak coordinator] message in coordinator?.send(message) }
         return view
     }
 
@@ -92,40 +120,70 @@ struct PreviewPane: NSViewRepresentable {
             view.load(URLRequest(url: url))
         }
 
-        let message = picking ? "pick-on" : "pick-off"
-        // Posted to every frame, since the picker lives in the one the dev server owns.
-        view.evaluateJavaScript("""
-            (function(){
-              window.postMessage({keel:'\(message)'}, '*');
-              for (var i=0;i<window.frames.length;i++) {
-                try { window.frames[i].postMessage({keel:'\(message)'}, '*'); } catch(e){}
-              }
-            })();
-            """)
+        // Only on a change: this runs on every render pass, and re-posting the mode each time
+        // was a message per keystroke to every frame.
+        if context.coordinator.picking != picking {
+            context.coordinator.picking = picking
+            context.coordinator.send(["keel": picking ? "pick-on" : "pick-off"])
+        }
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let model: SessionModel
         weak var web: WKWebView?
         /// What the view was last told to load, so an unchanged address is not reloaded on every
         /// pass of `updateNSView` — which would restart the page under you on every keystroke.
         var loaded: URL?
+        var picking = false
         init(model: SessionModel) { self.model = model }
+
+        /// A message to the canvas script, in every frame — the one the dev server owns is the
+        /// one that matters, and it is not the main frame.
+        func send(_ message: [String: Any]) {
+            guard let web,
+                  let data = try? JSONSerialization.data(withJSONObject: message),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            web.evaluateJavaScript("""
+                (function(){
+                  var m = \(json);
+                  window.postMessage(m, '*');
+                  for (var i=0;i<window.frames.length;i++) {
+                    try { window.frames[i].postMessage(m, '*'); } catch(e){}
+                  }
+                })();
+                """)
+        }
 
         func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let dict = message.body as? [String: Any],
-                  let data = try? JSONSerialization.data(withJSONObject: dict),
-                  let picked = try? JSONDecoder().decode(Picked.self, from: data) else { return }
-            Task { await capture(picked) }
+                  let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+            switch dict["type"] as? String {
+            case "changed":
+                struct Changed: Decodable { var regions: [Region] }
+                if let c = try? JSONDecoder().decode(Changed.self, from: data) {
+                    model.regionsChanged(c.regions)
+                }
+            default:
+                if let picked = try? JSONDecoder().decode(Picked.self, from: data) {
+                    Task { await capture(picked) }
+                }
+            }
         }
 
-        /// The same rect again, once the page has rebuilt.
-        func snapshot(_ picked: Picked) async -> NSImage? {
-            guard let web, picked.rect.width > 1, picked.rect.height > 1 else { return nil }
+        /// The page loaded — or reloaded under a turn. Re-draw the pins, and if the agent is
+        /// mid-edit, watch for the change to land: the `expect` sent before this load was lost
+        /// with the old document.
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            model.syncCanvas()
+            if model.running, model.editing != nil { send(["keel": "expect"]) }
+        }
+
+        /// A rect of the page, as it is right now.
+        func snapshot(_ rect: Picked.Rect) async -> NSImage? {
+            guard let web, rect.width > 1, rect.height > 1 else { return nil }
             let config = WKSnapshotConfiguration()
-            config.rect = CGRect(x: picked.rect.x, y: picked.rect.y,
-                                 width: picked.rect.width, height: picked.rect.height)
+            config.rect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
             return try? await web.takeSnapshot(configuration: config)
         }
 
@@ -135,7 +193,7 @@ struct PreviewPane: NSViewRepresentable {
         /// window capture, and it sees the element as the page actually rendered it. This is the
         /// half nobody else has: a UI change gets a pixel diff, not only a text one.
         private func capture(_ picked: Picked) async {
-            model.designPick(picked, before: await snapshot(picked))
+            model.designPick(picked, before: await snapshot(picked.rect))
         }
     }
 }
@@ -152,6 +210,34 @@ struct PreviewSurface: View {
         VStack(spacing: 0) {
             bar
             Hairline()
+            if let file = model.editing {
+                // The agent is writing the page you are looking at. Said here, over the page,
+                // so the ripple that follows is not a surprise.
+                HStack(spacing: K.S.sm) {
+                    Sweep()
+                    Text("Editing \((file as NSString).lastPathComponent)…")
+                        .font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                    if let route = Frontend.route(for: file) {
+                        Text(route).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, 5)
+                .background(K.C.accent.opacity(0.10))
+                Hairline()
+            } else if !model.changedRegions.isEmpty {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: "sparkles").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                    Text("\(model.changedRegions.count) region\(model.changedRegions.count == 1 ? "" : "s") changed — "
+                         + "click a dot to pin a note there")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
+                    Spacer()
+                    Button("Clear") { model.clearRegions() }.buttonStyle(QuietButton())
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, 4)
+                .background(K.C.accent.opacity(0.06))
+                Hairline()
+            }
             if let s = model.previewURL, let url = URL(string: s) {
                 // The page is rendered at a real width and scaled to fit, rather than squeezed
                 // into the pane. The pane is 340–720pt, so a responsive site was correctly
@@ -249,7 +335,15 @@ struct PreviewSurface: View {
             }
             .toggleStyle(.button)
             .controlSize(.small)
-            .help("Click an element in the page to describe it to the agent")
+            .help("Click an element in the page to pin a note on it for the agent")
+
+            Toggle(isOn: $model.followEdits) {
+                Label("Follow", systemImage: "eye")
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Bring this pane forward and go to the page whenever the agent edits the "
+                  + "frontend")
 
             if model.devRunning {
                 HStack(spacing: 4) {
@@ -268,13 +362,13 @@ struct PreviewSurface: View {
                     .frame(width: 20, height: 18).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
-            .help("Reload")
+            .hint("Reload")
         }
         .padding(8)
     }
 
     private var empty: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: K.S.half) {
             Text("Nothing to preview yet.").font(.system(size: 13, weight: .medium))
             Text(model.devDetected.map { "Start \($0) and Keel points the preview at whatever URL it announces." }
                  ?? "This project has no dev command. Paste a URL above — a deploy URL works too.")

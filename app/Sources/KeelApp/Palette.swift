@@ -13,27 +13,46 @@ struct Palette: View {
     @FocusState private var focused: Bool
 
     struct Item: Identifiable {
-        let id = UUID()
+        var id: String { title }
         let title: String
         let detail: String
+        /// The key that does the same thing without the palette, shown beside the row: the
+        /// palette is where people learn the shortcuts, or it is where they never do.
+        var shortcut: String? = nil
         let run: () -> Void
     }
 
     private var items: [Item] {
         var out: [Item] = [
-            Item(title: "New session", detail: "another window on this project") {
+            Item(title: "New lane on its own branch", detail: "its own checkout; merge when done",
+                 shortcut: "⌘N") {
                 NotificationCenter.default.post(name: .keelNewLane, object: nil)
             },
             Item(title: model.mode == "plan" ? "Switch to Auto" : "Switch to Plan",
-                 detail: "what the agent is allowed to do") {
+                 detail: "what the agent is allowed to do", shortcut: "⇧⇥") {
                 model.mode = model.mode == "plan" ? "acceptEdits" : "plan"
             },
-            Item(title: "Stop the turn", detail: "sends SIGINT, not SIGTERM") { model.stop() },
-            Item(title: "Open project…", detail: "switches every lane") {
+            Item(title: "Stop the turn", detail: "sends SIGINT, not SIGTERM", shortcut: "⌘.") {
+                model.stop()
+            },
+            Item(title: "Next lane", detail: "the one below", shortcut: "⌘⇧]") {
+                NotificationCenter.default.post(name: .keelNextLane, object: 1)
+            },
+            Item(title: "Toggle side panel", detail: "more room for the trace", shortcut: "⌘⇧E") {
+                NotificationCenter.default.post(name: .keelTogglePanel, object: nil)
+            },
+            Item(title: "Trust this project…", detail: "stop asking about commands here",
+                 shortcut: "⌘⇧T") {
+                NotificationCenter.default.post(name: .keelTrust, object: nil)
+            },
+            Item(title: "Settings", detail: "tools, permissions, devices", shortcut: "⌘,") {
+                NotificationCenter.default.post(name: .keelSettings, object: nil)
+            },
+            Item(title: "Open project…", detail: "switches every lane", shortcut: "⌘O") {
                 NotificationCenter.default.post(name: .keelOpenProject, object: nil)
             },
-            Item(title: "New session", detail: "another agent, running alongside") {
-                NotificationCenter.default.post(name: .keelNewLane, object: nil)
+            Item(title: "New lane sharing the working tree", detail: "for reading or planning alongside") {
+                model.lanes?.newLane()
             },
             Item(title: "Run the project's checks", detail: "the gate, on demand") {
                 Task { await model.runGateNow() }
@@ -46,9 +65,9 @@ struct Palette: View {
                 model.notes.removeAll()
             })
         }
-        for p in model.pending {
+        for (i, p) in model.pending.enumerated() {
             out.append(Item(title: "Approve: \(p.command.isEmpty ? p.tool : p.command)",
-                            detail: "once, this session") {
+                            detail: "once, this session", shortcut: i == 0 ? "⌘⇧A" : nil) {
                 model.answer(p, allow: true, scope: "session")
             })
         }
@@ -66,18 +85,30 @@ struct Palette: View {
         }
 
         // Files last: there are thousands, and they should not push the verbs off the list.
-        for f in model.files.prefix(400) {
+        // Not capped here — the match does the narrowing, so the four-hundred-and-first file
+        // is as reachable as the first.
+        for f in model.files {
             out.append(Item(title: f, detail: "attach as context") { model.mention(f) })
         }
         return out
     }
 
+    /// What is shown: recently run things first on an empty query, otherwise the best fuzzy
+    /// matches. Substring matching is the thing every palette is criticised for — `nlb` should
+    /// find "New lane on its own branch".
     private var hits: [Item] {
-        guard !query.isEmpty else { return Array(items.prefix(12)) }
-        return items
-            .filter { $0.title.localizedCaseInsensitiveContains(query) }
+        let all = items
+        guard !query.isEmpty else {
+            let recent = Recent.titles
+            let first = recent.compactMap { t in all.first { $0.title == t } }
+            let rest = all.filter { !recent.contains($0.title) }
+            return Array((first + rest).prefix(12))
+        }
+        return all
+            .compactMap { item in Fuzzy.score(query, in: item.title).map { (item, $0) } }
+            .sorted { $0.1 > $1.1 }
             .prefix(12)
-            .map { $0 }
+            .map(\.0)
     }
 
     var body: some View {
@@ -100,7 +131,7 @@ struct Palette: View {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(hits.enumerated()), id: \.element.id) { i, item in
                             HStack(spacing: K.S.sm) {
-                                Text(item.title)
+                                Text(Fuzzy.highlight(query, in: item.title))
                                     .font(K.F.small)
                                     .foregroundStyle(K.C.text)
                                     .lineLimit(1).truncationMode(.middle)
@@ -108,10 +139,16 @@ struct Palette: View {
                                 Text(item.detail)
                                     .font(K.F.micro).foregroundStyle(K.C.faint)
                                     .lineLimit(1)
-                                if i == selection {
+                                if let key = item.shortcut {
+                                    Text(key).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                        .frame(width: 44, alignment: .trailing)
+                                } else if i == selection {
                                     Image(systemName: "return")
-                                        .font(.system(size: 8, weight: .bold))
+                                        .font(.system(size: 10, weight: .bold))
                                         .foregroundStyle(K.C.faint)
+                                        .frame(width: 44, alignment: .trailing)
+                                } else {
+                                    Color.clear.frame(width: 44, height: 1)
                                 }
                             }
                             .padding(.horizontal, K.S.md).padding(.vertical, 5)
@@ -136,8 +173,58 @@ struct Palette: View {
 
     private func runSelected() {
         guard selection < hits.count else { return }
-        hits[selection].run()
+        let item = hits[selection]
+        Recent.remember(item.title)
+        item.run()
         open = false
         query = ""
+    }
+}
+
+/// The last few things run from the palette, so an empty query shows them first.
+enum Recent {
+    private static let key = "keel.palette.recent"
+    static var titles: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+    static func remember(_ title: String) {
+        var t = titles.filter { $0 != title }
+        t.insert(title, at: 0)
+        UserDefaults.standard.set(Array(t.prefix(8)), forKey: key)
+    }
+}
+
+/// Subsequence matching with a score, so `nlb` finds "New lane on its own branch" and a hit at
+/// the start of a word beats one in the middle.
+enum Fuzzy {
+    /// `nil` when the query is not a subsequence. Higher is better.
+    static func score(_ query: String, in text: String) -> Int? {
+        let q = Array(query.lowercased()), t = Array(text.lowercased())
+        guard !q.isEmpty else { return 0 }
+        var qi = 0, score = 0, last = -2
+        for (i, c) in t.enumerated() where qi < q.count && c == q[qi] {
+            // Runs and word starts are what a person meant; scattered letters are what they
+            // will accept.
+            if i == last + 1 { score += 8 }
+            if i == 0 || t[i - 1] == " " || t[i - 1] == "/" || t[i - 1] == "-" { score += 6 }
+            score -= i / 4
+            last = i
+            qi += 1
+        }
+        guard qi == q.count else { return nil }
+        // Shorter titles win ties: the exact verb over the file that contains it.
+        return score * 4 - t.count / 8
+    }
+
+    /// The matched characters in bold, so the row says why it is there.
+    static func highlight(_ query: String, in text: String) -> AttributedString {
+        var out = AttributedString(text)
+        let q = Array(query.lowercased()), t = Array(text.lowercased())
+        var qi = 0
+        for (i, c) in t.enumerated() where qi < q.count && c == q[qi] {
+            let lo = out.index(out.startIndex, offsetByCharacters: i)
+            let hi = out.index(lo, offsetByCharacters: 1)
+            out[lo..<hi].font = K.F.small.weight(.bold)
+            qi += 1
+        }
+        return out
     }
 }

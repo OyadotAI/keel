@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct KeelApp: App {
@@ -16,7 +17,8 @@ struct KeelApp: App {
                     delegate.app = app
                     await app.start()
                 }
-                .frame(minWidth: 1000, minHeight: 620)
+                // The panes inside add up to 1062 before any of them gets its ideal width.
+                .frame(minWidth: 1080, minHeight: 620)
                 // The window draws its own chrome: a translucent background would put the desktop
                 // behind a diff, and a dense reading surface needs an opaque ground.
                 .containerBackground(K.C.bg, for: .window)
@@ -72,6 +74,37 @@ struct KeelApp: App {
                     NotificationCenter.default.post(name: .keelApprove, object: nil)
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Deny oldest request") {
+                    NotificationCenter.default.post(name: .keelDeny, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Trust this project…") {
+                    NotificationCenter.default.post(name: .keelTrust, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            }
+            // Lanes are the point of the window, so they get the number keys.
+            CommandMenu("Lanes") {
+                ForEach(1...9, id: \.self) { n in
+                    Button("Lane \(n)") {
+                        NotificationCenter.default.post(name: .keelFocusLane, object: n - 1)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+                }
+                Divider()
+                Button("Next lane") {
+                    NotificationCenter.default.post(name: .keelNextLane, object: 1)
+                }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Previous lane") {
+                    NotificationCenter.default.post(name: .keelNextLane, object: -1)
+                }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+                Divider()
+                Button("Toggle side panel") {
+                    NotificationCenter.default.post(name: .keelTogglePanel, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
             }
         }
     }
@@ -84,7 +117,7 @@ struct KeelApp: App {
 /// nothing signals it, and macOS has no `PR_SET_PDEATHSIG` for the child to notice with — so it
 /// reparents to init and keeps serving. That is precisely the accumulation Orca is bug-reported
 /// for, and it was happening here until a launch/quit cycle was actually watched.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor var app: AppModel?
 
     @MainActor
@@ -92,9 +125,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app?.shutdown()
     }
 
+    /// A banner's Approve/Deny buttons were registered and then never listened for, so they did
+    /// nothing; clicking the banner did nothing either. This is the listener.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        let lane = response.notification.request.content.userInfo["lane"] as? String
+        let action = response.actionIdentifier
+        await MainActor.run { Notifications.handle(lane: lane, action: action) }
+    }
+
     /// Dark by default. Keel is a reading surface for code and diffs, and the palette is built
     /// dark-first — light exists and is complete, but it is not what this is for.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         if UserDefaults.standard.object(forKey: "keel.appearance") == nil {
             UserDefaults.standard.set("dark", forKey: "keel.appearance")
         }
@@ -196,4 +239,11 @@ extension Notification.Name {
     static let keelOpenProject = Notification.Name("keel.openProject")
     static let keelNewProject = Notification.Name("keel.newProject")
     static let keelToggleTerminal = Notification.Name("keel.toggleTerminal")
+    static let keelDeny = Notification.Name("keel.deny")
+    static let keelTrust = Notification.Name("keel.trust")
+    /// Object: a lane id string, or an `Int` index from ⌘1–9.
+    static let keelFocusLane = Notification.Name("keel.focusLane")
+    /// Object: +1 or −1.
+    static let keelNextLane = Notification.Name("keel.nextLane")
+    static let keelTogglePanel = Notification.Name("keel.togglePanel")
 }

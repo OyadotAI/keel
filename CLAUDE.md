@@ -89,10 +89,45 @@ It was deleted only once the Swift app could do what it did. What is deliberatel
 over: file editing (there is no editor), and `/api/browse` and `/api/open-url`, which `NSOpenPanel`
 and `NSWorkspace` do better natively.
 
-## Design turns
+## Lanes and worktrees
+
+A lane is one conversation in the window; ⌘N gives it a checkout of its own under
+`.keel/worktrees/<name>` on branch `keel/<name>`, created on the first send so the branch is named
+for the ask. Every checkout-scoped request carries `?wt=<name>`, resolved by one extractor
+(`serve::Checkout`); the handlers that do not take it are the point:
+
+- **Permissions, trust and approvals read the project root.** A lane cannot carry a different
+  allowlist than its repository, by construction (`AppState::checkout` is never consulted there).
+- **`git branch -D` is run in exactly one place**, after the person has been shown the count of
+  commits it will lose. `finish` merges with `--no-ff` and deletes with `-d`; a dirty project or a
+  conflict refuses and leaves the lane untouched. Tests for each.
+- `.worktreeinclude` (Claude Code's own file) lists what git leaves behind — `.env` and the like —
+  and it is copied into the new checkout.
+- **One dev server.** `dev.rs` is global; the preview follows whichever lane started it. Ports are
+  not allocated per lane. Said in the UI rather than hidden.
+
+Beside that: `AskUserQuestion` is in `HOOKED_TOOLS` so a question holds the turn like a command
+does, and the answer travels back as a `deny` whose reason is the answer — never short-circuited
+by trust, because a question is not a permission. Every turn is preceded by a snapshot
+(`snapshot.rs`, a git tree from a throwaway index, no refs) so it can be rewound, and a rewind
+snapshots first so it can be undone. Tokens and context size come from the stream's own `usage`
+fields; Keel makes no usage API calls and shows tokens rather than a guessed percentage.
+
+## Design turns and the live canvas
 
 Click an element in the preview and the turn that follows carries a **pixel column**: the same rect
-photographed before and after, with a verdict.
+photographed before and after, with a verdict. Several clicks are several **pins**, each with its
+own note, sent as one prompt and drawn on the page until the turn ends.
+
+The other direction is the one every vibe-coding tool is criticised for missing: **when the agent
+writes a frontend file, the preview comes forward, goes to that page, says what is being edited,
+and ripples the regions that changed when HMR lands.** The rule that makes it work is *observe the
+DOM, don't infer it*: `Picker.js` runs a `MutationObserver` armed by an `expect` message at each
+write, and the mutated subtrees are both the "rebuild finished" signal and the regions to mark —
+no file→element mapping, no framework knowledge. `Frontend.route(for:)` maps a page file to a URL
+only when that is unambiguous (App Router, Pages Router, SvelteKit; dynamic segments are `nil`),
+and is used for navigation alone. Everything the script draws carries `data-keel` so it never
+reports itself as a change.
 
 Picking elements is table stakes — Cursor ships it, and sends the agent xpath, computed styles and
 fiber props. What none of them do is *check*. The cited failure everywhere is the same: the agent

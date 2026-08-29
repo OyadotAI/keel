@@ -63,10 +63,54 @@ impl AppState {
         self.repo.read().expect("repo lock poisoned").clone()
     }
 
+    /// The checkout a request is about: the project, or one of its lane worktrees.
+    ///
+    /// Permissions, trust and approvals never come through here — they are decisions about the
+    /// repository and read `repo()` — so a lane cannot carry a different allowlist than its
+    /// project, by construction rather than by care.
+    pub fn checkout(&self, wt: Option<&str>) -> Result<Utf8PathBuf, String> {
+        let root = self.repo();
+        match wt.filter(|s| !s.is_empty()) {
+            None => Ok(root),
+            Some(name) => {
+                let path = crate::worktree::path_of(&root, name)?;
+                if path.is_dir() {
+                    Ok(path)
+                } else {
+                    Err(format!("lane {name} has no checkout"))
+                }
+            }
+        }
+    }
+
     pub fn set_repo(&self, path: Utf8PathBuf) {
         crate::prefs::Prefs::remember(&path);
         *self.repo.write().expect("repo lock poisoned") = path;
         self.open.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The checkout a request names with `?wt=<lane>`, or the project when it names none.
+///
+/// One extractor rather than a `wt` field on every query struct: the handlers that take a
+/// checkout are the ones that read or change files, and they all resolve it the same way.
+pub struct Checkout(pub Utf8PathBuf);
+
+impl axum::extract::FromRequestParts<Arc<AppState>> for Checkout {
+    type Rejection = (axum::http::StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let wt = parts
+            .uri
+            .query()
+            .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("wt=")));
+        state
+            .checkout(wt)
+            .map(Checkout)
+            .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
     }
 }
 
@@ -232,6 +276,31 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/git/act", axum::routing::post(api_git_act))
         .route("/api/git/init", axum::routing::post(api_git_init))
+        .route(
+            "/api/git/commit",
+            axum::routing::post(crate::worktree::api_commit),
+        )
+        .route("/api/worktree", get(crate::worktree::api_list))
+        .route(
+            "/api/worktree/create",
+            axum::routing::post(crate::worktree::api_create),
+        )
+        .route(
+            "/api/worktree/finish",
+            axum::routing::post(crate::worktree::api_finish),
+        )
+        .route(
+            "/api/worktree/discard",
+            axum::routing::post(crate::worktree::api_discard),
+        )
+        .route(
+            "/api/git/snapshot",
+            axum::routing::post(crate::snapshot::take),
+        )
+        .route(
+            "/api/git/restore",
+            axum::routing::post(crate::snapshot::put_back),
+        )
         .route("/api/permissions", get(crate::permissions::list))
         .route(
             "/api/permissions/trust",
@@ -389,8 +458,7 @@ fn bind_address() -> (Ipv4Addr, String) {
 /// repository takes seconds to minutes, and for all of it Keel served nothing at all — reported as
 /// the screen freezing after cloning a project. The same was true, less dramatically, of walking a
 /// large tree or running the scanner.
-async fn api_tree(State(state): State<Arc<AppState>>) -> Json<Vec<crate::api::Node>> {
-    let repo = state.repo();
+async fn api_tree(Checkout(repo): Checkout) -> Json<Vec<crate::api::Node>> {
     Json(blocking(move || crate::api::tree(&repo), Vec::new()).await)
 }
 
@@ -408,11 +476,11 @@ where
 }
 
 async fn api_raw(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Query(query): Query<crate::api::FileQuery>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match crate::api::read_raw(&state.repo(), &query.path) {
+    match crate::api::read_raw(&repo, &query.path) {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
         Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
     }
@@ -425,36 +493,30 @@ struct SessionQuery {
 
 /// Read one session's transcript, for the session switcher in the agent panel.
 async fn api_session(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Query(query): Query<SessionQuery>,
 ) -> Json<Vec<keel_workspace::Turn>> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    Json(keel_workspace::transcript(&state.repo(), &home, &query.id))
+    Json(keel_workspace::transcript(&repo, &home, &query.id))
 }
 
 /// What one session changed and ran. Explicit, on a click — see `keel_workspace::session_work`.
 async fn api_session_work(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Query(query): Query<SessionQuery>,
 ) -> Json<keel_workspace::SessionWork> {
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    Json(keel_workspace::session_work(
-        &state.repo(),
-        &home,
-        &query.id,
-    ))
+    Json(keel_workspace::session_work(&repo, &home, &query.id))
 }
 
-async fn api_git_status(State(state): State<Arc<AppState>>) -> Json<crate::api::GitStatus> {
-    let repo = state.repo();
+async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::api::GitStatus> {
     Json(blocking(move || crate::api::git_status(&repo), Default::default()).await)
 }
 
 async fn api_git_diff(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Query(query): Query<crate::api::FileQuery>,
 ) -> Json<crate::api::DiffResponse> {
-    let repo = state.repo();
     Json(
         blocking(
             move || crate::api::git_diff(&repo, &query.path),
@@ -468,14 +530,15 @@ async fn api_git_diff(
 struct GitActRequest {
     action: String,
     path: String,
+    /// For `discard-hunk`: which `@@` block, counting from zero.
+    hunk: Option<usize>,
 }
 
 /// Stage, unstage or discard one file, from the Changes panel.
 /// `git init`, for a project that is not one yet.
 async fn api_git_init(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    let repo = state.repo();
     blocking(move || crate::api::git_init(&repo), Err("timed out".into()))
         .await
         .map(|()| Json(true))
@@ -483,12 +546,11 @@ async fn api_git_init(
 }
 
 async fn api_git_act(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Json(req): Json<GitActRequest>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    let repo = state.repo();
     blocking(
-        move || crate::api::git_act(&repo, &req.action, &req.path),
+        move || crate::api::git_act(&repo, &req.action, &req.path, req.hunk),
         Err("timed out".into()),
     )
     .await

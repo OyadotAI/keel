@@ -189,7 +189,7 @@ struct ItemRow: View {
                         .lineLimit(1)
                     if fromRepo {
                         Text("repo")
-                            .font(.system(size: 8, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                             .padding(.horizontal, 3).padding(.vertical, 0.5)
                             .background(K.C.warn.opacity(0.2),
                                         in: RoundedRectangle(cornerRadius: 2))
@@ -199,7 +199,7 @@ struct ItemRow: View {
                 }
                 if !detail.isEmpty {
                     Text(detail)
-                        .font(K.F.mono(9.5)).foregroundStyle(K.C.faint)
+                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -224,7 +224,7 @@ struct PanelAction: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 9))
+                Image(systemName: icon).font(.system(size: 10))
                 Text(title)
                 Spacer()
             }

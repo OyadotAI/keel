@@ -10,6 +10,12 @@ struct SidePanel: View {
             RailHeader(panel.title, trailing: count)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    // Before the daemon has answered once, an empty list means "not yet", and
+                    // showing "nothing here" for it is a lie that lasts half a second and is
+                    // believed for longer.
+                    if !model.loaded {
+                        Empty(text: "Reading…")
+                    } else {
                     switch panel {
                     case .changes: ChangesTreeView(model: model)
                     case .files: FileTree(model: model)
@@ -20,6 +26,7 @@ struct SidePanel: View {
                     case .mcp: MCPPanel(model: model)
                     case .hooks: HooksPanel(model: model)
                     case .plugins: PluginsPanel(model: model)
+                    }
                     }
                 }
                 .padding(.bottom, K.S.md)
@@ -71,8 +78,8 @@ struct SessionsPanel: View {
                         .foregroundStyle(K.C.text)
                         .lineLimit(1)
                     HStack(spacing: K.S.xs) {
-                        Text("\(s.messages) msg").font(K.F.mono(9.5))
-                        if let t = s.lastActive { Text(short(t)).font(K.F.mono(9.5)) }
+                        Text("\(s.messages) msg").font(K.F.mono(10))
+                        if let t = s.lastActive { Text(short(t)).font(K.F.mono(10)) }
                     }
                     .foregroundStyle(K.C.faint)
                 }
@@ -118,13 +125,14 @@ struct ReadinessPanel: View {
         }
         ForEach(model.findings.prefix(30)) { f in
             HoverRow {
-                HStack(alignment: .top, spacing: K.S.sm) {
-                    Circle().fill(tint(f.severity)).frame(width: 5, height: 5)
-                        .padding(.top, 5)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(f.id).font(K.F.mono(9.5)).foregroundStyle(K.C.faint)
+                VStack(alignment: .leading, spacing: K.S.xxs) {
+                    Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: K.S.xs) {
+                        // The severity as a word, not only a colour: a red dot and an amber dot
+                        // are the same dot to one person in twelve.
+                        Pill(text: f.severity.uppercased(), tone: tone(f.severity))
+                        Text(f.id).font(K.F.mono(10)).foregroundStyle(K.C.faint)
                     }
                 }
             } action: {
@@ -134,11 +142,11 @@ struct ReadinessPanel: View {
         }
     }
 
-    private func tint(_ s: String) -> Color {
+    private func tone(_ s: String) -> Pill.Tone {
         switch s {
-        case "critical", "high": K.C.del
-        case "medium": K.C.warn
-        default: K.C.faint
+        case "critical", "high": .bad
+        case "medium": .warn
+        default: .neutral
         }
     }
 }
