@@ -190,6 +190,20 @@ final class Lanes {
         return m
     }
 
+    /// A lane for a review, beside the one being worked in rather than instead of it. Made in
+    /// the background: the person's lane stays focused and the review tab fills in on its own.
+    func reviewLane(beside current: SessionModel) -> SessionModel {
+        let keep = activeID
+        let m = SessionModel(client: client, port: port, sessionId: nil)
+        m.lanes = self
+        m.adopt(project: current)
+        m.title = "Staff review"
+        lanes.append(m)
+        activeID = keep
+        Telemetry.track("lane_created", ["isolated": false, "resumed": false, "review": true])
+        return m
+    }
+
     /// Open a past session in a lane. If it is already open, focus it rather than opening a second
     /// copy that would then race the first over `--resume`.
     func open(session id: String) async {

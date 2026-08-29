@@ -214,7 +214,8 @@ struct ReadinessPanel: View {
     /// review, keep it as the contract and fix the docs it judged.
     @ViewBuilder
     private var primary: some View {
-        let reviewed = model.lastReview != nil && !(model.turns.last?.text.isEmpty ?? true) && !model.running
+        let lane = model.reviewLane
+        let reviewed = model.lastReview != nil && !(lane?.turns.last?.text.isEmpty ?? true) && !(lane?.running ?? true)
         HStack(spacing: K.S.xs) {
             Button {
                 busy = true
@@ -230,8 +231,8 @@ struct ReadinessPanel: View {
                 .background(K.C.accent, in: RoundedRectangle(cornerRadius: K.R.sm))
             }
             .buttonStyle(.plain)
-            .disabled(busy || model.running)
-            .help("Reads the code the way a staff engineer would — hot path, threat model, tests, pipeline, docs — and ranks what hurts first. Plan mode: changes nothing. Runs on its own once a day.")
+            .disabled(busy || (model.reviewLane?.running ?? false))
+            .help("Runs in its own lane, beside this one. Reads the code the way a staff engineer would — hot path, threat model, tests, pipeline, docs — and ranks what hurts first. Plan mode: changes nothing. Runs on its own once a day.")
             if reviewed {
                 Menu {
                     Button(saved == nil ? "Save as the contract" : "Saved \(saved!)") { Task { saved = await model.saveReview() } }

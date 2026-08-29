@@ -223,15 +223,17 @@ private struct ChatTurn: View {
                 .animation(K.M.quick, value: hovering)
             }
 
-            HStack(alignment: .top, spacing: K.S.sm) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(K.C.accent.opacity(0.6))
-                    .frame(width: 2)
+            // The ask, as a message from you: right-aligned, tinted, a bubble. The reply is a
+            // bubble from the other side. Two voices, told apart at a glance.
+            HStack {
+                Spacer(minLength: 48)
                 Text(turn.prompt)
                     .font(K.F.body)
-                    .foregroundStyle(K.C.text)
+                    .foregroundStyle(.white)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                    .background(K.C.accent, in: Bubble(tail: .trailing))
             }
 
             if !turn.thinking.isEmpty {
@@ -250,7 +252,15 @@ private struct ChatTurn: View {
                 }
             }
 
-            if !turn.text.isEmpty { Markdown(turn.text) }
+            if !turn.text.isEmpty {
+                HStack {
+                    Markdown(turn.text)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                        .background(K.C.raised, in: Bubble(tail: .leading))
+                        .overlay(Bubble(tail: .leading).stroke(K.C.line, lineWidth: 1))
+                    Spacer(minLength: 24)
+                }
+            }
         }
         .onHover { hovering = $0 }
         // A second route, because a hover target is no use from the keyboard or a trackpad tap.
@@ -469,5 +479,29 @@ struct SendButton: ButtonStyle {
                     .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
                                   : K.C.line)
             )
+    }
+}
+
+
+/// A message bubble: rounded, with a small tail on the side it came from.
+struct Bubble: Shape {
+    enum Tail { case leading, trailing }
+    let tail: Tail
+    func path(in r: CGRect) -> Path {
+        let radius: CGFloat = 14
+        var p = Path(roundedRect: r, cornerRadius: radius)
+        let y = r.maxY - 1
+        switch tail {
+        case .trailing:
+            p.move(to: CGPoint(x: r.maxX - radius, y: y))
+            p.addQuadCurve(to: CGPoint(x: r.maxX + 5, y: y), control: CGPoint(x: r.maxX - 2, y: y))
+            p.addQuadCurve(to: CGPoint(x: r.maxX - 4, y: y - 9), control: CGPoint(x: r.maxX - 1, y: y - 3))
+        case .leading:
+            p.move(to: CGPoint(x: r.minX + radius, y: y))
+            p.addQuadCurve(to: CGPoint(x: r.minX - 5, y: y), control: CGPoint(x: r.minX + 2, y: y))
+            p.addQuadCurve(to: CGPoint(x: r.minX + 4, y: y - 9), control: CGPoint(x: r.minX + 1, y: y - 3))
+        }
+        p.closeSubpath()
+        return p
     }
 }
