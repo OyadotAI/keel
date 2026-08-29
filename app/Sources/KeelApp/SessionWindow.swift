@@ -636,6 +636,10 @@ struct WindowEvents: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
                 starting = true
             }
+            .onReceive(NotificationCenter.default.publisher(for: .keelRunInTerminal)) { _ in
+                // The terminal types it once it is open; here it only has to be open.
+                withAnimation(K.M.quick) { showTerminal = true; showSettings = false }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .keelToggleTerminal)) { _ in
                 withAnimation(K.M.quick) { showTerminal.toggle() }
             }

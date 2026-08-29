@@ -39,8 +39,23 @@ struct TerminalPane: NSViewRepresentable {
             _title = title
         }
 
+        /// A command handed to the terminal from elsewhere — a "Run in Terminal" button. Typed
+        /// with a newline, into the shell, exactly as the person would have.
+        func type(_ command: String) {
+            socket?.send(.data(Data((command + "\n").utf8))) { _ in }
+        }
+
         func attach(_ view: TerminalView) {
             self.view = view
+            NotificationCenter.default.addObserver(forName: .keelRunInTerminal, object: nil,
+                                                   queue: .main) { [weak self] note in
+                guard let cmd = note.object as? String else { return }
+                // The pane may have just been opened for this; give the socket a moment.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(self?.socket == nil ? 600 : 50))
+                    self?.type(cmd)
+                }
+            }
             let url = URL(string: "ws://127.0.0.1:\(port)/api/term/ws"
                           + (worktree.map { "?wt=" + $0 } ?? ""))!
             let task = URLSession.shared.webSocketTask(with: url)

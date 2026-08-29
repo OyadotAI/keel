@@ -71,17 +71,19 @@ struct ConnectionsSettings: View {
                 }
             }
 
-            // A grid of cards, not a section per tool: nine sections was a page of scrolling
-            // to answer "is docker signed in".
+            // One row per tool, the broken ones first. A grid of cards had ragged heights and
+            // a command you had to retype; a row has the state, the account, and the button.
             Section {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: K.S.sm)],
-                          alignment: .leading, spacing: K.S.sm) {
-                    ForEach(tools) { t in
-                        ToolCard(tool: t, busy: busy == t.id, anyBusy: busy != nil,
-                                 install: { stream("/api/cli/install", ["id": t.id], t.id) },
-                                 login: { stream("/api/cli/login", ["id": t.id], t.id) })
+                VStack(spacing: 0) {
+                    ForEach(tools.sorted { ($0.authenticated ? 1 : 0, $0.label) < ($1.authenticated ? 1 : 0, $1.label) }) { t in
+                        ToolRow(tool: t, busy: busy == t.id, anyBusy: busy != nil,
+                                install: { stream("/api/cli/install", ["id": t.id], t.id) },
+                                login: { stream("/api/cli/login", ["id": t.id], t.id) })
+                        if t.id != tools.last?.id { Hairline() }
                     }
                 }
+                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+                .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
             }
 
             Section {
@@ -315,14 +317,14 @@ private struct AwsSso: View {
 }
 
 
-/// One tool: its state, and every way of fixing it — the command Keel can run, the installer
-/// you can download, and the command to paste when Keel cannot drive the flow.
-private struct ToolCard: View {
+/// One tool: its state, who is signed in, and the one button that fixes it.
+private struct ToolRow: View {
     let tool: ConnectionsSettings.Tool
     let busy: Bool
     let anyBusy: Bool
     let install: () -> Void
     let login: () -> Void
+    @State private var copied = false
 
     /// Where the official installer lives, for the people who would rather click than brew.
     private static let installers: [String: String] = [
@@ -338,50 +340,75 @@ private struct ToolCard: View {
         "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     ]
 
+    /// `gh version 2.87.3 (2026-…)` → `2.87.3`.
+    private var version: String? {
+        guard let v = tool.version,
+              let m = v.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) else { return tool.version }
+        return String(v[m])
+    }
+
+    private var setup: String? { tool.installed && !tool.authenticated ? tool.setup.flatMap { $0.isEmpty ? nil : $0 } : nil }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
+        VStack(alignment: .leading, spacing: K.S.xs) {
             HStack(spacing: K.S.sm) {
                 Pill(text: tool.authenticated ? "OK" : (tool.installed ? "SIGN IN" : "MISSING"),
                      tone: tool.authenticated ? .good : (tool.installed ? .warn : .neutral))
+                    .frame(width: 58, alignment: .leading)
                 Text(tool.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
-                Spacer()
-                if let v = tool.version { Text(v).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1) }
+                    .frame(width: 110, alignment: .leading)
+                Text(tool.identity ?? (tool.installed ? "not signed in" : "not installed"))
+                    .font(K.F.small).foregroundStyle(tool.authenticated ? K.C.dim : K.C.faint)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: K.S.sm)
+                if let version { Text(version).font(K.F.mono(10)).foregroundStyle(K.C.faint) }
+                actions
             }
-            Text(tool.identity ?? (tool.installed ? "not connected" : "not installed"))
-                .font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1)
-            if let why = tool.blocked {
+            if let why = tool.blocked, !tool.authenticated {
                 Text(why).font(K.F.micro).foregroundStyle(K.C.dim)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 58 + 110 + 2 * K.S.sm)
             }
-            HStack(spacing: K.S.sm) {
-                if !tool.installed {
-                    Button(busy ? "Installing…" : "Install") { install() }
-                        .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
-                } else if !tool.authenticated, tool.setup?.isEmpty ?? true {
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+    }
+
+    /// The one thing to do about this row. Install, sign in, or run the command — as a button
+    /// that runs it in Keel's terminal, not a string to retype.
+    @ViewBuilder
+    private var actions: some View {
+        HStack(spacing: K.S.xs) {
+            if !tool.installed {
+                Button(busy ? "Installing…" : "Install") { install() }
+                    .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
+                if let page = Self.installers[tool.id], let url = URL(string: page) {
+                    Button("Download") { NSWorkspace.shared.open(url) }.buttonStyle(QuietButton())
+                }
+            } else if !tool.authenticated {
+                if let setup {
+                    Button("Run in Terminal") {
+                        NotificationCenter.default.post(name: .keelRunInTerminal, object: setup)
+                    }
+                    .buttonStyle(QuietButton(tone: K.C.accent))
+                    .help(setup)
+                    Button(copied ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(setup, forType: .string)
+                        copied = true
+                    }
+                    .buttonStyle(QuietButton())
+                } else {
                     Button(busy ? "Signing in…" : "Sign in") { login() }
                         .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
                 }
-                if let page = Self.installers[tool.id], let url = URL(string: page) {
-                    Button(tool.installed ? "Website" : "Download installer") {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .buttonStyle(QuietButton())
+            } else if let page = Self.installers[tool.id], let url = URL(string: page) {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    Image(systemName: "arrow.up.right.square").font(.system(size: 10))
+                        .frame(width: 18, height: 16).contentShape(Rectangle())
                 }
-            }
-            if !tool.authenticated, tool.installed, let setup = tool.setup, !setup.isEmpty {
-                // A flow Keel cannot drive — a password prompt, a browser handshake — is
-                // offered as the command to run rather than as a button that would do nothing.
-                VStack(alignment: .leading, spacing: K.S.xxs) {
-                    Text(setup).font(K.F.code).textSelection(.enabled)
-                        .padding(.horizontal, K.S.half).padding(.vertical, 3)
-                        .background(K.C.well, in: RoundedRectangle(cornerRadius: 3))
-                    Text("run this in the terminal").font(K.F.micro).foregroundStyle(K.C.faint)
-                }
+                .buttonStyle(.plain).foregroundStyle(K.C.faint)
+                .hint("\(tool.label) website")
             }
         }
-        .padding(K.S.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
-        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
     }
 }
