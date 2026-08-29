@@ -35,7 +35,7 @@ struct StartProject: View {
         var id: String { full_name ?? name }
     }
 
-    struct NewProject: Encodable { var parent: String; var name: String; var template: String }
+    struct NewProject: Encodable { var parent: String; var name: String; var template: String; var notes: String }
     struct CloneBody: Encodable { var clone_url: String; var name: String; var parent: String? }
     struct Created: Decodable { var path: String }
 
@@ -68,104 +68,217 @@ struct StartProject: View {
             }
         }
         .padding(K.S.xl)
-        .frame(width: 640)
+        .frame(width: mode == .new ? 960 : 640)
         .background(K.C.bg)
         .task { await loadRepos() }
     }
 
     // MARK: New
 
+    @State private var category: Template.Category? = nil
+
     private var templates: [Template] {
-        guard !query.isEmpty else { return Template.all }
-        return Template.all.filter {
-            $0.title.localizedCaseInsensitiveContains(query) || $0.blurb.localizedCaseInsensitiveContains(query)
+        Template.all.filter { t in
+            (category == nil || t.category == category)
+                && (query.isEmpty
+                    || t.title.localizedCaseInsensitiveContains(query)
+                    || t.blurb.localizedCaseInsensitiveContains(query)
+                    || t.components.contains { $0.tech.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) })
         }
     }
 
+    /// Categories on the left, the list in the middle, the architecture on the right. The
+    /// people this is for choose by the shape of the system, so the shape is what they see
+    /// before Create — and it is the same text the agent builds to.
     private var newForm: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
-            HStack(spacing: K.S.sm) {
-                search("Search templates…")
-                HStack(spacing: 0) {
-                    ForEach([("stack", "Containers"), ("app", "Cloudflare Workers")], id: \.0) { s, label in
-                        let on = stack == s
-                        Text(label)
-                            .font(K.F.micro.weight(on ? .semibold : .regular))
-                            .foregroundStyle(on ? K.C.text : K.C.faint)
-                            .padding(.horizontal, K.S.sm).padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: K.R.sm - 1)
-                                .fill(on ? K.C.raised : .clear).padding(1))
-                            .contentShape(Rectangle())
-                            .asButton { stack = s }
-                            .help(s == "stack"
-                                  ? "Docker images, docker-compose, nginx, kustomize overlays, CI to GHCR and a cluster"
-                                  : "Next.js and Hono as Workers with a service binding; no cluster")
+            HStack(alignment: .top, spacing: K.S.md) {
+                categories.frame(width: 168)
+                VStack(spacing: K.S.sm) {
+                    search("Search \(Template.all.count) templates…")
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(templates) { t in
+                                let on = template.id == t.id
+                                HStack(spacing: K.S.sm) {
+                                    Image(systemName: t.icon).font(.system(size: 12))
+                                        .foregroundStyle(on ? K.C.accent : K.C.dim).frame(width: 18)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(t.title).font(K.F.small.weight(on ? .semibold : .regular))
+                                            .foregroundStyle(K.C.text)
+                                        Text(t.blurb).font(K.F.micro).foregroundStyle(K.C.faint)
+                                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)
+                                .background(on ? K.C.accent.opacity(0.10) : .clear,
+                                            in: RoundedRectangle(cornerRadius: K.R.sm))
+                                .contentShape(Rectangle())
+                                .asButton { template = t; if t.wants == nil { attachment = nil } }
+                                .accessibilityAddTraits(on ? .isSelected : [])
+                            }
+                            if templates.isEmpty {
+                                Text("Nothing matches.").font(K.F.small).foregroundStyle(K.C.faint).padding(K.S.md)
+                            }
+                        }
                     }
                 }
-                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-                .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                .frame(width: 260)
+                detail
             }
+            .frame(height: 440)
 
-            // The gallery. Ten of the things people start most, each a scaffold plus the first
-            // brief, so "new project" ends with the agent already working on the right thing.
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: K.S.sm)], spacing: K.S.sm) {
-                ForEach(templates) { t in
-                    let on = template.id == t.id
-                    VStack(alignment: .leading, spacing: K.S.xs) {
-                        HStack(spacing: K.S.sm) {
-                            Image(systemName: t.icon).font(.system(size: 13))
-                                .foregroundStyle(on ? K.C.accent : K.C.dim)
-                            Text(t.title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+            Hairline()
+            footer
+        }
+    }
+
+    private var categories: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            categoryRow(nil, "All", "square.grid.2x2", Template.all.count)
+            ForEach(Template.Category.allCases) { c in
+                categoryRow(c, c.rawValue, c.icon, Template.all.count { $0.category == c })
+            }
+        }
+    }
+
+    private func categoryRow(_ c: Template.Category?, _ title: String, _ icon: String, _ n: Int) -> some View {
+        let on = category == c
+        return HStack(spacing: K.S.sm) {
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(on ? K.C.accent : K.C.faint).frame(width: 16)
+            Text(title).font(K.F.small.weight(on ? .semibold : .regular)).foregroundStyle(K.C.text).lineLimit(1)
+            Spacer()
+            Text("\(n)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+        }
+        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+        .background(on ? K.C.text.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: K.R.sm))
+        .contentShape(Rectangle())
+        .asButton {
+            category = c
+            if let first = templates.first, !templates.contains(where: { $0.id == template.id }) { template = first }
+        }
+    }
+
+    /// The architecture: components, the flow of one request, what is built in, what you get.
+    private var detail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: K.S.md) {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: template.icon).font(.system(size: 16)).foregroundStyle(K.C.accent)
+                    Text(template.title).font(K.F.title).foregroundStyle(K.C.text)
+                    Spacer()
+                    Text(template.category.rawValue).font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                Text(template.blurb).font(K.F.body).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !template.components.isEmpty {
+                    section("Architecture", "square.stack.3d.up")
+                    VStack(spacing: 0) {
+                        ForEach(Array(template.components.enumerated()), id: \.offset) { i, c in
+                            HStack(alignment: .top, spacing: K.S.sm) {
+                                Text(c.name).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                                    .frame(width: 118, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(c.role).font(K.F.small).foregroundStyle(K.C.dim)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text(c.tech).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                }
+                            }
+                            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)
+                            if i < template.components.count - 1 { Hairline() }
                         }
-                        Text(t.blurb).font(K.F.micro).foregroundStyle(K.C.dim)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+                }
+
+                if !template.flow.isEmpty {
+                    section("How a request moves", "arrow.right")
+                    VStack(alignment: .leading, spacing: K.S.xs) {
+                        ForEach(Array(template.flow.enumerated()), id: \.offset) { i, step in
+                            HStack(alignment: .top, spacing: K.S.sm) {
+                                Text("\(i + 1)").font(K.F.mono(10, .semibold)).foregroundStyle(K.C.accent).frame(width: 14, alignment: .trailing)
+                                Text(step).font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+
+                if !template.practices.isEmpty {
+                    section("Built in", "checkmark.shield")
+                    VStack(alignment: .leading, spacing: K.S.xs) {
+                        ForEach(template.practices, id: \.self) { p in
+                            HStack(alignment: .top, spacing: K.S.sm) {
+                                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(K.C.add).frame(width: 14)
+                                Text(p).font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+
+                section("You get", "shippingbox")
+                Text(template.scaffold == "empty"
+                     ? "CLAUDE.md, a gate, and three reviewer agents (review, security, reliability). No application code."
+                     : stack == "stack"
+                        ? "frontend/ (Next.js standalone image) · backend/ (Hono on Node image) · docker-compose with Postgres, Redis and nginx · k8s/base + dev/prod kustomize overlays · env-to-secrets · CI to ghcr and a cluster · CLAUDE.md with this architecture · reviewer, security and reliability agents"
+                        : "frontend/ (Next.js on Workers) · backend/ (Hono on Workers, service binding) · infra/ deploy script with dev/prod · CLAUDE.md with this architecture · reviewer, security and reliability agents")
+                    .font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
+
+                if let wants = template.wants {
+                    HStack(spacing: K.S.sm) {
+                        Image(systemName: "paperclip").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                        Text(attachment.map { $0.lastPathComponent } ?? "Attach \(wants)")
+                            .font(K.F.small).foregroundStyle(attachment == nil ? K.C.dim : K.C.text).lineLimit(1)
+                        Spacer()
+                        Button(attachment == nil ? "Choose file…" : "Change") { chooseAttachment() }
+                            .buttonStyle(QuietButton(tone: K.C.accent))
                     }
                     .padding(K.S.sm)
-                    .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
-                    .background(on ? K.C.accent.opacity(0.10) : K.C.raised,
-                                in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.md)
-                        .stroke(on ? K.C.accent : K.C.line, lineWidth: 1))
-                    .contentShape(Rectangle())
-                    .asButton { template = t; if t.wants == nil { attachment = nil } }
-                    .accessibilityAddTraits(on ? .isSelected : [])
+                    .background(K.C.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: K.R.sm))
                 }
             }
+            .padding(.trailing, K.S.xs)
+        }
+        .frame(maxWidth: .infinity)
+    }
 
-            if let wants = template.wants {
-                HStack(spacing: K.S.sm) {
-                    Image(systemName: "paperclip").font(.system(size: 10)).foregroundStyle(K.C.accent)
-                    Text(attachment.map { $0.lastPathComponent } ?? "Attach \(wants)")
-                        .font(K.F.small).foregroundStyle(attachment == nil ? K.C.dim : K.C.text)
-                        .lineLimit(1)
-                    Spacer()
-                    Button(attachment == nil ? "Choose file…" : "Change") { chooseAttachment() }
-                        .buttonStyle(QuietButton(tone: K.C.accent))
+    private func section(_ title: String, _ icon: String) -> some View {
+        HStack(spacing: K.S.xs) {
+            Image(systemName: icon).font(.system(size: 10)).foregroundStyle(K.C.faint)
+            Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.7).foregroundStyle(K.C.faint)
+        }
+        .padding(.top, K.S.xs)
+    }
+
+    private var footer: some View {
+        HStack(spacing: K.S.sm) {
+            TextField("project-name", text: $name).field().font(K.F.code).frame(width: 170)
+            TextField("~/Dev", text: $parent).field().font(K.F.code).frame(width: 150)
+            Button("Choose…") { chooseParent() }.buttonStyle(QuietButton())
+            HStack(spacing: 0) {
+                ForEach([("stack", "Containers"), ("app", "Cloudflare Workers")], id: \.0) { s, label in
+                    let on = stack == s
+                    Text(label)
+                        .font(K.F.micro.weight(on ? .semibold : .regular))
+                        .foregroundStyle(on ? K.C.text : K.C.faint)
+                        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: K.R.sm - 1).fill(on ? K.C.raised : .clear).padding(1))
+                        .contentShape(Rectangle())
+                        .asButton { stack = s }
+                        .help(s == "stack"
+                              ? "Docker images, docker-compose, nginx, kustomize overlays, CI to GHCR and a cluster"
+                              : "Next.js and Hono as Workers with a service binding; no cluster")
                 }
-                .padding(K.S.sm)
-                .background(K.C.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: K.R.sm))
             }
-
-            HStack(spacing: K.S.sm) {
-                TextField("project-name", text: $name).field().font(K.F.code).frame(width: 200)
-                TextField("~/Dev", text: $parent).field().font(K.F.code)
-                Button("Choose…") { chooseParent() }.buttonStyle(QuietButton())
-            }
-
-            HStack {
-                Text(template.scaffold == "empty"
-                     ? "A CLAUDE.md, a gate and the agent scaffolding — no application code."
-                     : stack == "stack"
-                        ? "Next.js + Hono in containers, Postgres and Redis, kustomize dev/prod, CI that ships images. Green from the first commit."
-                        : "Next.js + Hono on Cloudflare Workers, two environments, green from the first commit.")
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
-                Spacer()
-                Button(busy ? "Creating…" : (template.brief.isEmpty ? "Create" : "Create and start")) { create() }
-                    .buttonStyle(SendButton())
-                    .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty
-                              || (template.wants != nil && attachment == nil))
-            }
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            Spacer()
+            Button(busy ? "Creating…" : (template.brief.isEmpty ? "Create" : "Create and start")) { create() }
+                .buttonStyle(SendButton())
+                .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty
+                          || (template.wants != nil && attachment == nil))
         }
     }
 
@@ -258,9 +371,10 @@ struct StartProject: View {
                     "/api/project/new",
                     body: NewProject(parent: parent,
                                      name: name.trimmingCharacters(in: .whitespaces),
-                                     template: template.scaffold == "empty" ? "empty" : stack))
+                                     template: template.scaffold == "empty" ? "empty" : stack,
+                                     notes: template.components.isEmpty ? "" : template.architecture))
                 Telemetry.track("project_created", ["template": template.id, "stack": stack])
-                onOpened(made.path, template.brief, attachment)
+                onOpened(made.path, template.fullBrief, attachment)
             } catch { self.error = error.localizedDescription }
         }
     }
