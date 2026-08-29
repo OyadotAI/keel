@@ -422,6 +422,7 @@ struct Composer: View {
     private var controls: some View {
         HStack(spacing: K.S.sm) {
             ModeToggle(mode: $model.mode)
+            ModelPicker(model: model)
             Button { model.chooseAttachments() } label: {
                 Image(systemName: "paperclip").font(.system(size: 11))
                     .frame(width: 22, height: 20).contentShape(Rectangle())
@@ -494,5 +495,31 @@ struct SendButton: ButtonStyle {
                     .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
                                   : K.C.line)
             )
+    }
+}
+
+
+/// The model, the way `/model` picks it in the terminal. Default means the CLI's own choice.
+struct ModelPicker: View {
+    let model: SessionModel
+    private static let choices: [(String, String)] = [
+        ("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"),
+    ]
+    var body: some View {
+        let _ = model.modelTick
+        Menu {
+            ForEach(Self.choices, id: \.0) { value, label in
+                Button {
+                    model.claudeModel = value
+                } label: {
+                    if model.claudeModel == value { Label(label, systemImage: "checkmark") } else { Text(label) }
+                }
+            }
+        } label: {
+            Text(Self.choices.first { $0.0 == model.claudeModel }?.1 ?? model.claudeModel)
+                .font(K.F.micro).foregroundStyle(K.C.faint)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("Which Claude answers — the same choice /model makes in the terminal. Applies from the next turn.")
     }
 }

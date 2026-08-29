@@ -27,6 +27,7 @@ struct GitPanel: View {
             } else {
                 branchHeader
                 commitBox
+                workingTree
                 branches
                 CommitList(model: model)
             }
@@ -136,6 +137,18 @@ struct GitPanel: View {
         .buttonStyle(QuietButton(tone: enabled ? K.C.accent : K.C.faint))
         .disabled(busy || !enabled)
         .hint(n > 0 ? "\(title) \(n)" : title)
+    }
+
+    // MARK: Working tree — git's view, as a tree, with the same rows as Changes.
+
+    @ViewBuilder
+    private var workingTree: some View {
+        if !model.changes.isEmpty {
+            RailHeader("Uncommitted", trailing: "\(model.changes.count)")
+            ForEach(ChangeTree.build(model.changes)) { node in
+                ChangeRow(node: node, depth: 0, model: model)
+            }
+        }
     }
 
     // MARK: Commit

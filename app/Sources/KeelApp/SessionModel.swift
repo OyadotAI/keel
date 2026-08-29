@@ -66,9 +66,37 @@ final class SessionModel: Identifiable {
     /// Prompts typed while the agent works. Queued visibly rather than refused.
     var queued: [String] = []
     var mode = "acceptEdits"
+    /// `--model` for every turn, or empty for the CLI's default. The same choice `/model` makes
+    /// in the terminal.
+    var claudeModel: String {
+        get { UserDefaults.standard.string(forKey: "keel.model") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "keel.model"); modelTick += 1 }
+    }
+    var modelTick = 0
 
     var branch: String?
     var changes: [Wire.Change] = []
+
+    /// The files the agent wrote in this conversation, newest turn last, as the Changes panel
+    /// shows them — what happened here, not git's view of the working tree (that is the Git tab).
+    var editedThisSession: [Wire.Change] {
+        var seen: [String: Wire.Change] = [:]
+        var order: [String] = []
+        for turn in turns {
+            for call in turn.calls where Turn.writeTools.contains(call.tool) {
+                var path = call.subject
+                if !repoPath.isEmpty, path.hasPrefix(repoPath + "/") { path = String(path.dropFirst(repoPath.count + 1)) }
+                if let wt = worktree, path.contains("/.keel/worktrees/\(wt)/") {
+                    path = String(path.split(separator: "/.keel/worktrees/\(wt)/", maxSplits: 1).last ?? Substring(path))
+                }
+                guard !path.isEmpty, !path.hasPrefix("/") else { continue }
+                let status = call.tool == "Write" && seen[path] == nil ? "A" : "M"
+                if seen[path] == nil { order.append(path) }
+                seen[path] = Wire.Change(path: path, status: status, label: call.tool == "Write" ? "written" : "edited")
+            }
+        }
+        return order.compactMap { seen[$0] }
+    }
     var pending: [Wire.Pending] = []
     var lastError: String?
 
@@ -93,7 +121,9 @@ final class SessionModel: Identifiable {
     var editing: String?
     /// Bring the Designer forward and follow the agent to the page it edits.
     var followEdits: Bool {
-        get { UserDefaults.standard.object(forKey: "keel.followEdits") as? Bool ?? true }
+        // Off by default: the trace is the tab engineers read, and a stage that switches to
+        // the page on its own is the thing they turned off first. On is a choice.
+        get { UserDefaults.standard.object(forKey: "keel.followEdits") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "keel.followEdits"); designTick += 1 }
     }
     /// Bumped when the window should show the preview because the agent is editing it.
@@ -429,6 +459,7 @@ final class SessionModel: Identifiable {
                 await makeWorktree()
             }
             var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString])
+            if !claudeModel.isEmpty { query["model"] = claudeModel }
             if let sessionId { query["session"] = sessionId }
             if let system = nextSystem { query["system"] = system; nextSystem = nil }
 
@@ -1206,7 +1237,12 @@ final class SessionModel: Identifiable {
     /// Run a request whose failure must be seen. A discard that fails and looks like it worked
     /// is the kind of silence that costs someone an afternoon.
     private func attempt(_ work: () async throws -> Void) async {
-        do { try await work(); lastError = nil } catch { lastError = error.localizedDescription }
+        do { try await work(); lastError = nil } catch {
+            lastError = error.localizedDescription
+            // The kind of failure, never its text: the text can carry a path.
+            let e = error as NSError
+            Telemetry.warn("request failed", ["domain": e.domain, "code": "\(e.code)"])
+        }
     }
 
     struct SessionRename: Encodable { var id: String; var title: String }

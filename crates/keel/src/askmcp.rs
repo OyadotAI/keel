@@ -186,6 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_question_is_queued_for_the_lane_and_the_answer_comes_back_as_text() {
+        let _guard = crate::approve::tests::lock().await;
         let args = json!({ "questions": [{ "question": "Red or blue?", "header": "Colour", "options": [{ "label": "Red" }, { "label": "Blue" }] }] });
         let asking = tokio::spawn(async move { ask(Some("lane-1"), &args).await });
         // The UI polls, sees it under its lane, answers.
