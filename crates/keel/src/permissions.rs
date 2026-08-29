@@ -418,26 +418,29 @@ mod tests {
     fn a_one_time_rule_does_not_leak_into_another_conversation() {
         let (_dir, root) = repo(&[]);
 
-        remember(&root, "Bash(docker *)", "session", Some("session-a")).expect("remembered");
+        // `sh` and `ls`, not `docker` and `bun`: `remember` refuses a rule for a program that is
+        // not on the PATH, and CI's runner has neither. The test is about conversations, not
+        // about which tools a machine happens to have.
+        remember(&root, "Bash(sh *)", "session", Some("session-a")).expect("remembered");
 
         assert!(
-            effective(&root, Some("session-a")).contains(&"Bash(docker *)".to_string()),
+            effective(&root, Some("session-a")).contains(&"Bash(sh *)".to_string()),
             "the conversation that approved it can run it"
         );
         assert!(
-            !effective(&root, Some("session-b")).contains(&"Bash(docker *)".to_string()),
+            !effective(&root, Some("session-b")).contains(&"Bash(sh *)".to_string()),
             "another conversation still has to ask"
         );
         assert!(
-            !effective(&root, None).contains(&"Bash(docker *)".to_string()),
+            !effective(&root, None).contains(&"Bash(sh *)".to_string()),
             "and so does a conversation that does not exist yet"
         );
 
         // A project rule is shared on purpose: it is a decision about the repository, not about
         // one conversation in it.
-        remember(&root, "Bash(bun *)", "project", None).expect("remembered");
+        remember(&root, "Bash(ls *)", "project", None).expect("remembered");
         assert!(
-            effective(&root, Some("session-b")).contains(&"Bash(bun *)".to_string()),
+            effective(&root, Some("session-b")).contains(&"Bash(ls *)".to_string()),
             "a project rule still reaches every conversation"
         );
 
@@ -478,11 +481,19 @@ mod tests {
         assert!(d.contains(&"Bash(claude plugin *)".to_string()));
         // Bare `claude` would be an agent spawning agents, not configuration.
         assert!(!d.contains(&"Bash(claude *)".to_string()));
-        // And the rules survive the sanity filter on read, or they would vanish silently.
+        // Every default is well-formed, and none is subject to the PATH check: defaults are
+        // Keel's own, appended by `effective` after stored rules are filtered, so a machine
+        // without `claude` on it still passes the rule through rather than dropping it silently.
         assert!(
-            d.iter().all(|r| sane(r)),
-            "a default that reads back as junk"
+            d.iter().all(|r| valid_rule(r)),
+            "a default that is not a rule"
         );
+        for rule in &d {
+            assert!(
+                effective(&root, None).contains(rule),
+                "{rule} did not reach the CLI"
+            );
+        }
     }
 
     #[test]
