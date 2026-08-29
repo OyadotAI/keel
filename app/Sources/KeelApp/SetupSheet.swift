@@ -18,6 +18,8 @@ struct SetupSheet: View {
         let detail: String
         let action: String
         let tone: Pill.Tone
+        /// Work in flight for this item — the row shows it, and stays until the item clears.
+        var busy = false
         let run: () -> Void
     }
 
@@ -29,11 +31,15 @@ struct SetupSheet: View {
                             action: "git init", tone: .bad) { Task { _ = await m.gitInit() } })
         }
         if m.gateCommand == nil {
+            // Sent, not drafted: the click is the ask. The sheet stays; the row shows the
+            // agent working and clears itself when a gate exists.
             out.append(Item(id: "gate", icon: "checkmark.seal", title: "No gate",
                             detail: "Nothing checks the agent's work. Keel runs the project's own tests after every turn — it needs a `check` target, a test script, or `cargo test`.",
-                            action: "Ask the agent to add one", tone: .warn) {
-                m.prompt = "Add a gate to this project: a `check` target in the Makefile (or a `check` script in package.json) that runs the existing lint, typecheck and tests. Use only commands the repository already has."
-                done_(m)
+                            action: "Add one", tone: .warn, busy: m.running) {
+                guard !m.running else { return }
+                m.mode = "acceptEdits"
+                m.prompt = "Add a gate to this project: a `check` target in the Makefile (or a `check` script in package.json) that runs the existing lint, typecheck and tests. Use only commands the repository already has. Run it once to prove it passes."
+                m.send()
             })
         }
         for t in m.tools where !t.installed || !t.authenticated {
@@ -46,7 +52,7 @@ struct SetupSheet: View {
             out.append(Item(id: "plugin-" + e.id, icon: "puzzlepiece.extension",
                             title: "Recommended: \(e.name)",
                             detail: e.reason ?? e.description ?? "",
-                            action: "Install", tone: .accent) { Task { await m.installPlugin(e) } })
+                            action: "Install", tone: .accent, busy: m.installing == e.id) { Task { await m.installPlugin(e) } })
         }
         let repoHooks = m.workspace.hooks.filter(\.fromRepo).count
         if repoHooks > 0 {
@@ -104,8 +110,15 @@ struct SetupSheet: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: K.S.sm)
-                            Button(it.action) { it.run() }
-                                .buttonStyle(QuietButton(tone: it.tone == .accent || it.tone == .warn ? K.C.accent : K.C.dim))
+                            if it.busy {
+                                HStack(spacing: K.S.xs) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("working…").font(K.F.micro).foregroundStyle(K.C.faint)
+                                }
+                            } else {
+                                Button(it.action) { it.run() }
+                                    .buttonStyle(QuietButton(tone: it.tone == .accent || it.tone == .warn ? K.C.accent : K.C.dim))
+                            }
                         }
                         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
                         if it.id != items.last?.id { Hairline() }
