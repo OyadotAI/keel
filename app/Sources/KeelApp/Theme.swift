@@ -208,6 +208,25 @@ extension View {
 }
 
 /// A small status pill. One shape for every state so they read as a set.
+/// The one filled button. Every primary call to action in the app is this, so a filled
+/// accent block means "the thing to do here" everywhere it appears.
+struct FilledButton: ButtonStyle {
+    var tone: Color = K.C.accent
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(K.F.small.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, K.S.md).padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: K.R.sm)
+                    .fill(tone.opacity(configuration.isPressed ? 0.8 : (hovering ? 0.92 : 1)))
+            )
+            .onHover { hovering = $0 }
+    }
+}
+
 struct Pill: View {
     let text: String
     let tone: Tone

@@ -35,39 +35,28 @@ struct ApprovalCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
 
-            VStack(alignment: .leading, spacing: K.S.xs) {
-                Button {
-                    model.answer(pending, allow: true, scope: "trust")
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Trust this project").font(K.F.small.weight(.semibold))
-                            Text("stop asking here — withdrawable from the status bar")
-                                .font(K.F.micro).foregroundStyle(K.C.faint)
-                        }
-                        Spacer()
-                    }
+            // One filled button, the same one every primary action in the app uses: trust is
+            // the answer that removes the whole class of questions, so it is the one that
+            // stands out. The narrower answers are quiet beside it; deny sits apart, in red.
+            HStack(spacing: K.S.sm) {
+                Button("Trust this project") { model.answer(pending, allow: true, scope: "trust") }
+                    .buttonStyle(FilledButton())
+                    .help("Stop asking in this project. Withdrawable any time from the status bar.")
+                Button("Allow \(pending.rules.joined(separator: " "))") {
+                    model.answer(pending, allow: true, scope: "project")
                 }
-                .buttonStyle(PrimaryChoice())
-
-                HStack(spacing: K.S.xs) {
-                    Button("Allow \(pending.rules.joined(separator: " "))") {
-                        model.answer(pending, allow: true, scope: "project")
-                    }
+                .buttonStyle(QuietButton())
+                .help("Remembered in .keel/permissions.json for this project")
+                Button("Once") { model.answer(pending, allow: true, scope: "session") }
                     .buttonStyle(QuietButton())
-                    .help("Remembered in .keel/permissions.json for this project")
-
-                    Button("Once") { model.answer(pending, allow: true, scope: "session") }
-                        .buttonStyle(QuietButton())
-                        .help("This conversation only, until Keel restarts")
-
-                    Spacer()
-
-                    Button("Deny") { model.answer(pending, allow: false, scope: "session") }
-                        .buttonStyle(QuietButton(tone: K.C.del))
-                        .help("The agent is told to stop rather than substitute another command")
-                }
+                    .help("This conversation only, until Keel restarts")
+                Spacer()
+                Button("Deny") { model.answer(pending, allow: false, scope: "session") }
+                    .buttonStyle(QuietButton(tone: K.C.del))
+                    .help("The agent is told to stop rather than substitute another command")
             }
+            Text("Trusting stops the questions here; allowing remembers this command; once is just now.")
+                .font(K.F.micro).foregroundStyle(K.C.faint)
         }
         .padding(K.S.md)
         .background(K.C.warn.opacity(0.07), in: RoundedRectangle(cornerRadius: K.R.md))
@@ -80,24 +69,6 @@ struct ApprovalCard: View {
     }
 }
 
-struct PrimaryChoice: ButtonStyle {
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(K.C.text)
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(K.C.warn.opacity(configuration.isPressed ? 0.28 : (hovering ? 0.2 : 0.14)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.warn.opacity(0.4), lineWidth: 1)
-            )
-            .onHover { hovering = $0 }
-    }
-}
 
 // MARK: - Questions
 
