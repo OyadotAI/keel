@@ -26,25 +26,41 @@ struct LaneTabs: View {
                 .padding(.horizontal, K.S.xs)
             }
 
-            // Click for a lane with its own checkout; the menu for one that shares the tree,
-            // which is the right shape for reading or reviewing beside an agent that edits.
+            // A labelled button, not a bare plus: testers did not find the plus. Click for a
+            // session with its own checkout; the chevron offers one that shares the tree, which
+            // is the right shape for reading or reviewing beside an agent that edits.
             Menu {
-                Button("New lane on its own branch") { lanes.newLane(isolated: true) }
-                Button("New lane sharing the working tree") { lanes.newLane() }
+                Button("New session on its own branch") { lanes.newLane(isolated: true) }
+                Button("New session sharing the working tree") { lanes.newLane() }
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
+                HStack(spacing: 4) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                    Text("New session").font(K.F.small)
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+                }
+                .padding(.horizontal, K.S.sm).padding(.vertical, 4)
+                .background(K.C.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: K.R.sm))
+                .contentShape(Rectangle())
             } primaryAction: {
                 lanes.newLane(isolated: true)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .foregroundStyle(K.C.faint)
-            .hint("New lane in its own checkout (⌘N). The menu offers one that "
+            .foregroundStyle(K.C.accent)
+            .padding(.leading, K.S.xs)
+            .hint("Start another agent in its own checkout (⌘N). The chevron offers one that "
                   + "shares the working tree instead.")
 
-            Spacer(minLength: 0)
+            // The empty run of the header asks the same question when clicked: an empty tab
+            // strip in a browser makes a tab, and people click it expecting that.
+            Menu {
+                Text("Start a new session?")
+                Button("On its own branch") { lanes.newLane(isolated: true) }
+                Button("Sharing the working tree") { lanes.newLane() }
+            } label: {
+                Color.clear.frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .hint("Click for a new session")
             if lanes.runningCount > 0 {
                 Text("\(lanes.runningCount) running")
                     .font(K.F.mono(10)).foregroundStyle(K.C.accent)
