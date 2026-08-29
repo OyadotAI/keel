@@ -34,6 +34,16 @@ struct SidePanel: View {
             }
         }
         .background(K.C.surface)
+        // The one destructive question in the panels, anchored here for the same reason as
+        // the sheets below: a row can be recycled under its own dialog.
+        .confirmationDialog("Discard every uncommitted change?", isPresented: $model.confirmingDiscard, titleVisibility: .visible) {
+            Button("Discard \(model.changes.count) file\(model.changes.count == 1 ? "" : "s")", role: .destructive) {
+                Task { await model.discardAll() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Modified files go back to the last commit. New files go to the Trash, where they can be recovered. Ignored files such as .env are left alone. The last commit is untouched.")
+        }
         // Every sheet the panels open, anchored here on a view that is never recycled.
         .sheet(item: $model.sheet) { which in
             switch which {

@@ -1311,10 +1311,17 @@ final class SessionModel: Identifiable {
     }
     /// Every uncommitted change, gone: tracked back to HEAD, untracked to the Trash. The
     /// panel asks first and says the counts.
+    /// Asked from the panel root, not a row: a dialog presented from a row inside a lazy stack
+    /// can vanish with the row, and its button then does nothing.
+    var confirmingDiscard = false
+    var discarded: String?
     func discardAll() async {
-        await git("discard") { _ = try await client.post("/api/git/discard-all", body: Nothing(), q(), as: [Int].self) }
+        var counts = [0, 0]
+        await git("discard") { counts = try await client.post("/api/git/discard-all", body: Nothing(), q(), as: [Int].self) }
         await refreshState()
+        discarded = lastError == nil ? "Discarded \(counts[0]) modified, \(counts[1]) new → Trash" : nil
         Telemetry.track("discarded_all")
+        Task { try? await Task.sleep(for: .seconds(6)); discarded = nil }
     }
     func stageAll(_ stage: Bool) async {
         await git(stage ? "stage" : "unstage") { _ = try await client.post("/api/git/stage-all", body: StageAllBody(stage: stage), q(), as: Bool.self) }
