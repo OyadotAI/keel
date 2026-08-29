@@ -887,15 +887,25 @@ final class SessionModel: Identifiable {
     /// Ask for the staff-engineer review: plan mode, so the turn reads and proposes and
     /// changes nothing; the scan travels as evidence; the persona is the system prompt.
     func requestReview() async {
-        await attempt {
-            let r: ReviewPrompt = try await client.get("/api/review", q())
-            mode = "plan"
-            nextSystem = r.system + r.evidence
-            prompt = r.prompt
-            send()
+        // Never in the lane being worked in: a review is a second reader, and it gets its own
+        // tab. An empty lane is fine to use — nothing is displaced.
+        let target: SessionModel = (turns.isEmpty && !running) ? self : (lanes?.reviewLane(beside: self) ?? self)
+        if target === self { title = "Staff review" }
+        await target.attempt {
+            let r: ReviewPrompt = try await target.client.get("/api/review", target.q())
+            target.mode = "plan"
+            target.nextSystem = r.system + r.evidence
+            target.prompt = r.prompt
+            target.send()
             UserDefaults.standard.set(Date(), forKey: reviewKey)
-            lastReview = Date()
         }
+        lastReview = Date()
+    }
+
+    /// The lane holding the latest review, for saving it: this one, or the review tab.
+    var reviewLane: SessionModel? {
+        if title == "Staff review" { return self }
+        return lanes?.lanes.last(where: { $0.title == "Staff review" })
     }
 
     /// Rewrite the agent instructions to the template standard, in a mode that may edit. The
@@ -912,7 +922,7 @@ final class SessionModel: Identifiable {
 
     /// Save the review that just ran into docs/REVIEW.md.
     func saveReview() async -> String? {
-        guard let text = turns.last?.text, !text.isEmpty else { return nil }
+        guard let text = reviewLane?.turns.last?.text, !text.isEmpty else { return nil }
         var path: String?
         await attempt { path = try await client.post("/api/review/save", body: SaveBody(text: text), q(), as: String.self) }
         await refreshTree()
@@ -937,8 +947,9 @@ final class SessionModel: Identifiable {
     /// A review a day: when a project opens into a lane with nothing in it and the last review
     /// is older than a day, it runs on its own. Never into a conversation already in use.
     func offerReview() {
-        guard !repoPath.isEmpty, loaded, turns.isEmpty, !running else { return }
+        guard !repoPath.isEmpty, loaded else { return }
         if let last = lastReview, Date().timeIntervalSince(last) < 86_400 { return }
+        if lanes?.lanes.contains(where: { $0.title == "Staff review" && $0.running }) == true { return }
         Task { await requestReview() }
     }
     struct Empty: Encodable {}
