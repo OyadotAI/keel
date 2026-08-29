@@ -36,7 +36,8 @@ extension SessionModel {
                 var req = URLRequest(url: await client.base
                     .appendingPathComponent("api/attach"))
                 req.url = URL(string: req.url!.absoluteString
-                    + "?name=" + (name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "file"))
+                    + "?name=" + (name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "file")
+                    + (worktree.map { "&wt=" + $0 } ?? ""))
                 req.httpMethod = "POST"
                 req.httpBody = data
                 let (body, response) = try await URLSession.shared.data(for: req)
@@ -110,7 +111,7 @@ struct AttachmentStrip: View {
 
     var body: some View {
         if !model.attachments.isEmpty {
-            Flow(spacing: 6) {
+            Flow(spacing: K.S.half) {
                 ForEach(model.attachments) { a in
                     HStack(spacing: 5) {
                         if let t = a.thumbnail {
@@ -119,12 +120,12 @@ struct AttachmentStrip: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 2))
                         } else {
                             Image(systemName: "paperclip")
-                                .font(.system(size: 8)).foregroundStyle(K.C.faint)
+                                .font(.system(size: 10)).foregroundStyle(K.C.faint)
                         }
                         Text(a.label)
                             .font(K.F.mono(10)).foregroundStyle(K.C.dim)
                             .lineLimit(1).truncationMode(.head)
-                        CloseButton(size: 8) {
+                        CloseButton(size: 10) {
                             model.attachments.removeAll { $0.id == a.id }
                         }
                     }

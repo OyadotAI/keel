@@ -17,7 +17,7 @@ struct WorkingBar: View {
                 Sweep()
 
                 Text(activity)
-                    .font(K.F.mono(10.5))
+                    .font(K.F.mono(11))
                     .foregroundStyle(K.C.text)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -25,7 +25,7 @@ struct WorkingBar: View {
                 Spacer(minLength: K.S.sm)
 
                 Text(elapsed(at: context.date))
-                    .font(K.F.mono(10.5, .medium))
+                    .font(K.F.mono(11, .medium))
                     .monospacedDigit()
                     .foregroundStyle(K.C.accent)
 
@@ -59,7 +59,17 @@ struct WorkingBar: View {
 /// A bar that sweeps. Indeterminate on purpose — a turn has no total to be a fraction of, and a
 /// progress bar that invents one is a lie you watch for two minutes.
 struct Sweep: View {
+    @Environment(\.accessibilityReduceMotion) private var still
+
     var body: some View {
+        // A person who asked for less motion gets the bar without the sweep. The clock beside it
+        // still ticks, which is the part that proves the agent is alive.
+        if still {
+            Capsule().fill(K.C.accent.opacity(0.5)).frame(width: 44, height: 3)
+        } else { moving }
+    }
+
+    private var moving: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let phase = (t.truncatingRemainder(dividingBy: 1.4)) / 1.4

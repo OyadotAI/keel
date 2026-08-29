@@ -7,15 +7,13 @@
 //! The process is owned by Keel rather than by the agent: a dev server is long-running, and an
 //! agent tool call that never returns is a hang, not a feature.
 
-use axum::{Json, extract::State};
+use axum::Json;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-
-use crate::serve::AppState;
 
 #[derive(Default)]
 struct DevState {
@@ -106,13 +104,13 @@ pub struct Status {
     pub log: Vec<String>,
 }
 
-pub async fn status(State(app): State<Arc<AppState>>) -> Json<Status> {
+pub async fn status(crate::serve::Checkout(repo): crate::serve::Checkout) -> Json<Status> {
     let s = state().lock().expect("dev lock");
     Json(Status {
         running: s.child.is_some(),
         url: s.url.clone(),
         command: s.command.clone(),
-        detected: detect(&app.repo()),
+        detected: detect(&repo),
         log: s.log.clone(),
     })
 }
@@ -124,11 +122,10 @@ pub struct StartBody {
 }
 
 pub async fn start(
-    State(app): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(body): Json<StartBody>,
 ) -> Result<Json<Status>, (axum::http::StatusCode, String)> {
     let bad = |m: String| (axum::http::StatusCode::BAD_REQUEST, m);
-    let repo = app.repo();
 
     {
         let s = state().lock().expect("dev lock");

@@ -8,12 +8,9 @@
 //! file on a menu click has to be right every time; one that moves it to the trash only has to be
 //! recoverable, and the user already knows where to look.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{Json, http::StatusCode};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-use crate::serve::AppState;
 
 #[derive(Deserialize)]
 pub struct CreateRequest {
@@ -91,11 +88,10 @@ fn relative(repo: &Utf8Path, path: &Utf8Path) -> String {
 }
 
 pub async fn create(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<CreateRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
     valid_name(&req.name)?;
-    let repo = state.repo();
 
     // The parent must already exist and be inside the boundary; the new entry is then a name within
     // it, which is why the name is validated separately and never resolved.
@@ -121,11 +117,10 @@ pub async fn create(
 }
 
 pub async fn rename(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<RenameRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
     valid_name(&req.name)?;
-    let repo = state.repo();
     let from = crate::api::resolve(&repo, &req.path).map_err(bad)?;
 
     if Some(&from) == repo.canonicalize_utf8().ok().as_ref() {
@@ -145,10 +140,9 @@ pub async fn rename(
 }
 
 pub async fn delete(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let repo = state.repo();
     let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
 
     // Deleting the repository from inside the IDE that has it open is never what was meant.
@@ -217,10 +211,9 @@ fn survey(root: &Utf8Path) -> (usize, bool, bool) {
 
 /// Report what deleting a path would actually destroy.
 pub async fn stat(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<Stat>, (StatusCode, String)> {
-    let repo = state.repo();
     let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
 
     if !target.is_dir() {
@@ -270,10 +263,9 @@ pub fn trash(path: &std::path::Path) -> Result<(), String> {
 
 /// Show a path in the platform's file manager.
 pub async fn reveal(
-    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let repo = state.repo();
     let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
 
     #[cfg(target_os = "macos")]

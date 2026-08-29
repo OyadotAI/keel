@@ -5,10 +5,10 @@ The [README](../README.md) is the short version. This is everything, with the re
 ## Seeing what it did
 
 **Diffs, while they happen.** Every file the agent writes during a turn appears as a stacked diff in
-the editor pane, refreshed as the turn proceeds — one screen for a change across six files, rather
-than six tabs or a `git diff` afterwards. Click a filename to open it properly, anywhere else on the
-header to fold it. Diffs are Monaco's own diff editor against `git show HEAD:<path>`, so word-level
-highlighting and diff navigation come for free.
+the trace, refreshed as the turn proceeds — one screen for a change across six files, rather than
+six tabs or a `git diff` afterwards. Click a header to fold it. Inside a changed line the changed
+*span* is marked (common prefix and suffix stripped, the rest highlighted), lines never wrap, one
+hunk can be discarded on its own, and ⌥↑/⌥↓ walk the hunks while ⌘⌥↑/⌘⌥↓ walk the changed files.
 
 **Turns, not transcript.** Work is grouped: what you asked, everything the agent did about it, and a
 footer with how long it took and what it cost. Tool calls are one dim line each and consecutive
@@ -146,19 +146,17 @@ discard from the row's menu or from the editor bar while you are looking at the 
 untracked file goes to the Trash rather than being deleted, since git has no copy of it. The list
 follows the repository, so a `git reset` in the terminal below is reflected without a reload.
 
-**A preview that can hold a session.** The pane points at whatever is serving — the dev server Keel
-starts, or a URL a deploy printed — with width presets, reload, address history, and `open ↗` to
-your default browser for devtools work. The frame is served from Keel's own hostname on purpose: an
-iframe on a different host is *cross-site*, its cookies are partitioned, and logging into your own
-app inside it silently fails. Dialogs, downloads and popups work; navigating the Keel window itself
-does not.
+**A preview that follows the agent.** The pane points at whatever is serving — the dev server Keel
+starts, or a URL a tool printed — rendered at a real desktop, tablet or phone width. When the agent
+writes a frontend file, the Designer comes forward, navigates to that page when the file *is* a
+page, shows *Editing header.tsx…* over it, and when the hot reload lands the regions that changed
+ripple and get a numbered dot. Click a dot, or any element with Pick on, and it becomes a pin with
+a note; pins stack, stay on their element across reloads, and go with the next send as one prompt.
+The turn card then shows what changed on screen beside what changed in the code — and, for a
+pinned element, whether its pixels actually moved. **Follow** turns the auto-switch off.
 
-**An editor** that is Monaco, the engine VS Code runs on, vendored and compiled in. Multi-cursor,
-column selection, real find and replace, folding, minimap, sticky scroll, a proper undo stack. One
-model per open file, so switching tabs restores cursor, scroll and folds. When the agent rewrites a
-file underneath you it arrives as an edit rather than a `setValue`, so it stays undoable like
-anything you typed. Nothing autosaves — the agent writes to disk directly, and an autosave racing it
-would overwrite work you did not make.
+**No editor.** Keel shows what the agent changed as diffs you can comment on and rewind; editing a
+file is what the editor you already have is for.
 
 ## Connecting the things you work with
 

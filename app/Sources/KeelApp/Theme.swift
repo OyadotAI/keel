@@ -90,8 +90,15 @@ enum K {
             .system(size: size, weight: weight, design: .monospaced)
         }
 
-        /// 11 · a label, a count, a timestamp
-        static let micro = ui(10)
+        /// 11 · a label, a count, a timestamp. The platform's small-system size and the floor:
+        /// nothing meant to be read is set below `floor`, and a test says so.
+        static let micro = ui(11)
+        static let floor: CGFloat = 10
+        /// Every named size, for the test.
+        static let sizes: [(String, CGFloat)] = [
+            ("micro", 11), ("small", 11.5), ("body", 12.5), ("title", 15), ("display", 22),
+            ("code", 11.5), ("codeSmall", 11),
+        ]
         /// 11.5 · secondary rows
         static let small = ui(11.5)
         /// 12.5 · body, the default
@@ -102,15 +109,18 @@ enum K {
         static let display = ui(22, .semibold)
 
         static let code = mono(11.5)
-        static let codeSmall = mono(10.5)
+        static let codeSmall = mono(11)
     }
 
     // MARK: - Space
     //
-    // A 4pt grid. Anything not on it is a mistake, not a refinement.
+    // A 4pt grid with two half-steps. Rows in a dense rail genuinely want 2 and 6; pretending
+    // they did not meant forty literal `spacing: 6`s that the tokens could not see.
 
     enum S {
+        static let xxs: CGFloat = 2
         static let xs: CGFloat = 4
+        static let half: CGFloat = 6
         static let sm: CGFloat = 8
         static let md: CGFloat = 12
         static let lg: CGFloat = 16
@@ -147,11 +157,11 @@ struct RailHeader: View {
     var body: some View {
         HStack(spacing: K.S.xs) {
             Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .tracking(0.7)
             Spacer()
             if let trailing {
-                Text(trailing).font(K.F.mono(9.5)).monospacedDigit()
+                Text(trailing).font(K.F.mono(10)).monospacedDigit()
             }
         }
         .foregroundStyle(K.C.faint)
@@ -162,6 +172,9 @@ struct RailHeader: View {
 }
 
 /// A row that highlights on hover, which is how a dense list stays navigable without borders.
+///
+/// A `Button`, not a tap gesture: a gesture on a plain view is invisible to the keyboard and to
+/// VoiceOver, and every list in the side panel is built from this row. Same pixels, focusable.
 struct HoverRow<Content: View>: View {
     var selected = false
     // Content before action so `HoverRow { … } action: { … }` reads in the order it happens.
@@ -170,17 +183,27 @@ struct HoverRow<Content: View>: View {
     @State private var hovering = false
 
     var body: some View {
-        content
-            .padding(.horizontal, K.S.md)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                selected ? K.C.accent.opacity(0.16)
-                         : (hovering ? K.C.text.opacity(0.06) : .clear)
-            )
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .onTapGesture { action?() }
+        Button { action?() } label: {
+            content
+                .padding(.horizontal, K.S.md)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    selected ? K.C.accent.opacity(0.16)
+                             : (hovering ? K.C.text.opacity(0.06) : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    /// A tooltip that is also the VoiceOver label. Icon-only controls had thirty tooltips and no
+    /// labels; the strings were there, they were just pointer-only.
+    func hint(_ text: String) -> some View {
+        help(text).accessibilityLabel(text)
     }
 }
 
@@ -192,7 +215,7 @@ struct Pill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(.system(size: 10, weight: .semibold))
             .tracking(0.3)
             .padding(.horizontal, 5).padding(.vertical, 2)
             .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 3))
@@ -225,6 +248,7 @@ struct Hairline: View {
 /// small because it is not the point of the row; the *target* around it does not.
 struct CloseButton: View {
     var size: CGFloat = 9
+    var label = "Close"
     let action: () -> Void
     @State private var hovering = false
 
@@ -242,6 +266,7 @@ struct CloseButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
         .onHover { hovering = $0 }
     }
 }
@@ -286,4 +311,36 @@ struct Flow: Layout {
             rowHeight = max(rowHeight, size.height)
         }
     }
+}
+
+
+/// `12.4k`, `1.2M` — tokens are read at a glance or not at all.
+func compact(_ n: Int) -> String {
+    switch n {
+    case ..<1000: return "\(n)"
+    case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
+    default: return String(format: "%.2fM", Double(n) / 1_000_000)
+    }
+}
+
+
+/// A text field on the design system: a well with a hairline, like the composer.
+///
+/// The settings panes used `.roundedBorder`, which is AppKit's look, in a window where every
+/// other input is a well — so two of the four tabs looked like a different application.
+struct Field: ViewModifier {
+    @FocusState private var focused: Bool
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .focused($focused)
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm)
+                .stroke(focused ? K.C.accent : K.C.line, lineWidth: 1))
+    }
+}
+
+extension View {
+    func field() -> some View { modifier(Field()) }
 }

@@ -52,7 +52,7 @@ struct ConnectionsSettings: View {
                     HStack(alignment: .top, spacing: K.S.sm) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 11)).foregroundStyle(K.C.warn)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: K.S.xxs) {
                             Text(broken.map(\.label).joined(separator: ", "))
                                 .font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -68,19 +68,19 @@ struct ConnectionsSettings: View {
             ForEach(tools) { t in
                 Section {
                     HStack(spacing: 8) {
-                        Circle()
-                            .fill(t.authenticated ? Color.green
-                                  : (t.installed ? Color.orange : Color.secondary.opacity(0.4)))
-                            .frame(width: 6, height: 6)
-                        Text(t.label).font(.system(size: 12, weight: .medium))
+                        // The state as a word too, beside the name: three colours of dot are
+                        // one dot to some people.
+                        Pill(text: t.authenticated ? "OK" : (t.installed ? "SIGN IN" : "MISSING"),
+                             tone: t.authenticated ? .good : (t.installed ? .warn : .neutral))
+                        Text(t.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                         Spacer()
                         Text(t.identity ?? (t.installed ? "not connected" : "not installed"))
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .font(K.F.small).foregroundStyle(K.C.dim)
                             .lineLimit(1)
                     }
 
                     if let why = t.blocked {
-                        Text(why).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(why).font(K.F.small).foregroundStyle(K.C.dim)
                     }
 
                     HStack(spacing: 8) {
@@ -88,6 +88,7 @@ struct ConnectionsSettings: View {
                             Button(busy == t.id ? "Installing…" : "Install") {
                                 stream("/api/cli/install", ["id": t.id], t.id)
                             }
+                            .buttonStyle(QuietButton(tone: K.C.accent))
                             .disabled(busy != nil)
                         } else if !t.authenticated {
                             // `setup` is the daemon saying "this one cannot be connected from the
@@ -98,23 +99,22 @@ struct ConnectionsSettings: View {
                                 Button(busy == t.id ? "Signing in…" : "Sign in") {
                                     stream("/api/cli/login", ["id": t.id], t.id)
                                 }
+                                .buttonStyle(QuietButton(tone: K.C.accent))
                                 .disabled(busy != nil)
                             } else if let setup = t.setup {
                                 // A flow Keel cannot drive — a password prompt, a browser
                                 // handshake — is offered as the command to run rather than as a
                                 // button that would do nothing.
                                 Text(setup)
-                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .font(K.F.code)
                                     .textSelection(.enabled)
-                                    .padding(.horizontal, 6).padding(.vertical, 3)
-                                    .background(.quaternary.opacity(0.5),
-                                                in: RoundedRectangle(cornerRadius: 3))
+                                    .padding(.horizontal, K.S.half).padding(.vertical, 3)
+                                    .background(K.C.well, in: RoundedRectangle(cornerRadius: 3))
                                 Text("run this in the terminal")
-                                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                    .font(K.F.micro).foregroundStyle(K.C.faint)
                             }
                         }
                     }
-                    .controlSize(.small)
                 }
             }
 
@@ -132,7 +132,7 @@ struct ConnectionsSettings: View {
             } footer: {
                 Text("Stored in the macOS login keychain, never in the repository and never in "
                      + "Keel's own files.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(K.F.small).foregroundStyle(K.C.dim)
             }
 
             Section {
@@ -144,7 +144,7 @@ struct ConnectionsSettings: View {
                 // `aws sso login` and lives in the CLI's own cache.
                 Text("Writes a named profile and signs in with `aws sso login`. Keel never asks "
                      + "for an access key and never stores one.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(K.F.small).foregroundStyle(K.C.dim)
             }
 
             if !log.isEmpty {
@@ -208,28 +208,37 @@ private struct TokenRow: View {
     @State private var token = ""
     @State private var status: String?
     @State private var failed = false
+    @State private var confirming = false
 
     struct TokenBody: Encodable { var token: String }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(label).font(.system(size: 12, weight: .medium)).frame(width: 90, alignment: .leading)
-                SecureField(stored ? "stored" : "token", text: $token)
-                    .textFieldStyle(.roundedBorder)
+                Text(label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
+                    .frame(width: 90, alignment: .leading)
+                SecureField(stored ? "stored" : "token", text: $token).field()
                 Button("Connect") { connect() }
-                    .controlSize(.small)
+                    .buttonStyle(QuietButton(tone: K.C.accent))
                     .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)
                 if stored {
-                    Button("Disconnect", role: .destructive) { disconnect() }
-                        .controlSize(.small)
+                    // Confirmed: this removes a credential from the keychain, and the button
+                    // beside it is the one that adds one.
+                    Button("Disconnect") { confirming = true }
+                        .buttonStyle(QuietButton(tone: K.C.del))
+                        .alert("Disconnect \(label)?", isPresented: $confirming) {
+                            Button("Disconnect", role: .destructive) { disconnect() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Removes the stored token from the login keychain. Anything that "
+                                 + "needed it stops working until a new one is connected.")
+                        }
                 }
             }
             if let status {
-                Text(status).font(.system(size: 10.5))
-                    .foregroundStyle(failed ? .red : .green)
+                Text(status).font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.add)
             }
-            Text(help).font(.system(size: 10.5)).foregroundStyle(.secondary)
+            Text(help).font(K.F.small).foregroundStyle(K.C.dim)
         }
     }
 
@@ -237,11 +246,16 @@ private struct TokenRow: View {
 
     private func disconnect() {
         Task {
-            _ = try? await client.post("/api/disconnect",
-                                       body: ProviderBody(provider: label.lowercased()),
-                                       as: Bool.self)
-            status = "Disconnected."
-            failed = false
+            do {
+                _ = try await client.post("/api/disconnect",
+                                          body: ProviderBody(provider: label.lowercased()),
+                                          as: Bool.self)
+                status = "Disconnected."
+                failed = false
+            } catch {
+                status = error.localizedDescription
+                failed = true
+            }
         }
     }
 
@@ -290,7 +304,7 @@ private struct AwsSso: View {
     struct Configured: Decodable { var profile: String }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: K.S.half) {
             field("Start URL", "https://d-1234567890.awsapps.com/start", $startURL)
             field("Identity Center region", "us-east-1", $ssoRegion)
             field("Account", "123456789012", $account)
@@ -300,21 +314,19 @@ private struct AwsSso: View {
             HStack {
                 Spacer()
                 Button("Set up") { configure() }
-                    .controlSize(.small)
+                    .buttonStyle(QuietButton(tone: K.C.accent))
                     .disabled(startURL.isEmpty || account.isEmpty || role.isEmpty)
             }
             if let status {
-                Text(status).font(.system(size: 10.5))
-                    .foregroundStyle(failed ? .red : .green)
+                Text(status).font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.add)
             }
         }
     }
 
     private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
         HStack {
-            Text(label).font(.system(size: 11)).frame(width: 150, alignment: .leading)
-            TextField(hint, text: value).textFieldStyle(.roundedBorder)
-                .font(.system(size: 11))
+            Text(label).font(K.F.small).foregroundStyle(K.C.dim).frame(width: 150, alignment: .leading)
+            TextField(hint, text: value).field().font(K.F.small)
         }
     }
 

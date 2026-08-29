@@ -190,7 +190,10 @@ pub fn effective(repo: &Utf8Path, session: Option<&str>) -> Vec<String> {
 /// Tools whose refusal becomes a question rather than an error.
 ///
 /// A Claude Code matcher is a regular expression over the tool name, so this is one alternation.
-pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch";
+/// `AskUserQuestion` is in the list for a different reason than the others: it is not a permission
+/// but a question, and headless `-p` has nobody to answer it — the CLI waits sixty seconds and
+/// carries on without an answer. Hooking it makes the agent wait for a real one.
+pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion";
 
 /// The `--settings` payload carrying those rules.
 /// The settings Keel hands `claude`: the allowlist, and the hook that makes the agent wait.

@@ -58,6 +58,10 @@ pub struct Pending {
     pub command: String,
     /// The rules that would let this through, derived the same way the UI used to derive them.
     pub rules: Vec<String>,
+    /// The tool's whole input. For `AskUserQuestion` this is the questions and their options,
+    /// which the card renders; for everything else the UI reads `command` and ignores this.
+    #[serde(default)]
+    pub input: serde_json::Value,
     /// The conversation that provoked the question.
     ///
     /// Claude Code has always sent this and it was always thrown away, which was survivable while
@@ -82,6 +86,10 @@ pub struct Answer {
     /// `project`, `session`, or `trust` — the last meaning "stop asking about this project".
     #[serde(default)]
     pub scope: String,
+    /// For a question rather than a permission: what the person answered, already rendered as
+    /// text. Delivered to the agent as the tool's result.
+    #[serde(default)]
+    pub answer: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -240,8 +248,13 @@ pub async fn ask(
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     let repo = state.repo();
 
+    // A question is not a permission. Trust means "stop asking whether it may run things", and
+    // an answer to "which of these two designs" is not covered by that — so it is never
+    // short-circuited, on any project.
+    let is_question = is_question(&hook.tool_name);
+
     // One decision, already made. Nothing is queued and nobody is asked.
-    if crate::permissions::trusted(&repo) {
+    if !is_question && crate::permissions::trusted(&repo) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -251,7 +264,7 @@ pub async fn ask(
     let rules = rules_for(&hook.tool_name, &hook.tool_input);
     let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
 
-    if already_allowed(&rules, &crate::permissions::effective(&repo, session)) {
+    if !is_question && already_allowed(&rules, &crate::permissions::effective(&repo, session)) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -274,6 +287,7 @@ pub async fn ask(
             .unwrap_or_default()
             .to_string(),
         rules,
+        input: hook.tool_input.clone(),
         session_id: hook.session_id.clone(),
     };
 
@@ -329,6 +343,27 @@ pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
     Json(mine)
 }
 
+/// Whether a tool is a question to the person rather than a request to do something.
+pub fn is_question(tool: &str) -> bool {
+    tool == "AskUserQuestion"
+}
+
+/// What the agent is told when the person answers a question.
+///
+/// A `deny` whose reason is the answer. There is no hook verb for "run this tool with this
+/// result", but a denial's reason is delivered to the model as the tool's result, which is the
+/// same thing from where it sits — and the alternative, letting the tool run, means the CLI's own
+/// sixty-second wait for a terminal that is not there.
+pub fn answered(answer: &str) -> Decision {
+    Decision {
+        decision: "deny".into(),
+        reason: format!(
+            "The user answered your question in Keel. Continue with this answer; do not ask \
+             again.\n\n{answer}"
+        ),
+    }
+}
+
 /// The person answered.
 pub async fn answer(
     State(state): State<Arc<AppState>>,
@@ -352,13 +387,18 @@ pub async fn answer(
         }
     }
 
-    let decision = Decision {
-        decision: if allow { "allow" } else { "deny" }.into(),
-        reason: if allow {
-            "Approved in Keel.".into()
-        } else {
-            "Not approved. Say what you needed and stop; do not substitute another command.".into()
-        },
+    let decision = if !body.answer.is_empty() {
+        answered(&body.answer)
+    } else {
+        Decision {
+            decision: if allow { "allow" } else { "deny" }.into(),
+            reason: if allow {
+                "Approved in Keel.".into()
+            } else {
+                "Not approved. Say what you needed and stop; do not substitute another command."
+                    .into()
+            },
+        }
     };
 
     match waiters().lock().expect("waiters lock").remove(&body.id) {
@@ -418,6 +458,7 @@ mod tests {
             tool: "Bash".into(),
             command: "ls".into(),
             rules: vec!["Bash(ls *)".into()],
+            input: serde_json::Value::Null,
             session_id: session.into(),
         }
     }
@@ -466,6 +507,21 @@ mod tests {
             queue().lock().expect("queue lock").is_empty(),
             "nothing is left queued once both windows have polled"
         );
+    }
+
+    /// A question reaches the person even on a trusted project, and the answer reaches the agent.
+    ///
+    /// Trust short-circuits permissions, and `AskUserQuestion` matched the same hook — so on a
+    /// trusted project the CLI's own sixty-second timeout ran instead, and the agent "continued
+    /// without an answer" to a question nobody saw.
+    #[test]
+    fn a_question_is_never_a_permission() {
+        assert!(is_question("AskUserQuestion"));
+        assert!(!is_question("Bash"));
+        let d = answered("Which database?: Postgres");
+        assert_eq!(d.decision, "deny", "delivered as the tool result");
+        assert!(d.reason.contains("Postgres"));
+        assert!(d.reason.contains("do not ask again"));
     }
 
     #[test]

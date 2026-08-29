@@ -106,7 +106,7 @@ struct ChangesTreeView: View {
                     Text("Open a pull request").font(K.F.small.weight(.semibold))
                     if let branch = model.branch {
                         Text(branch)
-                            .font(K.F.mono(9.5))
+                            .font(K.F.mono(10))
                             .foregroundStyle(.white.opacity(0.7))
                             .lineLimit(1)
                     }
@@ -123,6 +123,12 @@ struct ChangesTreeView: View {
         .padding(.bottom, K.S.sm)
         .sheet(isPresented: $openingPR) {
             PullRequest(model: model) { openingPR = false }
+        }
+
+        if let err = model.lastError {
+            Text(err).font(K.F.micro).foregroundStyle(K.C.del)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, K.S.md).padding(.bottom, K.S.sm)
         }
 
         if model.changes.isEmpty {
@@ -168,7 +174,7 @@ struct NotARepo: View {
             .disabled(running)
 
             Text("Runs `git init` here. No first commit and no `.gitignore` — those are yours.")
-                .font(.system(size: 9.5)).foregroundStyle(K.C.faint)
+                .font(.system(size: 10)).foregroundStyle(K.C.faint)
 
             if let error {
                 Text(error).font(K.F.micro).foregroundStyle(K.C.del)
@@ -201,7 +207,7 @@ struct PullRequest: View {
 
             HStack(spacing: K.S.sm) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9)).foregroundStyle(K.C.faint)
+                    .font(.system(size: 10)).foregroundStyle(K.C.faint)
                 Text(model.branch ?? "—").font(K.F.code).foregroundStyle(K.C.dim)
                 if !model.changes.isEmpty {
                     Pill(text: "\(model.changes.count) UNCOMMITTED", tone: .warn)
@@ -322,13 +328,13 @@ private struct ChangeRow: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(K.C.faint).frame(width: 8)
                     Image(systemName: "folder")
-                        .font(.system(size: 9)).foregroundStyle(K.C.faint).frame(width: 11)
+                        .font(.system(size: 10)).foregroundStyle(K.C.faint).frame(width: 11)
                     Text(node.name)
-                        .font(K.F.mono(10.5)).foregroundStyle(K.C.dim)
+                        .font(K.F.mono(11)).foregroundStyle(K.C.dim)
                         .lineLimit(1).truncationMode(.head)
                     Spacer(minLength: K.S.xs)
                     Text("\(node.fileCount)")
-                        .font(K.F.mono(9)).foregroundStyle(K.C.faint)
+                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
                 }
                 .padding(.leading, CGFloat(depth) * 10)
             } action: {
@@ -345,11 +351,11 @@ private struct ChangeRow: View {
                 HStack(spacing: K.S.xs) {
                     Spacer().frame(width: 8)
                     Text(String((node.change?.label ?? "?").prefix(1)).uppercased())
-                        .font(K.F.mono(9, .bold))
+                        .font(K.F.mono(10, .bold))
                         .foregroundStyle(tint)
                         .frame(width: 11)
                     Text(node.name)
-                        .font(K.F.mono(10.5)).foregroundStyle(K.C.text)
+                        .font(K.F.mono(11)).foregroundStyle(K.C.text)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
                 }

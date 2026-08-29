@@ -22,17 +22,9 @@ struct ChatRail: View {
             Composer(model: model, focused: $composerFocused)
         }
         .background(K.C.surface)
-        .onReceive(NotificationCenter.default.publisher(for: .keelSend)) { _ in model.send() }
-        .onReceive(NotificationCenter.default.publisher(for: .keelStop)) { _ in model.stop() }
-        .onReceive(NotificationCenter.default.publisher(for: .keelFocusComposer)) { _ in
-            composerFocused = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .keelToggleMode)) { _ in
-            model.mode = model.mode == "plan" ? "acceptEdits" : "plan"
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .keelApprove)) { _ in
-            if let p = model.pending.first { model.answer(p, allow: true, scope: "session") }
-        }
+        // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
+        // Focus is the one thing only this view can do, so it watches a counter.
+        .onChange(of: model.focusComposerTick) { composerFocused = true }
     }
 
     private var transcript: some View {
@@ -87,7 +79,7 @@ struct ChatRail: View {
                         withAnimation(K.M.settle) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "arrow.down").font(.system(size: 9, weight: .bold))
+                            Image(systemName: "arrow.down").font(.system(size: 10, weight: .bold))
                             Text("Jump to latest").font(K.F.micro)
                         }
                         .padding(.horizontal, K.S.sm).padding(.vertical, 5)
@@ -122,7 +114,12 @@ struct ChatRail: View {
     /// where it matters rather than let two agents fight over the same files.
     private var hint: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
-            if let lanes = model.lanes, lanes.lanes.count > 1 {
+            if model.isolated {
+                Text("This lane gets its own checkout and branch on the first send, so it can "
+                     + "edit while the others do. Finish it from the rail to merge.")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let lanes = model.lanes, lanes.lanes.count > 1 {
                 VStack(alignment: .leading, spacing: K.S.xs) {
                     Text("A second agent, on the same files")
                         .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
@@ -150,7 +147,7 @@ struct ChatRail: View {
                     Button { model.prompt = s } label: {
                         HStack(spacing: K.S.xs) {
                             Image(systemName: "arrow.turn.down.right")
-                                .font(.system(size: 8)).foregroundStyle(K.C.faint)
+                                .font(.system(size: 10)).foregroundStyle(K.C.faint)
                             Text(s).font(K.F.small).foregroundStyle(K.C.faint)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -197,7 +194,7 @@ private struct ChatTurn: View {
                 } label: {
                     HStack(spacing: K.S.xs) {
                         Text("TURN \(number)")
-                            .font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                            .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                         Image(systemName: "arrow.right")
                             .font(.system(size: 7, weight: .bold))
                     }
@@ -240,7 +237,7 @@ private struct ChatTurn: View {
             if !turn.thinking.isEmpty {
                 DisclosureGroup {
                     Text(turn.thinking)
-                        .font(K.F.mono(10.5)).italic()
+                        .font(K.F.mono(11)).italic()
                         .foregroundStyle(K.C.faint)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -285,7 +282,7 @@ private struct CopyChip: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                 Text(copied ? "copied" : label).font(K.F.micro)
             }
             .foregroundStyle(copied ? K.C.add : K.C.faint)
@@ -312,7 +309,7 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: K.S.sm) {
-            PickedCard(model: model)
+            PinList(model: model)
             AttachmentStrip(model: model)
 
             if !model.notes.isEmpty {
@@ -322,7 +319,7 @@ struct Composer: View {
                     focused = true
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: "text.bubble.fill").font(.system(size: 9))
+                        Image(systemName: "text.bubble.fill").font(.system(size: 10))
                         Text("Send \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")")
                     }
                 }
@@ -332,7 +329,7 @@ struct Composer: View {
 
             if !model.queued.isEmpty {
                 HStack(spacing: 5) {
-                    Image(systemName: "arrow.down.circle").font(.system(size: 9))
+                    Image(systemName: "arrow.down.circle").font(.system(size: 10))
                     Text("\(model.queued.count) queued — they run in order when this turn ends")
                         .font(K.F.micro)
                 }
@@ -401,14 +398,15 @@ struct Composer: View {
             if model.running {
                 Button("Stop") { model.stop() }
                     .buttonStyle(QuietButton(tone: K.C.del))
-                    .help("Sends SIGINT — the turn ends rather than being abandoned (⌘.)")
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .help("Sends SIGINT — the turn ends rather than being abandoned (⌘. or Esc)")
             } else {
                 Button {
                     model.send()
                 } label: {
                     HStack(spacing: 5) {
                         Text("Send")
-                        Image(systemName: "return").font(.system(size: 9, weight: .bold))
+                        Image(systemName: "return").font(.system(size: 10, weight: .bold))
                     }
                 }
                 .buttonStyle(SendButton())
@@ -443,8 +441,9 @@ struct ModeToggle: View {
                     .padding(1)
             )
             .contentShape(Rectangle())
-            .onTapGesture { mode = value }
-            .help(help)
+            .asButton { mode = value }
+            .hint("\(label) — \(help) (⇧⇥ switches)")
+            .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

@@ -59,10 +59,10 @@ struct SettingsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("SETTINGS")
-                    .font(.system(size: 9.5, weight: .semibold)).tracking(0.7)
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint)
                 Spacer()
-                CloseButton(size: 8) { onClose() }
+                CloseButton(size: 10) { onClose() }
             }
             .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.sm)
 
@@ -82,7 +82,7 @@ struct SettingsPage: View {
                         Spacer()
                         if s == .connections, needsAttention > 0 {
                             Text("\(needsAttention)")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(K.C.bg)
                                 .padding(.horizontal, 3).padding(.vertical, 1)
                                 .background(K.C.warn, in: Capsule())

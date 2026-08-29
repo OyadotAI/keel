@@ -23,6 +23,28 @@ final class SessionModel: Identifiable {
     /// three identical rows — the fastest way to make concurrency look pointless.
     var title = "Untitled"
 
+    /// This lane's own checkout, once it has one. Created on the first send rather than on
+    /// `+`, so the branch can be named after what the lane is for.
+    var worktree: String?
+    /// Whether this lane gets a checkout of its own. Set at creation; a lane that shares the
+    /// project's working tree is for reading and planning beside one that is editing.
+    var isolated = false
+
+    /// The query every checkout-scoped request carries, so the daemon reads and writes this
+    /// lane's tree rather than the project's.
+    func q(_ extra: [String: String] = [:]) -> [String: String] {
+        var out = extra
+        if let worktree { out["wt"] = worktree }
+        return out
+    }
+
+    /// Bumped when the composer should take focus. The shortcut is handled by the window, which
+    /// stays mounted; the text view is the only thing that can actually focus itself.
+    var focusComposerTick = 0
+    /// Whether the daemon has answered `/api/state` at least once. Before that, every empty
+    /// list is "not loaded yet", not "nothing here".
+    var loaded = false
+
     var turns: [Turn] = []
     var running = false
     var prompt = ""
@@ -35,13 +57,88 @@ final class SessionModel: Identifiable {
     var pending: [Wire.Pending] = []
     var lastError: String?
 
-    /// The element picked in the preview, waiting for you to say what to do with it.
-    var picked: Picked?
-    var pickedBefore: NSImage?
-    /// Set while a design turn is in flight, so the after-photo knows what to re-photograph.
-    var designInFlight: (picked: Picked, before: NSImage?)?
-    /// Asks the preview to snapshot the same rect again. Set by the preview pane while it is open.
-    var resnapshot: ((Picked) async -> NSImage?)?
+    /// Notes left on the page, Figma-style: each is an element and what to do about it. They
+    /// stack, they stay pinned on the page across hot reloads, and they go with the next send.
+    struct Pin: Identifiable {
+        let id = UUID()
+        var picked: Picked
+        var before: NSImage?
+        var note = ""
+    }
+    var pins: [Pin] = []
+
+    /// The pins the turn in flight was sent with, so the after-photos know what to re-shoot.
+    var designInFlight: [Pin] = []
+    /// Asks the preview to photograph a rect of the page as it is now. Set by the pane while open.
+    var resnapshot: ((Picked.Rect) async -> NSImage?)?
+    /// Sends a message to the canvas script in the page. Set by the pane while open.
+    var canvas: (([String: Any]) -> Void)?
+
+    /// The frontend file the agent is writing right now, for the bar over the preview.
+    var editing: String?
+    /// Bring the Designer forward and follow the agent to the page it edits.
+    var followEdits: Bool {
+        get { UserDefaults.standard.object(forKey: "keel.followEdits") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "keel.followEdits"); designTick += 1 }
+    }
+    /// Bumped when the window should show the preview because the agent is editing it.
+    var designTick = 0
+    /// What the last write changed on the page, as the page reported it.
+    var changedRegions: [Region] = []
+    /// Bumped by every `changed` report; `checkDesign` waits on it instead of on a timer.
+    private var changeTick = 0
+
+    /// A frontend file is being written. Show the page it is, and arm the observer.
+    private func frontendEdit(_ path: String) {
+        editing = path
+        if let route = Frontend.route(for: path), let url = previewURL,
+           let origin = Frontend.origin(of: url), url != origin + route {
+            previewURL = origin + route
+        }
+        // If a pin's likely source is this file, that pin's element is what is about to move.
+        if let pin = pins.first(where: { $0.picked.hints.contains { path.hasSuffix(
+            $0.value.split(separator: ":").first.map(String.init) ?? $0.value) } }) {
+            canvas?(["keel": "outline", "selector": pin.picked.selector])
+        }
+        canvas?(["keel": "expect"])
+        if followEdits { designTick += 1 }
+    }
+
+    /// The page reported what moved.
+    func regionsChanged(_ regions: [Region]) {
+        changedRegions = regions
+        changeTick += 1
+        // While a turn runs, the write is the current turn's; after it ended it belongs to the
+        // last one. Either way the trace shows the after-image beside the code.
+        if let turn = current, let union = Picked.Rect.union(regions.map(\.rect)) {
+            Task {
+                let shot = await resnapshot?(union) ?? nil
+                turn.design = Turn.Design(
+                    selector: turn.design?.selector ?? "",
+                    before: turn.design?.before,
+                    after: turn.design?.after,
+                    verdict: turn.design?.verdict ?? .unstable,
+                    duplicated: turn.design?.duplicated ?? false,
+                    regions: regions, pageAfter: shot)
+            }
+        }
+    }
+
+    func clearRegions() {
+        changedRegions = []
+        canvas?(["keel": "clear"])
+        syncCanvas()
+    }
+
+    /// Draw what the model knows onto the page: the pins.
+    func syncCanvas() {
+        canvas?(["keel": "pins", "pins": pins.map { ["id": $0.id.uuidString, "selector": $0.picked.selector] }])
+    }
+
+    func removePin(_ id: UUID) {
+        pins.removeAll { $0.id == id }
+        syncCanvas()
+    }
 
     /// The dev server, when there is one.
     var previewURL: String?
@@ -53,21 +150,39 @@ final class SessionModel: Identifiable {
     /// letting the pane decide meant every site opened in its phone layout.
     var previewWidth: PreviewWidth = .desktop
 
-    /// Take a pick from the preview: stage it, and file its before-image as an attachment so the
-    /// agent sees what the thing looks like now.
+    /// Take a pick from the preview: it becomes a pin, and its before-image rides along as an
+    /// attachment so the agent sees what the thing looks like now.
     func designPick(_ p: Picked, before: NSImage?) {
-        picked = p
-        pickedBefore = before
-        if let before, let tiff = before.tiffRepresentation,
-           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-            attach(data: png, name: "before-\(p.tag).png", thumbnail: before, label: "before · \(p.tag)")
+        // Clicking the same element again focuses its pin rather than stacking a second.
+        if let i = pins.firstIndex(where: { $0.picked.selector == p.selector }) {
+            pins[i].picked = p
+            pins[i].before = before ?? pins[i].before
+        } else {
+            pins.append(Pin(picked: p, before: before))
+            if let before, let tiff = before.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                attach(data: png, name: "before-\(p.tag).png", thumbnail: before,
+                       label: "pin \(pins.count) · \(p.tag)")
+            }
         }
+        picking = false
+        syncCanvas()
     }
 
-    /// Turn the staged pick and what you typed into the prompt that gets sent.
+    /// The pins and what you typed, as the prompt that gets sent. One prompt for all of them:
+    /// sending notes one at a time makes the agent swing back and forth.
     func designPrompt(_ instruction: String) -> String? {
-        guard let picked else { return nil }
-        return picked.prompt(instruction: instruction)
+        guard !pins.isEmpty else { return nil }
+        var out = pins.count == 1
+            ? "Change this element in the running app:\n\n"
+            : "Change these \(pins.count) elements in the running app. Each is pinned on the page:\n\n"
+        for (i, pin) in pins.enumerated() {
+            if pins.count > 1 { out += "## Pin \(i + 1)\n" }
+            out += pin.picked.describe()
+            if !pin.note.isEmpty { out += "\n\nNote on this element: \(pin.note)" }
+            out += "\n\n"
+        }
+        return out + instruction
     }
 
     /// Files pasted or dropped into the composer, sent as `@path` mentions.
@@ -114,7 +229,9 @@ final class SessionModel: Identifiable {
     var activity: Activity {
         if !pending.isEmpty { return .waiting }
         if running {
-            let last = current?.calls.last
+            // The deepest running call: while a subagent works, "Task survey the auth flow"
+            // for a minute says less than the file it is reading right now.
+            let last = current?.calls.last?.deepestRunning ?? current?.calls.last
             return .working(last.map { "\($0.tool) \($0.subject)" } ?? "thinking")
         }
         if case .failed = current?.gate { return .failed }
@@ -123,12 +240,17 @@ final class SessionModel: Identifiable {
 
     /// Take the project-level facts from another lane, so N lanes do not each scan the repository.
     func adopt(project other: SessionModel) {
-        branch = other.branch
-        isRepo = other.isRepo
-        changes = other.changes
-        tree = other.tree
+        // Only what is about the project. A lane with its own checkout has its own branch,
+        // changes and tree, and copying the project's over them is how an edit reads as landing
+        // in the wrong place.
+        if worktree == nil {
+            branch = other.branch
+            isRepo = other.isRepo
+            changes = other.changes
+            tree = other.tree
+            files = other.files
+        }
         repoPath = other.repoPath
-        files = other.files
         sessions = other.sessions
         findings = other.findings
         workspace = other.workspace
@@ -179,6 +301,28 @@ final class SessionModel: Identifiable {
         return total > 0 ? total : nil
     }
 
+    /// Every token this conversation has spent, summed from what the CLI reported per turn.
+    var sessionTokens: Turn.Tokens? {
+        let all = turns.compactMap(\.tokens)
+        guard !all.isEmpty else { return nil }
+        return all.reduce(Turn.Tokens()) { $0 + $1 }
+    }
+
+    /// How full the context window is: the last request's input. Tokens, not a percentage —
+    /// the window size is not in the stream and a guessed denominator is a lie with a unit.
+    var contextTokens: Int? { turns.last(where: { $0.contextTokens > 0 })?.contextTokens }
+
+    /// Dollars per minute, from finished turns. The number people ask for as "how fast is this
+    /// burning" — shown while running, when it is the question, and computed from the turns
+    /// that have a cost, since the live one does not until it ends.
+    var burnRate: Double? {
+        let done = turns.filter { $0.cost != nil && ($0.durationMS ?? 0) > 0 }
+        let ms = done.reduce(0) { $0 + ($1.durationMS ?? 0) }
+        let cost = done.reduce(0.0) { $0 + ($1.cost ?? 0) }
+        guard ms > 0, cost > 0 else { return nil }
+        return cost / (Double(ms) / 60_000)
+    }
+
     // MARK: - Sending
 
     /// Bumped whenever both panes should jump to the end and start following again.
@@ -189,7 +333,11 @@ final class SessionModel: Identifiable {
     var pinTick = 0
 
     func send() {
-        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Pins with notes are a request on their own; the box may stay empty.
+        if text.isEmpty, pins.contains(where: { !$0.note.isEmpty }) {
+            text = "Apply the notes on the pinned elements."
+        }
         guard !text.isEmpty else { return }
         pinTick += 1
         prompt = ""
@@ -205,12 +353,13 @@ final class SessionModel: Identifiable {
             title = String(first.prefix(60))
         }
 
-        // A staged pick turns what you typed into a design prompt, and is handed to the turn so
-        // the same element can be photographed again when it finishes.
-        let instruction = picked.map { _ in designPrompt(text) ?? text } ?? text
-        if let picked { designInFlight = (picked, pickedBefore) }
-        self.picked = nil
-        pickedBefore = nil
+        // Pins turn what you typed into a design prompt, and are handed to the turn so the same
+        // elements can be photographed again when it finishes.
+        let instruction = designPrompt(text) ?? text
+        designInFlight = pins
+        pins = []
+        changedRegions = []
+        canvas?(["keel": "clear"])
 
         let full = promptWithAttachments(instruction)
         attachments.removeAll()
@@ -220,10 +369,22 @@ final class SessionModel: Identifiable {
         lastError = nil
         watchApprovals(true)
 
-        var query = ["prompt": full, "mode": mode]
-        if let sessionId { query["session"] = sessionId }
-
         streamTask = Task { [client] in
+            // An isolated lane gets its checkout now, named for what it is about to do. If the
+            // repository cannot branch — no commits yet — the lane says so and shares the tree.
+            if isolated, worktree == nil {
+                await makeWorktree()
+            }
+            var query = q(["prompt": full, "mode": mode])
+            if let sessionId { query["session"] = sessionId }
+
+            // Before the agent touches anything: what the tree looked like, so "restore to
+            // before this turn" has something to restore to. A failure here is not a reason to
+            // refuse the turn — there is simply no rewind for it, and the menu says so by absence.
+            if let snap: Snapshot = try? await client.post("/api/git/snapshot", body: Nothing(),
+                                                            q(), as: Snapshot.self) {
+                turn.snapshot = snap.tree
+            }
             do {
                 for try await event in client.events("/api/chat", query) {
                     switch event.name {
@@ -247,14 +408,16 @@ final class SessionModel: Identifiable {
     private func endTurn(_ turn: Turn) async {
         turn.finished = true
         running = false
+        editing = nil
         watchApprovals(false)
         await refreshGit()
+        await lanes?.refreshWorktrees()
         // The agent does not grade its own work.
         if mode != "plan" { await runGate(turn) }
         // After the gate, not before: the notification carries the verdict, and a verdict that
         // arrives before the checks have run is the "done!" that started this whole argument.
         await checkDesign(turn)
-        Notifications.turnFinished(files: turn.files.count, gate: turn.gate)
+        Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
         if !queued.isEmpty { start(queued.removeFirst()) }
     }
 
@@ -263,6 +426,42 @@ final class SessionModel: Identifiable {
         streamTask = nil
         running = false
         watchApprovals(false)
+    }
+
+    // MARK: - The checkout
+
+    struct WorktreeName: Encodable { var name: String }
+
+    /// Create this lane's checkout, named from its title.
+    func makeWorktree() async {
+        let name = Self.slug(title) + "-" + String(UUID().uuidString.prefix(3)).lowercased()
+        do {
+            let made: Wire.Worktree = try await client.post("/api/worktree/create",
+                                                            body: WorktreeName(name: name))
+            worktree = made.name
+            await refreshGit()
+            await refreshTree()
+            await lanes?.refreshWorktrees()
+        } catch {
+            isolated = false
+            lastError = "This lane shares the project's working tree: " + error.localizedDescription
+        }
+    }
+
+    /// A branch name from a sentence: `Fix the billing tests` → `fix-the-billing-tests`.
+    static func slug(_ text: String) -> String {
+        var out = ""
+        var dash = true
+        for c in text.lowercased().unicodeScalars {
+            if c.properties.isASCIIHexDigit || (c.value >= 97 && c.value <= 122) {
+                out.unicodeScalars.append(c); dash = false
+            } else if !dash {
+                out += "-"; dash = true
+            }
+            if out.count >= 24 { break }
+        }
+        while out.hasSuffix("-") { out.removeLast() }
+        return out.isEmpty ? "lane" : out
     }
 
     // MARK: - The stream
@@ -280,8 +479,26 @@ final class SessionModel: Identifiable {
         var duration_ms: Int?
         var message: Message?
         var event: StreamEvent?
+        /// On a `result`: the whole turn's tokens.
+        var usage: Usage?
+        /// Set on every record a subagent produced: the `Task` call it is working for.
+        var parent_tool_use_id: String?
 
-        struct Message: Decodable { var content: [Block]? }
+        struct Message: Decodable {
+            var content: [Block]?
+            /// On an `assistant` message: what that one request cost, and therefore — input plus
+            /// what was read from cache — how full the context window is right now.
+            var usage: Usage?
+        }
+        struct Usage: Decodable {
+            var input_tokens: Int?
+            var output_tokens: Int?
+            var cache_read_input_tokens: Int?
+            var cache_creation_input_tokens: Int?
+            var context: Int {
+                (input_tokens ?? 0) + (cache_read_input_tokens ?? 0) + (cache_creation_input_tokens ?? 0)
+            }
+        }
         struct Block: Decodable {
             var type: String
             var id: String?
@@ -312,9 +529,18 @@ final class SessionModel: Identifiable {
             if d.type == "thinking_delta", let t = d.thinking { turn.thinking += t }
 
         case "assistant":
+            if let u = r.message?.usage, u.context > 0 { turn.contextTokens = u.context }
             for b in r.message?.content ?? [] where b.type == "tool_use" {
                 guard let id = b.id, let name = b.name else { continue }
-                turn.begin(call: id, tool: name, input: b.input ?? [:])
+                turn.begin(call: id, tool: name, input: b.input ?? [:],
+                           parent: r.parent_tool_use_id)
+                // The moment the agent starts writing a frontend file, the page is the thing to
+                // look at — the loop every vibe-coding tool is criticised for not closing.
+                if Turn.writeTools.contains(name),
+                   let path = b.input?["file_path"]?.stringValue ?? b.input?["path"]?.stringValue,
+                   Frontend.isUI(path) {
+                    frontendEdit(path)
+                }
             }
 
         case "user":
@@ -322,6 +548,9 @@ final class SessionModel: Identifiable {
                 guard let id = b.tool_use_id else { continue }
                 let output = b.content?.flatText ?? ""
                 turn.finish(call: id, output: output, failed: b.is_error ?? false)
+                // The write landed; the dev server is about to rebuild. Arm the page again so a
+                // slow HMR is still caught, and keep the bar up until the next call starts.
+                if editing != nil { canvas?(["keel": "expect"]) }
                 // A dev server the *agent* started announces its URL in its own output, and Keel
                 // did not know about it: `/api/dev` only tracks servers Keel launched itself. This
                 // is the same trick the web UI used, and it is how "it started the app" becomes
@@ -332,6 +561,12 @@ final class SessionModel: Identifiable {
         case "result":
             if let c = r.total_cost_usd { turn.cost = c }
             turn.durationMS = r.duration_ms
+            if let u = r.usage {
+                turn.tokens = Turn.Tokens(
+                    input: u.input_tokens ?? 0, output: u.output_tokens ?? 0,
+                    cacheRead: u.cache_read_input_tokens ?? 0,
+                    cacheWrite: u.cache_creation_input_tokens ?? 0)
+            }
             sessionId = r.session_id ?? sessionId
 
         default:
@@ -364,7 +599,7 @@ final class SessionModel: Identifiable {
     var gateCommand: String?
 
     func refreshGatePlan() async {
-        if let c: Wire.Check? = try? await client.get("/api/verify/plan") {
+        if let c: Wire.Check? = try? await client.get("/api/verify/plan", q()) {
             gateCommand = c?.command
         }
     }
@@ -380,7 +615,7 @@ final class SessionModel: Identifiable {
         var problems: [Wire.Problem] = []
         var command = ""
         do {
-            for try await event in client.events("/api/verify") {
+            for try await event in client.events("/api/verify", q()) {
                 switch event.name {
                 case "none":
                     turn.gate = .none(event.data); return
@@ -407,24 +642,33 @@ final class SessionModel: Identifiable {
         }
     }
 
-    /// Photograph the picked element again and say what the pixels did.
+    /// Photograph the pinned elements again and say what the pixels did.
     ///
     /// Runs after the gate, because a turn that failed its own checks has a more useful thing to
     /// report first — but it runs even then, since "the tests broke and it edited the wrong file"
-    /// is two facts, not one.
+    /// is two facts, not one. Waits for the page to report a change rather than for a timer: the
+    /// observer is the "HMR has landed" signal, and a fixed delay was wrong in both directions.
     private func checkDesign(_ turn: Turn) async {
-        guard let flight = designInFlight else { return }
-        designInFlight = nil
+        let flight = designInFlight
+        designInFlight = []
+        guard let first = flight.first else { return }
 
-        // Let the dev server rebuild and the page settle before believing the pixels.
-        try? await Task.sleep(for: .milliseconds(900))
-        let after = await resnapshot?(flight.picked) ?? nil
+        let seen = changeTick
+        for _ in 0..<60 where changeTick == seen && !turn.files.isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if changeTick == seen { try? await Task.sleep(for: .milliseconds(400)) }
+
+        let after = await resnapshot?(first.picked.rect) ?? nil
         turn.design = Turn.Design(
-            selector: flight.picked.selector,
-            before: flight.before,
+            selector: first.picked.selector,
+            before: first.before,
             after: after,
-            verdict: DesignCheck.compare(before: flight.before, after: after),
-            duplicated: DesignCheck.looksDuplicated(files: turn.files, hints: flight.picked.hints))
+            verdict: DesignCheck.compare(before: first.before, after: after),
+            duplicated: DesignCheck.looksDuplicated(
+                files: turn.files, hints: flight.flatMap(\.picked.hints)),
+            regions: turn.design?.regions ?? changedRegions,
+            pageAfter: turn.design?.pageAfter)
     }
 
     // MARK: - Dev server
@@ -436,7 +680,7 @@ final class SessionModel: Identifiable {
     }
 
     func refreshDev() async {
-        guard let d: DevStatus = try? await client.get("/api/dev") else { return }
+        guard let d: DevStatus = try? await client.get("/api/dev", q()) else { return }
         devRunning = d.running
         devDetected = d.detected
         if let u = d.url { previewURL = u }
@@ -446,7 +690,7 @@ final class SessionModel: Identifiable {
 
     func startDev() async {
         struct Ok: Decodable {}
-        _ = try? await client.post("/api/dev/start", body: StartDev(command: nil), as: DevStatus.self)
+        _ = try? await client.post("/api/dev/start", body: StartDev(command: nil), q(), as: DevStatus.self)
         // The URL appears in the server's own output a moment after it starts.
         for _ in 0..<40 {
             await refreshDev()
@@ -468,7 +712,7 @@ final class SessionModel: Identifiable {
                 if let id = self.sessionId { q["session"] = id }
                 if let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q), !found.isEmpty {
                     self.pending.append(contentsOf: found)
-                    Notifications.approvalWaiting(found.count)
+                    Notifications.approvalWaiting(lane: self, found.count)
                 }
                 try? await Task.sleep(for: .milliseconds(700))
             }
@@ -481,6 +725,18 @@ final class SessionModel: Identifiable {
         var rules: [String]
         var scope: String
         var session: String?
+        var answer: String = ""
+    }
+
+    /// Answer a question. The text is what the agent reads as the tool's result.
+    func answer(_ p: Wire.Pending, text: String) {
+        pending.removeAll { $0.id == p.id }
+        let body = Answer(id: p.id, decision: "deny", rules: [], scope: "session",
+                          session: sessionId, answer: text)
+        Task { [client] in
+            struct Ok: Decodable { var ok: Bool }
+            _ = try? await client.post("/api/approve/answer", body: body, as: Ok.self)
+        }
     }
 
     func answer(_ p: Wire.Pending, allow: Bool, scope: String) {
@@ -528,7 +784,7 @@ final class SessionModel: Identifiable {
     var files: [String] = []
 
     func refreshTree() async {
-        guard let t: [Wire.Node] = try? await client.get("/api/tree") else { return }
+        guard let t: [Wire.Node] = try? await client.get("/api/tree", q()) else { return }
         tree = t
         var flat: [String] = []
         func walk(_ nodes: [Wire.Node]) {
@@ -581,6 +837,7 @@ final class SessionModel: Identifiable {
 
     func refreshState() async {
         guard let s: Wire.State = try? await client.get("/api/state") else { return }
+        loaded = true
         projectOpenKnown = s.projectOpen
         repoPath = s.repo
         // A project resumed from prefs was never seen by this app's own recents list, so the
@@ -598,8 +855,8 @@ final class SessionModel: Identifiable {
         turns.removeAll()
         // What the session actually said, and what it did to the repository — two different
         // endpoints, because the daemon deliberately keeps the listing away from the bodies.
-        async let bodies: [Wire.Turn]? = try? client.get("/api/session", ["id": id])
-        async let work: SessionWork? = try? client.get("/api/session/work", ["id": id])
+        async let bodies: [Wire.Turn]? = try? client.get("/api/session", q(["id": id]))
+        async let work: SessionWork? = try? client.get("/api/session/work", q(["id": id]))
         let (said, did) = await (bodies, work)
 
         // The conversation, so a replayed session reads as one rather than as a command log. The
@@ -659,21 +916,29 @@ final class SessionModel: Identifiable {
 
     /// Show a file in the Finder.
     func reveal(_ path: String) async {
-        _ = try? await client.post("/api/fs/reveal", body: PathBody(path: path), as: PathReply.self)
+        _ = try? await client.post("/api/fs/reveal", body: PathBody(path: path), q(), as: PathReply.self)
     }
 
     /// Delete a file. The daemon moves it to the Trash rather than unlinking it, so this is
     /// recoverable — which is the only reason it is offered without a confirmation.
     func delete(_ path: String) async {
-        _ = try? await client.post("/api/fs/delete", body: PathBody(path: path), as: PathReply.self)
+        await attempt { _ = try await client.post("/api/fs/delete", body: PathBody(path: path), q(), as: PathReply.self) }
         await refreshTree()
         await refreshGit()
     }
 
     func rename(_ path: String, to name: String) async {
-        _ = try? await client.post("/api/fs/rename", body: RenameBody(path: path, name: name),
-                                   as: PathReply.self)
+        await attempt {
+            _ = try await client.post("/api/fs/rename", body: RenameBody(path: path, name: name),
+                                      q(), as: PathReply.self)
+        }
         await refreshTree()
+    }
+
+    /// Run a request whose failure must be seen. A discard that fails and looks like it worked
+    /// is the kind of silence that costs someone an afternoon.
+    private func attempt(_ work: () async throws -> Void) async {
+        do { try await work(); lastError = nil } catch { lastError = error.localizedDescription }
     }
 
     struct SessionRename: Encodable { var id: String; var title: String }
@@ -687,21 +952,57 @@ final class SessionModel: Identifiable {
         await refreshState()
     }
 
-    struct GitAct: Encodable { var action: String; var path: String }
+    struct GitAct: Encodable { var action: String; var path: String; var hunk: Int? }
 
     /// Stage, unstage or discard one file.
     ///
     /// `discard` on a tracked file is `git restore`; on an untracked one the daemon moves it to
     /// the Trash rather than unlinking it, so a mistaken discard is recoverable.
-    func gitAct(_ action: String, _ path: String) async {
-        _ = try? await client.post("/api/git/act", body: GitAct(action: action, path: path),
-                                   as: Bool.self)
+    func gitAct(_ action: String, _ path: String, hunk: Int? = nil) async {
+        await attempt {
+            _ = try await client.post("/api/git/act", body: GitAct(action: action, path: path, hunk: hunk),
+                                      q(), as: Bool.self)
+        }
         await refreshGit()
+        // The diffs on screen are read once per view; bumping this makes them read again.
+        diffTick += 1
+    }
+
+    /// Bumped when the working tree changed under a diff someone is looking at.
+    var diffTick = 0
+
+    // MARK: - Rewind
+
+    struct Snapshot: Decodable { var tree: String }
+    struct RestoreBody: Encodable { var tree: String }
+    struct Restored: Decodable { var undo: String }
+
+    /// The snapshot that undoes the last restore, while there is one.
+    var undoSnapshot: String?
+
+    /// Put every file back to how it was before this turn. The restore photographs the tree
+    /// first, so it can itself be undone — a rewind you cannot take back is the version people
+    /// file issues about.
+    func restore(to turn: Turn) async {
+        guard let tree = turn.snapshot else { return }
+        await restore(tree: tree)
+    }
+
+    func restore(tree: String) async {
+        do {
+            let r = try await client.post("/api/git/restore", body: RestoreBody(tree: tree),
+                                          q(), as: Restored.self)
+            undoSnapshot = r.undo
+        } catch {
+            lastError = error.localizedDescription
+        }
+        await refreshGit()
+        await refreshTree()
+        diffTick += 1
     }
 
     func stopDev() async {
-        struct Ok: Decodable {}
-        _ = try? await client.post("/api/dev/stop", body: [String: String](), as: Bool.self)
+        await attempt { _ = try await client.post("/api/dev/stop", body: [String: String](), as: Bool.self) }
         await refreshDev()
     }
 
@@ -715,7 +1016,7 @@ final class SessionModel: Identifiable {
     var isRepo = true
 
     func refreshGit() async {
-        if let s: Wire.GitStatus = try? await client.get("/api/git/status") {
+        if let s: Wire.GitStatus = try? await client.get("/api/git/status", q()) {
             isRepo = s.isRepo
             branch = s.branch
             changes = s.changes
@@ -726,7 +1027,7 @@ final class SessionModel: Identifiable {
 
     func gitInit() async -> String? {
         do {
-            _ = try await client.post("/api/git/init", body: Nothing(), as: Bool.self)
+            _ = try await client.post("/api/git/init", body: Nothing(), q(), as: Bool.self)
             await refreshGit()
             return nil
         } catch {
@@ -735,6 +1036,6 @@ final class SessionModel: Identifiable {
     }
 
     func diff(_ path: String) async -> Wire.Diff? {
-        try? await client.get("/api/git/diff", ["path": path])
+        try? await client.get("/api/git/diff", q(["path": path]))
     }
 }

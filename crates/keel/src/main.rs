@@ -24,8 +24,10 @@ mod prefs;
 mod project;
 mod render;
 mod serve;
+mod snapshot;
 mod term;
 mod verify;
+mod worktree;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;

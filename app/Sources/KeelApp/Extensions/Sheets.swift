@@ -45,7 +45,7 @@ struct SkillCatalog: View {
 
             if query.isEmpty && !suggested.isEmpty {
                 Text("SUGGESTED FOR THIS REPOSITORY")
-                    .font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint)
                     .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
             }
@@ -80,10 +80,10 @@ struct SkillCatalog: View {
 
     private func row(_ e: Entry) -> some View {
         HStack(alignment: .top, spacing: K.S.sm) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: K.S.xxs) {
                 HStack(spacing: K.S.xs) {
                     Text(e.name).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
-                    Text(e.marketplace).font(K.F.mono(9)).foregroundStyle(K.C.faint)
+                    Text(e.marketplace).font(K.F.mono(10)).foregroundStyle(K.C.faint)
                 }
                 // A recommendation is a row that has to argue for itself.
                 if let why = e.reason, !why.isEmpty {

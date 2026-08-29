@@ -351,3 +351,131 @@ final class MarkdownTests: XCTestCase {
         if case .rule = blocks[1] {} else { XCTFail("no rule") }
     }
 }
+
+// MARK: - Usage
+
+@MainActor
+final class UsageTests: XCTestCase {
+    private func model() -> SessionModel { SessionModel(client: Client(port: 0)) }
+    private func feed(_ json: String, _ m: SessionModel, _ t: Turn) {
+        m.record(Data(json.utf8), into: t)
+    }
+
+    /// The CLI reports tokens; Keel shows them. The largest complaint cluster against the CLI is
+    /// not knowing what a session is consuming, and every number needed is already in the stream.
+    func testAResultCarriesTokensAndAnAssistantMessageCarriesContext() {
+        let m = model(), t = Turn(prompt: "hi")
+        feed(#"{"type":"assistant","message":{"usage":{"input_tokens":1200,"cache_read_input_tokens":140000,"cache_creation_input_tokens":800,"output_tokens":50},"content":[]}}"#, m, t)
+        XCTAssertEqual(t.contextTokens, 142_000, "input plus everything read from cache")
+
+        feed(#"{"type":"result","usage":{"input_tokens":3000,"output_tokens":900,"cache_read_input_tokens":27000,"cache_creation_input_tokens":0},"total_cost_usd":0.12,"duration_ms":60000}"#, m, t)
+        XCTAssertEqual(t.tokens, Turn.Tokens(input: 3000, output: 900, cacheRead: 27000, cacheWrite: 0))
+        XCTAssertEqual(t.tokens!.cached, 0.9, accuracy: 0.001)
+
+        let t2 = Turn(prompt: "again")
+        feed(#"{"type":"result","usage":{"input_tokens":1000,"output_tokens":100},"total_cost_usd":0.06,"duration_ms":30000}"#, m, t2)
+        m.turns = [t, t2]
+        XCTAssertEqual(m.sessionTokens?.total, 3000 + 900 + 27000 + 1000 + 100)
+        XCTAssertEqual(m.contextTokens, 142_000, "the last turn that reported one")
+        XCTAssertEqual(m.burnRate!, 0.18 / 1.5, accuracy: 0.0001, "$ per minute across finished turns")
+    }
+
+    func testCompactNumbers() {
+        XCTAssertEqual(compact(950), "950")
+        XCTAssertEqual(compact(12_400), "12.4k")
+        XCTAssertEqual(compact(1_250_000), "1.25M")
+    }
+}
+
+// MARK: - Subagents and questions
+
+@MainActor
+final class SubagentTests: XCTestCase {
+    private func model() -> SessionModel { SessionModel(client: Client(port: 0)) }
+    private func feed(_ json: String, _ m: SessionModel, _ t: Turn) {
+        m.record(Data(json.utf8), into: t)
+    }
+
+    /// A subagent's calls nest under the `Task` that started it rather than joining the list.
+    func testASubagentsCallsNestUnderItsTask() {
+        let m = model(), t = Turn(prompt: "hi")
+        feed(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"task1","name":"Task","input":{"description":"survey auth"}}]}}"#, m, t)
+        feed(#"{"type":"assistant","parent_tool_use_id":"task1","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"src/auth.ts"}}]}}"#, m, t)
+        feed(#"{"type":"assistant","parent_tool_use_id":"task1","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"src/new.ts"}}]}}"#, m, t)
+
+        XCTAssertEqual(t.calls.count, 1, "the child calls are not top-level rows")
+        XCTAssertEqual(t.calls[0].children.map(\.tool), ["Read", "Write"])
+        XCTAssertEqual(t.files, ["src/new.ts"], "a file the subagent wrote is the turn's file")
+
+        // The rail names what is happening now, not the Task it is happening inside.
+        m.turns = [t]; m.running = true
+        if case .working(let what) = m.activity {
+            XCTAssertEqual(what, "Write src/new.ts")
+        } else { XCTFail("running") }
+
+        feed(#"{"type":"user","parent_tool_use_id":"task1","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"ok"}]}}"#, m, t)
+        XCTAssertFalse(t.calls[0].children[1].running, "a child's result finds the child")
+        XCTAssertTrue(t.calls[0].running, "the Task itself is still going")
+    }
+
+    /// A question's options survive decoding, and the answer body carries them as text.
+    func testAQuestionDecodesItsOptions() throws {
+        let json = #"{"id":"q1","tool":"AskUserQuestion","command":"","rules":[],"session_id":"s","input":{"questions":[{"question":"Which DB?","header":"DB","multiSelect":false,"options":[{"label":"Postgres","description":"x"},{"label":"D1","description":"y"}]}]}}"#
+        let p = try JSONDecoder().decode(Wire.Pending.self, from: Data(json.utf8))
+        XCTAssertTrue(p.isQuestion)
+        XCTAssertEqual(p.questions.map(\.text), ["Which DB?"])
+        XCTAssertEqual(p.questions[0].options, ["Postgres", "D1"])
+        XCTAssertFalse(p.questions[0].multiSelect)
+    }
+}
+
+
+// MARK: - Diff marks and the palette
+
+@MainActor
+final class ReviewUXTests: XCTestCase {
+    /// The changed span of a changed line, not the whole line.
+    func testTheChangedSpanIsMarked() {
+        let (a, b) = Intraline.span("let x = foo(1)", "let x = bar(1)")
+        XCTAssertEqual(a, 8..<11)
+        XCTAssertEqual(b, 8..<11)
+        // Entirely different lines get no mark: all of it is none of it.
+        XCTAssertNil(Intraline.span("abc", "xyz").0)
+        // An insertion marks nothing on the old side and the inserted text on the new.
+        let (c, d) = Intraline.span("ab", "aXb")
+        XCTAssertNil(c); XCTAssertEqual(d, 1..<2)
+    }
+
+    func testMarksPairDeletionsWithAdditionsInOrder() {
+        let lines = [
+            Wire.DiffLine(kind: "ctx", old: 1, new: 1, text: "same"),
+            Wire.DiffLine(kind: "del", old: 2, new: nil, text: "a = 1"),
+            Wire.DiffLine(kind: "del", old: 3, new: nil, text: "b = 2"),
+            Wire.DiffLine(kind: "add", old: nil, new: 2, text: "a = 9"),
+            Wire.DiffLine(kind: "add", old: nil, new: 3, text: "b = 2 // c"),
+            Wire.DiffLine(kind: "add", old: nil, new: 4, text: "unpaired"),
+        ]
+        let m = Intraline.marks(lines)
+        XCTAssertNil(m[0])
+        XCTAssertEqual(m[1], 4..<5); XCTAssertEqual(m[3], 4..<5)
+        XCTAssertNil(m[2], "nothing removed from the old line")
+        XCTAssertEqual(m[4], 5..<10)
+        XCTAssertNil(m[5], "the unpaired tail is whole")
+    }
+
+    /// `nlb` finds the lane verb; a word-start run beats scattered letters; a miss is nil.
+    func testFuzzyFindsSubsequencesAndRanksWordStarts() {
+        XCTAssertNotNil(Fuzzy.score("nlb", in: "New lane on its own branch"))
+        XCTAssertNil(Fuzzy.score("xyz", in: "New lane on its own branch"))
+        let verb = Fuzzy.score("stop", in: "Stop the turn")!
+        let file = Fuzzy.score("stop", in: "src/components/StopButtonWrapper.tsx")!
+        XCTAssertGreaterThan(verb, file, "the exact verb outranks the file that contains it")
+    }
+
+    func testRecentsAreRememberedMostRecentFirst() {
+        UserDefaults.standard.removeObject(forKey: "keel.palette.recent")
+        Recent.remember("a"); Recent.remember("b"); Recent.remember("a")
+        XCTAssertEqual(Recent.titles, ["a", "b"])
+        UserDefaults.standard.removeObject(forKey: "keel.palette.recent")
+    }
+}

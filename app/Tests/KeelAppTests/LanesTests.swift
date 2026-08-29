@@ -65,6 +65,34 @@ final class LanesTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.data(forKey: "keel.lanes."))
     }
 
+    /// A lane's checkout is remembered beside its session, and a file written before checkouts
+    /// existed still decodes.
+    func testACheckoutIsRememberedWithItsSession() {
+        let l = lanes()
+        l.lanes[0].sessionId = "aaa"
+        let second = l.newLane(isolated: true)
+        second.sessionId = "bbb"
+        second.worktree = "fix-tests-k3f"
+        l.remember(repo: repo)
+
+        struct Saved: Decodable { var sessions: [String]; var worktrees: [String?]? }
+        let data = UserDefaults.standard.data(forKey: "keel.lanes." + repo)!
+        let saved = try! JSONDecoder().decode(Saved.self, from: data)
+        XCTAssertEqual(saved.sessions, ["aaa", "bbb"])
+        XCTAssertEqual(saved.worktrees, [nil, "fix-tests-k3f"])
+
+        let old = #"{"sessions":["aaa"],"active":0}"#
+        XCTAssertNoThrow(try JSONDecoder().decode(Saved.self, from: Data(old.utf8)))
+    }
+
+    /// A branch name from a sentence, and never an empty or hostile one.
+    func testALaneIsNamedForWhatItDoes() {
+        XCTAssertEqual(SessionModel.slug("Fix the billing tests!"), "fix-the-billing-tests")
+        XCTAssertEqual(SessionModel.slug("../../etc"), "etc")
+        XCTAssertEqual(SessionModel.slug("🚀🚀"), "lane")
+        XCTAssertLessThanOrEqual(SessionModel.slug(String(repeating: "a b ", count: 40)).count, 24)
+    }
+
     /// Closing the last lane leaves a usable window rather than an empty frame.
     func testClosingTheLastLaneStartsAFreshOne() {
         let l = lanes()

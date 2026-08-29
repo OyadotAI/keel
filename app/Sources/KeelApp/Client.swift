@@ -47,8 +47,9 @@ actor Client {
     }
 
     @discardableResult
-    func post<T: Decodable>(_ path: String, body: some Encodable, as: T.Type = T.self) async throws -> T {
-        var req = URLRequest(url: url(path))
+    func post<T: Decodable>(_ path: String, body: some Encodable, _ query: [String: String] = [:],
+                            as: T.Type = T.self) async throws -> T {
+        var req = URLRequest(url: url(path, query))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.httpBody = try JSONEncoder().encode(body)

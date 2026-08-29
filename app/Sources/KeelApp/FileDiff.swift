@@ -4,8 +4,9 @@ import SwiftUI
 ///
 /// The surface someone spends the most time reading, so the details are the design: line numbers
 /// in a fixed gutter so the code column never shifts, backgrounds far weaker than the +/− glyphs
-/// so forty changed lines stay readable, and word-level highlighting inside a changed line because
-/// "this line changed" is rarely the answer to "what changed".
+/// so forty changed lines stay readable, and the changed *part* of a changed line marked, because
+/// "this line changed" is rarely the answer to "what changed". Lines never wrap: wrapped code is a
+/// lie about where the line breaks are, so long ones scroll sideways.
 struct FileDiff: View {
     let path: String
     let model: SessionModel
@@ -24,17 +25,24 @@ struct FileDiff: View {
             header
             if open, let diff {
                 Hairline()
-                ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
-                    if hi > 0 { hunkSeparator(hunk.header) }
-                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                        row(line)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
+                            HunkHeader(header: hunk.header, index: hi, path: path,
+                                       discardable: !diff.untracked, model: model)
+                            let marks = Intraline.marks(hunk.lines)
+                            ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
+                                row(line, mark: marks[li])
+                            }
+                        }
                     }
+                    .frame(minWidth: 0, alignment: .leading)
                 }
             }
         }
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-        .task { diff = await model.diff(path) }
+        .task(id: model.diffTick) { diff = await model.diff(path) }
     }
 
     // MARK: Header
@@ -42,7 +50,7 @@ struct FileDiff: View {
     private var header: some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(hoveringHeader ? K.C.dim : K.C.faint.opacity(0.6))
                 .frame(width: 10)
 
@@ -86,20 +94,10 @@ struct FileDiff: View {
         return dir.isEmpty ? "" : dir + "/"
     }
 
-    private func hunkSeparator(_ header: String) -> some View {
-        Text(header)
-            .font(K.F.mono(9.5))
-            .foregroundStyle(K.C.faint)
-            .padding(.horizontal, K.S.md)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(K.C.well)
-    }
-
     // MARK: Rows
 
     @ViewBuilder
-    private func row(_ line: Wire.DiffLine) -> some View {
+    private func row(_ line: Wire.DiffLine, mark: Range<Int>?) -> some View {
         let lineNo = line.new ?? line.old
         let key = "\(path):\(lineNo ?? -1)"
         let noted = model.notes[key] != nil
@@ -117,14 +115,15 @@ struct FileDiff: View {
                 .foregroundStyle(glyph(line.kind))
                 .frame(width: 10, alignment: .leading)
 
-            Text(line.text.isEmpty ? " " : line.text)
+            Text(Intraline.styled(line.text, mark: mark, kind: line.kind))
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if noted {
                 Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 8))
+                    .font(.system(size: 10))
                     .foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.sm)
             }
@@ -148,7 +147,7 @@ struct FileDiff: View {
     private func noteEditor(key: String, line: Int) -> some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: "text.bubble")
-                .font(.system(size: 9)).foregroundStyle(K.C.accent)
+                .font(.system(size: 10)).foregroundStyle(K.C.accent)
             TextField("A note for the agent…", text: $draft)
                 .textFieldStyle(.plain)
                 .font(K.F.small)
@@ -193,6 +192,42 @@ struct FileDiff: View {
     }
 }
 
+/// The `@@` line, with the one thing you can do to a hunk: throw it away on its own.
+///
+/// Six duplicate issues ask the CLI for this. Reviewing four hunks and wanting three of them is
+/// the ordinary case, and discarding the file to get rid of one throws away the other three.
+struct HunkHeader: View {
+    let header: String
+    let index: Int
+    let path: String
+    let discardable: Bool
+    let model: SessionModel
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            Text(header).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+            Spacer()
+            // Always present, faint until pointed at. A control that only exists on hover does
+            // not exist for the keyboard, and does not exist for anyone who has not found it.
+            if discardable {
+                Button("discard hunk") {
+                    Task { await model.gitAct("discard-hunk", path, hunk: index) }
+                }
+                .buttonStyle(QuietButton(tone: K.C.del))
+                .opacity(hovering ? 1 : 0.55)
+                .help("Put these lines back the way they were; the other hunks stay")
+            }
+        }
+        .id("hunk-\(path)-\(index)")
+        .padding(.horizontal, K.S.md)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(K.C.well)
+        .onHover { hovering = $0 }
+    }
+}
+
 /// The five-segment bar every code host uses. Reads at a glance in a way two numbers do not.
 struct DiffBar: View {
     let adds: Int
@@ -213,5 +248,63 @@ struct DiffBar: View {
                     .frame(width: 5, height: 8)
             }
         }
+    }
+}
+
+// MARK: - What changed inside the line
+
+/// The changed span of a changed line, from the old and new versions side by side.
+///
+/// Common prefix and suffix by character, and the middle is what moved. Cheap enough to compute
+/// per row, and right for the case that matters: a renamed identifier or a changed argument in an
+/// otherwise identical line, where the whole-line tint says "this line" and nothing more.
+enum Intraline {
+    /// For each line in a hunk, the changed span — only for a `del` immediately followed by an
+    /// `add` (or a run of each, paired in order). Everything else is `nil`: the whole line.
+    static func marks(_ lines: [Wire.DiffLine]) -> [Range<Int>?] {
+        var out = [Range<Int>?](repeating: nil, count: lines.count)
+        var i = 0
+        while i < lines.count {
+            guard lines[i].kind == "del" else { i += 1; continue }
+            var j = i
+            while j < lines.count, lines[j].kind == "del" { j += 1 }
+            var k = j
+            while k < lines.count, lines[k].kind == "add" { k += 1 }
+            // Pair the nth deletion with the nth addition; the unpaired tail stays whole.
+            for n in 0..<min(j - i, k - j) {
+                let (a, b) = span(lines[i + n].text, lines[j + n].text)
+                out[i + n] = a
+                out[j + n] = b
+            }
+            i = k
+        }
+        return out
+    }
+
+    /// The differing middle of two strings, as character offsets into each.
+    static func span(_ old: String, _ new: String) -> (Range<Int>?, Range<Int>?) {
+        let a = Array(old), b = Array(new)
+        var head = 0
+        while head < a.count, head < b.count, a[head] == b[head] { head += 1 }
+        var tail = 0
+        while tail < a.count - head, tail < b.count - head,
+              a[a.count - 1 - tail] == b[b.count - 1 - tail] { tail += 1 }
+        // A line that changed entirely gets no mark: highlighting all of it is highlighting
+        // nothing.
+        if head == 0 && tail == 0 { return (nil, nil) }
+        let ra = head..<(a.count - tail), rb = head..<(b.count - tail)
+        return (ra.isEmpty ? nil : ra, rb.isEmpty ? nil : rb)
+    }
+
+    /// The line with its changed span on a stronger ground.
+    static func styled(_ text: String, mark: Range<Int>?, kind: String) -> AttributedString {
+        var s = AttributedString(text.isEmpty ? " " : text)
+        guard let mark, !text.isEmpty else { return s }
+        let chars = Array(text)
+        let lo = s.index(s.startIndex, offsetByCharacters: min(mark.lowerBound, chars.count))
+        let hi = s.index(s.startIndex, offsetByCharacters: min(mark.upperBound, chars.count))
+        s[lo..<hi].backgroundColor = (kind == "add" ? K.C.add : K.C.del).opacity(0.28)
+        s[lo..<hi].font = K.F.mono(11.5, .semibold)
+        return s
     }
 }

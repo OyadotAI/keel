@@ -164,11 +164,47 @@ enum Wire {
         var command: String
         var rules: [String]
         var sessionId: String
+        /// The whole tool input. Only a question reads it.
+        var input: JSONValue?
 
         enum CodingKeys: String, CodingKey {
-            case id, tool, command, rules
+            case id, tool, command, rules, input
             case sessionId = "session_id"
         }
+
+        var isQuestion: Bool { tool == "AskUserQuestion" }
+
+        /// The questions an `AskUserQuestion` carries, or none for a permission.
+        var questions: [Question] {
+            guard case .array(let qs)? = input?["questions"] else { return [] }
+            return qs.compactMap { q in
+                guard let text = q["question"]?.stringValue else { return nil }
+                let options: [String]
+                if case .array(let os)? = q["options"] {
+                    options = os.compactMap { $0["label"]?.stringValue }
+                } else { options = [] }
+                let multi: Bool
+                if case .bool(let b)? = q["multiSelect"] { multi = b } else { multi = false }
+                return Question(text: text, options: options, multiSelect: multi)
+            }
+        }
+    }
+
+    struct Question: Identifiable {
+        var text: String
+        var options: [String]
+        var multiSelect: Bool
+        var id: String { text }
+    }
+
+    /// A lane's own checkout.
+    struct Worktree: Decodable, Identifiable, Sendable {
+        var name: String
+        var branch: String
+        var path: String
+        var ahead: Int
+        var dirty: Bool
+        var id: String { name }
     }
 
     struct Check: Decodable {

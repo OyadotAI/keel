@@ -22,7 +22,7 @@ struct DiffSurface: View {
             content
         }
         .background(K.C.bg)
-        .task(id: path) {
+        .task(id: "\(path)-\(model.diffTick)") {
             loading = true
             diff = await model.diff(path)
             loading = false
@@ -66,8 +66,9 @@ struct DiffSurface: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .foregroundStyle(K.C.faint)
+            .hint("Actions for this file")
 
-            CloseButton { model.viewingDiff = nil }
+            CloseButton(label: "Close diff") { model.viewingDiff = nil }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
         .background(K.C.surface)
@@ -78,20 +79,28 @@ struct DiffSurface: View {
         if loading {
             centred("Reading…")
         } else if let diff, !diff.hunks.isEmpty {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
-                        if hi > 0 || diff.hunks.count > 1 {
-                            Text(hunk.header)
-                                .font(K.F.mono(9.5)).foregroundStyle(K.C.faint)
-                                .padding(.horizontal, K.S.md).padding(.vertical, 3)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(K.C.well)
-                        }
-                        ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                            DiffLineRow(line: line, path: path, model: model)
+            ScrollViewReader { proxy in
+                ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
+                            HunkHeader(header: hunk.header, index: hi, path: path,
+                                       discardable: !diff.untracked, model: model)
+                            let marks = Intraline.marks(hunk.lines)
+                            ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
+                                DiffLineRow(line: line, mark: marks[li], path: path, model: model)
+                            }
                         }
                     }
+                    .frame(minWidth: 0, alignment: .leading)
+                }
+                // ⌥↓ / ⌥↑ walk the hunks; ⌘⌥↓ / ⌘⌥↑ walk the changed files. The keys every
+                // review tool grows an extension for, built in.
+                .focusable()
+                .onKeyPress(keys: [.downArrow, .upArrow], phases: .down) { press in
+                    guard press.modifiers.contains(.option) else { return .ignored }
+                    let by = press.key == .downArrow ? 1 : -1
+                    return press.modifiers.contains(.command)
+                        ? nextFile(by) : jump(proxy, by, of: diff.hunks.count)
                 }
             }
         } else {
@@ -99,6 +108,23 @@ struct DiffSurface: View {
             // you are looking at it.
             centred("This file matches HEAD — the change was committed or undone.")
         }
+    }
+
+    @State private var hunk = 0
+
+    private func jump(_ proxy: ScrollViewProxy, _ by: Int, of count: Int) -> KeyPress.Result {
+        guard count > 0 else { return .ignored }
+        hunk = (hunk + by + count) % count
+        withAnimation(K.M.settle) { proxy.scrollTo("hunk-\(path)-\(hunk)", anchor: .top) }
+        return .handled
+    }
+
+    private func nextFile(_ by: Int) -> KeyPress.Result {
+        let paths = model.changes.map(\.path)
+        guard let i = paths.firstIndex(of: path), !paths.isEmpty else { return .ignored }
+        model.viewingDiff = paths[(i + by + paths.count) % paths.count]
+        hunk = 0
+        return .handled
     }
 
     private func centred(_ text: String) -> some View {
@@ -117,6 +143,7 @@ struct DiffSurface: View {
 /// One line of a diff, with the gutter that starts a review.
 struct DiffLineRow: View {
     let line: Wire.DiffLine
+    var mark: Range<Int>? = nil
     let path: String
     let model: SessionModel
     @State private var editing = false
@@ -133,13 +160,14 @@ struct DiffLineRow: View {
                 .frame(width: 38, alignment: .trailing)
                 .padding(.trailing, K.S.sm)
             Text(marker).foregroundStyle(glyph).frame(width: 10, alignment: .leading)
-            Text(line.text.isEmpty ? " " : line.text)
+            Text(Intraline.styled(line.text, mark: mark, kind: line.kind))
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if model.notes[key] != nil {
                 Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 8)).foregroundStyle(K.C.accent)
+                    .font(.system(size: 10)).foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.sm)
             }
         }
@@ -148,7 +176,7 @@ struct DiffLineRow: View {
         .padding(.leading, K.S.sm)
         .background(background)
         .contentShape(Rectangle())
-        .onTapGesture {
+        .asButton {
             guard lineNo != nil else { return }
             draft = model.notes[key] ?? ""
             withAnimation(K.M.quick) { editing.toggle() }
@@ -156,7 +184,7 @@ struct DiffLineRow: View {
 
         if editing {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "text.bubble").font(.system(size: 9))
+                Image(systemName: "text.bubble").font(.system(size: 10))
                     .foregroundStyle(K.C.accent)
                 TextField("A note for the agent…", text: $draft)
                     .textFieldStyle(.plain).font(K.F.small)
