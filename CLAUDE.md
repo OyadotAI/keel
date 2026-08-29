@@ -127,8 +127,9 @@ A build with no key has that SDK off.
 
 Updates are Sparkle. `make sparkle-keys` once per release machine (private key in the keychain,
 public key read by the build); `make release` builds, signs, notarises, writes `appcast.xml` and
-publishes a GitHub release — the feed is `releases/latest/download/appcast.xml`, so nothing is
-hosted. The version is the workspace version in `Cargo.toml`; bump it before `make release`.
+publishes a GitHub release to the **public** `OyadotAI/keel-releases` repository (this one is
+private, and Sparkle on a tester's Mac has no token) — the feed is that repo's
+`releases/latest/download/appcast.xml`, so nothing is hosted. The version is the workspace version in `Cargo.toml`; bump it before `make release`.
 
 Two rules the crashes taught: **WebKit's `takeSnapshot` returns nil for a rect outside the view
 and its async import force-unwraps it** — always the completion form, always clamped to bounds

@@ -73,7 +73,7 @@ if [ -x packaging/sparkle/bin/generate_appcast ]; then
   echo "==> writing the appcast"
   rm -f dist/appcast.xml
   packaging/sparkle/bin/generate_appcast \
-    --download-url-prefix "https://github.com/OyadotAI/keel/releases/download/v$version/" \
+    --download-url-prefix "https://github.com/OyadotAI/keel-releases/releases/download/v$version/" \
     -o dist/appcast.xml dist/ >/dev/null
   echo "    dist/appcast.xml"
 fi

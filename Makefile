@@ -56,11 +56,15 @@ sparkle-keys: sparkle-tools
 
 # Build, sign, notarise, write the appcast, and publish a GitHub release the updater feed
 # points at. After this, every installed Keel offers the update by itself.
+#
+# Published to a *public* releases-only repository: this one is private, and Sparkle on a
+# tester's machine has no token. The DMG and the appcast are all that repo ever holds.
+RELEASES = OyadotAI/keel-releases
 release: dmg
 	@version="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
-	gh release create "v$$version" dist/Keel.dmg dist/appcast.xml \
-	  --title "Keel $$version" --notes "See CHANGELOG.md" --latest || \
-	gh release upload "v$$version" dist/Keel.dmg dist/appcast.xml --clobber
+	gh release create "v$$version" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) \
+	  --title "Keel $$version" --notes "Signed and notarised. Installed copies update themselves." --latest || \
+	gh release upload "v$$version" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) --clobber
 	@echo "    released v$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
 
 .PHONY: app dmg sparkle-tools sparkle-keys release
