@@ -385,6 +385,8 @@ struct ActivityRail: View {
     private func badge(_ p: SessionWindow.Panel) -> Int? {
         switch p {
         case .changes: model.changes.count.nonZero
+        // The same number on Git: it is the count of what a commit there would take.
+        case .git: model.changes.count.nonZero
         // Every finding, not only the blocking ones: a warning in the panel with no number on
         // the icon read as a panel that had nothing to say.
         case .readiness: model.findings.count.nonZero

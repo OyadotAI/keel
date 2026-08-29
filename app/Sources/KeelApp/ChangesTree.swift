@@ -97,30 +97,8 @@ struct ChangesTreeView: View {
 
     @ViewBuilder
     private var repoContents: some View {
-        // First, not last. Shipping the change is what the panel is for; the file list is how you
-        // check it before you do. A quiet text link under forty rows is a link nobody finds.
-        Button { model.sheet = .pr } label: {
-            HStack(spacing: K.S.sm) {
-                Image(systemName: "arrow.triangle.pull").font(.system(size: 11, weight: .medium))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Open a pull request").font(K.F.small.weight(.semibold))
-                    if let branch = model.branch {
-                        Text(branch)
-                            .font(K.F.mono(10))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .lineLimit(1)
-                    }
-                }
-                Spacer()
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, K.S.sm).padding(.vertical, 6)
-            .background(K.C.accent, in: RoundedRectangle(cornerRadius: K.R.sm))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, K.S.sm)
-        .padding(.bottom, K.S.sm)
+        // The pull request lives in the Git panel with the rest of the branch work; a big
+        // button here read as the thing to click and was the thing nobody wanted.
 
         if let err = model.lastError {
             Text(err).font(K.F.micro).foregroundStyle(K.C.del)

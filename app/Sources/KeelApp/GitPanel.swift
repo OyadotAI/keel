@@ -86,6 +86,15 @@ struct GitPanel: View {
                 verb("Pull", "arrow.down", "pull", enabled: (current?.behind ?? 0) > 0)
                 verb("Push", "arrow.up", "push",
                      enabled: (current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true))
+                // The pull request, beside push — where the branch work is, not on top of the
+                // file list.
+                Button { model.sheet = .pr } label: {
+                    Image(systemName: "arrow.triangle.pull").font(.system(size: 10, weight: .semibold))
+                        .frame(minWidth: 22, minHeight: 16)
+                }
+                .buttonStyle(QuietButton(tone: (b?.remotes.isEmpty ?? true) ? K.C.faint : K.C.accent))
+                .disabled(busy || (b?.remotes.isEmpty ?? true))
+                .hint("Open a pull request")
                 if let what = model.gitBusy {
                     Sweep().scaleEffect(0.7, anchor: .leading).frame(width: 32, height: 3)
                     Text(what + "…").font(K.F.micro).foregroundStyle(K.C.faint)
