@@ -15,6 +15,9 @@ struct StartProject: View {
     @State private var name = ""
     @State private var parent = "~/Dev"
     @State private var template: Template = Template.all[0]
+    /// Where it runs. Containers by default: Docker, kustomize, a cluster — the production
+    /// shape. Workers for a project that wants no cluster at all.
+    @State private var stack = "stack"
     @State private var attachment: URL?
     @State private var query = ""
     @State private var repos: [Repo] = []
@@ -81,7 +84,27 @@ struct StartProject: View {
 
     private var newForm: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
-            search("Search templates…")
+            HStack(spacing: K.S.sm) {
+                search("Search templates…")
+                HStack(spacing: 0) {
+                    ForEach([("stack", "Containers"), ("app", "Cloudflare Workers")], id: \.0) { s, label in
+                        let on = stack == s
+                        Text(label)
+                            .font(K.F.micro.weight(on ? .semibold : .regular))
+                            .foregroundStyle(on ? K.C.text : K.C.faint)
+                            .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                            .background(RoundedRectangle(cornerRadius: K.R.sm - 1)
+                                .fill(on ? K.C.raised : .clear).padding(1))
+                            .contentShape(Rectangle())
+                            .asButton { stack = s }
+                            .help(s == "stack"
+                                  ? "Docker images, docker-compose, nginx, kustomize overlays, CI to GHCR and a cluster"
+                                  : "Next.js and Hono as Workers with a service binding; no cluster")
+                    }
+                }
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            }
 
             // The gallery. Ten of the things people start most, each a scaffold plus the first
             // brief, so "new project" ends with the agent already working on the right thing.
@@ -131,9 +154,11 @@ struct StartProject: View {
             }
 
             HStack {
-                Text(template.scaffold == "app"
-                     ? "Next.js + Hono on Cloudflare, two environments, green from the first commit."
-                     : "A CLAUDE.md, a gate and the agent scaffolding — no application code.")
+                Text(template.scaffold == "empty"
+                     ? "A CLAUDE.md, a gate and the agent scaffolding — no application code."
+                     : stack == "stack"
+                        ? "Next.js + Hono in containers, Postgres and Redis, kustomize dev/prod, CI that ships images. Green from the first commit."
+                        : "Next.js + Hono on Cloudflare Workers, two environments, green from the first commit.")
                     .font(K.F.micro).foregroundStyle(K.C.faint)
                 Spacer()
                 Button(busy ? "Creating…" : (template.brief.isEmpty ? "Create" : "Create and start")) { create() }
@@ -233,8 +258,8 @@ struct StartProject: View {
                     "/api/project/new",
                     body: NewProject(parent: parent,
                                      name: name.trimmingCharacters(in: .whitespaces),
-                                     template: template.scaffold))
-                Telemetry.track("project_created", ["template": template.id])
+                                     template: template.scaffold == "empty" ? "empty" : stack))
+                Telemetry.track("project_created", ["template": template.id, "stack": stack])
                 onOpened(made.path, template.brief, attachment)
             } catch { self.error = error.localizedDescription }
         }
