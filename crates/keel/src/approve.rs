@@ -23,7 +23,11 @@
 //! question nobody is going to answer, and a guardrail that can hang the product is a guardrail
 //! people turn off.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -54,6 +58,13 @@ pub struct Pending {
     pub command: String,
     /// The rules that would let this through, derived the same way the UI used to derive them.
     pub rules: Vec<String>,
+    /// The conversation that provoked the question.
+    ///
+    /// Claude Code has always sent this and it was always thrown away, which was survivable while
+    /// exactly one window existed. With two, a question has to find the conversation it belongs to
+    /// or it surfaces in the wrong one. Empty when the hook did not say, and an empty one is shown
+    /// to whoever asks — the same failing-open this whole module does.
+    pub session_id: String,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +72,10 @@ pub struct Answer {
     pub id: String,
     /// `allow` or `deny`.
     pub decision: String,
+    /// The conversation being answered, so a `session`-scoped rule lands on it and not on every
+    /// other window's agent.
+    #[serde(default)]
+    pub session: Option<String>,
     /// Rules to remember, so the same command is not asked about twice.
     #[serde(default)]
     pub rules: Vec<String>,
@@ -234,8 +249,9 @@ pub async fn ask(
     }
 
     let rules = rules_for(&hook.tool_name, &hook.tool_input);
+    let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
 
-    if already_allowed(&rules, &crate::permissions::effective(&repo)) {
+    if already_allowed(&rules, &crate::permissions::effective(&repo, session)) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -258,6 +274,7 @@ pub async fn ask(
             .unwrap_or_default()
             .to_string(),
         rules,
+        session_id: hook.session_id.clone(),
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -282,11 +299,34 @@ pub async fn ask(
     }
 }
 
+#[derive(Deserialize)]
+pub struct PollQuery {
+    /// Only take questions belonging to this conversation. Absent means take everything.
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
 /// What the UI is waiting to show. Polled rather than pushed: the chat already holds an SSE stream
 /// per turn, and a second long-lived connection for one message at a time is not worth its
 /// reconnection logic.
-pub async fn poll() -> Json<Vec<Pending>> {
-    Json(std::mem::take(&mut *queue().lock().expect("queue lock")))
+///
+/// Scoped by session, because there is more than one window now. This used to `mem::take` the whole
+/// queue, so whichever caller polled first swallowed every pending question — including the ones
+/// belonging to another window, which then waited out the full four minutes and failed open. A
+/// caller with no session of its own, such as the CLI, passes nothing and still gets everything.
+pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
+    let mut queue = queue().lock().expect("queue lock");
+
+    let Some(session) = q.session.filter(|s| !s.is_empty()) else {
+        return Json(std::mem::take(&mut *queue));
+    };
+
+    // Partitioned rather than filtered: what belongs to another window has to stay queued for it.
+    let (mine, theirs): (Vec<Pending>, Vec<Pending>) = queue
+        .drain(..)
+        .partition(|p| p.session_id.is_empty() || p.session_id == session);
+    *queue = theirs;
+    Json(mine)
 }
 
 /// The person answered.
@@ -302,7 +342,12 @@ pub async fn answer(
             let _ = crate::permissions::set_trusted(&state.repo(), true);
         } else {
             for rule in &body.rules {
-                let _ = crate::permissions::remember(&state.repo(), rule, &body.scope);
+                let _ = crate::permissions::remember(
+                    &state.repo(),
+                    rule,
+                    &body.scope,
+                    body.session.as_deref(),
+                );
             }
         }
     }
@@ -366,6 +411,62 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending(id: &str, session: &str) -> Pending {
+        Pending {
+            id: id.into(),
+            tool: "Bash".into(),
+            command: "ls".into(),
+            rules: vec!["Bash(ls *)".into()],
+            session_id: session.into(),
+        }
+    }
+
+    /// A question reaches the window that provoked it, and no other.
+    ///
+    /// One test rather than three, because the queue is a process-global and parallel tests over it
+    /// would interfere with each other rather than with the bug.
+    ///
+    /// Before this, `poll` took the whole queue. Two windows meant the first one to poll swallowed
+    /// every pending question, and the window actually waiting on one sat there until the hook's
+    /// four-minute timeout failed it open — a refusal the person never saw and never agreed to.
+    #[tokio::test]
+    async fn a_question_goes_to_the_window_that_asked_it() {
+        {
+            let mut q = queue().lock().expect("queue lock");
+            q.clear();
+            q.push(pending("a1", "session-a"));
+            q.push(pending("b1", "session-b"));
+            // The hook did not say which conversation this came from.
+            q.push(pending("orphan", ""));
+        }
+
+        let mine = poll(Query(PollQuery {
+            session: Some("session-a".into()),
+        }))
+        .await;
+        let got: Vec<&str> = mine.0.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            got,
+            vec!["a1", "orphan"],
+            "a poll takes its own questions, and an unattributed one rather than stranding it"
+        );
+
+        let theirs = poll(Query(PollQuery {
+            session: Some("session-b".into()),
+        }))
+        .await;
+        assert_eq!(
+            theirs.0.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["b1"],
+            "the other window's question survived the first poll"
+        );
+
+        assert!(
+            queue().lock().expect("queue lock").is_empty(),
+            "nothing is left queued once both windows have polled"
+        );
+    }
 
     #[test]
     fn a_compound_command_needs_every_program_in_it() {

@@ -29,7 +29,7 @@ axum = { workspace = true, features = ["ws"] }
 open.workspace = true
 ignore.workspace = true
 keyring.workspace = true
-rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+sha2 = "0.10"
 portable-pty = "0.9.0"
 futures-util = "0.3.34"
 trash = "5.2.6"

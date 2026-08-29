@@ -267,6 +267,33 @@ const TOOLS: &[Tool] = &[
         // any part of Keel.
         setup: "aws configure",
     },
+    Tool {
+        id: "tailscale",
+        label: "Tailscale",
+        binary: "tailscale",
+        version: &["version"],
+        // Bare `status`, and deliberately not `status --json` or `ip -4`. Measured on a machine
+        // with Tailscale installed but stopped: both of those exit 0 — `ip -4` prints
+        // "no current Tailscale IPs" to stderr and still succeeds, and `--json` happily returns a
+        // document saying `"BackendState": "Stopped"`. Only bare `status` exits 1. Either of the
+        // other two would have drawn a checkmark next to a VPN that was carrying nothing, which is
+        // the one thing this field exists to prevent.
+        whoami: &["status"],
+        // The cask, not the formula. `brew install tailscale` is the daemon on its own and needs
+        // `sudo brew services start tailscale` before it does anything; the app installs the CLI
+        // at /usr/local/bin/tailscale and manages the daemon itself. The cask is named
+        // `tailscale-app` — plain `tailscale` is an alias that resolves to it and may not always.
+        install: &[("brew", &["install", "--cask", "tailscale-app"])],
+        // `tailscale up` prints a URL and then waits, and on macOS it can ask for rights Keel
+        // cannot grant it. Hosted in the terminal rather than driven, for the same reason
+        // `aws configure` is.
+        login: &[],
+        // The tailnet address, which is exactly what pairing needs to show. Only ever read once
+        // `whoami` has said the tunnel is actually up, so the empty case never reaches display.
+        identity: &["ip", "-4"],
+        manual: "https://tailscale.com/download/macos",
+        setup: "tailscale up",
+    },
 ];
 
 /// Profiles the AWS CLI can see, across both `~/.aws/config` and `~/.aws/credentials`.
@@ -512,6 +539,13 @@ pub fn toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str
 /// 7.4 seconds — six tools, three commands each, several of them round-tripping to a cloud API to
 /// answer "who am I". It also blocked the executor for the whole time, so nothing else Keel served
 /// could respond either. The connections panel appearing to hang was that, exactly.
+/// The tools the `blocked` match below has words for.
+///
+/// Kept next to that match, and asserted against by `a_tool_without_a_login_is_one_we_explain`: a
+/// tool with no login of its own is unreachable from Settings unless something explains why.
+#[cfg(test)]
+const BLOCKED_EXPLAINS: &[&str] = &["kubectl", "docker", "aws", "tailscale"];
+
 pub async fn status() -> axum::Json<Vec<ToolStatus>> {
     let checks = TOOLS.iter().map(|t| async move {
         // Within one tool the calls are ordered — asking a missing binary who it is wastes a
@@ -564,6 +598,14 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             "aws" if version.is_some() && !authenticated => Some(
                 "A profile exists but its credentials are not valid. If it uses Identity Center, \
                  signing in again will refresh it."
+                    .to_string(),
+            ),
+            // Installed and stopped is the ordinary state of a VPN, not a failure, so this says
+            // what it is rather than reporting it broken. `tailscale up` opens a browser and can
+            // ask for rights Keel does not have, which is why it is offered to the terminal as a
+            // command rather than as a button that runs nothing.
+            "tailscale" if version.is_some() && !authenticated => Some(
+                "Tailscale is installed but not connected. Pairing over a tailnet needs it up."
                     .to_string(),
             ),
             _ => None,
@@ -808,15 +850,25 @@ mod tests {
     }
 
     /// A tool with no login flow must be one Keel explains rather than one it silently cannot
-    /// connect. Adding a fourth without a `blocked` message would leave a dead row in Settings.
+    /// connect. Adding one without a `blocked` message would leave a dead row in Settings.
+    ///
+    /// The frozen list of ids *was* the assertion, so adding any tool failed this test whether or
+    /// not the thing it guards against had happened. It checks the property directly now: a
+    /// login-less tool needs something to say and something to run.
     #[test]
     fn a_tool_without_a_login_is_one_we_explain() {
-        let no_login: Vec<&str> = TOOLS
-            .iter()
-            .filter(|t| t.login.is_empty())
-            .map(|t| t.id)
-            .collect();
-        assert_eq!(no_login, vec!["kubectl", "docker"]);
+        for t in TOOLS.iter().filter(|t| t.login.is_empty()) {
+            assert!(
+                !t.setup.is_empty(),
+                "{} has no login and no setup command, so Settings can offer nothing",
+                t.id
+            );
+            assert!(
+                BLOCKED_EXPLAINS.contains(&t.id),
+                "{} has no login, so it needs a `blocked` message saying why",
+                t.id
+            );
+        }
     }
 
     #[test]

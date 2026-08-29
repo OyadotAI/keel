@@ -10,3 +10,6 @@ dist/
 .env.*
 !.env.example
 ui/node_modules/
+
+# SwiftPM's build directory: four thousand files, and the Changes panel counts every one of them.
+app/.build/

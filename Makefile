@@ -9,7 +9,7 @@ help:
 build:
 	cargo build
 
-check: fmt lint test
+check: fmt lint test app-test
 
 fmt:
 	cargo fmt --all -- --check
@@ -19,6 +19,13 @@ lint:
 
 test:
 	cargo test
+
+# The Swift half of the gate: the stream parser, and the budgets from the plan that can actually
+# fail — orphaned agent processes, a second daemon, a bundle that grew.
+app-test:
+	swift test --package-path app
+
+.PHONY: app-test
 
 scan: build
 	cargo run --quiet -- scan .
@@ -34,11 +41,3 @@ dmg: app
 	@packaging/build-dmg.sh
 
 .PHONY: app dmg
-
-# Render the side panels in a headless DOM against a running Keel. Every UI bug in this project so
-# far has been "the code did not run" rather than "it looked wrong", and that is what this catches.
-# Needs `keel serve` on :7777 and `bun install` in ui/.
-ui:
-	@bun ui/check.mjs
-
-.PHONY: ui

@@ -12,14 +12,14 @@ mod clitools;
 mod connect;
 mod dev;
 mod fsops;
-mod gcp;
 mod gui;
-mod infra;
 mod mcp;
 mod names;
+mod pair;
 mod path;
 mod permissions;
 mod plugins;
+mod pr;
 mod prefs;
 mod project;
 mod render;
@@ -96,6 +96,23 @@ enum Command {
         /// Do not open a browser window.
         #[arg(long)]
         no_open: bool,
+
+        /// Exit when the process that started this one goes away.
+        ///
+        /// For the Mac app, which spawns the daemon as a child. macOS has no `PR_SET_PDEATHSIG`,
+        /// and a terminating app does not always get to run cleanup — SIGTERM, a force quit and a
+        /// crash all skip it. Without this the daemon reparents to init and keeps serving, which
+        /// is how a machine accumulates one invisible agent host per app launch.
+        #[arg(long)]
+        exit_with_parent: bool,
+
+        /// Reopen the last project instead of reading `path`.
+        ///
+        /// For a GUI launch, which has no working directory worth inferring a project from — from
+        /// Finder it is `/`, so the default `.` would open the whole filesystem as a repository.
+        /// `keel serve` in a terminal keeps meaning "this directory", because there it does.
+        #[arg(long)]
+        resume_last: bool,
     },
 
     /// Open Keel as an application, in its own window.
@@ -192,15 +209,24 @@ fn main() -> Result<()> {
             path,
             port,
             no_open,
+            exit_with_parent,
+            resume_last,
         } => {
-            let repo = path
-                .canonicalize_utf8()
-                .with_context(|| format!("resolving {path}"))?;
-            tokio::runtime::Builder::new_multi_thread()
+            if exit_with_parent {
+                watch_parent();
+            }
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .context("starting the async runtime")?
-                .block_on(serve::run(repo, port, !no_open))?;
+                .context("starting the async runtime")?;
+            if resume_last {
+                runtime.block_on(serve::run_app(port, false))?;
+            } else {
+                let repo = path
+                    .canonicalize_utf8()
+                    .with_context(|| format!("resolving {path}"))?;
+                runtime.block_on(serve::run(repo, port, !no_open))?;
+            }
         }
 
         Command::Approve { port } => {
@@ -288,4 +314,23 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Exit once the process that started this one is gone.
+///
+/// A polled `getppid()` rather than anything cleverer: on Unix an orphan is reparented to pid 1,
+/// so the parent going away is a one-integer comparison. A second of latency is irrelevant for a
+/// process whose job is now to stop existing, and this catches the cases a cleanup handler cannot
+/// — SIGKILL, a force quit, and a crashed parent.
+fn watch_parent() {
+    let original = std::os::unix::process::parent_id();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let now = std::os::unix::process::parent_id();
+            if now != original || now == 1 {
+                std::process::exit(0);
+            }
+        }
+    });
 }

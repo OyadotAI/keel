@@ -1,8 +1,14 @@
 # Keel — working agreement
 
-Keel is a local IDE that takes an existing repository, reports how ready it is for agent work and
-production deployment, fixes what's missing, provisions Cloudflare, and owns the ship-and-observe
-loop.
+Keel is a Claude Code IDE. It drives the user's own `claude` in their repository and makes the run
+visible: diffs as they are written, tool calls as one line each, a refused command as a question in
+the conversation, and the project's own checks run after every turn. The audience is people who
+already live in Claude Code and are tired of reading it through a terminal — so when a change is a
+choice between more surface and more visibility into what the agent just did, visibility wins.
+
+It also reads a repository and reports how ready it is for agent work and production, fixes what's
+missing, and scaffolds onto Cloudflare. That half stays out of the way of the first: a repository
+with no Cloudflare config is never asked about one.
 
 **On "Cloudflare only".** That was the original line and it is no longer true. Keel reads a
 Kubernetes cluster, lists GKE clusters and can create one, and shows GitHub Actions runs. What
@@ -29,6 +35,83 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
    list is not licence to display it. `transcript()` is the separate, explicit path for opening one
    session the user asked for by name, and it rejects any id that could climb out of the project
    directory. Both asserted by test.
+8. **A question belongs to one conversation.** `Pending` carries the `session_id` Claude Code
+   already sends, and `/api/approve/poll?session=` partitions the queue rather than draining it.
+   Windows are per-session now; the old `mem::take` meant whichever polled first swallowed every
+   window's questions and the others timed out into a refusal nobody saw.
+9. **"Allow once, this session" means that session.** `session_rules` is keyed by conversation, and
+   a session-scoped rule with no conversation to belong to is refused rather than made global.
+   Project rules and trust stay shared, because those are decisions about the repository.
+10. **Off-loopback requires a paired device.** Loopback stays unauthenticated — the `keel approve`
+    hook and the local app depend on it — but any other address demands a bearer token, and Keel
+    refuses to bind beyond 127.0.0.1 at all until something is paired. The check is at the bind,
+    not in the settings UI, so a hand-edited `state.json` cannot open a port either.
+
+## The Mac app and the daemon
+
+The application is Swift (`app/`, SwiftPM, no `.xcodeproj` — same reasoning as the bundle script:
+nothing here needs Xcode's project format, and `xcodebuild` will not run until its licence is
+accepted). It spawns `keel serve` as a child process and talks to it over loopback.
+
+The split is the point. Everything that knows anything — the scanner, the workspace reader, the
+permission model, the approval hook — stays in Rust and stays independently runnable as `keel scan`,
+`keel workspace`, `keel serve`. Swift is the view layer. A rewrite that moved that logic into the
+app would have thrown away the product in order to change the window.
+
+**The centre of a window is the turn, not the chat.** Files changed, commands run with their output,
+the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already
+existed; it was scattered across four panels. `make check` runs both halves (`cargo test` and
+`swift test`), and the Swift side includes budgets that can fail: no `claude` left running at rest,
+no more than one daemon from the app, a bundle under 40 MB, and — the one that matters — a real
+launch-and-quit cycle proving **the daemon dies with the app**.
+
+That last one is why `keel serve` takes `--exit-with-parent`. macOS has no `PR_SET_PDEATHSIG`, and
+`applicationWillTerminate` runs on a ⌘Q and on nothing else: SIGTERM, a force quit and a crash all
+skip it, and the daemon then reparents to init and keeps serving. The daemon polls `getppid()`
+instead. The first version of the budget only counted processes *at rest*, passed happily while
+every quit orphaned a daemon, and is the reason the test now launches the bundle: a budget that
+cannot fail reads as proof and is worse than no budget.
+
+The terminal is **SwiftTerm**, not a renderer of our own. Orca built its own and 678 of its issues
+mention the terminal — garbled output, IME breakage in Korean and Chinese, escape sequences leaking
+into the shell. The daemon's PTY framing is easy to get wrong in one specific way: **a text frame
+is the tab title, not output** (`term.rs:82-83`). Treating text frames as output prints the word
+`zsh` into the shell.
+
+### The web UI is gone
+
+`ui/` is deleted — the 6,600-line page, the 14 MB of vendored Monaco, and the `xterm` bundle. With
+it went `rust-embed`, the `/` and `/vendor/*` routes, and the three handlers that existed only to
+feed an editor: `api_file`, `api_original`, `api_save`, plus `read_file`, `read_original` and
+`write_file` behind them. The six `ui_tests` went too; every one of them read `ui/index.html`.
+
+It was deleted only once the Swift app could do what it did. What is deliberately *not* carried
+over: file editing (there is no editor), and `/api/browse` and `/api/open-url`, which `NSOpenPanel`
+and `NSWorkspace` do better natively.
+
+## Design turns
+
+Click an element in the preview and the turn that follows carries a **pixel column**: the same rect
+photographed before and after, with a verdict.
+
+Picking elements is table stakes — Cursor ships it, and sends the agent xpath, computed styles and
+fiber props. What none of them do is *check*. The cited failure everywhere is the same: the agent
+guesses which source produced the element, and when it guesses wrong it edits nothing that matters
+or forks a copy of the component. A green diff looks identical in both cases.
+
+So two things are different here, and both are the same idea Keel applies to the gate:
+
+- **The source candidates are on screen before the agent runs**, ranked, with their kind. React 19
+  removed `_debugSource`, so the `data-inspector-*` attributes and the owning component name are
+  the common path rather than the exception, and a ranked guess is honest where a silent one is not.
+- **The pixels are re-photographed afterwards.** Identical before and after means the edit went to
+  the wrong file, and Keel says so instead of letting the diff imply success. A new component file
+  when the hinted source was never touched is flagged as a likely fork.
+
+The mechanism is a `WKUserScript` with `forMainFrameOnly: false`, which crosses into the dev
+server's frame regardless of origin. A page script cannot do that; a host-installed one does not
+have to. This is the one feature that got *cheaper* by going native — the same thing needed a proxy
+in a browser shell, and a proxy breaks HMR.
 
 ## The one hook Keel ships
 
@@ -78,6 +161,12 @@ stops rather than substituting.
 - `keel-generator` — golden-path templates and workload placement.
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
+- `app/` — the Swift macOS application. A client of the daemon, and nothing else.
+
+**Gone on purpose:** `gcp.rs` and `infra.rs` (GKE, Kubernetes, GitHub Actions runs). The cluster
+surfaces were read-mostly and belonged to a different product than the one the agent loop is. What
+survived of `infra.rs` is `open_url`, which now lives beside `fsops::reveal` — the other handler
+whose whole job is asking the host to do something Keel deliberately will not.
 
 ## What a new project looks like
 
@@ -111,18 +200,15 @@ way it does not in the frontend; and, from the container version, `@cloudflare/c
 0.3.x rather than the version first written. Each would have shipped a project that fails its own
 first `make check`.
 
-## The editor
+## The editor (gone)
 
-Monaco is vendored in `ui/vendor/vs` (14 MB) and embedded with `rust-embed`. It is the whole build
-on purpose: `editor/editor.main.js` is a 2 KB AMD entry that pulls in `basic-languages/`,
-`language/` and a hashed `editor.api-*.js` chunk, and trimming any of those makes the loader fail
-silently — a blank editor, nothing in the console. That happened once.
+There was a vendored Monaco here — 14 MB, embedded with `rust-embed`, and a long note about why
+`editor/editor.main.js` could not be trimmed. All of it is deleted. Keel does not edit files: it
+shows what the agent changed, as diffs you can comment on, and the comments go back to the agent.
+Editing a file is what the editor you already have is for.
 
-The layout is a Vite build with content-hashed chunk names, not the classic `min/vs` tree, so the
-public API lives in `editor.api-<hash>.js` rather than anywhere predictable. Grep the whole
-directory rather than one file when checking whether an API exists — and do check. This build has
-`getLineChanges` and `revealLineNearTop`; it does not have `getDiffComputationResult`, which newer
-Monaco does.
+The one thing worth keeping from that note: **check before assuming an API exists.** That lesson
+now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 
 ## Conventions
 

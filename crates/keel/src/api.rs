@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use axum::{
+    Json,
     extract::{Query, State},
     response::sse::{Event, Sse},
 };
@@ -134,13 +135,6 @@ pub struct FileQuery {
     pub path: String,
 }
 
-#[derive(Serialize)]
-pub struct FileResponse {
-    pub path: String,
-    pub content: String,
-    pub truncated: bool,
-}
-
 /// Read one file for the editor pane.
 ///
 /// The path is resolved and checked to stay inside the repository. Keel binds to loopback, but a
@@ -196,27 +190,6 @@ pub fn resolve_dir(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, Stri
     }
 }
 
-pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileResponse, String> {
-    const MAX: usize = 400_000;
-
-    let canonical = resolve(root, requested)?;
-
-    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
-    let truncated = bytes.len() > MAX;
-    let slice = if truncated { &bytes[..MAX] } else { &bytes[..] };
-
-    let content = match std::str::from_utf8(slice) {
-        Ok(text) => text.to_string(),
-        Err(_) => return Err("binary file".to_string()),
-    };
-
-    Ok(FileResponse {
-        path: requested.to_string(),
-        content,
-        truncated,
-    })
-}
-
 /// Serve a file's raw bytes, for previewing images and anything else the editor cannot show as text.
 ///
 /// Bounded to the repository like [`read_file`]. Loopback is not a substitute for that check: a
@@ -252,34 +225,6 @@ pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static s
         _ => "application/octet-stream",
     };
     Ok((bytes, mime))
-}
-
-/// The committed version of a file, for the diff editor.
-///
-/// Returning the baseline text and letting the editor compute the diff beats shipping pre-parsed
-/// hunks: the editor's diff algorithm handles word-level highlighting, navigation and side-by-side
-/// layout that a hand-rolled hunk renderer would have to reimplement badly.
-pub fn read_original(root: &Utf8Path, requested: &str) -> Result<FileResponse, String> {
-    let out = std::process::Command::new("git")
-        .current_dir(root)
-        .arg("show")
-        .arg(format!("HEAD:{requested}"))
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-
-    // A file that is not in HEAD is new. An empty baseline is the honest answer — the whole file
-    // then renders as added, which is exactly what happened.
-    let content = if out.status.success() {
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    } else {
-        String::new()
-    };
-
-    Ok(FileResponse {
-        path: requested.to_string(),
-        content,
-        truncated: false,
-    })
 }
 
 #[derive(Deserialize)]
@@ -375,6 +320,17 @@ fn system_prompt(repo: &Utf8Path) -> String {
          button to allow it. That is the loop working, not a failure. Say plainly what you needed \
          and stop. Do not reach for a different command that happens to be permitted — a \
          substitute they did not approve is worse than a request they can answer in one click.\n\n\
+         ## Configuring the workspace\n\n\
+         Anything the person could set up from a terminal you can set up from here. A subagent is \
+         a Markdown file with YAML frontmatter in `.claude/agents/` — write one directly, and make \
+         its `description` say *when* to delegate to it, since that is the only part the main \
+         agent reads. Skills are `.claude/skills/<name>/SKILL.md`, slash commands \
+         `.claude/commands/`. MCP servers go through `claude mcp add --scope local` and \
+         `claude mcp list|remove`, never by editing `.mcp.json` — Keel quarantines that file as \
+         repository content, so a server written there is one the person then has to un-quarantine \
+         by hand. Do not write `.claude/settings.json` or a hook: a hook is a shell command that \
+         runs for whoever opens this repository next, which is why Keel quarantines it and the \
+         scanner rates it Critical.\n\n\
          ## Scope\n\n\
          Do the thing that was asked. If you notice something else wrong, say so in a sentence \
          and carry on; do not fix it uninvited. Read the repository rather than asking about it — \
@@ -447,6 +403,24 @@ mod prompt_tests {
     /// around the gap or gives up — neither of which is installing it, which it will not think to
     /// do if it does not know there is a package manager. Reported from a fresh machine as "the
     /// chat failed to install bun".
+    /// Reported as "the chat cannot create a subagent": it can — it is a file write — but nothing
+    /// told it where the file goes or that configuring the workspace was its business at all.
+    #[test]
+    fn the_prompt_says_the_workspace_is_configurable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let prompt = system_prompt(&root);
+
+        assert!(prompt.contains(".claude/agents/"), "where a subagent goes");
+        assert!(
+            prompt.contains("claude mcp add"),
+            "how an MCP server is added"
+        );
+        // The two paths it must not write: one is quarantined, the other is code execution.
+        assert!(prompt.contains(".mcp.json"));
+        assert!(prompt.contains(".claude/settings.json"));
+    }
+
     #[test]
     fn the_prompt_says_what_is_installed() {
         let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -499,6 +473,93 @@ mod prompt_tests {
     }
 }
 
+/// Reduce a name from a pasteboard to something that can only be a file in one directory.
+///
+/// Basename only, a conservative character set, no leading or trailing dots, and never empty. The
+/// dot trimming is what stops `..` and `....//....//x` surviving as traversal once the separators
+/// are gone.
+fn sanitise_attachment_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mapped: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed: String = mapped.trim_matches('.').chars().take(80).collect();
+    if trimmed.is_empty() {
+        "attachment".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// Take a file the person pasted or dropped, and put it where the agent can read it.
+///
+/// Written to disk and referenced as `@path` rather than sent as an image block. Two reasons, and
+/// the second is the real one:
+///
+/// - `claude` is spawned as `-p <prompt>` with no stdin. Real image blocks would mean
+///   `--input-format stream-json` and rewriting the whole spawn; the Read tool already returns PNG
+///   and JPEG as visual content, so a path is enough.
+/// - The prompt travels as a **GET query parameter** and then as an **argv value**. A large paste
+///   therefore has to survive a URL length limit and then macOS's ~256 KB `ARG_MAX`, and it does
+///   not. A file dodges both, which is why long text comes through here too rather than inline.
+pub async fn attach(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<AttachQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<Attached>, (axum::http::StatusCode, String)> {
+    let bad = |m: String| (axum::http::StatusCode::BAD_REQUEST, m);
+
+    // The name comes from a browser or a pasteboard and is never trusted as a path. Only a
+    // basename, only these characters, and never `..` — a `name` of `../../evil.sh` must land in
+    // the attachments directory or nowhere.
+    let safe = sanitise_attachment_name(&q.name);
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+
+    let dir = state.repo().join(".keel").join("attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
+
+    // A `.gitignore` inside the directory keeps attachments out of `git status` — and so out of the
+    // Changes panel — without editing the repository's own `.gitignore`, which is the user's file
+    // and not Keel's to rewrite.
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(&ignore, "*\n");
+    }
+
+    let name = format!("{stamp}-{safe}");
+    let path = dir.join(&name);
+    let bytes = body.len();
+    std::fs::write(&path, &body).map_err(|e| bad(e.to_string()))?;
+
+    Ok(Json(Attached {
+        path: format!(".keel/attachments/{name}"),
+        bytes,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AttachQuery {
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct Attached {
+    /// Repo-relative, because that is the form `@path` mentions take.
+    pub path: String,
+    pub bytes: usize,
+}
+
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ChatQuery>,
@@ -525,7 +586,11 @@ pub async fn chat(
             // acceptEdits covers file writes but not arbitrary shell, and headless has nobody to
             // ask. These are the rules the user approved in the IDE.
             .arg("--settings")
-            .arg(crate::permissions::settings_json(&repo, port))
+            .arg(crate::permissions::settings_json(
+                &repo,
+                port,
+                query.session.as_deref(),
+            ))
             .arg("--append-system-prompt")
             .arg(system_prompt(&repo))
             // Note what is deliberately *not* in that prompt: an instruction to avoid shell
@@ -610,6 +675,75 @@ fn git(root: &Utf8Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Run git and keep what it said when it fails.
+///
+/// [`git`] drops stderr, which is right for a status read and wrong for an action: "could not
+/// discard" with no reason is the kind of message people screenshot and send to you.
+fn git_run(root: &Utf8Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let why = String::from_utf8_lossy(&out.stderr);
+    let why = why.trim();
+    Err(if why.is_empty() {
+        "git refused, without saying why".into()
+    } else {
+        why.to_string()
+    })
+}
+
+/// Whether git is tracking this path. An untracked file has no version to be restored to.
+fn tracked(root: &Utf8Path, path: &str) -> bool {
+    git_run(root, &["ls-files", "--error-unmatch", "--", path]).is_ok()
+}
+
+/// Stage, unstage, or throw away one file's changes.
+///
+/// Discarding is the one that matters — reviewing a diff and deciding against it is most of what
+/// the Changes panel is for, and doing it in the terminal means retyping a path you are already
+/// looking at. It is also the only one that destroys anything, so an untracked file goes to the
+/// Trash rather than being deleted: git has no copy of it, and "discard" should not mean "gone".
+/// Turn a directory into a git repository.
+///
+/// Offered where the absence is noticed rather than reported as an error: a new project is not a
+/// broken one, and "not a git repository" is a thing to fix in a click, not a thing to be told.
+///
+/// Only `git init`. No first commit, no author config, no `.gitignore` guessed from the language —
+/// each of those is a decision that belongs to whoever owns the project, and doing them silently
+/// is how a tool ends up in someone's history with an opinion they never had.
+pub fn git_init(root: &Utf8Path) -> Result<(), String> {
+    if root.join(".git").exists() {
+        return Err("This is already a git repository.".into());
+    }
+    git_run(root, &["init"]).map(|_| ())
+}
+
+pub fn git_act(root: &Utf8Path, action: &str, path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("no file".into());
+    }
+    // Resolved against the repository, so a path cannot climb out of it.
+    let target = resolve(root, path)?;
+
+    match action {
+        "stage" => git_run(root, &["add", "--", path]).map(|_| ()),
+        "unstage" => git_run(root, &["restore", "--staged", "--", path]).map(|_| ()),
+        "discard" => {
+            if tracked(root, path) {
+                git_run(root, &["restore", "--staged", "--worktree", "--", path]).map(|_| ())
+            } else {
+                crate::fsops::trash(target.as_std_path())
+            }
+        }
+        _ => Err(format!("unknown action: {action}")),
+    }
+}
+
 /// Uncommitted changes, which after an agent run is the answer to "what did it just do".
 pub fn git_status(root: &Utf8Path) -> GitStatus {
     // `-uall` rather than the default. Without it git collapses an untracked directory to a single
@@ -648,6 +782,55 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
         is_repo: true,
         branch,
         changes,
+    }
+}
+
+#[cfg(test)]
+mod attach_tests {
+    /// The name comes from a pasteboard or a browser, so it is a string and not a path.
+    ///
+    /// Everything that could climb out of the attachments directory has to end up inside it or
+    /// nowhere. Asserted on the sanitiser rather than through the handler because the property is
+    /// about the name, and a test that needs an HTTP server to check a string is a test people
+    /// stop running.
+    #[test]
+    fn a_pasted_name_cannot_escape_the_attachments_directory() {
+        for hostile in [
+            "../../evil.sh",
+            "/etc/passwd",
+            "..\\..\\windows",
+            "....//....//x",
+            "",
+            ".",
+            "..",
+        ] {
+            let safe = super::sanitise_attachment_name(hostile);
+            assert!(
+                !safe.contains('/'),
+                "{hostile:?} kept a separator: {safe:?}"
+            );
+            assert!(
+                !safe.contains('\\'),
+                "{hostile:?} kept a separator: {safe:?}"
+            );
+            assert!(
+                !safe.contains(".."),
+                "{hostile:?} kept a traversal: {safe:?}"
+            );
+            assert!(!safe.is_empty(), "{hostile:?} sanitised to nothing");
+        }
+    }
+
+    /// An ordinary name survives recognisably. A sanitiser that turns `shot.png` into `--------`
+    /// is safe and useless.
+    #[test]
+    fn an_ordinary_name_is_left_alone() {
+        assert_eq!(super::sanitise_attachment_name("shot.png"), "shot.png");
+        assert_eq!(
+            super::sanitise_attachment_name("paste-4213-chars.txt"),
+            "paste-4213-chars.txt"
+        );
+        assert_eq!(super::sanitise_attachment_name("a b.png"), "a-b.png");
     }
 }
 
@@ -695,6 +878,56 @@ mod git_tests {
                 "{path} has no basename, so its row would render blank"
             );
         }
+    }
+
+    /// Discard is the only panel action that destroys anything, so it is the one worth a test:
+    /// the file has to come back exactly as it was committed, and staging has to be reversible.
+    #[test]
+    fn a_file_can_be_staged_unstaged_and_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "committed\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+
+        std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+        let staged = |root: &Utf8Path| {
+            git_status(root)
+                .changes
+                .iter()
+                .find(|c| c.path == "a.txt")
+                .map(|c| c.staged)
+        };
+        assert_eq!(staged(&root), Some(false), "an edit starts unstaged");
+
+        git_act(&root, "stage", "a.txt").expect("stage");
+        assert_eq!(staged(&root), Some(true));
+        git_act(&root, "unstage", "a.txt").expect("unstage");
+        assert_eq!(staged(&root), Some(false));
+
+        git_act(&root, "discard", "a.txt").expect("discard");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "committed\n"
+        );
+        assert!(
+            git_status(&root).changes.is_empty(),
+            "the working tree is clean again"
+        );
+
+        // A path that is not in the repository never reaches git.
+        assert!(git_act(&root, "discard", "../../etc/hosts").is_err());
+        assert!(git_act(&root, "nonsense", "a.txt").is_err());
     }
 }
 
@@ -810,32 +1043,4 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
         hunks,
         untracked,
     }
-}
-
-#[derive(Deserialize)]
-pub struct SaveRequest {
-    pub path: String,
-    pub content: String,
-}
-
-/// Write a file from the editor, bounded to the repository like [`read_file`].
-pub fn write_file(root: &Utf8Path, req: &SaveRequest) -> Result<(), String> {
-    // An existing file resolves directly; a new one is checked by its parent, since the file itself
-    // cannot be canonicalised until it exists.
-    let target = match resolve(root, &req.path) {
-        Ok(p) => p,
-        Err(_) => {
-            let joined = root.join(&req.path);
-            let parent = joined.parent().ok_or("invalid path")?;
-            let parent = parent
-                .canonicalize_utf8()
-                .map_err(|_| "no such directory".to_string())?;
-            if !roots(root).iter().any(|r| parent.starts_with(r)) {
-                return Err("path is outside the repository and your Claude config".to_string());
-            }
-            parent.join(joined.file_name().ok_or("invalid path")?)
-        }
-    };
-
-    std::fs::write(&target, &req.content).map_err(|e| e.to_string())
 }
