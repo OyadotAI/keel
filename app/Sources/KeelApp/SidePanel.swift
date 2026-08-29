@@ -260,6 +260,21 @@ struct ReadinessPanel: View {
                 Text(Self.ago(last)).font(K.F.micro).foregroundStyle(K.C.faint)
             }
         }
+        // Where the background review is: running, or ready to open.
+        if let lane = model.reviewLane, lane !== model {
+            HStack(spacing: K.S.xs) {
+                if lane.running {
+                    ProgressView().controlSize(.mini)
+                    Text("Reviewing in the background…").font(K.F.micro).foregroundStyle(K.C.faint)
+                } else if !(lane.turns.last?.text.isEmpty ?? true) {
+                    Image(systemName: "doc.text").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                    Button("Open the review") { model.openReview() }
+                        .buttonStyle(.plain).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.accent)
+                    Text("· opens as a tab").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                Spacer()
+            }
+        }
     }
 
     // MARK: Phases: a heading with a count; open one to see its findings, click one to fix it.

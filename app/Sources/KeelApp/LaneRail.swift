@@ -19,7 +19,7 @@ struct LaneTabs: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(lanes.lanes) { lane in
+                    ForEach(lanes.lanes.filter { !$0.hidden }) { lane in
                         LaneRow(lane: lane, lanes: lanes)
                     }
                 }

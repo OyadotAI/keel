@@ -198,6 +198,7 @@ final class Lanes {
         m.lanes = self
         m.adopt(project: current)
         m.title = "Staff review"
+        m.hidden = true
         lanes.append(m)
         activeID = keep
         Telemetry.track("lane_created", ["isolated": false, "resumed": false, "review": true])
