@@ -360,6 +360,19 @@ fn system_prompt(repo: &Utf8Path) -> String {
         );
     }
 
+    // The contract: written by the review, corrected by the team, enforced from then on. It
+    // is a subagent so the person can invoke it, and it is named here so every turn reads it.
+    if repo.join(".claude/agents/contract.md").exists() {
+        out.push_str(
+            "\n## The contract\n\n`.claude/agents/contract.md` is this repository's engineering \
+             contract: the invariants, the rules and the plan, first written by the staff-engineer \
+             review and since corrected by the team. It outranks your defaults. Read it before \
+             changing anything. When the person corrects a rule in conversation, update the \
+             contract's own section so the file stays the agreement — never the review section \
+             below it, which is history.\n",
+        );
+    }
+
     // The scan is Keel's own reading of this repository, and it is on screen next to the
     // conversation. An agent that has to rediscover "there are no tests" wastes a turn on
     // something the person is already looking at.
