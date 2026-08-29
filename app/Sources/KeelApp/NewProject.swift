@@ -175,56 +175,31 @@ struct StartProject: View {
 
                 if !template.components.isEmpty {
                     section("Architecture", "square.stack.3d.up")
-                    VStack(spacing: 0) {
-                        ForEach(Array(template.components.enumerated()), id: \.offset) { i, c in
-                            HStack(alignment: .top, spacing: K.S.sm) {
-                                Text(c.name).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                                    .frame(width: 118, alignment: .leading)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(c.role).font(K.F.small).foregroundStyle(K.C.dim)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Text(c.tech).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                                }
-                            }
-                            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)
-                            if i < template.components.count - 1 { Hairline() }
-                        }
-                    }
-                    .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+                    ArchitectureDiagram(template: template)
                 }
-
                 if !template.flow.isEmpty {
-                    section("How a request moves", "arrow.right")
-                    VStack(alignment: .leading, spacing: K.S.xs) {
-                        ForEach(Array(template.flow.enumerated()), id: \.offset) { i, step in
-                            HStack(alignment: .top, spacing: K.S.sm) {
-                                Text("\(i + 1)").font(K.F.mono(10, .semibold)).foregroundStyle(K.C.accent).frame(width: 14, alignment: .trailing)
-                                Text(step).font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
+                    section("Request path", "arrow.right")
+                    FlowStrip(steps: template.flow)
                 }
-
                 if !template.practices.isEmpty {
                     section("Built in", "checkmark.shield")
-                    VStack(alignment: .leading, spacing: K.S.xs) {
-                        ForEach(template.practices, id: \.self) { p in
-                            HStack(alignment: .top, spacing: K.S.sm) {
-                                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(K.C.add).frame(width: 14)
-                                Text(p).font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
+                    PracticePills(practices: template.practices)
                 }
 
                 section("You get", "shippingbox")
-                Text(template.scaffold == "empty"
-                     ? "CLAUDE.md, a gate, and three reviewer agents (review, security, reliability). No application code."
-                     : stack == "stack"
-                        ? "frontend/ (Next.js standalone image) · backend/ (Hono on Node image) · docker-compose with Postgres, Redis and nginx · k8s/base + dev/prod kustomize overlays · env-to-secrets · CI to ghcr and a cluster · CLAUDE.md with this architecture · reviewer, security and reliability agents"
-                        : "frontend/ (Next.js on Workers) · backend/ (Hono on Workers, service binding) · infra/ deploy script with dev/prod · CLAUDE.md with this architecture · reviewer, security and reliability agents")
-                    .font(K.F.small).foregroundStyle(K.C.dim).fixedSize(horizontal: false, vertical: true)
+                Flow(spacing: K.S.xs) {
+                    ForEach(template.scaffold == "empty"
+                            ? ["CLAUDE.md", "gate", "3 reviewer agents"]
+                            : stack == "stack"
+                                ? ["Next.js image", "Hono image", "compose: Postgres · Redis · nginx", "k8s base + dev/prod", "env → secrets", "CI → ghcr → cluster", "CLAUDE.md + architecture", "3 reviewer agents"]
+                                : ["Next.js on Workers", "Hono on Workers", "service binding", "infra/deploy dev/prod", "CLAUDE.md + architecture", "3 reviewer agents"],
+                            id: \.self) { item in
+                        Text(item).font(K.F.small).foregroundStyle(K.C.dim)
+                            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
+                            .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
+                            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                    }
+                }
 
                 if let wants = template.wants {
                     HStack(spacing: K.S.sm) {
