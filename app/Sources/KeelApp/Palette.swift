@@ -45,6 +45,9 @@ struct Palette: View {
                  shortcut: "⌘⇧T") {
                 NotificationCenter.default.post(name: .keelTrust, object: nil)
             },
+            Item(title: "Project setup", detail: "what this project still needs, with the fixes") {
+                model.sheet = .setup
+            },
             Item(title: "Settings", detail: "tools, permissions, devices", shortcut: "⌘,") {
                 NotificationCenter.default.post(name: .keelSettings, object: nil)
             },

@@ -143,12 +143,20 @@ struct SessionWindow: View {
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal,
             paletteOpen: $paletteOpen, starting: $starting, panel: $panel))
         .sheet(isPresented: $starting) {
-            StartProject(client: model.client) { path in
+            StartProject(client: model.client) { path, brief, file in
                 starting = false
                 Task {
                     try? await model.openProject(path)
                     Recents.remember(path)
                     await lanes.refreshShared()
+                    // A template's brief goes into the box, its file onto the strip, and the
+                    // first turn starts — "new project" ends with the agent working.
+                    if let file { model.attach(fileURL: file) }
+                    if !brief.isEmpty {
+                        model.prompt = brief
+                        try? await Task.sleep(for: .milliseconds(file == nil ? 100 : 1200))
+                        model.send()
+                    }
                 }
             }
         }

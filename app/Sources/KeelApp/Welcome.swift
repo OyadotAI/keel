@@ -61,9 +61,17 @@ struct Welcome: View {
         .background(K.C.bg)
         .task { await refresh() }
         .sheet(isPresented: $starting) {
-            StartProject(client: model.client) { path in
+            StartProject(client: model.client) { path, brief, file in
                 starting = false
                 open(path)
+                if let file { model.attach(fileURL: file) }
+                if !brief.isEmpty {
+                    model.prompt = brief
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(file == nil ? 800 : 1800))
+                        model.send()
+                    }
+                }
             }
         }
     }

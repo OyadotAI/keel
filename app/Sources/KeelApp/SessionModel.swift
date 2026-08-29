@@ -297,10 +297,21 @@ final class SessionModel: Identifiable {
     /// from a row: a `.sheet` on a row inside a lazy stack loses its anchor when the row is
     /// recycled, and a sheet with no anchor is a crash on the way out of it.
     enum Sheet: String, Identifiable {
-        case pr, skills, subagent, mcp
+        case pr, skills, subagent, mcp, setup
         var id: String { rawValue }
     }
     var sheet: Sheet?
+
+    /// Offer the setup checklist once per project, the first time it is opened with something
+    /// missing. Reachable any time from ⌘K.
+    func offerSetup() {
+        guard !repoPath.isEmpty, loaded else { return }
+        let key = "keel.setupSeen." + repoPath
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let needs = !SetupSheet.items(for: self) {}.isEmpty
+        UserDefaults.standard.set(true, forKey: key)
+        if needs { sheet = .setup }
+    }
 
     /// What the right pane is inspecting, when it is not showing a turn or the preview.
     ///
