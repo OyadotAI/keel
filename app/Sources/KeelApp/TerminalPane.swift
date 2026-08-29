@@ -13,6 +13,10 @@ struct TerminalPane: NSViewRepresentable {
     /// The lane's checkout to open the shell in, if it has one.
     var worktree: String? = nil
     @Binding var title: String
+    /// A command to type once the shell is up — from a "Run in Terminal" button. Consumed
+    /// here, not delivered by notification: a notification sent before this pane existed
+    /// had no listener, and the command was lost.
+    @Binding var command: String?
 
     func makeCoordinator() -> Coordinator { Coordinator(port: port, worktree: worktree, title: $title) }
 
@@ -23,7 +27,12 @@ struct TerminalPane: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: TerminalView, context: Context) {}
+    func updateNSView(_ view: TerminalView, context: Context) {
+        if let cmd = command {
+            context.coordinator.queue(cmd)
+            Task { @MainActor in command = nil }
+        }
+    }
 
     @MainActor
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
@@ -45,17 +54,15 @@ struct TerminalPane: NSViewRepresentable {
             socket?.send(.data(Data((command + "\n").utf8))) { _ in }
         }
 
+        private var pending: [String] = []
+        private var connected = false
+        /// Type now if the shell has spoken; otherwise as soon as it does.
+        func queue(_ command: String) {
+            if connected { type(command) } else { pending.append(command) }
+        }
+
         func attach(_ view: TerminalView) {
             self.view = view
-            NotificationCenter.default.addObserver(forName: .keelRunInTerminal, object: nil,
-                                                   queue: .main) { [weak self] note in
-                guard let cmd = note.object as? String else { return }
-                // The pane may have just been opened for this; give the socket a moment.
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(self?.socket == nil ? 600 : 50))
-                    self?.type(cmd)
-                }
-            }
             let url = URL(string: "ws://127.0.0.1:\(port)/api/term/ws"
                           + (worktree.map { "?wt=" + $0 } ?? ""))!
             let task = URLSession.shared.webSocketTask(with: url)
@@ -71,6 +78,12 @@ struct TerminalPane: NSViewRepresentable {
                     switch result {
                     case .success(.data(let d)):
                         self.view?.feed(byteArray: ArraySlice(d))
+                        // The first bytes are the prompt: the shell is there to be typed at.
+                        if !self.connected {
+                            self.connected = true
+                            for cmd in self.pending { self.type(cmd) }
+                            self.pending.removeAll()
+                        }
                     case .success(.string(let s)):
                         // A text frame is the tab title, never output.
                         self.title = s

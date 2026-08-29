@@ -14,6 +14,7 @@ struct SessionWindow: View {
     @State private var stage: Stage = .turn
     @State private var showTerminal = false
     @State private var terminalTitle = "shell"
+    @State private var terminalCommand: String?
     @State private var paletteOpen = false
     @State private var starting = false
     @State private var showSettings = false
@@ -155,7 +156,7 @@ struct SessionWindow: View {
         .navigationSubtitle(subtitle)
         .modifier(WindowEvents(
             lanes: lanes, model: model,
-            stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal,
+            stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
             paletteOpen: $paletteOpen, starting: $starting, panel: $panel))
         .sheet(isPresented: $starting) {
             StartProject(client: model.client) { path, brief, file in
@@ -265,7 +266,7 @@ struct SessionWindow: View {
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             .background(K.C.surface)
-            TerminalPane(port: model.port, worktree: model.worktree, title: $terminalTitle)
+            TerminalPane(port: model.port, worktree: model.worktree, title: $terminalTitle, command: $terminalCommand)
                 .id(model.id)
         }
         .frame(minHeight: 140, idealHeight: 220)
@@ -657,6 +658,7 @@ struct WindowEvents: ViewModifier {
     @Binding var stage: SessionWindow.Stage
     @Binding var showSettings: Bool
     @Binding var showTerminal: Bool
+    @Binding var terminalCommand: String?
     @Binding var paletteOpen: Bool
     @Binding var starting: Bool
     @Binding var panel: SessionWindow.Panel?
@@ -686,9 +688,11 @@ struct WindowEvents: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
                 starting = true
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelRunInTerminal)) { _ in
-                // The terminal types it once it is open; here it only has to be open.
-                withAnimation(K.M.quick) { showTerminal = true; showSettings = false }
+            .onReceive(NotificationCenter.default.publisher(for: .keelRunInTerminal)) { note in
+                // Open the terminal where you are — under Settings too, since that is where
+                // the button lives — and hand it the command; it types it once the shell is up.
+                terminalCommand = note.object as? String
+                withAnimation(K.M.quick) { showTerminal = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelToggleTerminal)) { _ in
                 withAnimation(K.M.quick) { showTerminal.toggle() }
