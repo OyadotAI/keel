@@ -255,4 +255,6 @@ extension Notification.Name {
     /// Object: +1 or −1.
     static let keelNextLane = Notification.Name("keel.nextLane")
     static let keelTogglePanel = Notification.Name("keel.togglePanel")
+    /// Object: the command to type into the terminal, opening it first.
+    static let keelRunInTerminal = Notification.Name("keel.runInTerminal")
 }
