@@ -601,75 +601,82 @@ struct TurnFooter: View {
         }
     }
 
+    /// A strip of labelled cells rather than a line of fragments: the caption says what the
+    /// number is, the value stands alone, and the gate is the one cell with a colour.
     private var row: some View {
-        HStack(spacing: K.S.md) {
-            verdict
+        HStack(spacing: 0) {
+            gateCell
             if let sha = turn.commit {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle").font(.system(size: 10))
-                    Text("committed \(sha)").font(K.F.mono(10))
-                }
-                .foregroundStyle(K.C.add)
-                .help("Keel committed this turn's changes. Undo from the Changes panel.")
+                divider
+                cell("COMMIT", sha, icon: "checkmark.circle", tone: K.C.add,
+                     help: "Keel committed this turn's changes as \(sha). Undo from the Changes panel.")
             }
-            Spacer()
+            Spacer(minLength: K.S.md)
             if let ms = turn.durationMS {
-                Label(duration(ms), systemImage: "clock")
-                    .labelStyle(.titleAndIcon)
-                    .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                cell("TIME", duration(ms), icon: "clock", help: "Wall-clock time for this turn")
+                divider
             }
             if let t = turn.tokens {
-                Text("\(compact(t.input + t.cacheRead + t.cacheWrite)) in · \(compact(t.output)) out"
-                     + (t.cacheRead > 0 ? String(format: " · %.0f%% cached", t.cached * 100) : ""))
-                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
-                    .help("Tokens this turn, as the CLI reported them")
+                let value = "\(compact(t.input + t.cacheRead + t.cacheWrite)) in · \(compact(t.output)) out"
+                cell("TOKENS", value, icon: "arrow.up.arrow.down",
+                     help: "Tokens this turn, as the CLI reported them: \(t.input + t.cacheRead + t.cacheWrite) in, \(t.output) out"
+                           + (t.cacheRead > 0 ? String(format: ", %.0f%% served from cache", t.cached * 100) : ""))
+                if t.cacheRead > 0 {
+                    Text(String(format: "%.0f%% cached", t.cached * 100))
+                        .font(K.F.micro).foregroundStyle(K.C.faint).padding(.leading, K.S.xs)
+                        .padding(.trailing, K.S.sm)
+                }
+                if turn.cost != nil { divider }
             }
             if let c = turn.cost {
-                Text(String(format: "$%.3f", c))
-                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                cell("COST", String(format: "$%.3f", c), icon: "dollarsign.circle", help: "What this turn cost, from the CLI's own figure")
             }
         }
-        .padding(.top, K.S.xs)
+        .padding(.top, K.S.sm)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(K.C.line).frame(width: 1, height: 22).padding(.horizontal, K.S.sm)
+    }
+
+    /// Caption over value. The caption is what made the old line unreadable by its absence.
+    private func cell(_ label: String, _ value: String, icon: String, tone: Color = K.C.text, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(K.C.faint)
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(tone == K.C.text ? K.C.faint : tone)
+                Text(value).font(K.F.mono(11)).monospacedDigit().foregroundStyle(tone).lineLimit(1)
+            }
+        }
+        .help(help)
     }
 
     @ViewBuilder
-    private var verdict: some View {
+    private var gateCell: some View {
         switch turn.gate {
         case .notRun:
-            if !turn.finished {
-                EmptyView()
-            } else if turn.replayed || !turn.didWork {
-                // Nothing true to say: Keel was not watching when a replayed turn ran, and a turn
-                // that changed nothing has no claim for a gate to check.
-                EmptyView()
-            } else {
-                Pill(text: "NO CHECKS", tone: .neutral)
+            if turn.finished, !turn.replayed, turn.didWork {
+                cell("GATE", "no checks ran", icon: "minus.circle", help: "This turn changed files but nothing was checked afterwards.")
             }
         case .running(let cmd):
-            HStack(spacing: 5) {
-                Pill(text: "CHECKING", tone: .accent)
-                Text(cmd).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-            }
+            cell("GATE", "checking · \(short(cmd))", icon: "circle.dotted", tone: K.C.accent, help: "Running \(cmd)")
         case .passed(let cmd, let t):
-            HStack(spacing: 5) {
-                Pill(text: "GATE PASSED", tone: .good)
-                Text(cmd).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                Text(String(format: "%.1fs", t)).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-            }
+            cell("GATE", String(format: "passed · %@ · %.1fs", short(cmd), t), icon: "checkmark.seal.fill", tone: K.C.add,
+                 help: "\(cmd) passed in \(String(format: "%.1f", t))s")
         case .failed(let cmd, let problems):
-            HStack(spacing: 5) {
-                Pill(text: "GATE FAILED", tone: .bad)
-                Text(cmd).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                if !problems.isEmpty {
-                    Text("\(problems.count) problem\(problems.count == 1 ? "" : "s")")
-                        .font(K.F.mono(10)).foregroundStyle(K.C.del)
-                }
-            }
+            cell("GATE", "failed · \(short(cmd))" + (problems.isEmpty ? "" : " · \(problems.count) problem\(problems.count == 1 ? "" : "s")"),
+                 icon: "xmark.seal.fill", tone: K.C.del, help: "\(cmd) failed" + (problems.isEmpty ? "" : " with \(problems.count) problems, listed above"))
         case .none:
             // Why there is no gate is a fact about the project, not about this turn, and the
             // status bar says it once. Repeating it under every turn was most of the noise.
-            Pill(text: "NO GATE", tone: .neutral)
+            cell("GATE", "none set", icon: "minus.circle", help: "No check command is configured for this project. Set one in the status bar.")
         }
+    }
+
+    /// `go test ./... && go vet ./...` → `go test ./…`: the first command, elided.
+    private func short(_ cmd: String) -> String {
+        let first = cmd.split(separator: "&&").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? cmd
+        return first.count > 22 ? String(first.prefix(21)) + "…" : first
     }
 
     private func duration(_ ms: Int) -> String {
