@@ -11,7 +11,8 @@ struct Template: Identifiable, Hashable {
     let id: String
     let category: Category
     let title: String
-    /// Existing products this is the shape of — "like Kong, Envoy Gateway".
+    /// Open-source projects this is the shape of — "like Kong, APISIX". Open source on purpose:
+    /// the person can read the reference, and so can the agent.
     let like: String
     let icon: String
     let blurb: String
@@ -71,6 +72,20 @@ struct Template: Identifiable, Hashable {
         return out
     }
 
+    /// Every template's architecture in one document, for a blank project to learn from.
+    static var patternsDoc: String {
+        var out = "# Patterns\n\nThe architectures Keel's templates are built from. Each names the open-source projects it is the shape of, its components, how a request moves, and the rules that keep it up.\n\n"
+        for c in Category.allCases {
+            let ts = all.filter { $0.category == c && !$0.components.isEmpty }
+            guard !ts.isEmpty else { continue }
+            out += "## \(c.rawValue)\n\n"
+            for t in ts {
+                out += t.architecture.replacingOccurrences(of: "### \(t.title)", with: "### \(t.title)" + (t.like.isEmpty ? "" : " — like \(t.like)")) + "\n"
+            }
+        }
+        return out
+    }
+
     /// The first prompt: the brief, with the architecture attached so the agent builds to it.
     var fullBrief: String {
         guard !brief.isEmpty else { return "" }
@@ -98,7 +113,7 @@ struct Template: Identifiable, Hashable {
 
     static let all: [Template] = [
         // ── backend & workers ─────────────────────────────────────────────────────────────
-        Template(id: "api", category: .backend, title: "REST API service", like: "Stripe's API, Twilio", icon: "point.3.connected.trianglepath.dotted",
+        Template(id: "api", category: .backend, title: "REST API service", like: "PostgREST, Directus", icon: "point.3.connected.trianglepath.dotted",
                  blurb: "A typed HTTP API with keys, limits and generated docs — the service other things call.",
                  scaffold: "app",
                  components: [
@@ -111,7 +126,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Idempotency-Key on every mutating route: stored with the request hash and response for 24h; same key with a different body is 422", "Keyset pagination on (created_at, id), page size capped at 100 — never OFFSET", "429 with RateLimit-* headers from a token bucket per key; bounded body size; unknown fields rejected"]),
                  brief: "Make the backend a standalone API service: resources in the database with migrations and typed Hono routes, API-key auth with keys stored hashed, per-key rate limiting in Redis, request validation with zod, idempotency keys on creates, cursor pagination, an OpenAPI document generated from the routes, and a docs page in the frontend that renders it. Run the gate when done.",
                  wants: nil),
-        Template(id: "jobs", category: .backend, title: "Webhooks & background jobs", like: "Inngest, Sidekiq, Trigger.dev", icon: "arrow.triangle.2.circlepath.circle",
+        Template(id: "jobs", category: .backend, title: "Webhooks & background jobs", like: "Inngest, BullMQ", icon: "arrow.triangle.2.circlepath.circle",
                  blurb: "Inbound events verified and queued; workers that retry with backoff; nothing processed twice, nothing lost.",
                  scaffold: "app",
                  components: [
@@ -125,7 +140,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Transactional outbox: the event row and the enqueue happen in one transaction, so a crash never loses an event", "Exactly-once is at-least-once plus an idempotent consumer: processed event ids recorded in the same transaction as the effect", "Dead-letter after N attempts; DLQ depth > 0 pages; every dead event is replayable from the admin page", "Workers scale on queue depth, separately from the API; bounded queues shed with 503 + Retry-After"]),
                  brief: "Build an event-processing backend: webhook endpoints that verify signatures (Stripe and GitHub as examples) and enqueue to Redis streams, a separate worker Deployment that consumes with idempotency keys in the database, exponential backoff and a dead-letter table, a leader-elected scheduler for cron jobs, and an admin page listing events by state with a replay action. Run the gate when done.",
                  wants: nil),
-        Template(id: "pipeline", category: .backend, title: "Data pipeline", like: "Airflow + dbt, small", icon: "arrow.down.right.and.arrow.up.left",
+        Template(id: "pipeline", category: .backend, title: "Data pipeline", like: "Airflow, dbt", icon: "arrow.down.right.and.arrow.up.left",
                  blurb: "Ingest raw records, transform on a schedule, keep aggregates queryable — with backfill and replay from day one.",
                  scaffold: "app",
                  components: [
@@ -139,7 +154,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Watermarks, not wall-clock now — reruns and late data are normal; the DB clock is the only clock", "Raw is immutable and partitioned by day; retention is dropping a partition, never DELETE", "Transforms are pure functions with tests; aggregates are upserted so any rerun is safe", "IDs are ULID/UUIDv7 so indexes stay ordered under write load"]),
                  brief: "Build a data pipeline: a batched ingest endpoint appending to an events table partitioned by day, a scheduled job with a watermark that transforms new partitions through pure, unit-tested functions and upserts daily aggregates, a backfill command for a date range, a metrics API over the aggregates, and a frontend page with a chart and a table. Seed sample data so it demos. Run the gate when done.",
                  wants: nil),
-        Template(id: "realtime", category: .backend, title: "Realtime service", like: "Ably, Pusher, Liveblocks", icon: "dot.radiowaves.left.and.right",
+        Template(id: "realtime", category: .backend, title: "Realtime service", like: "Centrifugo, Soketi", icon: "dot.radiowaves.left.and.right",
                  blurb: "WebSockets that survive more than one replica: rooms, presence, ordered history.",
                  scaffold: "app",
                  components: [
@@ -154,7 +169,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build a realtime service: a WebSocket endpoint with a room per channel, join tokens minted by an HTTP route from the session, ordered message history in the database with cursor-based resume, Redis pub/sub so rooms work across replicas, presence with TTL heartbeats, backpressure for slow clients, and a frontend page that joins a room and shows messages live. Run the gate when done.",
                  wants: nil),
         // ── full-stack ────────────────────────────────────────────────────────────────────
-        Template(id: "fullstack", category: .fullstack, title: "Full-stack app", like: "a T3 / Vercel starter, deployable", icon: "square.stack.3d.up",
+        Template(id: "fullstack", category: .fullstack, title: "Full-stack app", like: "create-next-app + Hono, deployable", icon: "square.stack.3d.up",
                  blurb: "Next.js in front, Hono behind, Postgres and Redis beside — the scaffold as-is, ready to deploy.",
                  scaffold: "app",
                  components: [
@@ -168,7 +183,7 @@ struct Template: Identifiable, Hashable {
                  practices: with([]),
                  brief: "",
                  wants: nil),
-        Template(id: "auth", category: .fullstack, title: "Auth & users", like: "Clerk, Auth.js", icon: "person.badge.key",
+        Template(id: "auth", category: .fullstack, title: "Auth & users", like: "Auth.js, Lucia, Keycloak", icon: "person.badge.key",
                  blurb: "The account layer done once: magic links, sessions, roles, API tokens — no passwords stored, ever.",
                  scaffold: "app",
                  components: [
@@ -182,7 +197,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Sessions rotate on login and privilege change; logout invalidates server-side; cookies HttpOnly, Secure, SameSite", "Token comparison in constant time; error text never reveals whether an account exists", "Rate limits and lockouts on every auth endpoint", "Every auth event is in an append-only audit table"]),
                  brief: "Build the account layer: users and sessions in the database, email magic-link sign-in with signed single-use tokens stored hashed, HttpOnly session cookies with rotation, roles (owner, admin, member) enforced by middleware on Hono routes, personal API tokens hashed at rest, an audit table for auth events, rate limits on the sign-in endpoint, and account pages. No passwords stored, ever. Run the gate when done.",
                  wants: nil),
-        Template(id: "tenant", category: .fullstack, title: "Multi-tenant SaaS", like: "Slack workspaces, Linear teams", icon: "building.2",
+        Template(id: "tenant", category: .fullstack, title: "Multi-tenant SaaS", like: "Cal.com, Twenty CRM", icon: "building.2",
                  blurb: "Organisations, memberships, and a data layer that cannot forget the tenant.",
                  scaffold: "app",
                  components: [
@@ -196,7 +211,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Row-level scope by construction, tested with a cross-tenant read that must fail", "tenant_id is the partition key on every tenant table — chosen now, not re-sharded later", "Invitations expire; membership changes are audited; billing state is derived from idempotent webhooks, never from the client", "Per-tenant rate limits so one tenant cannot starve the rest (bulkheads)"]),
                  brief: "Build a multi-tenant SaaS: organisations and memberships in the database, a scoped query layer where every tenant-table query requires the org id (with a test that a cross-tenant read fails), invitations that expire, plan limits enforced in middleware, Stripe webhook handling for subscription state, and org settings pages. Run the gate when done.",
                  wants: nil),
-        Template(id: "internal", category: .fullstack, title: "Admin & internal tools", like: "Retool, Airtable views", icon: "tablecells",
+        Template(id: "internal", category: .fullstack, title: "Admin & internal tools", like: "Appsmith, ToolJet", icon: "tablecells",
                  blurb: "Tables, forms, approvals and an audit log — the back office your team actually uses.",
                  scaffold: "app",
                  components: [
@@ -211,7 +226,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build an internal tool: a data table with sorting, filtering, inline editing and CSV export over a database table, schema-driven forms with zod shared between frontend and backend, an approval workflow as an explicit state machine, an audit log written in the same transaction as every change, and roles (admin, editor, viewer). Run the gate when done.",
                  wants: nil),
         // ── agents ────────────────────────────────────────────────────────────────────────
-        Template(id: "agent", category: .agents, title: "AI agent backend", like: "a ChatGPT-style backend", icon: "sparkles",
+        Template(id: "agent", category: .agents, title: "AI agent backend", like: "Open WebUI, LibreChat", icon: "sparkles",
                  blurb: "Streaming model calls with tools, a conversation store, budgets — and a chat UI to exercise it.",
                  scaffold: "app",
                  components: [
@@ -239,7 +254,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Tasks are idempotent and resumable after a worker dies; (run_id, task_id) is the idempotency key for every tool effect", "The judge is a cold context that sees the output and the acceptance criteria, never the worker's reasoning", "Budgets per run and per task; handoffs are bounded — an infinite handoff loop is a stop condition", "A second agent exists only where contexts must be isolated or work is genuinely parallel"]),
                  brief: "Build a multi-agent orchestrator: a planner that turns a goal into a task graph stored in the database, a Redis-backed queue that releases tasks when their dependencies complete, a worker Deployment that runs tasks with scoped tools and budgets, a judge step with a cold context that checks each output against acceptance criteria and triggers re-planning of failed nodes, and a run viewer page showing the graph live. Run the gate when done.",
                  wants: nil),
-        Template(id: "evals", category: .agents, title: "Evaluation harness", like: "Braintrust, promptfoo", icon: "checklist",
+        Template(id: "evals", category: .agents, title: "Evaluation harness", like: "promptfoo, DeepEval", icon: "checklist",
                  blurb: "Datasets, runners, graders and a leaderboard — so a prompt change is a measured change.",
                  scaffold: "app",
                  components: [
@@ -253,7 +268,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Runs are reproducible: config and dataset versions pinned", "Model-judged grading uses a cold context and a fixed rubric", "Cost per run is visible before it finishes"]),
                  brief: "Build an evaluation harness: versioned datasets of cases in the database, a worker that runs a prompt and model configuration over a dataset with a concurrency cap and retries, graders (exact match, rubric, and a cold-context model judge), per-case results with score, cost and latency, and a leaderboard page comparing runs with a per-case drill-down. Run the gate when done.",
                  wants: nil),
-        Template(id: "loop", category: .agents, title: "Loop agent", like: "ReAct, Claude Code's loop", icon: "arrow.trianglehead.2.clockwise.rotate.90",
+        Template(id: "loop", category: .agents, title: "Loop agent", like: "smolagents, OpenHands", icon: "arrow.trianglehead.2.clockwise.rotate.90",
                  blurb: "One agent, one loop: observe → think → act → check, with stop conditions and budgets so it always ends.",
                  scaffold: "app",
                  components: [
@@ -271,7 +286,7 @@ struct Template: Identifiable, Hashable {
                  ] + base,
                  brief: "Build a loop agent: a worker that runs observe→think→act→check with the Claude API and a schema-validated tool registry, stop conditions (goal check, max steps, token budget, wall clock, and a no-progress detector), every step persisted to a trace table before the next runs so a crashed worker resumes, truncation of long tool results with an explicit note to the model, a run API to start/stop/replay, and a page that shows a run live step by step. Run the gate when done.",
                  wants: nil),
-        Template(id: "graph", category: .agents, title: "Graph agent", like: "LangGraph", icon: "point.3.filled.connected.trianglepath.dotted",
+        Template(id: "graph", category: .agents, title: "Graph agent", like: "LangGraph, Mastra", icon: "point.3.filled.connected.trianglepath.dotted",
                  blurb: "A state machine of nodes and edges with checkpoints: pause for a human, resume, replay from any node.",
                  scaffold: "app",
                  components: [
@@ -289,7 +304,7 @@ struct Template: Identifiable, Hashable {
                  ] + base,
                  brief: "Build a graph agent runtime: a typed graph definition (model, tool and code nodes; conditional edges as tested functions; entry and end), a Postgres checkpointer that saves state after every node per thread, a worker executor that runs nodes and evaluates edges, interrupt nodes that park a thread until a person resumes it with input through the API, replay from any checkpoint and branching, and a page showing the graph with the current node lit and the state beside it. Include one example graph with a cycle bounded by a counter. Run the gate when done.",
                  wants: nil),
-        Template(id: "dag", category: .agents, title: "DAG agent", like: "Airflow / Temporal for LLM steps", icon: "arrow.triangle.branch",
+        Template(id: "dag", category: .agents, title: "DAG agent", like: "Airflow, Temporal", icon: "arrow.triangle.branch",
                  blurb: "Deterministic fan-out and fan-in: a DAG of LLM and code steps with per-node retries, caching and cost.",
                  scaffold: "app",
                  components: [
@@ -308,7 +323,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build a DAG agent runtime: a typed DAG definition with node inputs/outputs and dependencies, a worker scheduler that runs ready nodes in parallel up to a concurrency cap, content-hash caching of node outputs, per-node retry policies with backoff and a dead-letter state that fails only descendants, per-node cost and latency recorded, and a page showing the DAG coloured by state with cost per node. Include an example DAG (fetch → summarise ×N → merge → judge). Run the gate when done.",
                  wants: nil),
         // ── control planes ────────────────────────────────────────────────────────────────
-        Template(id: "controlplane", category: .control, title: "Control plane", like: "Kubernetes controllers, Terraform Cloud", icon: "slider.horizontal.3",
+        Template(id: "controlplane", category: .control, title: "Control plane", like: "Kubernetes controllers, Crossplane", icon: "slider.horizontal.3",
                  blurb: "Desired state in, reconciled state out: an API that owns a fleet of things and keeps them right.",
                  scaffold: "app",
                  components: [
@@ -322,7 +337,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Reconcile is idempotent and level-triggered: compare spec to status on a timer and on change; it can run any number of times", "generation on the spec, observedGeneration in the status, resourceVersion on writes — a lost update is a 409, never a silent overwrite", "Changes roll out staged — canary → 10% → all — and halt on error-rate rise", "Static stability: nothing the data plane needs waits on this API being up"]),
                  brief: "Build a control plane: declarative resources with generations and optimistic concurrency in the database, a worker reconciler loop that diffs desired against observed state through provider adapters and requeues failures with backoff, status and event records per resource, and a console page showing resources, status and events. Include one real provider adapter (for example, managing records in a table) and a fake one for tests. Run the gate when done.",
                  wants: nil),
-        Template(id: "dataplane", category: .control, title: "Data plane", like: "Envoy's data plane, the Cloudflare edge", icon: "waveform.path",
+        Template(id: "dataplane", category: .control, title: "Data plane", like: "Envoy, Pingora", icon: "waveform.path",
                  blurb: "The hot path that keeps serving when the control plane is down: config pulled, cached, and applied locally.",
                  scaffold: "app",
                  components: [
@@ -340,7 +355,7 @@ struct Template: Identifiable, Hashable {
                 ] + base,
                  brief: "Build a control-plane/data-plane pair: a data-plane Hono service that serves from a local versioned config snapshot and an in-process LRU with single-flight refresh and never calls the control plane on the request path, a background loop that pulls snapshots by generation from Redis and accepts push notifications, a stale-snapshot gauge, a separate control-plane API that writes desired state with generations, and a test that kills the control plane and proves the data plane keeps serving. Run the gate when done.",
                  wants: nil),
-        Template(id: "flags", category: .control, title: "Feature flags & config", like: "LaunchDarkly, Unleash", icon: "switch.2",
+        Template(id: "flags", category: .control, title: "Feature flags & config", like: "Unleash, Flagsmith, OpenFeature", icon: "switch.2",
                  blurb: "Flags, targeting, and config a fleet reads in microseconds — with an audit trail and a kill switch.",
                  scaffold: "app",
                  components: [
@@ -355,7 +370,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build a feature-flag and config service: flags with rules, segments and percentage rollouts stored versioned in the database with an audit table, a snapshot per environment published through Redis and streamed to clients over SSE, a small TypeScript SDK that evaluates in memory and keeps the last snapshot on disconnect, and a console page to edit, target, roll out and kill. Run the gate when done.",
                  wants: nil),
         // ── proxies & gateways ────────────────────────────────────────────────────────────
-        Template(id: "gateway", category: .proxies, title: "API gateway", like: "Kong, Envoy Gateway", icon: "arrow.left.arrow.right",
+        Template(id: "gateway", category: .proxies, title: "API gateway", like: "Kong, APISIX, Envoy Gateway", icon: "arrow.left.arrow.right",
                  blurb: "One front door: auth, rate limits, routing and observability for services behind it.",
                  scaffold: "app",
                  components: [
@@ -369,7 +384,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Circuit breaker per upstream: open after N failures in a window, half-open probe, fallback — never queue behind a dead one", "Retries only for idempotent methods, under a retry budget (≤ 10% of requests)", "Bulkheads: a concurrency limit per upstream so one slow service cannot take the others", "Route changes are versioned and atomic; the request id and traceparent are forwarded"]),
                  brief: "Build an API gateway: a Hono service that matches requests to a versioned route table (stored in the database, snapshotted to Redis), enforces API-key auth and per-key/per-route rate limits before forwarding, forwards with timeouts, a request id and retries only for idempotent methods, opens a circuit on repeated upstream failures, logs every request with timing, and a console page for routes, keys and live traffic. Run the gate when done.",
                  wants: nil),
-        Template(id: "llmproxy", category: .proxies, title: "LLM proxy (LiteLLM-style)", like: "LiteLLM, OpenRouter", icon: "brain",
+        Template(id: "llmproxy", category: .proxies, title: "LLM proxy (LiteLLM-style)", like: "LiteLLM, Bifrost", icon: "brain",
                  blurb: "One OpenAI-compatible endpoint in front of every provider: routing, fallbacks, spend per key, logs you own.",
                  scaffold: "app",
                  components: [
@@ -383,7 +398,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["Provider keys never leave the proxy; rotation is a config change", "Budgets stop spend before it happens; cost is recorded per request", "Fallbacks are ordered, timed out individually, and observable as events", "Cache hits are served with a header saying so"]),
                  brief: "Build an LLM proxy: an OpenAI-compatible streaming endpoint that routes model names to providers (Anthropic and OpenAI adapters) with ordered fallbacks, exact-match response caching in Redis, per-key budgets with hard stops, request logs with tokens, cost and latency in the database, provider keys only from the environment, and a console page with spend by key and recent requests. Run the gate when done.",
                  wants: nil),
-        Template(id: "aigateway", category: .proxies, title: "AI gateway", like: "Portkey, Cloudflare AI Gateway", icon: "shield.lefthalf.filled",
+        Template(id: "aigateway", category: .proxies, title: "AI gateway", like: "Portkey gateway, Helicone", icon: "shield.lefthalf.filled",
                  blurb: "The policy layer for model traffic: virtual keys, guardrails, semantic cache, A/B routing, full observability.",
                  scaffold: "app",
                  components: [
@@ -401,7 +416,7 @@ struct Template: Identifiable, Hashable {
                  ] + base,
                  brief: "Build an AI gateway: an OpenAI-compatible streaming endpoint keyed by virtual keys whose policy bundle (allowed models, budgets, guardrails, routing experiment) is stored in the database; an input guardrail pipeline (PII redaction, prompt-injection heuristics, topic allowlist) and output filters applied to the stream; a semantic cache using pgvector similarity in front of the providers; a weighted router with A/B assignment by caller hash and ordered fallbacks; every call logged with prompt hash, tokens, cost, latency and guardrail verdicts; and a dashboard page per key. Provider keys only from the environment. Run the gate when done.",
                  wants: nil),
-        Template(id: "mcpgateway", category: .proxies, title: "MCP gateway", like: "an MCP hub / Composio", icon: "cable.connector",
+        Template(id: "mcpgateway", category: .proxies, title: "MCP gateway", like: "mcp-proxy, Metorial", icon: "cable.connector",
                  blurb: "One authenticated MCP endpoint that aggregates tool servers, scopes what each caller sees, and audits every call.",
                  scaffold: "app",
                  components: [
@@ -420,7 +435,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build an MCP gateway: a Hono service speaking MCP to clients (streamable HTTP) that connects to upstream MCP servers from a registry in the database, caches their tool schemas, filters the tool list per caller scope, validates and forwards calls with size caps and timeouts, audits every call (caller, tool, args hash, result size, duration), hides tools of unhealthy upstreams, and a console page for servers, tools, scopes and recent calls. Run the gate when done.",
                  wants: nil),
         // ── ides & harnesses ──────────────────────────────────────────────────────────────
-        Template(id: "harness", category: .harness, title: "Agent harness", like: "Keel, SWE-agent", icon: "terminal",
+        Template(id: "harness", category: .harness, title: "Agent harness", like: "OpenHands, SWE-agent, Keel", icon: "terminal",
                  blurb: "Run coding agents against repositories with the tools you allow, the gate you define, and a record of every call.",
                  scaffold: "app",
                  components: [
@@ -434,7 +449,7 @@ struct Template: Identifiable, Hashable {
                  practices: with(["The agent never gets a shell; every effect is a narrow typed tool with an audit record; secrets are injected per call, never into the context", "Approvals are questions the turn waits on; a question belongs to exactly one run", "A green diff is not done until the project's own gate says so — verification, not self-report", "Evals in CI: a golden task set graded by assertions first, judge second; a regression fails the build"]),
                  brief: "Build an agent harness: a worker that runs a coding agent per task in a checkout with only an MCP tool server (read, edit, run-gate) and no shell, a policy that holds named tool calls for approval, a trace table of every call and result, the repository's own check command run after every turn with its verdict stored, and a review page showing the diff beside the calls, the verdict, and approve/deny buttons. Run the gate when done.",
                  wants: nil),
-        Template(id: "sandbox", category: .harness, title: "Code-runner service", like: "E2B, Modal sandboxes", icon: "cube.transparent",
+        Template(id: "sandbox", category: .harness, title: "Code-runner service", like: "E2B, Firecracker", icon: "cube.transparent",
                  blurb: "Execute untrusted code with limits, isolation and a clean result — the piece every agent product needs.",
                  scaffold: "app",
                  components: [
@@ -449,7 +464,7 @@ struct Template: Identifiable, Hashable {
                  brief: "Build a code-runner service: a Hono run API that queues code with limits, an executor worker that runs each job in an isolated container with CPU, memory and time limits and no network by default, captures stdout, stderr, exit code and timings, stores output files as expiring artifacts, and a playground page. Include a fake executor for tests so the gate needs no Docker. Run the gate when done.",
                  wants: nil),
         // ── agent builders ────────────────────────────────────────────────────────────────
-        Template(id: "builder", category: .builders, title: "Agent builder platform", like: "Oya, Dify, Relevance AI", icon: "wand.and.stars",
+        Template(id: "builder", category: .builders, title: "Agent builder platform", like: "Dify, Flowise, Langflow", icon: "wand.and.stars",
                  blurb: "Define agents from prompts, tools and skills; run them on schedules and channels; see every run.",
                  scaffold: "app",
                  components: [

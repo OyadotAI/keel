@@ -39,6 +39,13 @@ pub struct NewProject {
     /// Markdown appended to the generated CLAUDE.md: the architecture the person chose, so the
     /// agent reads the same plan they did.
     pub notes: Option<String>,
+    /// The whole template catalogue as Markdown, for a blank project: written to
+    /// `docs/PATTERNS.md` and pointed at from CLAUDE.md, so an agent starting from nothing has
+    /// the same architectures to build from that the gallery shows.
+    pub patterns: Option<String>,
+    /// A working feature pack laid over the stack scaffold — real code for the template, so the
+    /// project does something the minute it opens. See `stack::pack`.
+    pub pack: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -104,7 +111,17 @@ pub async fn create(
         Some("stack") => Template::Stack,
         _ => Template::App,
     };
-    for (rel, body) in scaffold(&req.name, template) {
+    let mut files = scaffold(&req.name, template);
+    if template == Template::Stack
+        && let Some(pack) = req.pack.as_deref()
+    {
+        // A pack's file replaces the scaffold's at the same path; everything else is added.
+        for (rel, body) in crate::stack::pack(pack, &req.name) {
+            files.retain(|(p, _)| *p != rel);
+            files.push((rel, body));
+        }
+    }
+    for (rel, body) in files {
         let path = root.join(rel);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| bad(&e.to_string()))?;
@@ -122,6 +139,20 @@ pub async fn create(
                 let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
             }
         }
+    }
+
+    if let Some(patterns) = req.patterns.as_deref().filter(|p| !p.trim().is_empty()) {
+        std::fs::create_dir_all(root.join("docs")).map_err(|e| bad(&e.to_string()))?;
+        std::fs::write(root.join("docs/PATTERNS.md"), patterns).map_err(|e| bad(&e.to_string()))?;
+        let claude = root.join("CLAUDE.md");
+        let mut body = std::fs::read_to_string(&claude).unwrap_or_default();
+        body.push_str(
+            "\n## Patterns\n\n`docs/PATTERNS.md` holds the architectures Keel's templates are built \
+             from — APIs, job systems, agents (loop, graph, DAG), control and data planes, gateways \
+             — each with components, request flow and the rules that keep it up. Before designing a \
+             new component, find the closest pattern there and build to it; say which one you used.\n",
+        );
+        std::fs::write(&claude, body).map_err(|e| bad(&e.to_string()))?;
     }
 
     if let Some(notes) = req.notes.as_deref().filter(|n| !n.trim().is_empty()) {
