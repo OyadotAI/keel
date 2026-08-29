@@ -186,6 +186,19 @@ fn program_of(segment: &str) -> Option<String> {
 /// `bun` and `make`. Deriving one rule from the first token leaves the second half refused and the
 /// approval looking broken, which is a bug this project has already had once.
 pub fn rules_for(tool: &str, input: &serde_json::Value) -> Vec<String> {
+    if is_edit(tool) {
+        // The directory, not the file: approving `/tmp/report.md` and then being asked about
+        // `/tmp/report2.md` is the toll again.
+        let path = input
+            .get("file_path")
+            .and_then(|p| p.as_str())
+            .unwrap_or_default();
+        let dir = std::path::Path::new(path)
+            .parent()
+            .map(|d| d.display().to_string())
+            .unwrap_or_default();
+        return vec![format!("{tool}({dir}/*)")];
+    }
     if tool != "Bash" {
         return vec![tool.to_string()];
     }
@@ -241,6 +254,30 @@ pub fn already_allowed(rules: &[String], allowed: &[String]) -> bool {
         })
 }
 
+pub fn is_edit(tool: &str) -> bool {
+    matches!(tool, "Write" | "Edit" | "MultiEdit" | "NotebookEdit")
+}
+
+/// An edit inside the repository (or one of its lane checkouts) is what `acceptEdits` already
+/// covers; the hook has nothing to ask. Anything else — `/tmp`, the home directory, another
+/// project — is a question.
+pub fn edit_is_inside(repo: &Utf8Path, input: &serde_json::Value) -> bool {
+    let Some(path) = input.get("file_path").and_then(|p| p.as_str()) else {
+        return false;
+    };
+    let path = std::path::Path::new(path);
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    // The file may not exist yet; its nearest existing ancestor decides.
+    let mut probe = path.to_path_buf();
+    while !probe.exists() {
+        let Some(parent) = probe.parent() else {
+            return false;
+        };
+        probe = parent.to_path_buf();
+    }
+    canon(&probe).starts_with(canon(repo.as_std_path()))
+}
+
 /// Ask the person, and wait for them.
 pub async fn ask(
     State(state): State<Arc<AppState>>,
@@ -255,6 +292,13 @@ pub async fn ask(
 
     // One decision, already made. Nothing is queued and nobody is asked.
     if !is_question && crate::permissions::trusted(&repo) {
+        return Ok(Json(Decision {
+            decision: "defer".into(),
+            reason: String::new(),
+        }));
+    }
+
+    if is_edit(&hook.tool_name) && edit_is_inside(&repo, &hook.tool_input) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -315,9 +359,13 @@ pub async fn ask(
 
 #[derive(Deserialize)]
 pub struct PollQuery {
-    /// Only take questions belonging to this conversation. Absent means take everything.
+    /// Only take questions belonging to this conversation. Absent means only the questions
+    /// that belong to no conversation — never another window's.
     #[serde(default)]
     pub session: Option<String>,
+    /// Take everything regardless of session: for a CLI or a debugger, never a window.
+    #[serde(default)]
+    pub all: bool,
 }
 
 /// What the UI is waiting to show. Polled rather than pushed: the chat already holds an SSE stream
@@ -331,14 +379,16 @@ pub struct PollQuery {
 pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
     let mut queue = queue().lock().expect("queue lock");
 
-    let Some(session) = q.session.filter(|s| !s.is_empty()) else {
+    if q.all {
         return Json(std::mem::take(&mut *queue));
-    };
-
-    // Partitioned rather than filtered: what belongs to another window has to stay queued for it.
-    let (mine, theirs): (Vec<Pending>, Vec<Pending>) = queue
-        .drain(..)
-        .partition(|p| p.session_id.is_empty() || p.session_id == session);
+    }
+    // A window on its first turn does not know its session yet, and used to take the whole
+    // queue on the strength of that — including a question meant for a lane that could see it.
+    // It takes only what belongs to nobody; the rest waits for the window that owns it.
+    let session = q.session.filter(|s| !s.is_empty());
+    let (mine, theirs): (Vec<Pending>, Vec<Pending>) = queue.drain(..).partition(|p| {
+        p.session_id.is_empty() || session.as_deref() == Some(p.session_id.as_str())
+    });
     *queue = theirs;
     Json(mine)
 }
@@ -450,6 +500,64 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edits_inside_the_repository_are_not_questions_and_outside_ones_name_the_directory() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let inside = serde_json::json!({ "file_path": repo.join("src/new/file.ts").as_str() });
+        let outside = serde_json::json!({ "file_path": "/tmp/keel-test/report.md" });
+        assert!(edit_is_inside(&repo, &inside));
+        assert!(!edit_is_inside(&repo, &outside));
+        assert_eq!(
+            rules_for("Write", &outside),
+            vec!["Write(/tmp/keel-test/*)"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_without_a_session_never_takes_another_windows_question() {
+        use super::*;
+        let q = queue();
+        q.lock().unwrap().clear();
+        q.lock().unwrap().push(Pending {
+            id: "1".into(),
+            tool: "Bash".into(),
+            command: "ls".into(),
+            rules: vec![],
+            input: serde_json::json!({}),
+            session_id: "s-other".into(),
+        });
+        q.lock().unwrap().push(Pending {
+            id: "2".into(),
+            tool: "Bash".into(),
+            command: "ls".into(),
+            rules: vec![],
+            input: serde_json::json!({}),
+            session_id: String::new(),
+        });
+        let got = poll(Query(PollQuery {
+            session: None,
+            all: false,
+        }))
+        .await;
+        assert_eq!(
+            got.0.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["2"]
+        );
+        let got = poll(Query(PollQuery {
+            session: Some("s-other".into()),
+            all: false,
+        }))
+        .await;
+        assert_eq!(
+            got.0.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["1"]
+        );
+        assert!(q.lock().unwrap().is_empty());
+    }
+
     use super::*;
 
     fn pending(id: &str, session: &str) -> Pending {
@@ -484,6 +592,7 @@ mod tests {
 
         let mine = poll(Query(PollQuery {
             session: Some("session-a".into()),
+            all: false,
         }))
         .await;
         let got: Vec<&str> = mine.0.iter().map(|p| p.id.as_str()).collect();
@@ -495,6 +604,7 @@ mod tests {
 
         let theirs = poll(Query(PollQuery {
             session: Some("session-b".into()),
+            all: false,
         }))
         .await;
         assert_eq!(

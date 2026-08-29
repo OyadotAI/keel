@@ -193,7 +193,10 @@ pub fn effective(repo: &Utf8Path, session: Option<&str>) -> Vec<String> {
 /// `AskUserQuestion` is in the list for a different reason than the others: it is not a permission
 /// but a question, and headless `-p` has nobody to answer it — the CLI waits sixty seconds and
 /// carries on without an answer. Hooking it makes the agent wait for a real one.
-pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion";
+/// Edits are hooked too, but only an edit outside the repository ever becomes a question — the
+/// hook waves the rest through. Headless Claude Code cannot prompt for `/tmp/x`, so without this
+/// the write was refused and the agent worked around it inside the repository instead.
+pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion|Write|Edit|MultiEdit";
 
 /// The `--settings` payload carrying those rules.
 /// The settings Keel hands `claude`: the allowlist, and the hook that makes the agent wait.
