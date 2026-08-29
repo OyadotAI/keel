@@ -246,6 +246,8 @@ pub struct ChatQuery {
     pub system: Option<String>,
     /// The window's own id, so a question asked through `ask_user` lands in its lane.
     pub lane: Option<String>,
+    /// `--model`, when the person chose one; absent means the CLI's own default.
+    pub model: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -577,6 +579,13 @@ pub async fn chat(
 
         if let Some(session) = &query.session {
             command.arg("--resume").arg(session);
+        }
+        if let Some(model) = query.model.as_deref().filter(|m| {
+            !m.is_empty()
+                && m.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        }) {
+            command.arg("--model").arg(model);
         }
 
         let mut child = match command.spawn() {

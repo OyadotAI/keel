@@ -224,6 +224,9 @@ final class CanvasTests: XCTestCase {
     func testAFrontendWriteMovesThePreview() {
         let m = SessionModel(client: Client(port: 0)), t = Turn(prompt: "add pricing")
         m.previewURL = "http://127.0.0.1:3000/"
+        // Following the edit is a choice now, off by default; this test is about what happens
+        // when it is on.
+        m.followEdits = true
         var sent: [String] = []
         m.canvas = { sent.append($0["keel"] as? String ?? "") }
         let tick = m.designTick

@@ -106,19 +106,20 @@ struct ChangesTreeView: View {
                 .padding(.horizontal, K.S.md).padding(.bottom, K.S.sm)
         }
 
-        if model.changes.isEmpty {
-            Text(model.autoCommit ? "Nothing uncommitted — every accepted turn is a commit below."
-                                  : "Nothing uncommitted.")
+        // What the agent changed in this conversation, as a tree. Git's own view — staged,
+        // unstaged, committed — is the Git tab's.
+        let edited = model.editedThisSession
+        if edited.isEmpty {
+            Text(model.turns.isEmpty ? "Nothing yet. Files the agent writes in this conversation appear here."
+                                     : "The agent has not written a file in this conversation.")
                 .font(K.F.small).foregroundStyle(K.C.faint)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
         } else {
-            ForEach(ChangeTree.build(model.changes)) { node in
+            ForEach(ChangeTree.build(edited)) { node in
                 ChangeRow(node: node, depth: 0, model: model)
             }
         }
-
-        CommitList(model: model)
     }
 }
 
@@ -385,7 +386,7 @@ struct PullRequest: View {
     }
 }
 
-private struct ChangeRow: View {
+struct ChangeRow: View {
     let node: ChangeTree.Node
     let depth: Int
     let model: SessionModel

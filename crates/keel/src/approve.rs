@@ -513,7 +513,13 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    /// The queue is a process-wide static, and the tests that touch it run in parallel.
+    pub(crate) async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
     #[test]
     fn edits_inside_the_repository_are_not_questions_and_outside_ones_name_the_directory() {
         use super::*;
@@ -533,6 +539,7 @@ mod tests {
     #[tokio::test]
     async fn a_window_without_a_session_never_takes_another_windows_question() {
         use super::*;
+        let _guard = lock().await;
         let q = queue();
         q.lock().unwrap().clear();
         q.lock().unwrap().push(Pending {
