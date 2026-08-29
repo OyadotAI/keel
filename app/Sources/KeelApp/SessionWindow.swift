@@ -144,7 +144,9 @@ struct SessionWindow: View {
                 terminalPane
             }
             Hairline()
-            StatusBar(model: model, terminalOpen: $showTerminal)
+            StatusBar(model: model, terminalOpen: $showTerminal) {
+                NotificationCenter.default.post(name: .keelTrust, object: nil)
+            }
         }
         .overlay(alignment: .top) { paletteOverlay }
         .toolbar { toolbar }
@@ -466,6 +468,7 @@ struct RailButton: View {
 struct StatusBar: View {
     let model: SessionModel
     @Binding var terminalOpen: Bool
+    var onTrust: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: K.S.md) {
@@ -487,6 +490,18 @@ struct StatusBar: View {
                 }
                 .foregroundStyle(K.C.warn)
                 .help("This project runs commands without asking. Withdraw in Settings › Permissions.")
+            } else if model.projectOpen {
+                // Untrusted is the safe state, but it is also the one where every command
+                // becomes a question — said here so the first refusal is not a surprise, and
+                // one click away from the decision that removes the toll.
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.shield").font(.system(size: 10))
+                    Text("not trusted · commands will ask").font(K.F.micro)
+                }
+                .foregroundStyle(K.C.warn)
+                .contentShape(Rectangle())
+                .asButton { onTrust?() }
+                .help("Commands the agent runs here need your approval each time. Click to trust this project (⌘⇧T).")
             }
 
             if !model.changes.isEmpty {
