@@ -58,6 +58,8 @@ final class SessionModel: Identifiable {
 
     var turns: [Turn] = []
     var running = false
+    /// When the stream last said anything; the working bar reads silence off it.
+    var lastEventAt = Date()
     var prompt = ""
     /// Prompts typed while the agent works. Queued visibly rather than refused.
     var queued: [String] = []
@@ -437,6 +439,7 @@ final class SessionModel: Identifiable {
             }
             do {
                 for try await event in client.events("/api/chat", query) {
+                    lastEventAt = Date()
                     switch event.name {
                     case "msg":
                         if let data = event.data.data(using: .utf8) { self.record(data, into: turn) }
