@@ -288,6 +288,13 @@ final class SessionModel: Identifiable {
     /// The file whose contents are on screen, picked from the file tree.
     var viewingFile: String?
 
+    /// One thing on the stage at a time. The stage picks the first of inspector, commit, file,
+    /// diff that is set, so setting a diff while a file was open showed the file — and the
+    /// click looked dead until the file was closed.
+    func show(diff path: String) { viewingDiff = path; viewingFile = nil; viewingCommit = nil; inspecting = nil }
+    func show(file path: String) { viewingFile = path; viewingDiff = nil; viewingCommit = nil; inspecting = nil }
+    func show(commit c: Wire.Commit) { viewingCommit = c; viewingDiff = nil; viewingFile = nil; inspecting = nil }
+
     /// A file's bytes, for the viewer. Bounded to the repository by the daemon.
     func raw(_ path: String) async -> Data? {
         try? await client.raw("/api/raw", q(["path": path]))
@@ -417,6 +424,7 @@ final class SessionModel: Identifiable {
             }
             var query = sq(["prompt": full, "mode": mode])
             if let sessionId { query["session"] = sessionId }
+            if let system = nextSystem { query["system"] = system; nextSystem = nil }
 
             // Before the agent touches anything: what the tree looked like, so "restore to
             // before this turn" has something to restore to. A failure here is not a reason to
@@ -851,10 +859,21 @@ final class SessionModel: Identifiable {
     var scan: Wire.Scan?
 
     struct Adopted: Decodable { var written: [String]; var skipped: [String] }
-    struct ReviewPrompt: Decodable { var system: String; var prompt: String }
+    struct ReviewPrompt: Decodable { var system: String; var evidence: String; var prompt: String }
+    /// System prompt for the next turn only: a persona and its evidence, consumed by `start`.
+    var nextSystem: String?
 
     /// Write the reviewers and the production checklist into the project (never overwriting),
     /// then rescan so the finding clears.
+    /// A finding's click is the fix, not a draft of it: the one Keel can write itself is
+    /// written; every other goes to the agent now, in a mode that may edit.
+    func fix(_ f: Wire.Finding) async {
+        if f.id == "agent/no-reviewers" { _ = await adoptPractices(); return }
+        mode = "acceptEdits"
+        prompt = "Fix this readiness finding: \(f.title)\n\n\(f.detail)"
+        send()
+    }
+
     func adoptPractices() async -> [String] {
         var written: [String] = []
         await attempt {
@@ -866,14 +885,30 @@ final class SessionModel: Identifiable {
     }
 
     /// Ask for the staff-engineer review: plan mode, so the turn reads and proposes and
-    /// changes nothing; the scan travels as evidence; the persona is part of the prompt.
+    /// changes nothing; the scan travels as evidence; the persona is the system prompt.
     func requestReview() async {
         await attempt {
             let r: ReviewPrompt = try await client.get("/api/review", q())
             mode = "plan"
-            prompt = r.system + "\n\n---\n\n" + r.prompt
+            nextSystem = r.system + r.evidence
+            prompt = r.prompt
             send()
+            UserDefaults.standard.set(Date(), forKey: reviewKey)
+            lastReview = Date()
         }
+    }
+
+    private var reviewKey: String { "keel.lastReview." + repoPath }
+    var lastReview: Date? {
+        get { UserDefaults.standard.object(forKey: reviewKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: reviewKey) }
+    }
+    /// A review a day: when a project opens into a lane with nothing in it and the last review
+    /// is older than a day, it runs on its own. Never into a conversation already in use.
+    func offerReview() {
+        guard !repoPath.isEmpty, loaded, turns.isEmpty, !running else { return }
+        if let last = lastReview, Date().timeIntervalSince(last) < 86_400 { return }
+        Task { await requestReview() }
     }
     struct Empty: Encodable {}
 

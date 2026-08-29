@@ -185,6 +185,12 @@ struct ReadinessPanel: View {
                     .foregroundStyle(score < 60 ? K.C.del : score < 85 ? K.C.warn : K.C.add)
                 Text("/100").font(K.F.micro).foregroundStyle(K.C.faint)
                 Spacer()
+                // The checklist re-runs on every read of the project; this is for the person
+                // who just fixed something and wants to see it gone now.
+                Button { Task { await model.refreshState() } } label: {
+                    Label("Scan again", systemImage: "arrow.clockwise").font(K.F.micro)
+                }
+                .buttonStyle(QuietButton()).help("The scan also re-runs whenever the project is re-read.")
             }
             if p.template != "blank" {
                 HStack(spacing: K.S.xs) {
@@ -209,6 +215,10 @@ struct ReadinessPanel: View {
     }
 
     private var score: Int { model.scan?.score ?? 0 }
+    static func ago(_ d: Date) -> String {
+        let s = Int(Date().timeIntervalSince(d))
+        return s < 3600 ? "\(max(1, s / 60)) min ago" : s < 86_400 ? "\(s / 3600) h ago" : "\(s / 86_400) d ago"
+    }
     private func hostName(_ h: String) -> String {
         switch h {
         case "Gcp": "Google Cloud"
@@ -228,9 +238,10 @@ struct ReadinessPanel: View {
             } label: {
                 HStack(spacing: K.S.xs) {
                     Image(systemName: "person.crop.rectangle.stack").font(.system(size: 10))
-                    Text("Staff-engineer review").font(K.F.small.weight(.semibold))
+                    Text(model.lastReview == nil ? "Staff-engineer review" : "Review again").font(K.F.small.weight(.semibold))
                     Spacer()
-                    Text("plan mode · reads, changes nothing").font(K.F.micro).foregroundStyle(K.C.faint)
+                    Text(model.lastReview.map { "last \(Self.ago($0)) · runs daily" } ?? "plan mode · reads, changes nothing")
+                        .font(K.F.micro).foregroundStyle(K.C.faint)
                 }
             }
             .buttonStyle(QuietButton(tone: K.C.accent))
@@ -270,10 +281,11 @@ struct ReadinessPanel: View {
                 }
             }
         } action: {
-            // Every finding carries a fix, so the useful click is "ask for it".
-            model.prompt = "Fix this readiness finding: \(f.title)\n\n\(f.detail)"
+            // Every finding carries a fix, so the click is the fix — not a draft in the box.
+            Task { await model.fix(f) }
         }
-        .help(f.detail)
+        .disabled(model.running)
+        .help(f.detail + "\n\nClick to fix it now.")
     }
 
     private func tone(_ s: String) -> Pill.Tone {

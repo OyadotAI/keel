@@ -32,7 +32,9 @@ struct FileDiff: View {
                     HunkHeader(header: hunk.header, index: hi, path: path,
                                discardable: !diff.untracked, model: model)
                     let marks = Intraline.marks(hunk.lines)
-                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
+                    // Ids unique across hunks: a lazy stack flattens nested ForEach, and two rows with
+                            // the same id render as one — the second hunk's first rows were blank.
+                            ForEach(Array(hunk.lines.enumerated()).map { ("\(hi)-\($0.offset)", $0.offset, $0.element) }, id: \.0) { _, li, line in
                         row(line, mark: marks[li])
                     }
                 }
