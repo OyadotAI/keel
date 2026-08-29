@@ -352,7 +352,11 @@ struct ActivityRail: View {
                   : "Settings (⌘,)")
         }
         .padding(.vertical, K.S.sm)
+        // Fixed and first in line for space: the rail never gives up width to a pane being
+        // dragged beside it.
         .frame(width: 60)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(2)
         .background(K.C.surface)
         .overlay(alignment: .trailing) { Rectangle().fill(K.C.line).frame(width: 1) }
     }
