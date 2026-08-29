@@ -236,6 +236,7 @@ final class Lanes {
         await a.refreshSuggestions()
         await a.refreshTools()
         await refreshWorktrees()
+        a.offerSetup()
         // Every lane draws the same project chrome, so they share what the project says about
         // itself rather than each asking.
         for lane in lanes where lane.id != a.id {

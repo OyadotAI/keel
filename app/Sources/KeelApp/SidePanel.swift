@@ -54,6 +54,8 @@ struct SidePanel: View {
                     model.sheet = nil
                     Task { await model.refreshState() }
                 }
+            case .setup:
+                SetupSheet(model: model) { model.sheet = nil }
             }
         }
     }
