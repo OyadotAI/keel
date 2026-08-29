@@ -7,6 +7,7 @@
 mod checks;
 mod context;
 mod finding;
+mod profile;
 mod report;
 #[cfg(test)]
 pub(crate) mod testutil;
@@ -14,7 +15,8 @@ pub(crate) mod testutil;
 pub use checks::default_checks;
 pub use context::RepoContext;
 pub use finding::{Dimension, Finding, Fix, Severity};
-pub use report::Report;
+pub use profile::{Hosting, Profile, detect};
+pub use report::{Phase, Report};
 
 /// Run every default check against `ctx` and collect the results into a report.
 pub fn scan(ctx: &RepoContext) -> Report {
@@ -32,7 +34,7 @@ pub fn scan(ctx: &RepoContext) -> Report {
             .then_with(|| a.path.cmp(&b.path))
     });
 
-    Report::new(findings)
+    Report::with_profile(findings, detect(ctx))
 }
 
 /// A single readiness check.

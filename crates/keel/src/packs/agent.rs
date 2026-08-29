@@ -2,7 +2,6 @@
 
 pub fn files(name: &str) -> Vec<(&'static str, String)> {
     let f = |s: &str| s.replace("{{NAME}}", name);
-    let _ = &f;
     vec![
         ("backend/src/app.ts", AGENT_APP.into()),
         ("backend/src/store.ts", AGENT_STORE.into()),
@@ -10,6 +9,10 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/app.test.ts", AGENT_TEST.into()),
         ("backend/migrations/0002_agent.sql", AGENT_SQL.into()),
         ("frontend/app/page.tsx", f(AGENT_PAGE)),
+        ("CLAUDE.md", f(AGENT_CLAUDE_MD)),
+        ("AGENTS.md", f(AGENT_AGENTS_MD)),
+        ("README.md", f(AGENT_README_MD)),
+        (".claude/agents/tool-safety.md", AGENT_REVIEWER.into()),
     ]
 }
 
@@ -472,4 +475,381 @@ export default function Home() {
     </main>
   );
 }
+"##;
+
+const AGENT_CLAUDE_MD: &str = r##"# {{NAME}} — agent
+
+This service is a chat backend with streaming tool use, modelled on Open WebUI's
+`/api/chat/completions` reduced to what a team can own: one assistant turn per request, streamed
+as Server-Sent Events, with the model allowed to call two tools (`web_fetch`, `notes`) and speak
+again until it stops. Conversations and messages are rows; the system prompt is a setting; every
+user has a daily token budget kept in the database. "Done" here means: a turn streams end to end
+through `POST /api/chat/completions`, both messages are stored with their token counts, the
+budget is charged, and `bun test` proves it against a scripted model without touching a provider.
+
+## Architecture
+
+| File | Owns |
+|---|---|
+| `backend/src/app.ts` | The routes, one chained expression; `x-user` extraction; the budget check before the model and the charge after; the SSE framing of a turn |
+| `backend/src/agent.ts` | `runTurn` (the tool loop), `TOOLS` (registry: schema, timeout, `run`), `claude()` (streaming Messages API client), `toApiMessages` (stored rows to API messages), `publicUrl`/`fetchPublic` (the SSRF guard) |
+| `backend/src/store.ts` | The `Store` interface, `pgStore` (Postgres) and `memoryStore` (tests) — conversations, messages, settings, notes, budgets |
+| `backend/src/app.test.ts` | Five tests, all against `memoryStore` and a scripted `Model` |
+| `backend/src/server.ts` | Listens on `PORT`, drains on SIGTERM (from the stack) |
+| `backend/src/db.ts` | The one `postgres` pool from `DATABASE_URL` (from the stack) |
+| `backend/migrations/0002_agent.sql` | `conversations`, `messages`, `settings`, `user_notes`, `budgets` |
+| `frontend/app/page.tsx` | A streaming chat page that parses the SSE events and edits the system prompt |
+
+### The request path
+
+1. `POST /api/chat/completions` with `{message, conversation_id?}`; the caller is the `x-user` header (`anonymous` when absent — put a real id there from the auth layer in front).
+2. The body is validated with zod (`message` 1–50,000 chars, `conversation_id` a UUID or absent); anything else is `400 invalid`.
+3. `store.spent(user, today)` is read; at or over `DAILY_TOKEN_BUDGET` the call is refused with `429 budget` before any model call.
+4. The conversation is loaded and ownership checked (`404` if it belongs to another user), or created with the first 80 chars of the message as its title.
+5. The stored history is unfolded by `toApiMessages`, the user message is appended and stored, and the system prompt is read from `settings` (falling back to `DEFAULT_SYSTEM`).
+6. The response switches to SSE. First event: `conversation {id}`. Then `runTurn` streams `delta` events as text arrives, `tool_call` before each tool runs, `tool_result` after, up to `maxRounds` (8) model calls.
+7. The assistant turn — text blocks, `tool_use` blocks and a `__tool_results` marker per round — is stored as one `messages` row with the turn's total input and output tokens; `store.spend` adds them to today's budget row.
+8. Final event: `done {input_tokens, output_tokens, rounds}`. A thrown error becomes an `error {message}` event; the HTTP status is already 200 by then.
+
+### Data model
+
+| Table | Column that matters | Why |
+|---|---|---|
+| `conversations` | `user_id` | Every read checks `conv.user_id === user`; the index `(user_id, created_at desc)` serves the list |
+| `messages` | `content jsonb` | Anthropic content blocks, verbatim, so history goes back to the API unchanged |
+| `messages` | `input_tokens`, `output_tokens` | Per turn, from the stream's own `usage`; what the budget charges |
+| `settings` | `key` primary key | `system_prompt` today; `on conflict do update` makes `PUT` idempotent |
+| `user_notes` | `user_id` | The `notes` tool receives the calling user and can only read that user's rows |
+| `budgets` | `(user_id, day)` primary key | One row per user per UTC day; `spend` is an upsert that adds, so replicas share one number |
+
+## Invariants
+
+1. **Nothing reaches the model over budget.** The check is at the top of the handler, before the conversation is even loaded, and returns `429` with `code: "budget"`. Guarded by `app.test.ts` "the daily budget refuses the call before the model is reached" (asserts the model function was called zero times).
+2. **A conversation belongs to one user.** Both `GET /api/conversations/:id` and `POST` with a `conversation_id` compare `conv.user_id` to the caller and return `404`, not `403`, so existence is not leaked. Guarded by "a turn streams deltas…" (u2 gets 404 on u1's conversation).
+3. **A tool gets the calling user, never a user id from the model.** `Tool.run` receives `{store, user}` from `runTurn`'s context; the `notes` tool has no `user` parameter in its schema. Guarded by "the notes tool writes to the store…" (`store.listNotes("u1")`).
+4. **Every tool has its own deadline.** `runTurn` races `tool.run` against `timeout_ms`; a timeout becomes a `tool_result` with `is_error: true` and the turn continues. Guarded by "a tool that exceeds its timeout becomes an error result, not a hung turn".
+5. **`web_fetch` only reaches public addresses.** `publicUrl` refuses non-http(s) schemes, resolves the host and rejects loopback, RFC 1918, link-local (cloud metadata), CGNAT and ULA; `fetchPublic` walks redirects by hand and re-checks each hop. `ALLOW_PRIVATE_URLS=1` is for tests only. Guarded by the `file:///etc/passwd` assertion in the timeout test; the address classes are `isPrivate`.
+6. **The stored transcript round-trips to the API shape.** Tool results are stored inside the assistant row under `__tool_results`, and `toApiMessages` unfolds them into `assistant(tool_use) / user(tool_result) / assistant(text)`. Guarded by "the notes tool…" (`api.map(m => m.role)`).
+7. **The model is a function.** `createApp(store, model)` and `runTurn(history, model, …)` take a `Model`; `claude()` is the default, never a hard-wired import. Tests script it. Every test in `app.test.ts` depends on this.
+8. **Token counts come from the stream, not from an estimate.** `claude()` reads `message_start.usage.input_tokens` and `message_delta.usage.output_tokens`; `runTurn` sums them across rounds. Guarded by "a turn streams deltas…" (`output_tokens` is 5, budget used is 15).
+9. **The system prompt is read per turn, not cached.** A `PUT` takes effect on the next request on every replica. Guarded by "the system prompt is editable and the model receives the edited one".
+10. **A turn is bounded.** `maxRounds` (8) caps model calls per request; the model cannot loop forever on tool calls. Not separately tested — `runTurn`'s `for` loop is the guard; a test that scripts nine `tool_use` replies and asserts `rounds === 8` is the one to add if you touch it.
+
+## Extending it
+
+**Add a tool.** Append to `TOOLS` in `agent.ts`: `name`, `description`, `input_schema` (JSON Schema the model sees), `timeout_ms`, and `run(input, {store, user, fetch})`. If it needs storage, add the method to `Store` and both implementations, and a migration `backend/migrations/0003_<name>.sql`. Test: script a model that calls it once, run `runTurn` with `memoryStore`, assert the store and the `tool_result` content. Any outbound HTTP goes through `fetchPublic`, never `fetch` directly.
+
+**Add a setting.** Read it with `store.getSetting("<key>")` where it is used and add a `GET`/`PUT /api/settings/<key>` pair to the chain in `app.ts` with a zod bound. No migration: `settings` is key/value. Test: `PUT` then assert the model saw it, as the system-prompt test does.
+
+**Add a per-user budget.** Today `DAILY_TOKEN_BUDGET` is one number for everyone. Add a `limit` column to `budgets` (or a `user_limits` table) with a migration, read it beside `spent` in the handler, and return it from `/api/budget`. Test: two users, two limits, one refused.
+
+**Add a route.** Add it to the chain in `app.ts` — never `app.get(...)` on a separate line, or `AppType` stops carrying it and `frontend/lib/api.ts` degrades to `any`. Validate the body with zod, return `{error: {message, code}}` on failure.
+
+**Change the model.** `MODEL` in the environment. To change provider, write another `Model` in `agent.ts` that streams deltas through `onDelta` and returns `ModelReply`; the loop, the tools and the store do not change.
+
+**Add conversation deletion or rename.** Add `deleteConversation`/`renameConversation` to `Store` and both implementations, then a `DELETE`/`PATCH /api/conversations/:id` with the same ownership check as `GET`. Test: another user's delete is `404` and the row survives.
+
+**Truncate history.** `toApiMessages` returns everything; long conversations will hit the context window. Insert a window (last N turns, or a summary row) between `getMessages` and `runTurn` in the handler. Test: 50 stored turns, assert the model receives fewer.
+
+## Operating it
+
+| Env var | Required | Meaning |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | Sent as `x-api-key`; never in the repository (`backend/.env`, committed as `.env.age`) |
+| `MODEL` | no | Model id, default `claude-opus-5` |
+| `DAILY_TOKEN_BUDGET` | no | Tokens per user per UTC day, default 200,000 |
+| `DATABASE_URL` | yes | The pool in `db.ts`; compose service locally, Secret in the cluster |
+| `PORT` | no | Default 8000 |
+| `ALLOW_PRIVATE_URLS` | never in production | `1` disables the SSRF guard; the test file sets it |
+
+**Scaling.** The API is stateless: the budget, settings and history are all in Postgres, so any replica can serve any turn. Per-replica today: nothing that matters. Move the budget to Redis `INCR` if `spent` becomes the hot read (the SQL comment says so). SSE responses hold a connection open for the length of a turn — size `proxy_read_timeout` (nginx has 300s) and the pod's `terminationGracePeriodSeconds` for the longest turn you accept.
+
+**Failure modes.** Provider down or 4xx/5xx: `claude()` throws, the client sees an `error` event after `conversation`, the user message is already stored, nothing is charged. Tool hung: the `tool_result` says `timed out`, the model is told, the turn continues. Budget spent: `429` before anything happens; the page shows `Error: daily budget…`. Database down: `/api/health/ready` still says ok today — it does not check the pool; that is a gap to close before relying on readiness. Client disconnect: `s.onAbort` aborts the provider request via `AbortSignal`.
+
+**What to watch.** `rounds` and `output_tokens` per turn from the `done` event (log them); `429 budget` rate per user; `tool_result` errors by tool name; p95 turn duration against the proxy timeout.
+
+## Ceilings
+
+- **Check-then-charge is not atomic.** The budget is read before the turn and added after; N parallel requests from one user at the limit all pass the check. Upgrade: reserve an estimate in the same statement (`update … where tokens + $est <= $limit returning`) and settle the difference.
+- **One system prompt for everyone.** `settings` is global. Upgrade: key it by user or add a `conversations.system` column.
+- **No auth.** `x-user` is trusted as given. This service expects a gateway in front that sets it; without one, everyone is `anonymous`. The frontend page does not set it.
+- **Whole history every turn.** No windowing or summarisation; long conversations grow input tokens linearly and eventually exceed the context window.
+- **Two simultaneous sends to one conversation interleave.** No per-conversation lock; both read the same history and both append. Upgrade: `select … for update` on the conversation row for the turn, or refuse with `409`.
+- **`listConversations` is `limit 50`, no cursor.** Upgrade: keyset on `(created_at, id)` as `docs/PRODUCTION.md` prescribes.
+- **DNS is checked once.** `publicUrl` resolves, then `fetch` resolves again — a rebinding host can answer differently. Upgrade: connect to the checked address and set `Host` yourself, or pin with a custom agent.
+- **Readiness does not probe the database.** Upgrade: `select 1` with a short timeout in `/api/health/ready`.
+
+The stack rules — gate, typed seam, production checklist, deploy — are in `docs/PRODUCTION.md`. They apply.
+"##;
+
+const AGENT_AGENTS_MD: &str = r##"# {{NAME}} — for agents
+
+`CLAUDE.md` has the rules and the invariants. This is how to run and test the service.
+
+## Run
+
+    make demo          # postgres + redis, migrations, seed, API on :8000, page on :3000
+    make check         # the gate: typecheck both halves, bun test the backend
+    make backend       # API alone, with reload
+    make migrate       # apply backend/migrations to DATABASE_URL
+
+`ANTHROPIC_API_KEY` goes in `backend/.env`. Without it every turn ends in an `error` event
+reading `anthropic 401`.
+
+## Every route, with curl
+
+Set a user once; the header is the whole identity model.
+
+    U='-H x-user:me'
+    J='-H content-type:application/json'
+
+    curl -s localhost:8000/api/health
+    # {"status":"ok"}
+
+    curl -s localhost:8000/api/tools
+    # {"tools":[{"name":"web_fetch","description":"Fetch a public http(s) URL…","timeout_ms":10000},{"name":"notes",…,"timeout_ms":2000}]}
+
+    curl -s localhost:8000/api/settings/system_prompt
+    # {"value":"You are a helpful assistant. Use web_fetch …"}
+
+    curl -s -X PUT localhost:8000/api/settings/system_prompt $J -d '{"value":"Answer in French. Be brief."}'
+    # {"ok":true}          — {} or an empty value is 400 {"error":{"message":"value required","code":"invalid"}}
+
+    curl -s $U localhost:8000/api/budget
+    # {"used":0,"limit":200000,"day":"2026-08-29"}
+
+    curl -N $U $J localhost:8000/api/chat/completions -d '{"message":"Save a note that the release is Friday, then list my notes."}'
+    # event: conversation
+    # data: {"id":"0191…"}
+    # event: tool_call
+    # data: {"type":"tool_call","call":{"id":"toolu_…","name":"notes","input":{"action":"add","body":"the release is Friday"}}}
+    # event: tool_result
+    # data: {"type":"tool_result","id":"toolu_…","output":"saved note #1","error":false}
+    # event: delta
+    # data: {"type":"delta","text":"Saved. Your notes: #1 the release is Friday"}
+    # event: done
+    # data: {"input_tokens":812,"output_tokens":64,"rounds":3}
+
+    # Continue the same conversation: pass the id from the first event.
+    curl -N $U $J localhost:8000/api/chat/completions -d '{"conversation_id":"0191…","message":"fetch https://example.com and summarise it"}'
+
+    curl -s $U localhost:8000/api/conversations
+    # {"conversations":[{"id":"0191…","user_id":"me","title":"Save a note that the release is Friday, then list…","created_at":"…","messages":4}]}
+
+    curl -s $U localhost:8000/api/conversations/0191…
+    # {"id":…,"messages":[{"role":"user","content":[{"type":"text","text":"…"}],…},{"role":"assistant","content":[{"type":"tool_use",…},{"type":"__tool_results","blocks":[…]},{"type":"text","text":"…"}],"input_tokens":812,"output_tokens":64}]}
+
+    curl -s -H x-user:someone-else localhost:8000/api/conversations/0191…
+    # 404 {"error":{"message":"no such conversation","code":"not_found"}}
+
+Over budget: `429 {"error":{"message":"daily budget of 200000 tokens spent","code":"budget"}}`.
+Set `DAILY_TOKEN_BUDGET=100` and send two messages to see it.
+
+## How the tests work
+
+`backend/src/app.test.ts` never opens a socket or a database:
+
+- **`memoryStore()`** from `store.ts` is the same `Store` interface as Postgres, in Maps. The
+  handler code under test is the production code; only the store differs.
+- **The model is scripted.** `script([...replies])` returns a `Model` that hands back the next
+  `ModelReply` on each call and streams its text as one `delta`. A reply with `calls` makes the
+  loop run a tool; the next reply is what the model "says" after seeing the result.
+- **Fetch is injected.** `runTurn` takes `ctx.fetch`; the timeout test passes one that never
+  resolves. `ALLOW_PRIVATE_URLS=1` is set at the top of the file so the guard does not do DNS.
+- **SSE is parsed by hand.** `events(text)` splits the response body on blank lines into
+  `{event, data}`.
+
+Run one test: `cd backend && bun test -t "budget"`.
+
+## Adding a test
+
+Copy the shape of the nearest existing one:
+
+```ts
+test("a tool error is reported and the turn still ends", async () => {
+  const boom = { ...TOOLS[1], run: async () => { throw new Error("db gone"); } };
+  const model = script([{ calls: [{ id: "t1", name: "notes", input: { action: "search" } }], stop: "tool_use" }, { text: "sorry" }]);
+  const out: string[] = [];
+  const turn = await runTurn([{ role: "user", content: "notes?" }], model, { store: memoryStore(), user: "u", system: "s", tools: [boom] }, (e) => { if (e.type === "tool_result") out.push(e.output); });
+  expect(out[0]).toBe("Error: db gone"); expect(turn.text).toBe("sorry");
+});
+```
+
+A test that needs a real provider does not belong in this file; it belongs in a script you run
+by hand with a key.
+"##;
+
+const AGENT_README_MD: &str = r##"# {{NAME}}
+
+A streaming chat backend with tool use, per-user budgets and a typed API — the part of
+Open WebUI you would have built yourself, as code you own.
+
+## What you get
+
+- `POST /api/chat/completions`: one assistant turn streamed as SSE — `delta`, `tool_call`,
+  `tool_result`, `done` — with the model calling tools and continuing until it stops.
+- Two tools out of the box: `web_fetch` (public URLs only — loopback, private ranges and cloud
+  metadata are refused, redirects re-checked) and `notes` (per-user, in Postgres). Each has its
+  own timeout; a hung tool becomes an error result, never a hung request.
+- Conversations and messages stored as Anthropic content blocks, listed and read per user; a
+  user cannot read another user's conversation.
+- A daily token budget per user, enforced before the model is called and charged from the
+  stream's real `usage`, shared across replicas through the database.
+- An editable system prompt, read per turn.
+- Next.js page that renders the stream and edits the prompt; Hono backend; Postgres; kustomize
+  overlays for dev and prod; a test suite that runs with no database and no API key.
+
+## Five minutes
+
+    cp backend/.env.example backend/.env    # add ANTHROPIC_API_KEY=…
+    make demo
+
+Then, in another shell:
+
+    curl -N localhost:8000/api/chat/completions -H x-user:me -H content-type:application/json \
+      -d '{"message":"Save a note that standup moved to 10:00."}'
+    # event: conversation … event: tool_call {"name":"notes",…} … event: tool_result "saved note #1" … event: done
+
+    curl -N localhost:8000/api/chat/completions -H x-user:me -H content-type:application/json \
+      -d '{"message":"fetch https://example.com and tell me its title"}'
+    # event: tool_call {"name":"web_fetch",…} … event: delta "The page is titled Example Domain…"
+
+    curl -s localhost:8000/api/conversations -H x-user:me
+    # {"conversations":[{"title":"Save a note that standup moved to 10:00.","messages":2,…},…]}
+
+    curl -s localhost:8000/api/budget -H x-user:me
+    # {"used":1103,"limit":200000,"day":"2026-08-29"}
+
+Open <http://localhost:3000> for the same thing with a text box.
+
+## API
+
+| Method | Path | Auth | What |
+|---|---|---|---|
+| GET | `/api/health` | none | Liveness |
+| GET | `/api/health/ready` | none | Readiness (does not yet probe the database) |
+| GET | `/api/tools` | none | Tool names, descriptions, timeouts |
+| GET | `/api/settings/system_prompt` | none | The current system prompt |
+| PUT | `/api/settings/system_prompt` | none | `{value}` — replaces it for every user |
+| GET | `/api/budget` | `x-user` | `{used, limit, day}` for today (UTC) |
+| POST | `/api/chat/completions` | `x-user` | `{message, conversation_id?}` → SSE turn; `429 budget` when spent |
+| GET | `/api/conversations` | `x-user` | Latest 50, with message counts |
+| GET | `/api/conversations/:id` | `x-user` | The conversation with every message; `404` if not yours |
+
+"Auth" means the `x-user` header is the identity. Nothing verifies it: put an auth proxy or
+gateway in front that sets it from a session, and strip it from client requests.
+
+## Compared with Open WebUI
+
+**Same shape, so their mental model carries over**
+
+- `POST /api/chat/completions` as the one chat endpoint, streaming.
+- Conversations with a title, listed newest first, each with its messages.
+- A system prompt as a setting; tools the model can call with a name, description and JSON
+  Schema; tool calls and results shown inline in the chat.
+- Message content stored as Anthropic content blocks, so the Messages API docs describe the rows.
+
+**Better here**
+
+- Typed end to end: `AppType` is exported from `backend/src/app.ts` and the frontend client is
+  built from it; a route change that breaks the page fails `make check`.
+- Tests without a database or a provider: `memoryStore` and a scripted `Model`, five tests in
+  under a second, in CI on every push.
+- Per-user token budgets in the database, refused before the model is reached.
+- An SSRF guard on tool fetches — private ranges, link-local and metadata addresses refused after
+  DNS, redirects re-checked hop by hop.
+- Per-tool timeouts inside the turn.
+- Kubernetes manifests, probes, secrets from an encrypted env file, and a one-command deploy.
+- One small TypeScript codebase: `app.ts`, `agent.ts`, `store.ts` — you can read the whole
+  service in an afternoon.
+
+**Not here yet**
+
+- User accounts, sign-in, roles, an admin panel — `x-user` is a header you must set.
+- The OpenAI-compatible request/response shape; this endpoint takes `{message}` and emits named
+  SSE events, so OpenAI SDKs do not point at it unchanged.
+- Multiple providers (Ollama, OpenAI, …) and per-chat model selection.
+- RAG: document upload, embeddings, citations.
+- Image, audio and file input; image generation.
+- Regenerate, edit-and-resend, branching, delete or rename a conversation.
+- Pipelines / functions / filters, web search integrations, MCP servers.
+- Per-user system prompts and memories.
+- Internationalisation and the full chat UI.
+
+## Production
+
+**Environments.** `k8s/overlays/dev` and `k8s/overlays/prod`; dev and prod never share a
+database. `git push` to `main` deploys dev; `make release` tags and deploys prod.
+
+**Secrets.** `ANTHROPIC_API_KEY` and `DATABASE_URL` live in `backend/.env`, committed only as
+`backend/.env.age`; `make k8s-secrets ENV=prod` renders the Secret.
+
+**Scaling.** Stateless replicas behind the HPA; every piece of state — history, budgets, the
+prompt — is in Postgres. Turns hold an SSE connection open: set the ingress/proxy read timeout
+and the pod's grace period to the longest turn you accept (nginx here: 300s).
+
+**Probes.** `/api/health` for liveness, `/api/health/ready` for readiness. Readiness does not
+yet check the pool; add a `select 1` before you let it gate rollouts.
+
+**Migrations.** `backend/migrations/0002_agent.sql` creates the five tables; the migrate init
+container applies new files before each rollout.
+
+**What pages you.** `error` events per minute (provider down), `429 budget` spikes (a runaway
+client), `tool_result` errors by tool, turn duration approaching the proxy timeout.
+
+## Roadmap
+
+- Atomic budget reservation (today: read before, add after; a burst can overshoot).
+- History windowing or summarisation (today: the whole conversation every turn).
+- Per-user and per-conversation system prompts.
+- A lock per conversation so parallel sends do not interleave.
+- Keyset pagination on conversations.
+- Readiness that probes the database.
+"##;
+
+const AGENT_REVIEWER: &str = r##"---
+name: tool-safety
+description: Run on any change to backend/src/agent.ts, the TOOLS registry, the turn loop, the budget, or a route that reads conversations. Reviews what the model is allowed to reach and what the caller is allowed to read; reports only what an attacker or a runaway model could exploit.
+tools: Read, Grep, Glob, Bash
+---
+
+You review the boundary between the model, the tools and the users. The model's output is
+untrusted input; so is the `x-user` header; so is every URL the model chooses.
+
+Report each finding as `path:line — what — how it is reached — the fix`. No style.
+
+Check:
+1. **Tool inputs.** Every `Tool.run` treats `input` as unvalidated JSON from the model: strings
+   coerced with `String()`, enums checked, no `input.user` or `input.conversation_id` honoured.
+   Failure: a tool that reads an id from `input` instead of `ctx.user`.
+2. **Outbound fetch.** Every HTTP call a tool makes goes through `fetchPublic`, never bare
+   `fetch`. `publicUrl` still rejects: non-http(s) schemes, `127/8`, `10/8`, `172.16/12`,
+   `192.168/16`, `169.254/16`, `100.64/10`, `0/8`, `::1`, `fc00::/7`, `fe80::/10` and
+   `::ffff:`-mapped v4. Redirects: `redirect: "manual"`, each hop re-checked, hop count bounded.
+   Failure: `ALLOW_PRIVATE_URLS` read anywhere but tests, or a new tool with `fetch(url)`.
+3. **Timeouts.** Every entry in `TOOLS` has a `timeout_ms` and `runTurn` still races it; a tool
+   that times out yields `is_error: true`, not a throw out of the loop.
+4. **Rounds.** `maxRounds` is still enforced and still the default of 8; no path lets the model
+   call tools without decrementing it.
+5. **Budget order.** In `POST /api/chat/completions`, `store.spent` is compared to
+   `DAILY_TOKEN_BUDGET` before `store.getConversation`, before the model. `store.spend` is
+   called with the turn's real `input_tokens + output_tokens`. Failure: a refactor that charges
+   before the turn and forgets to refund, or charges an estimate.
+6. **Ownership.** Every route that takes a conversation id compares `conv.user_id` to `user(c)`
+   and returns 404 (not 403, not the row). Grep for `getConversation(` and check each caller.
+7. **Notes scope.** `store.listNotes` and `store.addNote` are only ever called with `ctx.user`;
+   the SQL still has `user_id = ${user}`.
+8. **Stored content.** `addMessage` stores what the model returned, unmodified; `toApiMessages`
+   never emits a `__tool_results` block to the API. Failure: a marker block reaching Anthropic
+   as a content block.
+9. **Secrets.** `ANTHROPIC_API_KEY` appears only in `claude()`'s header; never in a log line,
+   an error message (`anthropic ${status}: ${body}` is body text, not the key) or an SSE event.
+10. **Body bounds.** zod still caps `message` at 50,000 and `value` at 20,000; a new route with
+    a body has a bound.
+11. **Stream errors.** A throw inside `streamSSE` becomes an `error` event, not an unhandled
+    rejection that kills the process; `s.onAbort` still aborts the provider request.
+12. **Tool descriptions.** A new tool's `description` and schema do not invite the model to
+    pass credentials, file paths or internal hostnames.
+
+End with one line: `tool-safety: N findings`, and if 0, which of the twelve you checked.
 "##;

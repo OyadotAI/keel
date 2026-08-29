@@ -11,6 +11,13 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/app.test.ts", BUILDER_TEST.into()),
         ("backend/migrations/0002_builder.sql", BUILDER_SQL.into()),
         ("frontend/app/page.tsx", f(BUILDER_PAGE)),
+        ("CLAUDE.md", f(BUILDER_CLAUDE_MD)),
+        ("AGENTS.md", f(BUILDER_AGENTS_MD)),
+        ("README.md", f(BUILDER_README_MD)),
+        (
+            ".claude/agents/agent-runtime.md",
+            BUILDER_AGENT_RUNTIME.into(),
+        ),
     ]
 }
 
@@ -576,4 +583,304 @@ export default function Home() {
     </main>
   );
 }
+"##;
+
+const BUILDER_CLAUDE_MD: &str = r##"# {{NAME}} — working agreement
+
+{{NAME}} is an agent-builder platform in the shape of Dify and Flowise: an agent is a JSON
+definition (system prompt, enabled tools, skills, a budget) with one editable draft and a list of
+immutable published versions; runs pin the version they were enqueued with and record every
+message and tool call; triggers turn schedules and webhooks into runs. "Done" means a `runs` row in
+`done` or `failed` with its full `messages` trace and token counts, executed by the worker from a
+definition that publishing later cannot change.
+
+## Architecture
+
+| File | Owns |
+|---|---|
+| `backend/src/app.ts` | The routes: agents, draft/publish/versions, runs (inline draft test or queued), triggers, webhooks. The `Definition` zod schema. Exports `AppType`. |
+| `backend/src/store.ts` | `Store` interface; `pgStore` (`publish` in a transaction with `for update`, `dueTriggers` as one `update … returning`, `SKIP LOCKED` claim) and `memoryStore`. |
+| `backend/src/runtime.ts` | `execute`: the step loop with the budget; the tool `registry` (`now`, `calculator`, `http_get`); `systemPrompt` (skills folded in); `claude()`; `publicUrl`/`fetchPublic` SSRF guard. |
+| `backend/src/worker.ts` | `tick` (claim and execute one run) and `schedule` (due triggers → queued runs). The `bun run worker` process. |
+| `backend/src/app.test.ts` | Five tests over `memoryStore` and a scripted model. |
+| `backend/migrations/0002_builder.sql` | `agents`, `agent_versions`, `triggers`, `runs`. |
+| `frontend/app/page.tsx` | Agent list, draft editor with tool checkboxes, test-inline, publish, runs with their traces. |
+
+### Request path
+
+1. `POST /api/agents {name, draft?}` creates an agent with `DEFAULT_DEFINITION` unless a draft is given; `published_version` is null.
+2. `PUT /api/agents/:id/draft` validates against `Definition` and refuses tool names not in the registry (`400 unknown tools: …`).
+3. `POST /api/agents/:id/publish` copies the draft into `agent_versions (agent_id, version)` and sets `published_version` — in one transaction, row locked.
+4. `POST /api/agents/:id/runs {input}` enqueues with the **published** definition pinned into `runs.definition` (`202`); `{version: "draft"}` executes the draft inline on the request and returns the finished run (`201`); `{version: n}` pins that version. No published version is `409 unpublished`.
+5. `worker.ts tick()` claims a queued run and calls `execute(run.definition, run.input, model)`.
+6. `execute` loops up to `max_steps`: model reply → append assistant text → for each call, look the tool up among the definition's enabled tools, run it with a 30 s race, append `tool_result` (an error is a result with `error: true`, not the end of the run) → stop when a reply has no calls, or `output_tokens ≥ max_tokens`.
+7. The worker writes `state`, `output`, `messages`, `input_tokens`, `output_tokens` once, at the end.
+8. Triggers: `schedule()` runs every worker loop; `dueTriggers(now)` advances `next_at` in the same statement it selects with, so each interval fires once across replicas. `POST /api/hooks/:token` enqueues a run whose input is the raw request body.
+
+### Data model
+
+| Table | Column | Why |
+|---|---|---|
+| `agents` | `draft jsonb` | The only editable definition. |
+| | `published_version` | Null until first publish; what `runs` and hooks use by default. |
+| `agent_versions` | `(agent_id, version)` pk, `definition jsonb` | Immutable. Never updated, never deleted. |
+| `runs` | `definition jsonb` | Pinned at enqueue; the worker reads this, never the agent. |
+| | `version` | Null means the draft was run (`source = test`). |
+| | `messages jsonb` | The full trace: user, assistant, tool_call, tool_result. |
+| | `input_tokens`, `output_tokens` | Summed across steps; the cost. |
+| | `source` | `api \| test \| schedule \| webhook`. |
+| `triggers` | `kind`, `every_seconds`, `next_at` | Fixed-interval schedules. |
+| | `token unique` | The webhook credential: 32 hex chars, one per trigger. |
+| `runs_queue`, `triggers_due` | indexes | The claim and the scheduler scan. |
+
+## Invariants
+
+1. **Publishing pins; editing the draft afterwards changes nothing published.** `agent_versions` is insert-only and `runs.definition` is copied at enqueue. Guarded by `publish pins a version; editing the draft afterwards does not change it`.
+2. **A run executes the definition it was enqueued with**, not the agent's current one. The worker never reads `agents`. Guarded by `the worker runs the pinned version and records every message and tool call` (`run.version` is 1 and the prompt is v1's).
+3. **Unknown tools are refused at draft time.** `PUT …/draft` with `tools: ["shell"]` is `400`. Same test as 1. At run time a call to a tool not enabled is a `tool_result` error, not a crash.
+4. **Every run ends.** `max_steps` and `max_tokens`, whichever first, fail the run with a `budget:` message. Guarded by `the budget ends a run that never answers`.
+5. **The trace is complete and ordered.** `messages` roles come out `user, assistant, tool_call, tool_result, assistant` for one tool round. Guarded by test 2.
+6. **A tool error is an observation.** `execute` pushes `{role: "tool_result", error: true}` and continues; the model gets to recover. Enforced by the `try/catch` in `execute`; a test that asserts a failing tool leads to `done` belongs in `app.test.ts` when you touch this.
+7. **A webhook's token is its only credential, and it is unguessable.** 32 hex chars from `randomUUID`; unknown is `404`; the body is the input verbatim, capped at 20 000. Guarded by `a webhook token enqueues a run with the body; an unknown token is 404`.
+8. **A schedule fires once per interval however many workers run.** `dueTriggers` is one `update … where next_at <= now returning`. Guarded by `a schedule fires once when due, then not again until its interval passes`.
+9. **Unpublished agents do not run from triggers or the API.** `409 unpublished` on runs and hooks; `schedule()` skips them. Tests 1 and 5.
+10. **Agent-chosen URLs are public only.** `http_get` goes through `fetchPublic`: DNS first, then loopback / RFC1918 / link-local (cloud metadata) / ULA / CGNAT refused, redirects walked by hand with the same check per hop. Tests set `ALLOW_PRIVATE_URLS=1` to fetch through a fake; that variable must never be set in a deployment.
+11. **`calculator` is not `eval`.** The expression is allow-listed to `[\d\s+\-*/().]` before `Function` sees it. Extend the regex, never remove it.
+
+## Extending it
+
+**Add a tool.** One entry in `registry()` in `runtime.ts`: `name`, `description`, `input_schema`, `run`. If it takes a URL, fetch through `fetchPublic`. `GET /api/tools` and the page's checkboxes pick it up. Test: enable it in a draft, script a model that calls it, assert the `tool_result`. No migration.
+
+**Add a definition field** (temperature, a model name). Add it to `Definition` in `app.ts` and to the `Definition` type in `runtime.ts`; read it in `execute` or `claude()`. Old versions in `agent_versions` lack it — read with a default, never migrate published JSON.
+
+**Add a trigger kind** (cron, a queue). Extend the discriminated union in `POST …/triggers`, add columns by migration, and give `Store.dueTriggers` the new due rule — keeping it a single statement that advances and returns.
+
+**Add a model provider.** Another `Model` beside `claude()`; the flat `Message[]` trace is provider-neutral and `claude()` shows how to collapse it into API turns.
+
+**Persist the trace as it happens.** `execute` takes `onMessage`; the worker passes a no-op. Have it call `store.update(id, {messages})` (or append to a `run_messages` table by migration) so a run that dies mid-way keeps what it had.
+
+**Chat / multi-turn.** A run is one input. For a conversation, add a `threads` table and seed `execute`'s `messages` from the thread's prior turns — and decide how the budget applies to a thread rather than a run.
+
+**Auth and tenancy.** There is none. Add a principal at the boundary, an `owner` column on `agents`, and scope every `store` method by it; the `tenant` pack has the shape.
+
+## Operating it
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres; API and worker. |
+| `ANTHROPIC_API_KEY` | yes | Both processes: the API runs draft tests inline. |
+| `MODEL` | no | Defaults to `claude-sonnet-4-20250514`; `max_tokens` 2048 per step. |
+| `ALLOW_PRIVATE_URLS` | never in prod | Disables the SSRF guard; tests only. |
+| `PORT` | no | API port, default 8000. |
+
+**Processes.** `backend` serves HTTP and executes draft tests inline (a request can last `max_steps` × model latency). `worker` runs queued runs one at a time and the scheduler tick every loop; scale it on queue depth. Not in the image yet: add `src/worker.ts` to the Dockerfile's build line and a `k8s/base/worker.yaml` with no Service or HTTP probes.
+
+**What is per-replica.** Nothing. Queue, triggers and traces are Postgres; the `registry` is code.
+
+**Failure modes.**
+
+| What | User sees |
+|---|---|
+| Model 401/429/529 | Run `failed`, output `anthropic <status>: …`. Not retried. |
+| Tool throws or exceeds 30 s | A `tool_result` with `error: true`; the run continues. |
+| Budget hit | `failed`, output `budget: …`; the trace up to that point is kept. |
+| Worker dies mid-run | Run stuck `running`, trace empty (it is written at the end). |
+| Webhook to an unpublished agent | `409 unpublished`. |
+| No worker | Runs stay `queued`; schedules do not fire (the worker is the scheduler). |
+
+**Metrics and logs.** `runs.input_tokens + output_tokens` per agent per day is the bill. Queue age. `failed` grouped by the first word of `output` (`budget:` vs `anthropic`). Trigger drift: `next_at` in the past by more than one interval means no worker ran.
+
+## Ceilings
+
+- **Draft tests run on the request path.** Fine for a person clicking; not for a load test. Queue them with `source = test` and poll if that changes.
+- **The trace is written once, at the end.** A crash loses it. `onMessage` is the hook.
+- **Schedules are fixed intervals**, `every_seconds ≥ 10`, no cron, no timezone, no "at 09:00".
+- **No lease on running runs**; a dead worker orphans them.
+- **Three tools**, in code. A tool marketplace or per-agent HTTP tools means a `tools` table and a generic HTTP tool built on `fetchPublic`.
+- **No memory across runs**, no RAG, no conversation threads.
+- **No authentication on any route except the webhook token.** Anyone reaching `:8000` can publish and run agents on your key.
+- **One provider**, no streaming.
+
+The stack rules — gate, typed seam, production checklist, deploy — are in `docs/PRODUCTION.md`. They apply.
+"##;
+
+const BUILDER_AGENTS_MD: &str = r##"# {{NAME}} — for agents
+
+See `CLAUDE.md` for the rules. This is how to run it.
+
+## Run
+
+    make demo                                        # postgres + redis, migrate, seed, API :8000, page :3000
+    make check                                       # typecheck both halves, bun test the backend — no key needed
+    cd backend && ANTHROPIC_API_KEY=… bun run worker  # executes queued runs and fires schedules
+
+The API needs `ANTHROPIC_API_KEY` too, for draft tests (`version: "draft"`), which run inline.
+
+## Routes
+
+Create, edit, publish:
+
+    curl -s -X POST localhost:8000/api/agents -H 'content-type: application/json' -d '{"name":"helper"}'
+    # 201 {"id":"a1…","name":"helper","draft":{"system_prompt":"You are a helpful assistant.","tools":["now","calculator"],"skills":[],"max_steps":8,"max_tokens":4000},"published_version":null,…}
+
+    curl -s -X PUT localhost:8000/api/agents/a1…/draft -H 'content-type: application/json' \
+      -d '{"system_prompt":"Answer in one line.","tools":["now","calculator","http_get"],"skills":[{"name":"brevity","instructions":"Never exceed 20 words."}],"max_steps":6,"max_tokens":2000}'
+    # 200 {"ok":true}          — 400 {"error":{"message":"unknown tools: shell"}} for a tool not in the registry
+
+    curl -s -X POST localhost:8000/api/agents/a1…/publish        # 201 {"version":1}
+    curl -s localhost:8000/api/agents/a1…/versions               # {"versions":[{"agent_id","version":1,"definition":{…},"created_at"}]}
+    curl -s localhost:8000/api/tools                             # {"tools":[{"name":"now",…},{"name":"calculator",…},{"name":"http_get",…}]}
+
+Run:
+
+    curl -s -X POST localhost:8000/api/agents/a1…/runs -H 'content-type: application/json' -d '{"input":"What is 12*12?"}'
+    # 202 {"id":"r1…","state":"queued","version":1}    — the worker picks it up; 409 unpublished if never published
+
+    curl -s -X POST localhost:8000/api/agents/a1…/runs -H 'content-type: application/json' -d '{"input":"What is 12*12?","version":"draft"}'
+    # 201 {…,"state":"done","output":"144.","version":null,"source":"test","messages":[{"role":"user","text":"What is 12*12?"},{"role":"assistant","text":"Let me compute."},{"role":"tool_call","id":"toolu_…","name":"calculator","input":{"expression":"12*12"}},{"role":"tool_result","id":"toolu_…","output":"144"},{"role":"assistant","text":"144."}],"input_tokens":…,"output_tokens":…}
+
+    curl -s localhost:8000/api/runs/r1…                          # the run, with messages once the worker is done
+    curl -s localhost:8000/api/agents/a1…/runs                   # {"runs":[…]} latest 50 for the agent
+    curl -s localhost:8000/api/runs                              # all agents
+
+Triggers:
+
+    curl -s -X POST localhost:8000/api/agents/a1…/triggers -H 'content-type: application/json' -d '{"kind":"schedule","every_seconds":3600,"input":"Daily report"}'
+    # 201 {"id":"t1…","kind":"schedule","every_seconds":3600,"input":"Daily report","next_at":"…",…}
+    curl -s -X POST localhost:8000/api/agents/a1…/triggers -H 'content-type: application/json' -d '{"kind":"webhook"}'
+    # 201 {"id":"t2…","kind":"webhook","token":"8f3a…(32 hex)",…}
+    curl -s -X POST localhost:8000/api/hooks/8f3a… -d '{"order":17}'
+    # 202 {"id":"r2…","state":"queued"}   — the body, as text, is the run's input; 404 for an unknown token
+    curl -s localhost:8000/api/agents/a1…/triggers
+
+Errors are `{"error":{"message","code"}}`: `400 invalid`, `404 not_found`, `409 unpublished`.
+
+## Tests
+
+`backend/src/app.test.ts`, `bun test`:
+
+- **`memoryStore()`** replaces Postgres, including `publish` and `dueTriggers` semantics.
+- **`script([...replies])`** is the model: each call returns the next reply, repeating the last. `createApp(store, model)` and `tick(store, model)` take it, so no provider is called.
+- **`schedule(store, now)`** takes the clock; the interval test hands it `t0 + 61_000` and so on.
+- **`ALLOW_PRIVATE_URLS=1`** is set at the top of the test file because tools fetch through fakes; it bypasses the DNS check and nothing else.
+
+To add a test: `createApp(memoryStore(), script([...]))`, `agent(app, draft)`, publish, run, `tick`, then assert on `GET /api/runs/:id` — `state`, `output`, `messages` roles, tokens. Assert on the stored run, not on what the model was sent.
+"##;
+
+const BUILDER_README_MD: &str = r##"# {{NAME}}
+
+Build agents from a prompt, tools and skills; publish immutable versions; run them from an API,
+a webhook or a schedule; read every step they took.
+
+## What you get
+
+- Agents as JSON definitions: `system_prompt`, `tools` (from a registry), `skills` (name + instructions, folded into the prompt), `max_steps`, `max_tokens`.
+- A draft you edit and versions you publish. Runs pin the version; publishing later never changes a queued run.
+- `POST /api/agents/:id/runs` queues on the published version; `{version: "draft"}` tests inline and returns the trace now.
+- Triggers: fixed-interval schedules fired by the worker, exactly once per interval across replicas; webhooks at `POST /api/hooks/:token` whose body is the input.
+- Every run stored with its messages — user, assistant, tool_call, tool_result — and token counts.
+- Three tools: `now`, `calculator` (allow-listed arithmetic), `http_get` (public addresses only; loopback, private ranges and cloud metadata refused after DNS, redirects re-checked).
+- A budget that ends every run. Tests that need no model.
+
+## Five minutes
+
+    make demo
+    cd backend && ANTHROPIC_API_KEY=sk-ant-… bun run worker
+
+    A=$(curl -s -X POST localhost:8000/api/agents -H 'content-type: application/json' -d '{"name":"helper"}' | jq -r .id)
+    curl -s -X POST localhost:8000/api/agents/$A/runs -H 'content-type: application/json' \
+      -d '{"input":"What time is it, and what is 12*12?","version":"draft"}' | jq '{state, output, steps: [.messages[].role]}'
+    # {"state":"done","output":"It is 14:03 UTC and 12*12 is 144.","steps":["user","tool_call","tool_result","tool_call","tool_result","assistant"]}
+
+    curl -s -X POST localhost:8000/api/agents/$A/publish          # {"version":1}
+    T=$(curl -s -X POST localhost:8000/api/agents/$A/triggers -H 'content-type: application/json' -d '{"kind":"webhook"}' | jq -r .token)
+    curl -s -X POST localhost:8000/api/hooks/$T -d 'Summarise: order 17 shipped late.'
+    # {"id":"r2…","state":"queued"}  — the worker runs it; GET /api/runs/r2… shows the trace
+
+Open `http://localhost:3000` to edit, test and publish with buttons.
+
+## API
+
+| Method | Path | Auth | What |
+|---|---|---|---|
+| GET | `/api/health`, `/api/health/ready` | none | probes |
+| GET | `/api/tools` | none | the registry |
+| GET / POST | `/api/agents` | none | list / create `{name, draft?}` |
+| GET | `/api/agents/:id` | none | agent with draft |
+| PUT | `/api/agents/:id/draft` | none | replace the draft; unknown tools 400 |
+| POST | `/api/agents/:id/publish` | none | `201 {version}` |
+| GET | `/api/agents/:id/versions` | none | newest first |
+| POST | `/api/agents/:id/runs` | none | `{input, version?}` → `202` queued, or `201` finished for `"draft"`; `409` unpublished |
+| GET | `/api/agents/:id/runs`, `/api/runs`, `/api/runs/:id` | none | traces |
+| GET / POST | `/api/agents/:id/triggers` | none | `{kind: "schedule", every_seconds, input}` or `{kind: "webhook"}` |
+| POST | `/api/hooks/:token` | the token | body → run input, `202` |
+
+## Compared with Dify / Flowise
+
+**Same shape.** An app/agent with a system prompt, tools and instructions; draft vs published, with runs pinned to a version; a run log with every message and tool call; API and webhook triggers; token accounting per run.
+
+**Better here, specifically.**
+- Version pinning is a database fact (`runs.definition` copied at enqueue, `agent_versions` insert-only) with a test, not a UI convention.
+- The budget is two numbers on the definition and a test that a looping agent stops.
+- SSRF protection on agent-chosen URLs: DNS-then-check, private and metadata ranges refused, manual redirects. Most builders hand the model a bare `fetch`.
+- Schedules fire exactly once per interval across any number of workers, by one SQL statement — no leader election, no Redis lock.
+- Typed end to end, tests without a model or a database, and the stack's manifests, migrations and secrets handling. One codebase you can read in an afternoon.
+
+**Not here yet.**
+- No visual workflow / graph editor — Dify's node canvas and Flowise's flows. A definition here is prompt + tools + skills, not a DAG (the `graph` and `dag` packs are that).
+- No knowledge base / RAG, no document upload, no embeddings.
+- No chat sessions with history; a run is one input.
+- No multi-provider model catalogue; one Anthropic model from the environment.
+- No streaming responses; the page polls.
+- No per-app API keys, users, workspaces or tenancy; no rate limits.
+- Cron schedules, timezones, and a tool marketplace — none. Three tools, in code.
+- No prompt variables / templating, no annotations, no evaluation datasets (see the `evals` pack).
+
+## Production
+
+- **Environments.** `DATABASE_URL`, `ANTHROPIC_API_KEY` (both processes), `MODEL`. Never set `ALLOW_PRIVATE_URLS` outside tests. Separate databases per environment.
+- **Processes.** `backend` (HTTP + inline draft tests; HPA) and `worker` (runs + scheduler; scale on `queued` age). Add `src/worker.ts` to the Dockerfile's build line and a `k8s/base/worker.yaml` without Service or HTTP probes. Two or more workers are safe.
+- **Probes.** `/api/health`, `/api/health/ready`. Worker: alert on oldest `queued` run and on any schedule with `next_at` more than one interval in the past.
+- **Migrations.** `0002_builder.sql`; the migrate init container runs it before each rollout. `runs.messages` grows with use; partition or prune by `created_at` when it matters.
+- **Secrets.** The Anthropic key through `.env.age` → `k8s/secrets.yaml`. Webhook tokens are in the database; treat `triggers` as sensitive.
+- **Auth.** None on the management routes. Put them behind ingress auth before anything but `/api/hooks/*` is reachable from outside.
+- **What pages you.** `queued` older than 60 s; `failed` rate by agent; token spend per hour above budget; a schedule that has not advanced.
+
+## Roadmap
+
+- Trace persisted per message, so a dead worker keeps what it had.
+- Lease and requeue for running runs.
+- Cron schedules with a timezone.
+- A `tools` table and a generic HTTP tool, so tools are data.
+- Threads (multi-turn) and streaming.
+- API keys, owners, and per-agent scoping.
+- Queued draft tests.
+"##;
+
+const BUILDER_AGENT_RUNTIME: &str = r##"---
+name: agent-runtime
+description: Run on any change to runtime.ts, worker.ts, store.ts publish/dueTriggers, or the runs and hooks routes. Checks that published versions stay immutable, every run ends, tools cannot reach the private network, and a schedule cannot fire twice.
+tools: Read, Grep, Glob, Bash
+---
+
+You review the runtime as the person who will be billed for it and paged by it. Report only what
+runs the wrong definition, runs forever, reaches something private, or fires twice — each as
+`path:line — what — the input that triggers it — the fix`.
+
+Check:
+1. **Pinning.** `POST …/runs` copies `v.definition` (or `a.draft` for `"draft"`) into `enqueue`; `tick` executes `run.definition` and never calls `store.getAgent`. `schedule()` and `/api/hooks/:token` enqueue the published version's definition, not the draft.
+2. **Versions are immutable.** No `update` or `delete` on `agent_versions` anywhere (`grep agent_versions backend/src`). `publish` uses `for update` on the agent row so two publishes cannot both become version N.
+3. **Budget.** `execute` checks `output_tokens >= d.max_tokens` after every step and exits the `for` loop at `max_steps`; both return `failed` with a `budget:` prefix. A change that `continue`s past either is an unbounded bill.
+4. **Tool timeout.** The `Promise.race` with 30 s stays, and the timer is `unref()`d so it does not hold the process.
+5. **Tool errors do not end the run**, and unknown tool names produce an error result rather than throwing out of `execute`.
+6. **SSRF guard.** Every tool that fetches uses `fetchPublic`; `publicUrl` resolves DNS before checking; `isPrivate` covers 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, 0/8, `::1`, `fc00::/7`, `fe80::/10`, and `::ffff:` mapped v4; redirects use `redirect: "manual"` and re-check each hop. `ALLOW_PRIVATE_URLS` is read only in `publicUrl`, and no manifest or `.env.example` sets it.
+7. **`calculator`.** The regex allow-list runs before `Function`; no letters, no backticks, no `[`.
+8. **Draft validation.** `PUT …/draft` refuses tool names outside `registry()`; `Definition` bounds prompt size (20 000), skills (20), steps (50), tokens (200 000).
+9. **Schedule once.** `pgStore.dueTriggers` is one statement: `update … set next_at = now + interval where next_at <= now returning *`. A select-then-update lets two workers fire the same trigger. `memoryStore` mirrors it.
+10. **Webhook.** `triggerByToken` looks up by the whole token; the route checks `t.kind === "webhook"`; input capped at 20 000 and empty refused; unpublished is 409 not a draft run.
+11. **Worker loop.** `tick`'s catch marks `failed`; `schedule()` errors do not kill the loop (wrap it if a change makes it throw).
+12. **Inline draft runs** still write a `runs` row (`source: test`) before executing, so a crash mid-test leaves evidence.
+13. **The trace.** `messages` roles alternate sensibly and `claude()` collapses `tool_call`/`tool_result` into `assistant`/`user` turns — a `tool_result` that lands on the assistant turn is a 400 from the API.
+
+Run `cd backend && bun test`. End with `agent-runtime: N findings` and, if 0, which of the above you read.
 "##;

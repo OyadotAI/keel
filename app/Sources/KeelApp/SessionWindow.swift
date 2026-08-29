@@ -469,11 +469,23 @@ struct StatusBar: View {
     let model: SessionModel
     @Binding var terminalOpen: Bool
     var onTrust: (() -> Void)? = nil
+    @State private var branchMenu = false
 
     var body: some View {
         HStack(spacing: K.S.md) {
             if model.isRepo {
+                // The branch is a menu, the way every IDE's status bar treats it: click to see
+                // the others and switch, or start a new one from here.
                 item("arrow.triangle.branch", model.branch ?? "—")
+                    .contentShape(Rectangle())
+                    .asButton {
+                        Task { await model.refreshBranches() }
+                        branchMenu = true
+                    }
+                    .help("Switch or create a branch")
+                    .popover(isPresented: $branchMenu, arrowEdge: .top) {
+                        BranchMenu(model: model) { branchMenu = false }
+                    }
             } else {
                 HStack(spacing: 3) {
                     Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
@@ -925,5 +937,119 @@ struct OpeningBar: View {
         .padding(.horizontal, K.S.md).padding(.vertical, 5)
         .background(done ? K.C.add.opacity(0.08) : K.C.surface)
         .overlay(alignment: .bottom) { Hairline() }
+    }
+}
+
+
+/// The branch switcher behind the footer chip. Local branches first with the current one
+/// marked and its distance from upstream, then the ones only the remote has; typing filters,
+/// ⏎ switches to the first match, and a name nothing matches becomes "create it".
+struct BranchMenu: View {
+    let model: SessionModel
+    let close: () -> Void
+    @State private var query = ""
+    @FocusState private var focused: Bool
+
+    private var local: [Wire.Branch] {
+        let all = model.branches?.local ?? []
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? all : all.filter { Fuzzy.score(q, in: $0.name) != nil }
+    }
+    private var remote: [String] {
+        let names = Set((model.branches?.local ?? []).map(\.name))
+        let all = (model.branches?.remote ?? []).filter { $0.contains("/") }
+            .filter { r in !names.contains(String(r.split(separator: "/", maxSplits: 1).last ?? "")) }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? all : all.filter { Fuzzy.score(q, in: $0) != nil }
+    }
+    private var canCreate: Bool {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return !q.isEmpty && !(model.branches?.local ?? []).contains { $0.name == q }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Switch to or create a branch…", text: $query)
+                .textFieldStyle(.plain).font(K.F.small)
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                .focused($focused)
+                .onSubmit {
+                    if let first = local.first { switchTo(first.name) }
+                    else if let r = remote.first { switchTo(r) }
+                    else if canCreate { create() }
+                }
+            Hairline()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !local.isEmpty { RailHeader("Local", trailing: "\(local.count)") }
+                    ForEach(local, id: \.name) { b in
+                        HoverRow(selected: b.current) {
+                            HStack(spacing: K.S.sm) {
+                                Image(systemName: b.current ? "checkmark" : "arrow.triangle.branch")
+                                    .font(.system(size: 10)).frame(width: 12)
+                                    .foregroundStyle(b.current ? K.C.accent : K.C.faint)
+                                Text(b.name).font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                                Spacer()
+                                if b.ahead > 0 { Text("\(b.ahead)↑").font(K.F.mono(10)).foregroundStyle(K.C.add) }
+                                if b.behind > 0 { Text("\(b.behind)↓").font(K.F.mono(10)).foregroundStyle(K.C.accent) }
+                                if b.upstream == nil, !b.current {
+                                    Text("local only").font(K.F.micro).foregroundStyle(K.C.faint)
+                                }
+                            }
+                        } action: { if !b.current { switchTo(b.name) } }
+                    }
+                    if !remote.isEmpty { RailHeader("On the remote only", trailing: "\(remote.count)") }
+                    ForEach(remote, id: \.self) { r in
+                        HoverRow {
+                            HStack(spacing: K.S.sm) {
+                                Image(systemName: "icloud").font(.system(size: 10)).frame(width: 12)
+                                    .foregroundStyle(K.C.faint)
+                                Text(r).font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                                Spacer()
+                                Text("check out").font(K.F.micro).foregroundStyle(K.C.faint)
+                            }
+                        } action: { switchTo(r) }
+                    }
+                    if canCreate {
+                        Hairline().padding(.vertical, K.S.xs)
+                        HoverRow {
+                            HStack(spacing: K.S.sm) {
+                                Image(systemName: "plus").font(.system(size: 10)).frame(width: 12)
+                                    .foregroundStyle(K.C.accent)
+                                Text("Create branch ").font(K.F.small).foregroundStyle(K.C.text)
+                                + Text(query.trimmingCharacters(in: .whitespaces)).font(K.F.mono(11))
+                                    .foregroundStyle(K.C.accent)
+                                Spacer()
+                                Text("from \(model.branch ?? "HEAD")").font(K.F.micro).foregroundStyle(K.C.faint)
+                            }
+                        } action: { create() }
+                    }
+                    if local.isEmpty, remote.isEmpty, !canCreate {
+                        Text("No branches yet.").font(K.F.small).foregroundStyle(K.C.faint)
+                            .padding(K.S.md)
+                    }
+                }
+                .padding(.vertical, K.S.xs)
+            }
+            .frame(maxHeight: 320)
+            if let err = model.lastError {
+                Hairline()
+                Text(err).font(K.F.micro).foregroundStyle(K.C.del).padding(K.S.sm)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(width: 340)
+        .background(K.C.surface)
+        .onAppear { focused = true }
+    }
+
+    private func switchTo(_ name: String) {
+        close()
+        Task { await model.branch("switch", name) }
+    }
+    private func create() {
+        let name = query.trimmingCharacters(in: .whitespaces)
+        close()
+        Task { await model.branch("create", name) }
     }
 }

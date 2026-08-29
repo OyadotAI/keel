@@ -22,6 +22,27 @@ enum Wire {
     struct Scan: Decodable, Sendable {
         var score: Int
         var findings: [Finding]
+        var profile: Profile?
+        @DefaultEmpty var plan: [Phase]
+    }
+
+    /// What the scanner thinks the repository is and where it runs.
+    struct Profile: Decodable, Sendable {
+        var template: String
+        var template_title: String
+        var like: String
+        var confidence: Int
+        @DefaultEmpty var signals: [String]
+        @DefaultEmpty var hosting: [String]
+        @DefaultEmpty var stack: [String]
+    }
+
+    /// One step of the road to production: a title, why, and the finding ids in it.
+    struct Phase: Decodable, Identifiable, Sendable {
+        var title: String
+        var why: String
+        @DefaultEmpty var findings: [String]
+        var id: String { title }
     }
 
     struct Finding: Decodable, Identifiable, Sendable {
