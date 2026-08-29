@@ -36,6 +36,9 @@ pub struct NewProject {
     pub name: String,
     /// `app` for the full three-folder stack, `empty` for just the agent scaffolding.
     pub template: Option<String>,
+    /// Markdown appended to the generated CLAUDE.md: the architecture the person chose, so the
+    /// agent reads the same plan they did.
+    pub notes: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +124,15 @@ pub async fn create(
         }
     }
 
+    if let Some(notes) = req.notes.as_deref().filter(|n| !n.trim().is_empty()) {
+        let claude = root.join("CLAUDE.md");
+        let mut body = std::fs::read_to_string(&claude).unwrap_or_default();
+        body.push_str("\n## Architecture\n\nChosen when the project was created. Build to it; change it here first if it has to change.\n\n");
+        body.push_str(notes.trim());
+        body.push('\n');
+        std::fs::write(&claude, body).map_err(|e| bad(&e.to_string()))?;
+    }
+
     // A repository from the start, so the diff view and the readiness scan both have a baseline.
     let _ = std::process::Command::new("git")
         .current_dir(&root)
@@ -143,6 +155,14 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         files.push(("CLAUDE.md", crate::stack::claude_md(name)));
         files.push(("README.md", f(README_MD)));
         files.push((".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()));
+        files.push((
+            ".claude/agents/security.md",
+            crate::stack::SECURITY_AGENT.to_string(),
+        ));
+        files.push((
+            ".claude/agents/reliability.md",
+            crate::stack::RELIABILITY_AGENT.to_string(),
+        ));
         return files;
     }
 
@@ -164,6 +184,14 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         ("infra/deploy.sh", DEPLOY_SH.to_string()),
         // ── the agent's own setup ────────────────────────────────────────────────────────────
         (".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()),
+        (
+            ".claude/agents/security.md",
+            crate::stack::SECURITY_AGENT.to_string(),
+        ),
+        (
+            ".claude/agents/reliability.md",
+            crate::stack::RELIABILITY_AGENT.to_string(),
+        ),
         (
             ".claude/agents/platform-limits.md",
             LIMITS_AGENT.to_string(),
