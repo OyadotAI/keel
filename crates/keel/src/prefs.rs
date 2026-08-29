@@ -21,6 +21,13 @@ pub struct Prefs {
     /// morning, whatever you left it at, is one of the quieter ways software says it is not one.
     #[serde(default)]
     pub window: Option<(f64, f64)>,
+    /// Who can reach this Keel: `loopback` (default), `lan`, or `tailscale`.
+    ///
+    /// Absent, unrecognised, or from an older file all read as `loopback`. Every way of failing to
+    /// answer this question has to mean the closed one — the setting exists to open a port, so a
+    /// missing value must never be what opens it.
+    #[serde(default)]
+    pub bind: Option<String>,
 }
 
 /// `~/.keel`. Keel's own directory, deliberately separate from `~/.claude`: Keel reads Claude

@@ -1,0 +1,465 @@
+import AppKit
+import SwiftUI
+
+/// The conversation, and the box you type in.
+///
+/// A rail beside the stage rather than the thing itself: the turn is the unit of work, and the
+/// chat is how you steer it. Tool calls appear here as one dim line each so the shape of what the
+/// agent is doing is visible without competing with what it changed.
+struct ChatRail: View {
+    @Bindable var model: SessionModel
+    @FocusState private var composerFocused: Bool
+
+    /// Whether the view is following the stream. Scrolling up to read releases it — a pane that
+    /// drags you back to the bottom mid-sentence is worse than one that never followed.
+    @State private var pinned = true
+    @State private var lastFollow = Date.distantPast
+
+    var body: some View {
+        VStack(spacing: 0) {
+            transcript
+            Hairline()
+            Composer(model: model, focused: $composerFocused)
+        }
+        .background(K.C.surface)
+        .onReceive(NotificationCenter.default.publisher(for: .keelSend)) { _ in model.send() }
+        .onReceive(NotificationCenter.default.publisher(for: .keelStop)) { _ in model.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: .keelFocusComposer)) { _ in
+            composerFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .keelToggleMode)) { _ in
+            model.mode = model.mode == "plan" ? "acceptEdits" : "plan"
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .keelApprove)) { _ in
+            if let p = model.pending.first { model.answer(p, allow: true, scope: "session") }
+        }
+    }
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: K.S.xl) {
+                    if model.turns.isEmpty { hint }
+                    ForEach(Array(model.turns.enumerated()), id: \.element.id) { i, turn in
+                        ChatTurn(turn: turn, number: i + 1, model: model)
+                            .id("chat-\(turn.id)")
+                    }
+                    // An anchor at the very end: scrolling to the last turn stops at its top when
+                    // that turn is taller than the pane, which is exactly the case while a long
+                    // reply is streaming.
+                    Color.clear.frame(height: 1).id(Self.bottom)
+                }
+                .padding(.horizontal, K.S.xl)
+                .padding(.vertical, K.S.lg)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            // Watches the reply text as well as the tool calls. It only watched calls before, and
+            // a reply arrives as text deltas — so the pane sat still through the entire answer.
+            .onChange(of: tailToken) {
+                guard pinned else { return }
+                // Coalesced. A reply arrives as many small deltas, and calling `scrollTo` on each
+                // of them competes with the wheel and makes the pane feel like it is resisting.
+                let now = Date()
+                guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
+                lastFollow = now
+                proxy.scrollTo(Self.bottom, anchor: .bottom)
+            }
+            .onChange(of: model.pinTick) {
+                pinned = true
+                proxy.scrollTo(Self.bottom, anchor: .bottom)
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // Within a line or two of the end counts as "at the end": demanding exactness
+                // means one stray pixel silently turns following off.
+                geometry.contentOffset.y + geometry.containerSize.height
+                    >= geometry.contentSize.height - 24
+            } action: { was, atBottom in
+                // Only on a transition. Assigning on every scroll event republishes state for the
+                // whole pane mid-gesture, which is its own source of stutter.
+                if was != atBottom { pinned = atBottom }
+            }
+            .overlay(alignment: .bottom) {
+                if !pinned && model.running {
+                    Button {
+                        pinned = true
+                        withAnimation(K.M.settle) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.down").font(.system(size: 9, weight: .bold))
+                            Text("Jump to latest").font(K.F.micro)
+                        }
+                        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                        .background(K.C.raised, in: Capsule())
+                        .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(K.C.text)
+                    .padding(.bottom, K.S.md)
+                    .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    private static let bottom = "chat-bottom"
+
+    /// Everything that means "there is more text below", as one value. Includes the reply length,
+    /// which is what actually grows while an answer streams.
+    private var tailToken: String {
+        let last = model.turns.last
+        return "\(model.turns.count)-\(last?.text.count ?? 0)-\(last?.calls.count ?? 0)"
+    }
+
+    /// What an empty lane is for.
+    ///
+    /// A second agent is only worth starting if it has its own job, so this says what the good
+    /// jobs are — and, when another lane is already editing, warns that they share one working
+    /// tree. Keel has no worktree isolation on purpose; the honest thing is to say so at the point
+    /// where it matters rather than let two agents fight over the same files.
+    private var hint: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            if let lanes = model.lanes, lanes.lanes.count > 1 {
+                VStack(alignment: .leading, spacing: K.S.xs) {
+                    Text("A second agent, on the same files")
+                        .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                    Text(lanes.wouldOverlap
+                         ? "Another lane is editing right now. These share one working tree, so "
+                           + "give this one reading or planning work — two agents writing the same "
+                           + "files will overwrite each other."
+                         : "These share one working tree. Good alongside work: reading, planning, "
+                           + "reviewing what another lane just did, or resuming an old session.")
+                        .font(K.F.micro).foregroundStyle(lanes.wouldOverlap ? K.C.warn : K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(K.S.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    (lanes.wouldOverlap ? K.C.warn.opacity(0.08) : K.C.surface),
+                    in: RoundedRectangle(cornerRadius: K.R.sm)
+                )
+            }
+
+            VStack(alignment: .leading, spacing: K.S.xs) {
+                Text("Ask for a change")
+                    .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.dim)
+                ForEach(suggestions, id: \.self) { s in
+                    Button { model.prompt = s } label: {
+                        HStack(spacing: K.S.xs) {
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.system(size: 8)).foregroundStyle(K.C.faint)
+                            Text(s).font(K.F.small).foregroundStyle(K.C.faint)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+    }
+
+    /// Reading and planning first when another lane is writing, because those are the jobs that
+    /// cannot collide.
+    private var suggestions: [String] {
+        if model.lanes?.wouldOverlap == true {
+            return ["Explain how this codebase is structured",
+                    "Review the uncommitted changes and flag anything unfinished",
+                    "Plan how to add a feature, without editing anything"]
+        }
+        return ["Explain how this codebase is structured",
+                "Summarise the uncommitted changes",
+                "Fix the blocking readiness findings"]
+    }
+}
+
+/// One exchange, as a conversation.
+///
+/// Deliberately *not* the tool calls or the file counts: the stage beside this lists both, and two
+/// panes printing the same numbers is the duplication that made the window hard to read. What
+/// belongs here is what you asked, what it thought, and what it said back — plus a marker that
+/// jumps the stage to the matching turn, which is cheaper than repeating its contents.
+private struct ChatTurn: View {
+    let turn: Turn
+    let number: Int
+    let model: SessionModel
+    @State private var hovering = false
+    @State private var copied: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Button {
+                    model.focusedTurn = turn.id
+                } label: {
+                    HStack(spacing: K.S.xs) {
+                        Text("TURN \(number)")
+                            .font(.system(size: 9, weight: .semibold)).tracking(0.7)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                    .foregroundStyle(K.C.faint)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show this turn in the trace")
+
+                Spacer()
+
+                // Always laid out, revealed by opacity. Appearing on hover changed the row's
+                // width and shoved the text sideways under the pointer, which is what made
+                // hovering feel like the page was moving.
+                HStack(spacing: K.S.xs) {
+                    if !turn.text.isEmpty {
+                        CopyChip(label: "reply", copied: copied == "reply") {
+                            put(turn.text, "reply")
+                        }
+                    }
+                    CopyChip(label: "both", copied: copied == "both") {
+                        put("> \(turn.prompt)\n\n\(turn.text)", "both")
+                    }
+                }
+                .opacity(hovering || copied != nil ? 1 : 0)
+                .animation(K.M.quick, value: hovering)
+            }
+
+            HStack(alignment: .top, spacing: K.S.sm) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(K.C.accent.opacity(0.6))
+                    .frame(width: 2)
+                Text(turn.prompt)
+                    .font(K.F.body)
+                    .foregroundStyle(K.C.text)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !turn.thinking.isEmpty {
+                DisclosureGroup {
+                    Text(turn.thinking)
+                        .font(K.F.mono(10.5)).italic()
+                        .foregroundStyle(K.C.faint)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, K.S.sm)
+                        .overlay(alignment: .leading) {
+                            Rectangle().fill(K.C.line).frame(width: 2)
+                        }
+                } label: {
+                    Text("thinking").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+            }
+
+            if !turn.text.isEmpty { Markdown(turn.text) }
+        }
+        .onHover { hovering = $0 }
+        // A second route, because a hover target is no use from the keyboard or a trackpad tap.
+        .contextMenu {
+            Button("Copy reply") { put(turn.text, "reply") }
+                .disabled(turn.text.isEmpty)
+            Button("Copy question and reply") { put("> \(turn.prompt)\n\n\(turn.text)", "both") }
+            Divider()
+            Button("Show in trace") { model.focusedTurn = turn.id }
+        }
+    }
+
+    /// Copies the Markdown source rather than the rendered text: it is what you paste back into a
+    /// message, an issue or a commit, and the rendering is only for reading here.
+    private func put(_ text: String, _ which: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = which
+        Task { try? await Task.sleep(for: .seconds(1.4)); copied = nil }
+    }
+}
+
+private struct CopyChip: View {
+    let label: String
+    let copied: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 8, weight: .bold))
+                Text(copied ? "copied" : label).font(K.F.micro)
+            }
+            .foregroundStyle(copied ? K.C.add : K.C.faint)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Composer
+
+struct Composer: View {
+    @Bindable var model: SessionModel
+    @FocusState.Binding var focused: Bool
+    @State private var dropping = false
+
+    /// Two lines, growing to eight. A composer that starts a third of the pane tall is a composer
+    /// that has taken space from the conversation for nothing.
+    private var height: CGFloat {
+        let lines = model.prompt.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        return min(max(CGFloat(lines) * 16 + 20, 52), 150)
+    }
+
+    var body: some View {
+        VStack(spacing: K.S.sm) {
+            PickedCard(model: model)
+            AttachmentStrip(model: model)
+
+            if !model.notes.isEmpty {
+                Button {
+                    model.prompt = model.commentsPrompt()
+                    model.notes.removeAll()
+                    focused = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "text.bubble.fill").font(.system(size: 9))
+                        Text("Send \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")")
+                    }
+                }
+                .buttonStyle(QuietButton(tone: K.C.accent))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if !model.queued.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.down.circle").font(.system(size: 9))
+                    Text("\(model.queued.count) queued — they run in order when this turn ends")
+                        .font(K.F.micro)
+                }
+                .foregroundStyle(K.C.faint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let err = model.lastError {
+                Text(err).font(K.F.small).foregroundStyle(K.C.del)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            field
+            controls
+        }
+        .padding(.horizontal, K.S.xl)
+        .padding(.vertical, K.S.md)
+        .frame(maxWidth: 760, alignment: .leading)
+    }
+
+    private var field: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: K.R.md)
+                .fill(K.C.well)
+                .overlay(
+                    RoundedRectangle(cornerRadius: K.R.md)
+                        .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
+                                lineWidth: dropping ? 2 : 1)
+                )
+
+            if model.prompt.isEmpty {
+                Text("Describe a change…   ⌘V an image, ⌘↵ to send")
+                    .font(K.F.body).foregroundStyle(K.C.faint)
+                    .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
+                    .allowsHitTesting(false)
+            }
+
+            TextEditor(text: $model.prompt)
+                .font(K.F.body)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 2)
+                .focused($focused)
+                .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
+                    if !model.takePaste(.general) {
+                        model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
+                    }
+                }
+        }
+        .frame(height: height)
+        .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+            for p in providers {
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in model.attach(fileURL: url) }
+                }
+            }
+            return true
+        }
+    }
+
+    private var controls: some View {
+        HStack(spacing: K.S.sm) {
+            ModeToggle(mode: $model.mode)
+            Spacer()
+            if model.running {
+                Button("Stop") { model.stop() }
+                    .buttonStyle(QuietButton(tone: K.C.del))
+                    .help("Sends SIGINT — the turn ends rather than being abandoned (⌘.)")
+            } else {
+                Button {
+                    model.send()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("Send")
+                        Image(systemName: "return").font(.system(size: 9, weight: .bold))
+                    }
+                }
+                .buttonStyle(SendButton())
+                .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+}
+
+/// Plan or Auto. Named for what it does to the repository, not for a permission mode string.
+struct ModeToggle: View {
+    @Binding var mode: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            segment("Plan", "plan", "explores and proposes, changes nothing")
+            segment("Auto", "acceptEdits", "edits files, and asks before running commands")
+        }
+        .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+    }
+
+    private func segment(_ label: String, _ value: String, _ help: String) -> some View {
+        let on = mode == value
+        return Text(label)
+            .font(K.F.micro.weight(on ? .semibold : .regular))
+            .foregroundStyle(on ? K.C.text : K.C.faint)
+            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: K.R.sm - 1)
+                    .fill(on ? K.C.raised : .clear)
+                    .padding(1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { mode = value }
+            .help(help)
+    }
+}
+
+struct SendButton: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(K.F.small.weight(.medium))
+            .foregroundStyle(enabled ? Color.white : K.C.faint)
+            .padding(.horizontal, K.S.md).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: K.R.sm)
+                    .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
+                                  : K.C.line)
+            )
+    }
+}

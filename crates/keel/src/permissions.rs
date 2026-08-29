@@ -10,18 +10,31 @@
 //! every subsequent run. Approval stays a human act; it just happens in the IDE instead of a
 //! terminal prompt.
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Query, State},
+};
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::serve::AppState;
 
-/// Rules approved only for as long as this Keel process lives.
-fn session_rules() -> &'static Mutex<BTreeSet<String>> {
-    static RULES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
-    RULES.get_or_init(|| Mutex::new(BTreeSet::new()))
+/// Rules approved only for as long as this Keel process lives, keyed by the conversation that
+/// approved them.
+///
+/// Keyed, because there is more than one window now. This was a single set, so "allow once, this
+/// session" in one window silently widened what another window's agent could run — a permission
+/// nobody granted, applied to a conversation nobody was watching. Project rules stay shared,
+/// because those *are* per-project by design.
+///
+/// Never cleaned up when a session ends. Bounded by sessions opened in one run of Keel, each a
+/// handful of short strings.
+// ponytail: grows for the process lifetime; evict by session if a long-running Keel ever cares.
+fn session_rules() -> &'static Mutex<BTreeMap<String, BTreeSet<String>>> {
+    static RULES: OnceLock<Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
+    RULES.get_or_init(Default::default)
 }
 
 fn store_path(repo: &Utf8Path) -> camino::Utf8PathBuf {
@@ -128,6 +141,11 @@ pub fn defaults(repo: &Utf8Path) -> Vec<String> {
         "Bash(git status *)".into(),
         "Bash(git diff *)".into(),
         "Bash(git log *)".into(),
+        // Configuring the workspace from the chat, through the same CLI Keel's own MCP panel
+        // shells out to. Subcommands only: bare `claude` would let the agent start another agent,
+        // which is not workspace configuration and is nobody's idea of a default.
+        "Bash(claude mcp *)".into(),
+        "Bash(claude plugin *)".into(),
     ];
     if repo.join("package.json").exists() {
         let bun = repo.join("bun.lock").exists() || repo.join("bun.lockb").exists();
@@ -147,10 +165,18 @@ pub fn defaults(repo: &Utf8Path) -> Vec<String> {
     out
 }
 
-/// Every rule that should be passed to the CLI for this repository.
-pub fn effective(repo: &Utf8Path) -> Vec<String> {
+/// Every rule that should be passed to the CLI for this repository and conversation.
+///
+/// `None` means a conversation that does not exist yet — the first turn, before `claude` has
+/// generated an id. It has no session rules by definition, and anything approved during it is
+/// carried by the hook's own answer rather than by these settings.
+pub fn effective(repo: &Utf8Path, session: Option<&str>) -> Vec<String> {
     let mut all: BTreeSet<String> = load(repo);
-    all.extend(session_rules().lock().expect("rules lock").iter().cloned());
+    if let Some(session) = session
+        && let Some(rules) = session_rules().lock().expect("rules lock").get(session)
+    {
+        all.extend(rules.iter().cloned());
+    }
     // The project's own build and test commands, applied rather than merely suggested.
     //
     // Running what a repository declares about itself is the reason the agent is here, and asking
@@ -161,6 +187,11 @@ pub fn effective(repo: &Utf8Path) -> Vec<String> {
     all.into_iter().collect()
 }
 
+/// Tools whose refusal becomes a question rather than an error.
+///
+/// A Claude Code matcher is a regular expression over the tool name, so this is one alternation.
+pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch";
+
 /// The `--settings` payload carrying those rules.
 /// The settings Keel hands `claude`: the allowlist, and the hook that makes the agent wait.
 ///
@@ -169,13 +200,19 @@ pub fn effective(repo: &Utf8Path) -> Vec<String> {
 /// Keel's own, points at Keel's own binary, and is passed on the command line rather than read
 /// from the working tree — the thing that made repo hooks dangerous is exactly the thing this
 /// does not do.
-pub fn settings_json(repo: &Utf8Path, port: u16) -> String {
-    let mut allow = effective(repo);
+pub fn settings_json(repo: &Utf8Path, port: u16, session: Option<&str>) -> String {
+    let mut allow = effective(repo, session);
     if trusted(repo) {
-        // A bare tool name allows every use of it. With the project trusted the hook answers
-        // instantly anyway; this is here so the two paths agree, and so a session that somehow
-        // runs without the hook behaves the same rather than differently.
-        allow.push("Bash".into());
+        // Every tool the hook covers, not just `Bash`.
+        //
+        // A bare tool name allows every use of it. This matters more than it looks: on a trusted
+        // project the hook answers `defer` immediately, which means "fall through to this
+        // allowlist" — so a tool the hook covers but the allowlist omits is refused *and* never
+        // asked about. `Bash` alone made trusting a project the one state in which `WebFetch`
+        // could not be approved at all, by anyone, ever.
+        for tool in HOOKED_TOOLS.split('|') {
+            allow.push(tool.to_string());
+        }
     }
     let mut settings = serde_json::json!({ "permissions": { "allow": allow } });
 
@@ -184,10 +221,16 @@ pub fn settings_json(repo: &Utf8Path, port: u16) -> String {
     // back to the behaviour that at least does not hang.
     if let Ok(exe) = std::env::current_exe() {
         settings["hooks"] = serde_json::json!({
-            // Bash only. Edits are already covered by `acceptEdits`, and asking about every Read
-            // would turn the loop into a clicking exercise.
+            // The tools that can be refused and that a person can meaningfully widen.
+            //
+            // `Bash` was the whole list, which meant a `WebSearch` denial never reached anyone:
+            // the agent was refused, said so in its reply, and there was no question to answer
+            // anywhere — the exact failure this hook exists to prevent, for every tool but one.
+            //
+            // Reads and edits stay out. Edits are covered by `acceptEdits`, and asking about every
+            // `Read` turns the loop into a clicking exercise.
             "PreToolUse": [{
-                "matcher": "Bash",
+                "matcher": HOOKED_TOOLS,
                 "hooks": [{
                     "type": "command",
                     "command": format!("{} approve --port {port}", exe.display()),
@@ -227,15 +270,31 @@ pub async fn trust(
     Ok(Json(body.trusted))
 }
 
-pub async fn list(State(state): State<Arc<AppState>>) -> Json<PermissionsView> {
+#[derive(Deserialize)]
+pub struct SessionQuery {
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SessionQuery>,
+) -> Json<PermissionsView> {
     let repo = state.repo();
     let project = load(&repo);
-    let session: Vec<String> = session_rules()
-        .lock()
-        .expect("rules lock")
-        .iter()
-        .cloned()
-        .collect();
+    // Only this window's one-time rules. Showing another conversation's would suggest they applied
+    // here, which is exactly the confusion the keying removed.
+    let session: Vec<String> = q
+        .session
+        .as_deref()
+        .and_then(|s| {
+            session_rules()
+                .lock()
+                .expect("rules lock")
+                .get(s)
+                .map(|r| r.iter().cloned().collect())
+        })
+        .unwrap_or_default();
     // These are applied now, not suggested — the panel shows them so it is visible *why* the
     // agent can run `make` without ever having asked, rather than leaving that unexplained.
     let suggested = defaults(&repo);
@@ -253,6 +312,9 @@ pub struct RuleBody {
     pub rule: String,
     /// `project` persists to `.keel/permissions.json`; `session` lasts until Keel restarts.
     pub scope: String,
+    /// Which conversation a `session` rule belongs to. Ignored for `project`.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 /// A rule must look like a tool pattern, not a shell fragment.
@@ -267,7 +329,12 @@ fn valid_rule(rule: &str) -> bool {
 }
 
 /// Store a rule. Shared by the HTTP handler and by an approval answered while the agent waits.
-pub fn remember(repo: &Utf8Path, rule: &str, scope: &str) -> Result<(), String> {
+pub fn remember(
+    repo: &Utf8Path,
+    rule: &str,
+    scope: &str,
+    session: Option<&str>,
+) -> Result<(), String> {
     if !valid_rule(rule) {
         return Err("That does not look like a permission rule, e.g. `Bash(bun *)`.".into());
     }
@@ -280,9 +347,16 @@ pub fn remember(repo: &Utf8Path, rule: &str, scope: &str) -> Result<(), String> 
             save(repo, &rules)
         }
         _ => {
+            // A one-time rule with no conversation to belong to would be a rule that applies
+            // everywhere and expires nowhere — the bug this keying exists to remove.
+            let Some(session) = session else {
+                return Err("A session rule needs the conversation it belongs to.".into());
+            };
             session_rules()
                 .lock()
                 .expect("rules lock")
+                .entry(session.to_string())
+                .or_default()
                 .insert(rule.to_string());
             Ok(())
         }
@@ -297,7 +371,13 @@ pub async fn add(
     if !matches!(body.scope.as_str(), "project" | "session") {
         return Err(bad("scope must be `project` or `session`"));
     }
-    remember(&state.repo(), &body.rule, &body.scope).map_err(|e| bad(&e))?;
+    remember(
+        &state.repo(),
+        &body.rule,
+        &body.scope,
+        body.session.as_deref(),
+    )
+    .map_err(|e| bad(&e))?;
     Ok(Json(true))
 }
 
@@ -306,10 +386,11 @@ pub async fn remove(
     Json(body): Json<RuleBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     if body.scope == "session" {
-        session_rules()
-            .lock()
-            .expect("rules lock")
-            .remove(&body.rule);
+        if let Some(session) = body.session.as_deref()
+            && let Some(rules) = session_rules().lock().expect("rules lock").get_mut(session)
+        {
+            rules.remove(&body.rule);
+        }
     } else {
         let repo = state.repo();
         let mut rules = load(&repo);
@@ -324,6 +405,42 @@ mod tests {
     use super::*;
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
+
+    /// "Allow once, this session" means this conversation, not every window's.
+    ///
+    /// The session set used to be a single global, so approving a command once in one window
+    /// silently let another window's agent run it too — a permission the person never granted for
+    /// that conversation, applied where they were not looking.
+    #[test]
+    fn a_one_time_rule_does_not_leak_into_another_conversation() {
+        let (_dir, root) = repo(&[]);
+
+        remember(&root, "Bash(docker *)", "session", Some("session-a")).expect("remembered");
+
+        assert!(
+            effective(&root, Some("session-a")).contains(&"Bash(docker *)".to_string()),
+            "the conversation that approved it can run it"
+        );
+        assert!(
+            !effective(&root, Some("session-b")).contains(&"Bash(docker *)".to_string()),
+            "another conversation still has to ask"
+        );
+        assert!(
+            !effective(&root, None).contains(&"Bash(docker *)".to_string()),
+            "and so does a conversation that does not exist yet"
+        );
+
+        // A project rule is shared on purpose: it is a decision about the repository, not about
+        // one conversation in it.
+        remember(&root, "Bash(bun *)", "project", None).expect("remembered");
+        assert!(
+            effective(&root, Some("session-b")).contains(&"Bash(bun *)".to_string()),
+            "a project rule still reaches every conversation"
+        );
+
+        // A one-time rule with nowhere to belong is refused rather than made global.
+        assert!(remember(&root, "Bash(rm *)", "session", None).is_err());
+    }
 
     fn repo(files: &[&str]) -> (TempDir, Utf8PathBuf) {
         let dir = TempDir::new().expect("tempdir");
@@ -346,6 +463,23 @@ mod tests {
         assert!(d.contains(&"Bash(cargo *)".to_string()));
         assert!(d.contains(&"Bash(make *)".to_string()));
         assert!(!d.contains(&"Bash(bun *)".to_string()));
+    }
+
+    /// Managing MCP servers and plugins is something the person can do in a terminal in one
+    /// command, and asking to approve `claude mcp list` is a question with one answer.
+    #[test]
+    fn the_workspace_cli_needs_no_approval() {
+        let (_d, root) = repo(&[]);
+        let d = defaults(&root);
+        assert!(d.contains(&"Bash(claude mcp *)".to_string()));
+        assert!(d.contains(&"Bash(claude plugin *)".to_string()));
+        // Bare `claude` would be an agent spawning agents, not configuration.
+        assert!(!d.contains(&"Bash(claude *)".to_string()));
+        // And the rules survive the sanity filter on read, or they would vanish silently.
+        assert!(
+            d.iter().all(|r| sane(r)),
+            "a default that reads back as junk"
+        );
     }
 
     #[test]
@@ -409,7 +543,7 @@ mod tests {
     #[test]
     fn the_projects_own_commands_need_no_approval() {
         let (_d, root) = repo(&["Cargo.toml", "Makefile"]);
-        let effective = effective(&root);
+        let effective = effective(&root, None);
         for rule in ["Bash(cargo *)", "Bash(make *)", "Bash(git status *)"] {
             assert!(
                 effective.contains(&rule.to_string()),
@@ -446,7 +580,7 @@ mod tests {
     #[test]
     fn trust_and_the_allowlist_are_independent() {
         let (_d, root) = repo(&["Cargo.toml"]);
-        remember(&root, "Bash(docker *)", "project").unwrap();
+        remember(&root, "Bash(docker *)", "project", None).unwrap();
         set_trusted(&root, true).unwrap();
 
         assert!(trusted(&root));
@@ -462,15 +596,39 @@ mod tests {
 
     /// A trusted project passes a blanket rule too, so the hook path and the plain permission path
     /// cannot disagree about what is allowed.
+    /// Trusting a project must not be the one state in which a tool cannot be used.
+    ///
+    /// The hook defers on a trusted project, so the allowlist is the only thing deciding — and it
+    /// listed `Bash` alone. `WebFetch` was therefore refused with no question raised and no rule
+    /// that could be added, which is worse than not trusting at all.
+    #[test]
+    fn trust_allows_every_tool_the_hook_would_have_asked_about() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        set_trusted(&root, true).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7777, None)).unwrap();
+        let allow = json["permissions"]["allow"].as_array().unwrap();
+
+        for tool in HOOKED_TOOLS.split('|') {
+            assert!(
+                allow.iter().any(|r| r == tool),
+                "a trusted project cannot use {tool}: the hook defers and the allowlist omits it"
+            );
+        }
+    }
+
     #[test]
     fn a_trusted_project_says_so_in_its_settings() {
         let (_d, root) = repo(&["Cargo.toml"]);
-        let before: serde_json::Value = serde_json::from_str(&settings_json(&root, 7777)).unwrap();
+        let before: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7777, None)).unwrap();
         let allow = before["permissions"]["allow"].as_array().unwrap();
         assert!(!allow.iter().any(|r| r == "Bash"));
 
         set_trusted(&root, true).unwrap();
-        let after: serde_json::Value = serde_json::from_str(&settings_json(&root, 7777)).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7777, None)).unwrap();
         let allow = after["permissions"]["allow"].as_array().unwrap();
         assert!(allow.iter().any(|r| r == "Bash"));
     }
@@ -479,7 +637,7 @@ mod tests {
     fn settings_payload_is_shaped_the_way_the_cli_expects() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777)).expect("valid json");
+            serde_json::from_str(&settings_json(&root, 7777, None)).expect("valid json");
         assert!(json["permissions"]["allow"].is_array());
     }
 
@@ -490,10 +648,18 @@ mod tests {
     fn the_settings_carry_the_hook_that_blocks_the_agent() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7788)).expect("valid json");
+            serde_json::from_str(&settings_json(&root, 7788, None)).expect("valid json");
 
         let hook = &json["hooks"]["PreToolUse"][0];
-        assert_eq!(hook["matcher"], "Bash");
+        assert_eq!(hook["matcher"], HOOKED_TOOLS);
+        // The regression this guards: `Bash` alone meant every other refusable tool failed
+        // silently, with the agent reporting it could not proceed and no question anywhere.
+        for tool in ["Bash", "WebSearch", "WebFetch"] {
+            assert!(
+                HOOKED_TOOLS.split('|').any(|t| t == tool),
+                "{tool} can be refused but its refusal would never be asked about"
+            );
+        }
 
         let entry = &hook["hooks"][0];
         assert_eq!(entry["type"], "command");

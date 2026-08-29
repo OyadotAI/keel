@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build dist/Keel.app from a release binary.
 #
-# There is no Xcode project because there is nothing to compile that cargo does not already build:
-# a bundle is a directory with a plist in it.
+# There is no Xcode project. The app is Swift built with SwiftPM and the daemon is built by cargo;
+# a bundle is a directory with a plist in it, and neither toolchain needs Xcode's project format to
+# produce one. `xcodebuild` also refuses to run until its licence is accepted, which is a thing to
+# make a release depend on only if it buys something.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,12 +15,21 @@ cd "$root"
 version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
 app="dist/Keel.app"
 
-echo "==> building keel $version (release)"
+echo "==> building the keel daemon $version (release)"
 cargo build --release --quiet
+
+echo "==> building the Keel app (release)"
+swift build --package-path app -c release
 
 echo "==> assembling $app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# The Swift app is what launches; the Rust binary rides along beside it as the daemon the app
+# spawns, and is the same binary as `keel serve` on a PATH. One artifact, two entry points.
+cp "app/$(swift build --package-path app -c release --show-bin-path)/KeelApp" \
+   "$app/Contents/MacOS/KeelApp" 2>/dev/null \
+  || cp "$(swift build --package-path app -c release --show-bin-path)/KeelApp" \
+        "$app/Contents/MacOS/KeelApp"
 cp target/release/keel "$app/Contents/MacOS/keel"
 sed "s/__VERSION__/$version/g" packaging/Info.plist > "$app/Contents/Info.plist"
 

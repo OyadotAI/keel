@@ -33,11 +33,43 @@ enum Cmd {
     Resize(u16, u16),
 }
 
+/// What the pty sends back.
+///
+/// Two kinds on one socket, split the same way the browser's own messages are: bytes are output,
+/// text is out of band. So a websocket text frame is the tab's title and never terminal output.
+enum Out {
+    Bytes(Vec<u8>),
+    Title(String),
+}
+
+/// The program name to show on the tab, from whatever `ps` prints for a pid.
+///
+/// `comm` is a path on macOS (`/bin/zsh`) and a login shell wears a leading hyphen (`-zsh`), and a
+/// tab labelled `/bin/zsh` is a tab labelled nothing.
+fn program_name(raw: &str) -> Option<String> {
+    let name = raw
+        .trim()
+        .rsplit('/')
+        .next()?
+        .trim_start_matches('-')
+        .trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// What is running in the foreground of this pty right now — the shell when nothing else is.
+fn foreground(pid: i32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    program_name(&String::from_utf8_lossy(&out.stdout))
+}
+
 async fn session(socket: WebSocket, cwd: String) {
     use futures_util::{SinkExt, StreamExt};
     let (mut sender, mut receiver) = socket.split();
 
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Out>(256);
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<Cmd>();
 
     // The pty master is Send but not Sync, so it cannot live in an async task that awaits. One
@@ -45,8 +77,12 @@ async fn session(socket: WebSocket, cwd: String) {
     let spawned = std::thread::spawn(move || pty_thread(&cwd, out_tx, cmd_rx));
 
     let pump = tokio::spawn(async move {
-        while let Some(bytes) = out_rx.recv().await {
-            if sender.send(Message::Binary(bytes.into())).await.is_err() {
+        while let Some(msg) = out_rx.recv().await {
+            let frame = match msg {
+                Out::Bytes(bytes) => Message::Binary(bytes.into()),
+                Out::Title(name) => Message::Text(name.into()),
+            };
+            if sender.send(frame).await.is_err() {
                 break;
             }
         }
@@ -82,7 +118,7 @@ async fn session(socket: WebSocket, cwd: String) {
 /// Own the pty for the life of one session.
 fn pty_thread(
     cwd: &str,
-    out: tokio::sync::mpsc::Sender<Vec<u8>>,
+    out: tokio::sync::mpsc::Sender<Out>,
     cmds: std::sync::mpsc::Receiver<Cmd>,
 ) {
     let pty = NativePtySystem::default();
@@ -92,7 +128,7 @@ fn pty_thread(
         pixel_width: 0,
         pixel_height: 0,
     }) else {
-        let _ = out.blocking_send(b"could not open a pty\r\n".to_vec());
+        let _ = out.blocking_send(Out::Bytes(b"could not open a pty\r\n".to_vec()));
         return;
     };
 
@@ -102,7 +138,7 @@ fn pty_thread(
     cmd.env("TERM", "xterm-256color");
 
     let Ok(mut child) = pair.slave.spawn_command(cmd) else {
-        let _ = out.blocking_send(b"could not start a shell\r\n".to_vec());
+        let _ = out.blocking_send(Out::Bytes(b"could not start a shell\r\n".to_vec()));
         return;
     };
     drop(pair.slave);
@@ -110,6 +146,7 @@ fn pty_thread(
     let Ok(mut reader) = pair.master.try_clone_reader() else {
         return;
     };
+    let titles = out.clone();
     let mut writer = pair.master.take_writer().ok();
 
     // Reading is blocking and must not stall command handling.
@@ -119,7 +156,7 @@ fn pty_thread(
             match std::io::Read::read(&mut reader, &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if out.blocking_send(buf[..n].to_vec()).is_err() {
+                    if out.blocking_send(Out::Bytes(buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
@@ -127,15 +164,34 @@ fn pty_thread(
         }
     });
 
-    while let Ok(cmd) = cmds.recv() {
-        match cmd {
-            Cmd::Input(bytes) => {
+    // Whatever is in the pty's foreground process group is what the person is running, which is
+    // the only honest name for the tab: `zsh` at a prompt, `cargo` while it builds. Polled on the
+    // command loop's own timeout rather than from a third thread, and `ps` runs only when the
+    // group actually changed — an idle terminal spawns nothing.
+    // `pid_t` is `i32` everywhere this runs, and a whole dependency to spell that is not worth it.
+    let mut showing: Option<i32> = None;
+    let announce = |master: &(dyn portable_pty::MasterPty + Send), showing: &mut Option<i32>| {
+        let pgid = master.process_group_leader();
+        if pgid == *showing {
+            return true;
+        }
+        *showing = pgid;
+        match pgid.and_then(foreground) {
+            Some(name) => titles.blocking_send(Out::Title(name)).is_ok(),
+            None => true,
+        }
+    };
+    announce(pair.master.as_ref(), &mut showing);
+
+    loop {
+        match cmds.recv_timeout(std::time::Duration::from_millis(700)) {
+            Ok(Cmd::Input(bytes)) => {
                 if let Some(w) = writer.as_mut() {
                     let _ = std::io::Write::write_all(w, &bytes);
                     let _ = std::io::Write::flush(w);
                 }
             }
-            Cmd::Resize(cols, rows) => {
+            Ok(Cmd::Resize(cols, rows)) => {
                 let _ = pair.master.resize(PtySize {
                     rows,
                     cols,
@@ -143,8 +199,30 @@ fn pty_thread(
                     pixel_height: 0,
                 });
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if !announce(pair.master.as_ref(), &mut showing) {
+            break;
         }
     }
 
     let _ = child.kill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `ps -o comm=` actually prints, on both platforms and for a login shell.
+    #[test]
+    fn a_tab_is_named_after_the_program_not_its_path() {
+        assert_eq!(program_name("/bin/zsh\n").as_deref(), Some("zsh"));
+        assert_eq!(program_name("-zsh").as_deref(), Some("zsh"));
+        assert_eq!(program_name("cargo\n").as_deref(), Some("cargo"));
+        assert_eq!(program_name("/usr/bin/vim ").as_deref(), Some("vim"));
+        // A dead pid prints nothing, and an empty tab title is worse than the number it replaces.
+        assert_eq!(program_name(""), None);
+        assert_eq!(program_name("  \n"), None);
+    }
 }

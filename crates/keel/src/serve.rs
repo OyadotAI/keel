@@ -1,36 +1,25 @@
 //! The local IDE server.
 //!
-//! Binds to loopback only. Keel reads the developer's repositories, their Claude Code sessions and
-//! (later) their cloud credentials; none of that should be reachable from another machine, so the
-//! bind address is not configurable.
+//! A JSON and SSE API, and nothing else — the Swift app in `app/` is the only thing that draws it.
+//! There was a web UI compiled in here, with Monaco alongside it; both are gone, and with them the
+//! handlers that existed only to feed an editor (`/api/file`, `/api/file/original`, `/api/save`).
+//!
+//! Binds to loopback by default, and only leaves it when a device has been paired — see `pair.rs`,
+//! which also owns the bearer token that anything off this machine has to carry. Keel reads the
+//! developer's repositories, their Claude Code sessions and their cloud credentials, so reaching
+//! any of that from another machine is a decision, never a default.
 
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{Query, State},
     http::header,
-    response::Html,
     routing::get,
 };
 use camino::Utf8PathBuf;
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-
-/// The single page, compiled into the binary so `keel` stays one file with no assets to lose.
-const INDEX: &str = include_str!("../../../ui/index.html");
-
-/// Monaco, vendored and compiled in for the same reason.
-///
-/// The editor is the one part of an IDE that cannot be approximated: a textarea behind a
-/// highlighted div gives you no multi-cursor, no column selection, no folding, no real find and
-/// replace, and no undo worth the name. Monaco is the engine VS Code itself runs on and ships a
-/// prebuilt bundle needing no build step. The heavy language services (TypeScript, CSS, HTML
-/// workers, ~7.5MB) are deliberately excluded — they add intellisense on top of editing, and
-/// editing is what was missing.
-#[derive(rust_embed::Embed)]
-#[folder = "$CARGO_MANIFEST_DIR/../../ui/vendor/"]
-struct Vendor;
 
 pub struct AppState {
     repo: std::sync::RwLock<Utf8PathBuf>,
@@ -222,12 +211,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
     let state = Arc::new(state);
 
     let app = Router::new()
-        .route("/", get(index))
-        .route("/vendor/{*path}", get(vendor))
         .route("/api/state", get(api_state))
         .route("/api/tree", get(api_tree))
-        .route("/api/file", get(api_file))
-        .route("/api/file/original", get(api_original))
         .route("/api/session", get(api_session))
         .route("/api/session/work", get(api_session_work))
         .route(
@@ -236,9 +221,17 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::api::chat))
+        .route(
+            "/api/attach",
+            axum::routing::post(crate::api::attach)
+                // No route overrides axum's 2 MB default, which a phone screenshot clears easily.
+                // Scoped to this route: the limit exists for attachments, not for every handler.
+                .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
         .route("/api/git/status", get(api_git_status))
         .route("/api/git/diff", get(api_git_diff))
-        .route("/api/save", axum::routing::post(api_save))
+        .route("/api/git/act", axum::routing::post(api_git_act))
+        .route("/api/git/init", axum::routing::post(api_git_init))
         .route("/api/permissions", get(crate::permissions::list))
         .route(
             "/api/permissions/trust",
@@ -277,6 +270,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             axum::routing::post(crate::connect::disconnect),
         )
         .route("/api/github/repos", get(crate::connect::repos))
+        .route("/api/github/pr", get(crate::pr::create))
         .route("/api/plugins", get(crate::plugins::list))
         .route("/api/plugins/install", get(crate::plugins::install))
         .route("/api/plugins/action", get(crate::plugins::action))
@@ -305,15 +299,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/aws/sso",
             axum::routing::post(crate::aws::configure_sso),
         )
-        .route("/api/gcp", get(crate::gcp::state))
-        .route("/api/gcp/regions", get(crate::gcp::regions))
-        .route("/api/gcp/connect", get(crate::gcp::connect))
-        .route("/api/gcp/create", get(crate::gcp::create))
-        .route("/api/k8s", get(crate::infra::cluster))
-        .route("/api/k8s/workload", get(crate::infra::workload))
-        .route("/api/k8s/namespace", get(crate::infra::set_namespace))
-        .route("/api/open-url", axum::routing::post(crate::infra::open_url))
-        .route("/api/pipelines", get(crate::infra::pipelines))
+        .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
         .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/cli", get(crate::clitools::status))
@@ -327,22 +313,74 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/open", axum::routing::post(crate::connect::open_repo))
         .route("/api/browse", get(crate::connect::browse))
         .route("/api/browse-files", get(crate::connect::browse_files))
+        .route("/api/pair/begin", axum::routing::post(crate::pair::begin))
+        .route(
+            "/api/pair/complete",
+            axum::routing::post(crate::pair::complete),
+        )
+        .route("/api/pair/devices", get(crate::pair::devices))
+        .route(
+            "/api/pair/devices/{id}",
+            axum::routing::delete(crate::pair::revoke),
+        )
         .route(
             "/api/project/new",
             axum::routing::post(crate::project::create),
         )
+        // Every request passes this, and for the loopback callers that are the only ones today
+        // it is one `is_loopback()` and nothing else.
+        .layer(axum::middleware::from_fn(crate::pair::guard))
         .with_state(state);
 
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let (ip, reach) = bind_address();
+    let addr = SocketAddr::from((ip, port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding {addr} (is another keel already running?)"))?;
 
-    println!("\n  Keel — {url}\n  Ctrl-C to stop\n");
+    println!("\n  Keel — {url}{reach}\n  Ctrl-C to stop\n");
     open_ui(&url, launch);
 
-    axum::serve(listener, app).await.context("serving")?;
+    // `ConnectInfo` is what lets the guard tell a loopback caller from a stranger. Without it the
+    // guard cannot answer its only question, so this is not an optional flourish.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("serving")?;
     Ok(())
+}
+
+/// Where to listen, and what to say about it.
+///
+/// Off-loopback requires a paired device. The check is here rather than in the settings UI because
+/// this is the last point before a socket exists: a hand-edited `state.json`, a stale file copied
+/// between machines, or a future caller that forgets to ask all arrive here, and all of them must
+/// end up on 127.0.0.1 rather than on the network.
+fn bind_address() -> (Ipv4Addr, String) {
+    let mode = crate::prefs::Prefs::load().bind.unwrap_or_default();
+    if mode.is_empty() || mode == "loopback" {
+        return (Ipv4Addr::LOCALHOST, String::new());
+    }
+    if !crate::pair::any_paired() {
+        println!("\n  Not listening beyond this machine: no device is paired yet.");
+        return (Ipv4Addr::LOCALHOST, String::new());
+    }
+    match mode.as_str() {
+        "lan" => (
+            Ipv4Addr::UNSPECIFIED,
+            "  ·  reachable on this network".into(),
+        ),
+        "tailscale" => match crate::pair::tailscale_ip() {
+            Some(ip) => (ip, format!("  ·  reachable at {ip} over Tailscale")),
+            None => {
+                println!("\n  Tailscale is not up, so Keel is listening on this machine only.");
+                (Ipv4Addr::LOCALHOST, String::new())
+            }
+        },
+        _ => (Ipv4Addr::LOCALHOST, String::new()),
+    }
 }
 
 /// Walking a repository is filesystem work, not async work.
@@ -367,24 +405,6 @@ where
     T: Send + 'static,
 {
     tokio::task::spawn_blocking(work).await.unwrap_or(fallback)
-}
-
-async fn api_file(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<crate::api::FileQuery>,
-) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
-    crate::api::read_file(&state.repo(), &query.path)
-        .map(Json)
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
-}
-
-async fn api_original(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<crate::api::FileQuery>,
-) -> Result<Json<crate::api::FileResponse>, (axum::http::StatusCode, String)> {
-    crate::api::read_original(&state.repo(), &query.path)
-        .map(Json)
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_raw(
@@ -444,53 +464,36 @@ async fn api_git_diff(
     )
 }
 
-async fn api_save(
+#[derive(serde::Deserialize)]
+struct GitActRequest {
+    action: String,
+    path: String,
+}
+
+/// Stage, unstage or discard one file, from the Changes panel.
+/// `git init`, for a project that is not one yet.
+async fn api_git_init(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<crate::api::SaveRequest>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    crate::api::write_file(&state.repo(), &req)
-        .map(|_| Json(true))
+    let repo = state.repo();
+    blocking(move || crate::api::git_init(&repo), Err("timed out".into()))
+        .await
+        .map(|()| Json(true))
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
-/// Serve a vendored asset straight from the binary.
-async fn vendor(
-    axum::extract::Path(path): axum::extract::Path<String>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    match Vendor::get(&path) {
-        Some(file) => {
-            let mime = mime_for(&path);
-            // These are content-addressed by filename, so they can be cached hard.
-            (
-                [
-                    (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                ],
-                file.data,
-            )
-                .into_response()
-        }
-        None => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
-    }
-}
-
-fn mime_for(path: &str) -> &'static str {
-    match path.rsplit('.').next() {
-        Some("js") => "text/javascript; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("json") => "application/json",
-        Some("ttf") => "font/ttf",
-        Some("svg") => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
-}
-
-async fn index() -> impl axum::response::IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        Html(INDEX),
+async fn api_git_act(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GitActRequest>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    let repo = state.repo();
+    blocking(
+        move || crate::api::git_act(&repo, &req.action, &req.path),
+        Err("timed out".into()),
     )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
@@ -545,261 +548,4 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         scan,
         workspace,
     })
-}
-
-#[cfg(test)]
-mod ui_tests {
-    /// The UI is one HTML file with one large inline script, and a syntax error anywhere in it
-    /// kills the entire page — no sidebar, no status rail, nothing in the console until you look
-    /// for it. That happened once, from a patch that duplicated a block and so declared the same
-    /// `let` twice. Nothing caught it but a screenshot.
-    ///
-    /// Skipped when node is not installed rather than failed: this asserts something about the
-    /// UI, and refusing to build on a machine without a JavaScript runtime would be a worse trade
-    /// than missing the check there.
-    #[test]
-    fn the_ui_script_parses() {
-        let html = include_str!("../../../ui/index.html");
-        let script = html
-            .rsplit_once("<script>")
-            .and_then(|(_, tail)| tail.split_once("</script>"))
-            .map(|(body, _)| body)
-            .expect("the UI has an inline script");
-        assert!(script.len() > 10_000, "found the wrong script block");
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ui.js");
-        std::fs::write(&path, script).unwrap();
-
-        let Ok(out) = std::process::Command::new("node")
-            .arg("--check")
-            .arg(&path)
-            .output()
-        else {
-            eprintln!("node not installed — skipping the UI syntax check");
-            return;
-        };
-
-        assert!(
-            out.status.success(),
-            "ui/index.html has a JavaScript syntax error, which blanks the whole page:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    /// A CSS variable that was never defined takes its whole declaration with it.
-    ///
-    /// `var(--acc)` where the token is `--accent` did not fail loudly: the background it was set
-    /// on was simply dropped, the `color: #fff` beside it was not, and every context menu turned
-    /// white text on a white background. `var(--s7)` where the scale stops at `--s6` silently
-    /// removed the spacing between the welcome screen's sections. Both are invisible until someone
-    /// looks at the right pixel.
-    ///
-    /// A `var(--x, fallback)` is deliberate and allowed — that is how the runtime-set ones work.
-    #[test]
-    fn no_control_is_invisible_until_hovered() {
-        // Three separate reports came in as "I cannot find the X": the session rename, the console
-        // close, the per-card actions. All three were `opacity:0` with a `:hover` rule to bring
-        // them back — an affordance only findable by someone who already knew where it was, which
-        // is precisely the person who does not need it.
-        //
-        // `.onhover` is the deliberate exception and says so at its definition: switching accounts
-        // is a real thing to want, and putting it in front of somebody whose connection is working
-        // is worse than making them look for it.
-        let html = include_str!("../../../ui/index.html");
-        let css = html
-            .split_once("<style>")
-            .and_then(|(_, tail)| tail.split_once("</style>"))
-            .map(|(body, _)| body)
-            .expect("the UI has a stylesheet");
-
-        let hidden: Vec<&str> = css
-            .lines()
-            .filter(|line| line.contains("opacity:0}") || line.contains("opacity:0;"))
-            .filter(|line| line.trim_start().starts_with('.') || line.trim_start().starts_with('#'))
-            // Animations fade things in; they are not a permanent state.
-            .filter(|line| !line.contains("@keyframes"))
-            .filter(|line| !line.contains(".boot") && !line.contains(".onhover"))
-            // A tab's close button is drawn on the tab that is open, which is the one you can close.
-            .filter(|line| !line.contains(".tab .x"))
-            .collect();
-
-        assert!(
-            hidden.is_empty(),
-            "these controls are invisible until hovered, so nobody finds them: {hidden:#?}"
-        );
-    }
-
-    #[test]
-    fn every_css_variable_is_defined() {
-        let html = include_str!("../../../ui/index.html");
-        let css = html
-            .split_once("<style>")
-            .and_then(|(_, tail)| tail.split_once("</style>"))
-            .map(|(body, _)| body)
-            .expect("the UI has a stylesheet");
-
-        let defined: std::collections::HashSet<&str> = css
-            .match_indices("--")
-            .filter_map(|(at, _)| {
-                let rest = &css[at..];
-                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-')?;
-                rest[end..].starts_with(':').then(|| &rest[..end])
-            })
-            .collect();
-
-        let mut missing: Vec<&str> = html
-            .match_indices("var(--")
-            .filter_map(|(at, _)| {
-                let rest = &html[at + 4..];
-                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-')?;
-                // A comma means a fallback was supplied on purpose.
-                rest[end..].starts_with(')').then(|| &rest[..end])
-            })
-            .filter(|name| !defined.contains(name))
-            .collect();
-        missing.sort_unstable();
-        missing.dedup();
-
-        assert!(
-            missing.is_empty(),
-            "these CSS variables are used with no definition and no fallback, so their whole \
-             declaration is silently dropped: {missing:?}"
-        );
-    }
-
-    /// Two top-level functions with the same name is legal JavaScript and the second one wins.
-    ///
-    /// `drawPreview` was declared twice — once for rendering a Markdown file, once for the dev
-    /// server's browser pane — so every Markdown file opened into the browser pane instead. No
-    /// error, no warning, and `node --check` is perfectly happy with it.
-    #[test]
-    fn no_function_is_declared_twice() {
-        let html = include_str!("../../../ui/index.html");
-        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-
-        for line in html.lines() {
-            let Some(rest) = line.strip_prefix("function ") else {
-                continue;
-            };
-            let Some(name) = rest.split('(').next() else {
-                continue;
-            };
-            *seen.entry(name.trim()).or_default() += 1;
-        }
-
-        let mut dupes: Vec<&str> = seen
-            .iter()
-            .filter(|(_, n)| **n > 1)
-            .map(|(name, _)| *name)
-            .collect();
-        dupes.sort_unstable();
-
-        assert!(
-            dupes.is_empty(),
-            "declared more than once at the top level, so only the last one exists: {dupes:?}"
-        );
-    }
-
-    /// A scrolling flex child must be allowed to shrink.
-    ///
-    /// A flex item's `min-height` defaults to `auto`, which resolves to its own content — so an
-    /// `overflow-y: auto` child of a flex column grows to fit everything instead of scrolling,
-    /// pushes its siblings out of a container with `overflow: hidden`, and never scrolls because
-    /// it is never overflowing.
-    ///
-    /// That is what happened to the chat: as the agent wrote, the composer was pushed off the
-    /// bottom and the log stopped scrolling. One missing declaration, invisible until a
-    /// conversation got long enough, and invisible to a headless DOM because nothing there does
-    /// layout. A grep is the only thing that catches this class, so here it is.
-    #[test]
-    fn a_scrolling_flex_child_can_shrink() {
-        let html = include_str!("../../../ui/index.html");
-        let css = html
-            .split_once("<style>")
-            .and_then(|(_, tail)| tail.split_once("</style>"))
-            .map(|(body, _)| body)
-            .expect("the UI has a stylesheet");
-
-        let mut offenders = Vec::new();
-        for rule in css.split('}') {
-            let Some((selector, body)) = rule.split_once('{') else {
-                continue;
-            };
-            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-            if !flat.contains("flex:1") {
-                continue;
-            }
-            let scrolls = flat.contains("overflow-y:auto")
-                || flat.contains("overflow:auto")
-                || flat.contains("overflow-y:scroll");
-            if scrolls && !flat.contains("min-height:0") {
-                offenders.push(selector.trim().to_string());
-            }
-        }
-
-        assert!(
-            offenders.is_empty(),
-            "these scroll and grow instead of scrolling, because a flex item will not shrink \
-             below its content without `min-height: 0`: {offenders:?}"
-        );
-    }
-
-    /// A grid item in the flexible row must be allowed to shrink, for the same reason a flex
-    /// child must.
-    ///
-    /// A grid item's automatic minimum size is its content, so a column whose content outgrows the
-    /// `1fr` row expands that row past its share. The app grid is `height: 100vh` and the body
-    /// clips, so what falls off the bottom is the status bar — reported, twice, as the footer
-    /// disappearing.
-    #[test]
-    fn grid_items_in_the_flexible_row_can_shrink() {
-        let html = include_str!("../../../ui/index.html");
-        let css = html
-            .split_once("<style>")
-            .and_then(|(_, tail)| tail.split_once("</style>"))
-            .map(|(body, _)| body)
-            .expect("the UI has a stylesheet");
-
-        let mut offenders = Vec::new();
-        for rule in css.split('}') {
-            let Some((selector, body)) = rule.split_once('{') else {
-                continue;
-            };
-            let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-            // The row between the menu bar and the status bar is the one that flexes.
-            if flat.contains("grid-row:2/3") && !flat.contains("min-height:0") {
-                offenders.push(selector.trim().to_string());
-            }
-        }
-
-        assert!(
-            offenders.is_empty(),
-            "these sit in the 1fr row and will grow it past the viewport, pushing the status bar \
-             off the bottom, because a grid item's automatic minimum is its content: {offenders:?}"
-        );
-    }
-
-    /// Markup has to precede the script that reaches for it.
-    ///
-    /// The welcome screen's markup was appended after the closing `</script>`, so the top-level
-    /// `querySelectorAll('[data-w]')` that wired its buttons matched nothing and every button on
-    /// the first screen anyone sees did nothing. The handlers now bind inside the function that
-    /// draws the screen, which makes order irrelevant — this keeps it that way for the markup too.
-    #[test]
-    fn body_markup_comes_before_the_script_that_uses_it() {
-        let html = include_str!("../../../ui/index.html");
-        let script = html.find("<script").expect("the UI loads scripts");
-        for id in ["welcome", "app", "surface", "prompt", "tabs"] {
-            let marker = format!("id=\"{id}\"");
-            let at = html
-                .find(&marker)
-                .unwrap_or_else(|| panic!("no element with id {id}"));
-            assert!(
-                at < script,
-                "#{id} is declared after the first <script>, so anything binding to it at parse \
-                 time silently finds nothing"
-            );
-        }
-    }
 }

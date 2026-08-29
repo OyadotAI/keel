@@ -42,16 +42,42 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         });
     }
 
+    // A justfile is the same statement as a Makefile, made by people who did not want make.
+    if let Ok(justfile) = std::fs::read_to_string(root.join("justfile"))
+        .or_else(|_| std::fs::read_to_string(root.join("Justfile")))
+        && justfile.lines().any(|l| l.starts_with("check:"))
+    {
+        return Some(Check {
+            command: "just check".into(),
+            source: "the `check` recipe in your justfile",
+        });
+    }
+
     if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
     {
         let scripts = json.get("scripts").cloned().unwrap_or_default();
         let has = |k: &str| scripts.get(k).is_some();
+        // The lockfile names the package manager. Running `npm run` in a pnpm workspace works
+        // until a script uses a workspace protocol and then does not, which is a confusing way to
+        // find out that Keel guessed.
         let runner = if root.join("bun.lock").exists() || root.join("bun.lockb").exists() {
             "bun run"
+        } else if root.join("pnpm-lock.yaml").exists() {
+            "pnpm run"
+        } else if root.join("yarn.lock").exists() {
+            "yarn run"
         } else {
             "npm run"
         };
+
+        // A `check` script is the project naming its own gate, the same as a Makefile target.
+        if has("check") {
+            return Some(Check {
+                command: format!("{runner} check"),
+                source: "the `check` script in your package.json",
+            });
+        }
 
         let mut parts = Vec::new();
         if has("typecheck") {
@@ -76,6 +102,34 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: "cargo test".into(),
             source: "this being a Cargo project",
+        });
+    }
+
+    // Python only when there is something to run: `pytest` with no tests exits 5, and a gate that
+    // fails because the project has no tests reports the wrong thing every turn.
+    let has_tests = root.join("tests").is_dir() || root.join("test").is_dir();
+    if has_tests
+        && (root.join("pyproject.toml").exists()
+            || root.join("pytest.ini").exists()
+            || root.join("setup.cfg").exists())
+    {
+        let command = if root.join("uv.lock").exists() {
+            "uv run pytest -q"
+        } else if root.join("poetry.lock").exists() {
+            "poetry run pytest -q"
+        } else {
+            "pytest -q"
+        };
+        return Some(Check {
+            command: command.into(),
+            source: "the tests in this Python project",
+        });
+    }
+
+    if root.join("go.mod").exists() {
+        return Some(Check {
+            command: "go test ./...".into(),
+            source: "this being a Go module",
         });
     }
 
@@ -286,6 +340,47 @@ mod tests {
             std::fs::write(root.join(p), body).expect("write");
         }
         (dir, root)
+    }
+
+    /// Every gate a project can already be stating, so Keel stops reporting "no check command" at
+    /// a repository that has one under a name it did not know.
+    #[test]
+    fn a_project_that_declares_a_gate_is_believed() {
+        let (_d, just) = repo(&[("justfile", "check:\n\tcargo test\n")]);
+        assert_eq!(detect(&just).unwrap().command, "just check");
+
+        let (_d, script) = repo(&[("package.json", r#"{"scripts":{"check":"tsc && vitest"}}"#)]);
+        assert_eq!(detect(&script).unwrap().command, "npm run check");
+
+        let (_d, pnpm) = repo(&[
+            ("package.json", r#"{"scripts":{"check":"turbo check"}}"#),
+            ("pnpm-lock.yaml", ""),
+        ]);
+        assert_eq!(detect(&pnpm).unwrap().command, "pnpm run check");
+
+        let (_d, yarn) = repo(&[
+            ("package.json", r#"{"scripts":{"test":"jest"}}"#),
+            ("yarn.lock", ""),
+        ]);
+        assert_eq!(detect(&yarn).unwrap().command, "yarn run test");
+
+        let (_d, go) = repo(&[("go.mod", "module x\n")]);
+        assert_eq!(detect(&go).unwrap().command, "go test ./...");
+    }
+
+    /// Python needs tests to exist before running pytest is a gate rather than an error: with no
+    /// tests collected it exits 5, which would fail every turn for a reason nobody caused.
+    #[test]
+    fn python_is_a_gate_only_when_there_is_something_to_run() {
+        let (_d, bare) = repo(&[("pyproject.toml", "[project]\nname='x'\n")]);
+        assert!(detect(&bare).is_none());
+
+        let (_d2, root) = repo(&[("pyproject.toml", "[project]\nname='x'\n")]);
+        std::fs::create_dir(root.join("tests")).unwrap();
+        assert_eq!(detect(&root).unwrap().command, "pytest -q");
+
+        std::fs::write(root.join("uv.lock"), "").unwrap();
+        assert_eq!(detect(&root).unwrap().command, "uv run pytest -q");
     }
 
     #[test]

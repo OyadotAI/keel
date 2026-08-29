@@ -173,7 +173,7 @@ pub async fn delete(
         }
     }
 
-    to_trash(target.as_std_path()).map_err(bad)?;
+    trash(target.as_std_path()).map_err(bad)?;
     Ok(Json(PathResponse {
         path: req.path.clone(),
     }))
@@ -248,7 +248,11 @@ pub async fn stat(
 /// prompt nobody expects from an IDE deleting a file. So Finder is tried first for the better
 /// outcome, and `NSFileManager` catches the case where that permission is missing. The file lands
 /// in the trash either way; only "Put Back" is lost on the fallback.
-fn to_trash(path: &std::path::Path) -> Result<(), String> {
+/// Move a path to the platform's Trash.
+///
+/// Shared with the git panel: discarding an untracked file destroys the only copy there is, so it
+/// goes where a deleted file goes rather than being unlinked.
+pub fn trash(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use trash::macos::{DeleteMethod, TrashContextExtMacos};
@@ -287,6 +291,30 @@ pub async fn reveal(
 
     spawned.map_err(|e| bad(format!("could not open the file manager: {e}")))?;
     Ok(Json(PathResponse { path: req.path }))
+}
+
+/// Open a URL in the real browser.
+///
+/// `window.open` does nothing inside a WKWebView unless the host implements the delegate that
+/// creates a second web view, so every "open on GitHub" in the application silently did nothing.
+/// It is also the wrong behaviour: a run page is GitHub's, and it wants a session and an extension
+/// set that Keel's window does not have.
+///
+/// Lives here rather than in its own module because it is the same kind of thing as `reveal`:
+/// Keel asking the host to do something it deliberately will not do itself.
+pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (StatusCode, String)> {
+    // The handler hands a string to the system's URL opener, which will happily launch a `file://`
+    // or a custom scheme registered by some other application. Two schemes is the whole allowance.
+    if !(body.url.starts_with("https://") || body.url.starts_with("http://")) {
+        return Err(bad("only http and https links can be opened"));
+    }
+    open::that_detached(&body.url).map_err(|e| bad(e.to_string()))?;
+    Ok(Json(true))
+}
+
+#[derive(serde::Deserialize)]
+pub struct OpenUrl {
+    pub url: String,
 }
 
 #[cfg(test)]

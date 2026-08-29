@@ -548,7 +548,7 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
 }
 
 /// Run a command, forwarding both pipes, and return its exit code.
-async fn pipe(
+pub(crate) async fn pipe(
     command: &mut Command,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) -> i32 {
