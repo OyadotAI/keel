@@ -269,84 +269,32 @@ pub struct ChatQuery {
 /// found. Everything it *can* work out by reading the repository is deliberately absent — a system
 /// prompt restating what `ls` would show is tokens spent on every turn to say nothing.
 fn system_prompt(repo: &Utf8Path) -> String {
+    // Facts about the room, not instructions about how to behave. The agent is Claude Code —
+    // the person's own `claude`, with its own judgement — and this used to be eleven
+    // paragraphs telling it how to talk, when to stop and what not to say, which is exactly
+    // what made the conversation read like a wrapper. What remains is what it cannot know
+    // otherwise: what the person can see, what checks the work, how a refusal comes back.
     let mut out = String::from(
-        "You are running inside Keel, a local IDE that drives you. This is what that changes.\n\n\
-         ## What the person can see\n\n\
-         Every file you write appears as a diff in the pane beside this conversation, live. They \
-         also have the terminal, the project's check output, and the readiness report. So do not \
-         paste back the code you just wrote, do not narrate a rename, and do not summarise a diff \
-         they are already looking at. Tell them what you did and what it means for them. The diff \
-         carries the rest.\n\n\
-         ## Evidence, not assertion\n\n",
+        "Notes from Keel, the IDE this session runs in. Facts, not instructions:\n\n         - Every file you write shows as a live diff beside this conversation; the person also          sees the terminal, the check output and the readiness report.\n",
     );
 
     match crate::verify::detect(repo) {
         Some(check) => out.push_str(&format!(
-            "`{}` is this project's gate, from {}. Keel runs it after every turn you take and \
-             shows the person the result, so a claim that something works gets checked whether \
-             you check it or not. Run it yourself first — finding out from your own run is \
-             cheaper for everyone than finding out from theirs.\n\n",
+            "- `{}` is this project's check command (from {}). Keel runs it after each of your turns and shows the result.\n",
             check.command, check.source
         )),
-        None => out.push_str(
-            "This project has no check command, so nothing contradicts you automatically. That \
-             makes it more important, not less, that you run what you can and say what you \
-             actually observed.\n\n",
-        ),
+        None => out.push_str("- This project has no check command configured.\n"),
     }
 
-    // What is installed, which the agent finds out by running something that fails.
-    let (manager, present, absent) = crate::clitools::toolchain();
-    out.push_str("## What is on this machine\n\n");
-    match manager {
-        Some(mgr) => out.push_str(&format!(
-            "`{mgr}` is installed, so a missing tool is one command away. Install what you need \
-             rather than working around its absence — a workaround is a worse answer that also \
-             takes longer.\n\n"
-        )),
-        None => out.push_str(
-            "There is no package manager here, so a missing tool cannot be installed. Say what \
-             is missing rather than working around it.\n\n",
-        ),
-    }
-    out.push_str(&format!("Present: {}\n", present.join(", ")));
+    let (_manager, present, absent) = crate::clitools::toolchain();
+    out.push_str(&format!("- On this machine: {}.", present.join(", ")));
     if !absent.is_empty() {
-        out.push_str(&format!("Not installed: {}\n", absent.join(", ")));
+        out.push_str(&format!(" Not installed: {}.", absent.join(", ")));
     }
-    out.push_str(
-        "\nInstalling something needs approval the first time, like any other command. That is \
-         the loop working — ask once and it is remembered.\n\n",
-    );
+    out.push('\n');
 
     out.push_str(
-        "Never report a result you have not seen. \"The tests pass\" means you ran them and read \
-         the output. If something could not be run, name it and say why rather than working \
-         around the gap quietly.\n\n\
-         ## Permissions\n\n\
-         This session is non-interactive: nothing can prompt the person mid-turn. A command \
-         outside the allowed set comes back refused, and Keel shows them that refusal with a \
-         button to allow it. That is the loop working, not a failure. Say plainly what you needed \
-         and stop. Do not reach for a different command that happens to be permitted — a \
-         substitute they did not approve is worse than a request they can answer in one click.\n\n\
-         `AskUserQuestion` works here: Keel shows the question and holds the turn until they \
-         answer, and the answer arrives as the tool's result. Use it when two readings of the \
-         request would lead to materially different work.\n\n\
-         ## Configuring the workspace\n\n\
-         Anything the person could set up from a terminal you can set up from here. A subagent is \
-         a Markdown file with YAML frontmatter in `.claude/agents/` — write one directly, and make \
-         its `description` say *when* to delegate to it, since that is the only part the main \
-         agent reads. Skills are `.claude/skills/<name>/SKILL.md`, slash commands \
-         `.claude/commands/`. MCP servers go through `claude mcp add --scope local` and \
-         `claude mcp list|remove`, never by editing `.mcp.json` — Keel quarantines that file as \
-         repository content, so a server written there is one the person then has to un-quarantine \
-         by hand. Do not write `.claude/settings.json` or a hook: a hook is a shell command that \
-         runs for whoever opens this repository next, which is why Keel quarantines it and the \
-         scanner rates it Critical.\n\n\
-         ## Scope\n\n\
-         Do the thing that was asked. If you notice something else wrong, say so in a sentence \
-         and carry on; do not fix it uninvited. Read the repository rather than asking about it — \
-         ask only when two readings of the request would lead to materially different work, and \
-         then ask once, at the point it matters.\n",
+        "- Permissions: a command outside the allowed set comes back refused; Keel shows the person          the refusal with a button to allow it, so say what you needed. `AskUserQuestion` is          answered in the UI and returned as the tool's result.\n         - MCP servers: use `claude mcp add --scope local`, not `.mcp.json` — Keel quarantines that          file as repository content. Keel also quarantines `.claude/settings.json` hooks.\n",
     );
 
     // A blank project ships the template catalogue as patterns; an agent that has them and
@@ -407,104 +355,60 @@ fn system_prompt(repo: &Utf8Path) -> String {
 mod prompt_tests {
     use super::*;
 
-    /// A system prompt costs tokens on every single turn, so it earns its place by carrying only
-    /// what the agent cannot see for itself: that its diffs are on screen, that a gate runs
-    /// whether it runs one or not, that a refusal is a question rather than a wall.
-    #[test]
-    fn the_prompt_names_this_project_s_gate() {
-        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root");
-        let prompt = system_prompt(repo);
-
-        assert!(
-            prompt.contains("make check"),
-            "the gate is named, not implied"
-        );
-        assert!(prompt.contains("Keel runs it after every turn"));
-        assert!(prompt.contains("non-interactive"));
-
-        // Short enough to send every turn. Past a page it stops being read as instruction and
-        // starts competing with the actual request.
-        assert!(
-            prompt.len() < 4_000,
-            "the system prompt is {} bytes and is sent on every turn",
-            prompt.len()
-        );
-    }
-
-    /// The agent finds out a tool is missing by running something that fails, and then works
-    /// around the gap or gives up — neither of which is installing it, which it will not think to
-    /// do if it does not know there is a package manager. Reported from a fresh machine as "the
-    /// chat failed to install bun".
-    /// Reported as "the chat cannot create a subagent": it can — it is a file write — but nothing
-    /// told it where the file goes or that configuring the workspace was its business at all.
-    #[test]
-    fn the_prompt_says_the_workspace_is_configurable() {
+    fn repo_with(files: &[(&str, &str)]) -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let prompt = system_prompt(&root);
+        for (p, body) in files {
+            let full = root.join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, body).unwrap();
+        }
+        (dir, root)
+    }
 
-        assert!(prompt.contains(".claude/agents/"), "where a subagent goes");
+    #[test]
+    fn the_prompt_names_this_project_s_gate() {
+        let (_d, root) = repo_with(&[("Makefile", "check:\n\tcargo test\n")]);
+        let prompt = system_prompt(&root);
         assert!(
-            prompt.contains("claude mcp add"),
-            "how an MCP server is added"
+            prompt.contains("`make check` is this project's check command"),
+            "{prompt}"
         );
-        // The two paths it must not write: one is quarantined, the other is code execution.
-        assert!(prompt.contains(".mcp.json"));
-        assert!(prompt.contains(".claude/settings.json"));
+        assert!(prompt.contains("Keel runs it after each of your turns"));
+    }
+
+    #[test]
+    fn the_prompt_is_facts_not_instructions() {
+        let (_d, root) = repo_with(&[("README.md", "x")]);
+        let prompt = system_prompt(&root);
+        // What used to be here: eleven paragraphs on tone, scope and when to stop. The agent
+        // is Claude Code with its own judgement; Keel tells it about the room and nothing else.
+        for directive in [
+            "Do the thing that was asked",
+            "do not paste back",
+            "Never report",
+            "Say plainly",
+            "## Scope",
+        ] {
+            assert!(
+                !prompt.contains(directive),
+                "directive survived: {directive}"
+            );
+        }
+        assert!(prompt.contains("Facts, not instructions"));
+        assert!(prompt.contains(".mcp.json") && prompt.contains(".claude/settings.json"));
+        assert!(
+            prompt.lines().count() < 20,
+            "short: {}",
+            prompt.lines().count()
+        );
     }
 
     #[test]
     fn the_prompt_says_what_is_installed() {
-        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root");
-        let prompt = system_prompt(repo);
-
-        assert!(prompt.contains("What is on this machine"));
-        assert!(prompt.contains("Present: "), "it lists what is there");
-
-        let (manager, present, _) = crate::clitools::toolchain();
-        if let Some(mgr) = manager {
-            assert!(
-                prompt.contains(mgr),
-                "the package manager is named, not implied"
-            );
-            assert!(
-                prompt.contains("rather than working around"),
-                "and what to do with it"
-            );
-        }
-        for tool in present.iter().take(3) {
-            assert!(prompt.contains(tool), "{tool} is installed but not listed");
-        }
-    }
-
-    /// Without a gate the advice inverts: nothing contradicts the agent automatically, so saying
-    /// what was actually observed matters more rather than less.
-    #[test]
-    #[ignore = "prints the prompt for review"]
-    fn show() {
-        let repo = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .unwrap();
-        let target = std::env::var("KEEL_PROMPT_REPO")
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|_| repo.to_owned());
-        println!("{}", system_prompt(&target));
-    }
-
-    #[test]
-    fn a_project_with_no_gate_is_told_so() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let (_d, root) = repo_with(&[("README.md", "x")]);
         let prompt = system_prompt(&root);
-        assert!(prompt.contains("no check command"));
-        assert!(!prompt.contains("make check"));
+        assert!(prompt.contains("On this machine:"));
     }
 }
 
