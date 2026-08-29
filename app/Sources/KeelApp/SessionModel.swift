@@ -929,6 +929,12 @@ final class SessionModel: Identifiable {
     /// single repo. Switching it moves every window, so this reloads the shared state rather than
     /// pretending the other windows are unaffected.
     func openProject(_ path: String) async throws {
+        // Said out loud from the first moment: the panels go back to "Reading…", and the bar
+        // names each step until the setup check is done. Before this, the window sat still
+        // for the seconds the daemon took to scan the new repository, then a dialog appeared
+        // from nowhere.
+        opening = Opening(name: URL(fileURLWithPath: path).lastPathComponent, stage: "opening")
+        loaded = false
         _ = try await client.post("/api/open", body: OpenBody(path: path), as: Opened.self)
         projectOpenKnown = true
         Telemetry.track("project_opened")
@@ -944,6 +950,20 @@ final class SessionModel: Identifiable {
 
     /// The open repository's path, for the project menu and for the Finder.
     var repoPath = ""
+
+    /// A project switch in progress: what is being opened and which step is running.
+    struct Opening: Equatable { var name: String; var stage: String }
+    var opening: Opening?
+    /// The project that just finished opening, shown for a moment so the change is seen.
+    var justOpened: String?
+
+    func stage(_ s: String) { if opening != nil { opening?.stage = s } }
+    func finishedOpening() {
+        guard let o = opening else { return }
+        opening = nil
+        justOpened = o.name
+        Task { try? await Task.sleep(for: .seconds(2.5)); if justOpened == o.name { justOpened = nil } }
+    }
 
     func refreshState() async {
         guard let s: Wire.State = try? await client.get("/api/state") else { return }
