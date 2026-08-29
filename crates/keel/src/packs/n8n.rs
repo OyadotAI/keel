@@ -12,6 +12,10 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/app.test.ts", N8N_TEST.into()),
         ("backend/migrations/0002_n8n.sql", N8N_SQL.into()),
         ("frontend/app/page.tsx", f(N8N_PAGE)),
+        ("CLAUDE.md", f(N8N_CLAUDE_MD)),
+        ("AGENTS.md", f(N8N_AGENTS_MD)),
+        ("README.md", f(N8N_README_MD)),
+        (".claude/agents/workflow-port.md", N8N_AGENT_GRAPH.into()),
     ]
 }
 
@@ -697,4 +701,334 @@ export default async function Home() {
     </main>
   );
 }
+"##;
+
+const N8N_CLAUDE_MD: &str = r##"# {{NAME}} — working agreement
+
+{{NAME}} is where n8n workflows land when a team stops running n8n. It reads the editor's JSON
+export, keeps n8n's production surface alive — a Webhook node's path served at `/webhook/<path>`,
+a Schedule or Cron node fired on its cron line, a manual trigger runnable from the API — and
+executes the nodes it understands (`webhook`, `scheduleTrigger`, `cron`, `manualTrigger`,
+`httpRequest`, `set`, `if`, `noOp`, `merge`) with a small expression subset. Everything else,
+**including every Code node**, is named up front, written into a function stub with its original
+source as a comment, and fails the run loudly when reached. "Done" for the import is: every
+workflow listed, every unsupported node in `MIGRATION.md`, every credential as an env name, and
+the runs table showing what fired. "Done" for the migration is in `README.md`.
+
+## Architecture
+
+| File | Owns |
+|---|---|
+| `backend/src/app.ts` | Routes: `POST /api/import` (admin), `GET /api/workflows`, `GET /api/runs`, `POST /api/workflows/:name/run`, `ALL /webhook/*`; `execute` (run + record); `tick` (the cron minute). Exports `AppType`. |
+| `backend/src/store.ts` | `Store`: `save`, `workflows`, `record`, `runs`, `claimMinute`; `pgStore` and `memoryStore`. |
+| `backend/src/engine.ts` | `evaluate` (the expression subset), `step` (one node → items per output), `run` (breadth-first walk from a trigger), `cronMatches`, `UnsupportedNode`, `BadExpression`. |
+| `backend/src/scheduler.ts` | One `tick` per minute, aligned; `bun src/scheduler.ts`. |
+| `backend/src/import/n8n.ts` | `Workflow`/`N8nExport` (zod), `parseWorkflow` → `Graph`, `cronOf`, `fnName`, `envName`, `stubs`, `report`, and the CLI (`bun src/import/n8n.ts <workflows.json>`). |
+| `backend/src/import/fixture.ts` | Two exported workflows: webhook → set → if → httpRequest (+ a Code node, a credential, a sticky note), and schedule → Slack (unsupported). |
+| `backend/src/app.test.ts` | Five tests: mapping, a webhook end to end, unsupported fails loudly, cron once per minute across replicas, a bad expression names its node. |
+| `backend/migrations/0002_n8n.sql` | `workflows`, `runs`, `cron_fired`. |
+| `frontend/app/page.tsx` | Per workflow: triggers as routes/schedules, nodes → functions or "unsupported", env names; recent runs. Server-rendered. |
+
+### Request path (a webhook)
+
+1. `ALL /webhook/*` — the path after `/webhook/` is matched against every active workflow's webhook triggers by path **and** method (`*` matches any). Inactive is `404 inactive`; no match is `404`.
+2. The body is parsed by content type (JSON, form, or text) into n8n's item shape: `{json: {headers, params: {}, query, body}}`.
+3. `run(graph, trigger, items, ctx)` walks the graph breadth-first from the trigger node along `edges`; each node's `step` returns one item list per output (`if` returns `[true, false]`), and an edge is followed only when its output has items.
+4. `step` for `set` builds items from assignments (v3 `assignments.assignments` or v1/2 `values.*`), for `if` compares with the operator table, for `httpRequest` evaluates url/query/headers/body per item and fetches through `ctx.fetch`; a non-2xx throws naming the node.
+5. `evaluate` handles `={{ $json.a.b }}`, `{{ $env.X }}`, `$now`, `$input.first().json.x`, `$('Node').item.json.x`, literals, and string interpolation; anything else throws `BadExpression` naming the node.
+6. A `code` node, or any type outside `SUPPORTED`, throws `UnsupportedNode`.
+7. `execute` records a `runs` row — `ok` with `steps` (function names in order) and the last node's output, or `failed` with the error — and logs one JSON line on failure.
+8. Response: `responseMode: lastNode` → the last node's items (`json` of one, or an array); otherwise `{"message":"Workflow was started"}`; a failure is `500 {error: {message, code: workflow_failed, run}}`.
+
+Cron: `scheduler.ts` calls `tick()` each minute; for every active workflow's cron triggers whose line matches the minute (UTC), `claimMinute(workflow, node, minute)` inserts into `cron_fired` and only the replica that inserted runs it.
+
+### Data model
+
+| Table | Column | Why |
+|---|---|---|
+| `workflows` | `name` pk, `graph jsonb` | The parsed `Graph`, not the raw export; re-import upserts by name. |
+| | `active` | n8n's flag; inactive workflows neither serve webhooks nor fire. |
+| `runs` | `trigger` | `webhook:/path`, `cron:<expr>` or `manual` — n8n's executions list, minus the per-node data. |
+| | `steps jsonb` | Function names in execution order; the one line you read first when a run failed. |
+| | `input`, `output`, `error` | What came in, what the last node produced, or which node refused. |
+| `cron_fired` | `(workflow, node, minute)` pk | The leader election: `insert … on conflict do nothing` wins once. |
+
+## Invariants
+
+1. **Code nodes are never evaluated.** `step`'s `case "code"` throws `UnsupportedNode`; `stubs` writes the `jsCode` as a comment. `jsCode` is arbitrary JavaScript from an uploaded file; running it in the API process is remote code execution by import, and n8n's own sandbox is not shipped here. Guarded by `nodes become functions named for them…` (`unsupported` lists the Code node; the stub contains `Original jsCode`) and by the cold branch in `a webhook route runs set → if → http…` (500 naming `Archive cold`, no fetch made).
+2. **Unsupported nodes fail loudly, never skip.** `run` throws when `n.kind` is null; the run is recorded `failed` with the node's name and type. Guarded by `an unsupported node fails the run loudly instead of skipping`.
+3. **Expressions outside the subset throw, naming the node.** No partial evaluation, no `eval`. Guarded by `an expression the engine cannot evaluate names the node`.
+4. **Credentials are names, never values.** `credentials` in the export carry `{id, name}` only; the parser turns them into env names (`CRM API key` → `CRM_API_KEY`) and the stub prints `$CRM_API_KEY`, never the id. Guarded by the first test (`not.toContain('"id": "7"')`).
+5. **A cron trigger fires once per matching minute across replicas.** `claimMinute` is the only gate, and it is a primary-key insert. Guarded by `a cron trigger fires once per matching minute across ticks and replicas`.
+6. **Webhooks match path and method.** `GET /webhook/lead` is 404 when the node is `POST`. Guarded by the webhook test.
+7. **Import is an operator action.** `POST /api/import` requires `Authorization: Bearer $ADMIN_TOKEN`; with no token configured it is 401 for everyone. Tests set `ADMIN_TOKEN=admin`.
+8. **Node names are function names**, via one rule (`fnName`), so `MIGRATION.md`, the stubs and `runs.steps` agree. Guarded by the first test.
+9. **A node is a pure step over items**: `step(spec, items, ctx)` returns `Item[][]`, and the engine's only side effects go through `ctx.fetch`. Tests inject `fetch`, `env` and `now`.
+10. **Every run is recorded**, success or failure, before the HTTP response.
+11. **Inactive workflows do nothing.** Both the webhook route and `tick` check `g.active`.
+
+## Extending it
+
+**Support another node type.** Add its short name to `SUPPORTED` in `import/n8n.ts`, a `case` in `step` that maps its parameters (check the `typeVersion`s you have — n8n renames parameters between versions), and a node of that type to `fixture.ts` with a test asserting its output items. Existing imported graphs pick it up on the next import.
+
+**Extend the expression subset.** Add a regex to `one()` in `evaluate`. Keep it a regex over a fixed shape — the moment it becomes a JavaScript evaluator, invariant 1 is gone through the back door. A test with the new form and one with a near-miss that still throws.
+
+**Port a Code node.** Open `src/workflows/<workflow>.ts`, read the comment, write the function body over `items` (n8n's `$input.all()` is `items`), return `[items]`. Then wire it: the runtime executes the stored graph, not the stubs, so either add a `case` to `step` that dispatches `code` nodes by name to your function, or write the whole workflow as a Hono route calling the stubs in order and deactivate the import. The second is the honest end state.
+
+**Apply a credential.** The engine does not inject credentials: `httpRequest` sends only `headerParameters`. For `httpHeaderAuth`, add a header parameter `={{ $env.CRM_API_KEY }}` to the node in the export before importing, or add the header in the ported function. Say which in the workflow's PR.
+
+**Add a webhook response mode** (`responseNode`). Today it is treated as `onReceived`. Add it to the `Trigger` union, find the Respond to Webhook node's output in `run`, and return that.
+
+**Time zones.** `cronMatches` is UTC. Add a `tz` on the trigger (n8n's `settings.timezone`) and convert the minute before matching.
+
+## Operating it
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres. |
+| `ADMIN_TOKEN` | for import | Bearer token on `POST /api/import`. Unset means nobody can import. |
+| per workflow | as listed | Every credential and `$env.X` in the export, upper-snake-cased; `GET /api/workflows` → `env` lists them. Missing ones evaluate to `undefined`. |
+| `API_URL` | frontend | Where the page fetches; default `http://127.0.0.1:8000`. |
+| `PORT` | no | 8000. |
+
+**Processes.** `backend` serves webhooks and runs them on the request path. `scheduler` (`bun src/scheduler.ts`) ticks once a minute; several are safe. Neither is a queue: a run is synchronous and unretried. The scheduler is not in the image yet — add `src/scheduler.ts` to the Dockerfile's build line and a Deployment with no Service or HTTP probes.
+
+**What is per-replica.** Nothing; graphs, runs and the cron claim table are Postgres. Each request re-reads `workflows` (one query), so an import is live everywhere immediately.
+
+**Failure modes.**
+
+| What | Caller sees |
+|---|---|
+| Unsupported or Code node reached | `500 workflow_failed`, run `failed`, error names the node. |
+| Expression outside the subset | Same, `cannot evaluate expression in "<node>": …`. |
+| `httpRequest` non-2xx | Same, `"<node>": POST https://host/path → 502`. |
+| Upstream slow | The request waits: **no timeout on `ctx.fetch`** (see Ceilings). |
+| Webhook on inactive workflow | `404 inactive`. |
+| Scheduler not running | Cron triggers silently do not fire; `runs` has no `cron:` rows. |
+| Missing env | `{{ $env.X }}` is empty; an URL built from it fails at `new URL`. |
+
+**Metrics and logs.** `runs` by `status` and `trigger` per hour; the failure log line carries `workflow`, `trigger`, `error`, `unsupported`. Count of `failed` with `unsupported: true` is the porting backlog. Absence of `cron:` runs for a workflow that has a cron trigger is the alert.
+
+## Ceilings
+
+- **Webhook runs are synchronous and unretried.** A Webhook node with `responseMode: onReceived` in n8n answered immediately and ran in the background; here it runs first, then answers. Queue them (a `jobs` table and a worker, as the `builder` pack does) when latency or retries matter.
+- **No timeout on `httpRequest`.** Wrap `ctx.fetch` in `AbortSignal.timeout(ms)` before production.
+- **Credentials are not injected.** Names only; see *Apply a credential*.
+- **Expression subset.** Dotted paths, `$env`, `$now`, `$input.first()`, `$('Node').item`, literals, interpolation. No method calls, no arithmetic, no `$items()`, no `$node`, no dates beyond `$now`.
+- **Merge runs per delivery**, not once with both inputs; `Split In Batches`, `Loop`, `Wait`, `Execute Workflow`, binary data — unsupported.
+- **UTC cron**, five fields; n8n's timezone setting is ignored.
+- **Webhook node auth (`basicAuth`, `headerAuth`) is not enforced.** A webhook that was protected in n8n is open here until you add the check in the route.
+- **The stubs are a workbench, not the runtime.** `src/workflows/*.ts` is generated for porting; `/webhook/*` executes the stored graph.
+- **One node reads `$('Node')`'s first item only.**
+
+The stack rules — gate, typed seam, production checklist, deploy — are in `docs/PRODUCTION.md`. They apply.
+"##;
+
+const N8N_AGENTS_MD: &str = r##"# {{NAME}} — for agents
+
+See `CLAUDE.md` for the rules. This is how to run it.
+
+## Run
+
+    make demo                                   # postgres + redis, migrate, seed, API :8000, page :3000
+    make check                                  # typecheck both halves, bun test the backend
+    cd backend && ADMIN_TOKEN=admin bun run dev  # the API needs ADMIN_TOKEN to accept an import
+    cd backend && bun src/scheduler.ts           # fires cron triggers; nothing scheduled runs without it
+
+## The importer, two ways
+
+Over HTTP (stores the graphs, serves the routes, returns the report and stubs as strings):
+
+    curl -s -X POST localhost:8000/api/import -H 'authorization: Bearer admin' -F file=@workflows.json | jq '.workflows'
+    # [{"name":"Lead intake","nodes":6,"triggers":[{"kind":"webhook","node":"Webhook","fn":"Webhook","method":"POST","path":"/lead","responseMode":"lastNode"}],
+    #   "unsupported":[{"node":"Archive cold","type":"n8n-nodes-base.code"}],"env":["CRM_API_KEY","CRM_URL"]},
+    #  {"name":"Daily digest","nodes":2,"triggers":[{"kind":"cron","node":"Every morning","fn":"Every_morning","cron":"30 9 */1 * *"}],"unsupported":[{"node":"Post to Slack","type":"n8n-nodes-base.slack"}],"env":["SLACK_BOT"]}]
+    # 401 without the token; 400 with zod's path for a file that is not an n8n export
+
+On disk (one stub module per workflow, plus the report):
+
+    cd backend && bun src/import/n8n.ts ../workflows.json
+    # 2 workflows, 8 nodes, 2 unsupported → src/workflows/*.ts, MIGRATION.md
+    ls src/workflows        # lead_intake.ts  daily_digest.ts
+
+The fixture is a valid export: `bun -e 'import {FIXTURE} from "./src/import/fixture"; console.log(JSON.stringify(FIXTURE))' > ../workflows.json` from `backend/`.
+
+## Routes
+
+    curl -s localhost:8000/api/workflows | jq '.workflows[] | {name, active, triggers: [.triggers[].kind], unsupported: [.unsupported[].node], env}'
+
+A webhook, as n8n's production URL (`responseMode: lastNode` answers with the last node's output):
+
+    CRM_URL=https://crm.example CRM_API_KEY=… ADMIN_TOKEN=admin bun run dev   # env the workflow reads
+    curl -s -X POST localhost:8000/webhook/lead -H 'content-type: application/json' -d '{"email":"a@b.c","score":80}'
+    # 200 {"id":"L1"}                         — whatever the CRM returned, via Webhook → Shape_lead → Is_hot → Create_in_CRM
+    curl -s -X POST localhost:8000/webhook/lead -H 'content-type: application/json' -d '{"email":"z@b.c","score":5}'
+    # 500 {"error":{"message":"unsupported n8n node n8n-nodes-base.code (\"Archive cold\") (port the jsCode in src/workflows by hand)","code":"workflow_failed","run":2}}
+    curl -s localhost:8000/webhook/lead        # 404 — the node is POST
+    curl -s -X POST localhost:8000/webhook/nope # 404 no webhook registered for POST /nope
+
+A manual run, and the runs list:
+
+    curl -s -X POST 'localhost:8000/api/workflows/Daily%20digest/run' -H 'content-type: application/json' -d '{}'
+    # 500 {"run":{"id":3,"workflow":"Daily digest","trigger":"cron:30 9 */1 * *","status":"failed","steps":[],"error":"unsupported n8n node n8n-nodes-base.slack (\"Post to Slack\"): port it by hand",…}}
+    curl -s localhost:8000/api/runs | jq '.runs[] | {id, workflow, trigger, status, steps, error}'
+    # {"id":1,"workflow":"Lead intake","trigger":"webhook:/lead","status":"ok","steps":["Webhook","Shape_lead","Is_hot","Create_in_CRM"],"error":null}
+
+## Tests
+
+`backend/src/app.test.ts`, `bun test`:
+
+- **`memoryStore()`** replaces Postgres, including `claimMinute`.
+- **`createApp(store, {fetch, env, now})`** — every side effect is injected. The webhook test records the calls the engine makes; the cron test builds two apps on one store with clocks 40 s apart to stand in for two replicas.
+- **`ADMIN_TOKEN`** is set at the top of the file and sent by the `json()` helper.
+- **`FIXTURE`** is the input; a node shape you meet in a real export goes into it.
+
+To add a test: import `FIXTURE` (or an inline workflow with `nodes` and `connections`), call the route, and assert on the run — `status`, `steps`, `error` — and on what the injected `fetch` received. For a new node kind, assert the items `step` returns, not the HTTP response.
+"##;
+
+const N8N_README_MD: &str = r##"# {{NAME}}
+
+Your n8n workflows, as code you own: the same webhook URLs, the same schedules, every node a
+named function, and nothing running that nobody has read.
+
+## What you get
+
+- `POST /api/import` reads the editor's export (one workflow, an array, or `{workflows}`) and stores each as a graph.
+- Webhook nodes answer at `/webhook/<path>` with their method and response mode; Schedule and Cron nodes fire on their cron line from a one-line scheduler that is safe to run in several replicas; manual triggers run from `POST /api/workflows/<name>/run`.
+- Nine node types executed: Webhook, Schedule Trigger, Cron, Manual Trigger, HTTP Request, Set (v1–v3.4), If (the v2 operator table), NoOp, Merge. Expressions: `$json.a.b`, `$env.X`, `$now`, `$input.first()`, `$('Node').item`, literals, string interpolation.
+- `bun src/import/n8n.ts workflows.json` writes `src/workflows/<name>.ts` — one typed function per node, named for it — and `MIGRATION.md`: every node, what it became, every credential as an environment variable name, every unsupported node in bold.
+- **Code nodes are never executed.** Their source is copied into the stub as a comment; the function throws until a person ports it.
+- A `runs` table: trigger, steps in order, output or the failing node.
+- Tests without n8n, a network or a database.
+
+## Five minutes
+
+    make demo
+    cd backend && bun -e 'import {FIXTURE} from "./src/import/fixture"; console.log(JSON.stringify(FIXTURE))' > ../workflows.json
+    ADMIN_TOKEN=admin CRM_URL=https://httpbin.org/anything CRM_API_KEY=x bun run dev     # in backend/, instead of make demo's API
+
+    curl -s -X POST localhost:8000/api/import -H 'authorization: Bearer admin' -F file=@../workflows.json | jq '[.workflows[] | {name, unsupported: [.unsupported[].node], env}]'
+    # [{"name":"Lead intake","unsupported":["Archive cold"],"env":["CRM_API_KEY","CRM_URL"]},{"name":"Daily digest","unsupported":["Post to Slack"],"env":["SLACK_BOT"]}]
+
+    curl -s -X POST localhost:8000/webhook/lead -H 'content-type: application/json' -d '{"email":"a@b.c","score":80}' | jq .json
+    # {"email":"a@b.c","score":80,"source":"webhook"}   — what reached the CRM, echoed by httpbin
+
+    curl -s -X POST localhost:8000/webhook/lead -H 'content-type: application/json' -d '{"email":"z@b.c","score":5}' | jq .error.message
+    # "unsupported n8n node n8n-nodes-base.code (\"Archive cold\") (port the jsCode in src/workflows by hand)"
+
+    bun src/import/n8n.ts ../workflows.json && sed -n '/Archive_cold/,/^}/p' src/workflows/lead_intake.ts
+    # the stub, with the original jsCode as a comment
+
+Open `http://localhost:3000` for every workflow, its routes, its env names and its backlog.
+
+## The migration, in order
+
+**1. Export.** In n8n: each workflow → ⋯ → Download, or `GET /api/v1/workflows` with an API key (`{data: [...]}` — pass the array). Credentials come out as `{id, name}` only; n8n never exports secrets.
+
+**2. Import** with `ADMIN_TOKEN` set. Read the response's `unsupported` and `env` per workflow, or the page. This is the whole backlog: nothing outside it needs a human.
+- *Check:* `GET /api/workflows` lists every workflow with the triggers you expect (`POST /webhook/lead`, `30 9 */1 * *`).
+
+**3. Environment.** Every name in `env` goes into `backend/.env` (then `.env.age`). Find the values in n8n's credential editor. Note: names are derived from the credential's *name* in n8n; two credentials named alike collide.
+
+**4. Credentials are not injected.** The engine sends only the node's own header parameters. For each `httpRequest` node with a credential, either edit the export — add a header parameter `Authorization: ={{ $env.CRM_API_KEY }}` (or whatever the API wants) — and re-import, or add the header in the ported function (step 6). Until then, those calls go out unauthenticated and fail at the upstream.
+- *Check:* one real webhook call per workflow against a staging upstream; `runs.status = ok`.
+
+**5. Generate the stubs.** `bun src/import/n8n.ts workflows.json` → `src/workflows/*.ts`, `MIGRATION.md`. Commit both.
+
+**6. Port, node by node**, starting with what fails:
+- **Code nodes.** The stub holds the original `jsCode` as a comment. Rewrite it as the function body over `items` (n8n's `$input.all()`); `$input.first().json` is `items[0].json`. Write a test with the items it used to receive. Never `eval` the comment — see *Why Code nodes are not evaluated* below.
+- **Integration nodes** (Slack, Google Sheets, Postgres, …). Each was an HTTP API behind a form. Write the call with `ctx.fetch` and `$env`, one function per node, tested with an injected `fetch`.
+- **Unsupported flow nodes** (Split In Batches, Loop, Wait, Execute Workflow, Merge with two real inputs). These are control flow; write the loop in TypeScript.
+- **Expressions the engine refused.** `cannot evaluate expression in "<node>"` — replace with a dotted path, or compute it in a ported function.
+
+**7. Wire the ported functions.** The runtime executes the stored graph, not the stubs. For each workflow with ported nodes, write a Hono route (`POST /webhook/lead` → `Webhook`, `Shape_lead`, `Is_hot`, then your `Archive_cold` or `Create_in_CRM`) that calls the stub functions in the graph's order, then set the imported workflow inactive so the generic route stops matching. Now the workflow is code: tests, types, review.
+- *Check:* `runs` shows `ok` for every trigger over a full day; no `unsupported: true` in the logs.
+
+**8. Webhook security.** A Webhook node with Basic or Header auth in n8n is **open** here. Add the check to the route in step 7 before the URL is public.
+
+**9. Cut over.** Point callers at `https://<host>/webhook/<path>` (the same path), switch DNS if you owned the hostname, deactivate the workflows in n8n, watch `runs`, then turn n8n off.
+
+### Why Code nodes are not evaluated
+
+A Code node's `jsCode` is whatever was typed into a text box, uploaded here in a JSON file by anyone holding `ADMIN_TOKEN`. n8n ran it inside its own sandbox (a restricted VM with a curated `require`); that sandbox is not part of this service, and an in-process JavaScript sandbox in Node is not a security boundary — every one shipped so far has been escaped. Executing the code would make "import a workflow" mean "run arbitrary code on the API server with the database credentials". So the engine throws on `code` nodes, the importer preserves the source where the person porting it will read it, and the test suite asserts both. The cost is honest: every Code node is work. The benefit is that after the port every line running in production has been read by someone on your team, which was the point of leaving.
+
+## API
+
+| Method | Path | Auth | What |
+|---|---|---|---|
+| GET | `/api/health`, `/api/health/ready` | none | probes |
+| POST | `/api/import` | `Bearer $ADMIN_TOKEN` | JSON or multipart `file` → `201` per-workflow summary, report, stubs |
+| GET | `/api/workflows` | none | graphs: nodes → functions, triggers, unsupported, env |
+| GET | `/api/runs` | none | latest 50 |
+| POST | `/api/workflows/:name/run` | none | run the manual (or first) trigger with the body as `$json`; `200`/`500` with the run |
+| ANY | `/webhook/*` | none (n8n's webhook auth is not enforced) | the imported Webhook nodes |
+
+## Compared with n8n
+
+**Same shape.** Production webhook URLs `/webhook/<path>` by method; `responseMode` `onReceived` (`{"message":"Workflow was started"}`) and `lastNode`; the item `{json}` as the unit of data and the webhook item `{headers, params, query, body}`; Set/If/HTTP Request parameter shapes across the type versions in the fixture; Schedule Trigger and Cron node intervals turned into cron lines; the executions list as `runs`.
+
+**Better here, specifically.**
+- Every node is a named, typed function in a file you can diff, test and review; `runs.steps` are those names.
+- Nothing runs that nobody has read: Code nodes and unknown nodes fail loudly and are listed before the first request, with the original source next to the stub.
+- Credentials exist only as environment names; the import cannot carry a secret.
+- Cron fires exactly once per minute across replicas by a primary-key insert — no leader, no Redis.
+- Tests drive the whole engine with injected `fetch`, `env` and clock.
+
+**Not here yet.**
+- **400+ integration nodes.** Nine node types execute; Slack, Sheets, Postgres, OpenAI, and the rest are stubs to port.
+- **Code nodes**, by design.
+- **The expression language.** A subset; no JavaScript, no `$items()`, no date arithmetic, no `$node`.
+- **The editor**, executions UI with per-node data, retries, error workflows, waiting/resume, sub-workflows, binary data, queue mode.
+- **Credential injection** into HTTP Request; Webhook node authentication; `responseNode` mode; `/webhook-test/`.
+- **Time zones**: cron is UTC.
+- **Async execution**: a webhook run happens on the request path with no timeout on outbound calls.
+
+## Production
+
+- **Environments.** `DATABASE_URL`, `ADMIN_TOKEN`, and every name in each workflow's `env`. Separate databases; import into each.
+- **Processes.** `backend` (webhooks, runs on the request path) and `scheduler` (`bun src/scheduler.ts`, one tick a minute; 2 replicas are safe). Add `src/scheduler.ts` to the Dockerfile's build line and a Deployment with no Service or HTTP probes.
+- **Probes.** `/api/health`, `/api/health/ready`. Scheduler: alert when a workflow with a cron trigger has no `cron:` run in two intervals.
+- **Migrations.** `0002_n8n.sql`, applied by the migrate init container. `runs` is append-only; prune by `started_at`. `cron_fired` grows one row per trigger per fire; prune older than a day.
+- **Secrets.** `ADMIN_TOKEN` and the workflow credentials through `.env.age` → `k8s/secrets.yaml`. Never commit the export with real hostnames if they are sensitive.
+- **Timeouts.** Add `AbortSignal.timeout` to `ctx.fetch` before exposing webhooks; an upstream hang is a held request today.
+- **Auth.** `/webhook/*` and the manual run route are open. Enforce what n8n enforced in the ported routes.
+- **What pages you.** `failed` runs with `unsupported: true` in production (something reached a stub); no `cron:` runs for a scheduled workflow; webhook p99 above the upstream's.
+
+## Roadmap
+
+- A queue for webhook runs (`onReceived` answering first), with retries and a dead-letter.
+- Fetch timeouts and per-node time budgets.
+- Credential injection for `httpHeaderAuth`, `httpBasicAuth`, `httpQueryAuth`.
+- Webhook node auth; `responseNode`.
+- Dispatching a graph's Code nodes to ported functions by name, so step 7 is one line.
+- Time zones; six-field cron.
+- More node kinds as real exports demand them.
+"##;
+
+const N8N_AGENT_GRAPH: &str = r##"---
+name: workflow-port
+description: Run on any change to engine.ts, import/n8n.ts, the webhook or cron routes, or a ported function under src/workflows/. Checks that uploaded code still cannot run, that a graph executes in n8n's order with n8n's item shapes, that cron fires once, and that a port did not quietly change what a node did.
+tools: Read, Grep, Glob, Bash
+---
+
+You review the engine as the person whose CRM will receive the wrong leads. Report only what
+runs untrusted code, changes a node's behaviour, drops a branch, or fires twice — each as
+`path:line — what — the node or export that triggers it — the fix`.
+
+Check:
+1. **No evaluation of uploaded code.** `grep -n "eval\|new Function\|vm\." backend/src` is empty. `step`'s `case "code"` throws; `stubs` writes `jsCode` only inside a comment, line by line (a `*/` inside the code cannot close anything because the lines are `//`).
+2. **`evaluate` is regexes over fixed shapes.** Each branch of `one()` is anchored (`^…$`); the fallthrough throws `BadExpression`. A branch that hands the expression to anything general-purpose is item 1 again.
+3. **Unsupported fails, never skips.** `run` throws on `!n.kind`; `SUPPORTED` contains only kinds with a `case` in `step`; the `default` throws. `stickyNote` is the one kind that returns without work — confirm it is skipped in `run` too.
+4. **Edges and outputs.** `parseWorkflow` reads `connections[from].main[output][…]`; an `if` node returns `[yes, no]` and edges with `output: 1` receive `no`. A change that follows every edge regardless of `outs[e.output].length` runs the false branch on the true items.
+5. **Item shape.** The webhook item is `{json: {headers, params, query, body}}`; `set` with `includeOtherFields: false` (or `keepOnlySet`) starts from `{}`; `httpRequest` wraps a non-object response as `{data}` and honours `fullResponse`. A ported function must return `Item[][]`, not `Item[]`.
+6. **Operators.** `compare` covers both operator vocabularies (`equals`/`equal`, `gt`/`larger`/`after`, …) and types (`string`, `number`, `dateTime`); an unknown operation throws rather than returning `false`.
+7. **Cron once.** `tick` calls `claimMinute` before `execute`; `pgStore.claimMinute` is `insert … on conflict do nothing` and returns `count > 0`. Minutes are floored. `cronMatches` treats weekday 7 as Sunday and `*/n` from the range start.
+8. **Webhook matching.** Path normalised with one leading slash on both sides; method compared, `*` allowed; inactive is 404 before the body is read; unknown path is 404 after all workflows are checked.
+9. **Credentials.** `parseWorkflow` keeps `{type, name, env}` only; `stubs` and `report` print the env name; nothing prints `credentials.*.id`. The engine does not inject credentials — a change that claims to must read from `ctx.env`, never from the export.
+10. **Admin token.** `POST /api/import` compares `Bearer ${ADMIN_TOKEN}` and refuses when the variable is unset. Nothing else writes `workflows`.
+11. **Recording.** `execute` records `ok` and `failed` paths; `steps` are `fn` names in execution order; the failure log line is one JSON object.
+12. **Ported functions.** For a change under `src/workflows/`: the function is named `fnName(node)`, takes `(items, ctx)`, returns `Item[][]`, uses `ctx.fetch` (never global `fetch`) and `ctx.env` (never `process.env`), and has a test with the items the node used to receive. Compare its behaviour with the commented `jsCode` line by line — a port that drops a field is the bug this reviewer exists for.
+13. **Timeouts.** Any new outbound call has `AbortSignal.timeout`; note that `httpRequest` in `step` does not yet, and say so if the change touches it.
+
+Run `cd backend && bun test`. End with `workflow-port: N findings` and, if 0, which of the above you read.
 "##;

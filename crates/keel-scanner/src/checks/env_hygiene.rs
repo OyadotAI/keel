@@ -39,6 +39,12 @@ impl Check for SharedBindings {
             if !ctx.has("package.json") {
                 return Vec::new();
             }
+            // A repository that already runs somewhere — an image, a cluster, a platform —
+            // is not missing a Wrangler config; it made a different choice. The hosting
+            // check speaks to that choice; this one would only be noise beside it.
+            if !crate::detect(ctx).hosting.is_empty() {
+                return Vec::new();
+            }
             return vec![Finding::new(
                 "env/no-wrangler-config",
                 self.dimension(),

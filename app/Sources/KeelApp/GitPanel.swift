@@ -10,6 +10,8 @@ import SwiftUI
 struct GitPanel: View {
     @Bindable var model: SessionModel
     @State private var message = ""
+    @State private var addingRemote = false
+    @State private var remoteURL = ""
     @State private var newBranch = ""
     @State private var creating = false
     @State private var allBranches = false
@@ -51,6 +53,32 @@ struct GitPanel: View {
                     if c.ahead == 0 && c.behind == 0 { Pill(text: "IN SYNC", tone: .good) }
                 } else if b != nil {
                     Pill(text: "NO REMOTE", tone: .neutral)
+                    // The state a freshly created project is in. Fetch and Push are greyed
+                    // out until this is answered, so the answer sits beside them.
+                    Button("Add remote…") { addingRemote = true; remoteURL = "" }
+                        .buttonStyle(QuietButton(tone: K.C.accent))
+                        .disabled(busy)
+                        .popover(isPresented: $addingRemote, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: K.S.sm) {
+                                Text("Where should this project be pushed?")
+                                    .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                                Text("Create an empty repository on GitHub first, then paste its URL. "
+                                     + "It becomes `origin`; the first Push sets the upstream.")
+                                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                TextField("git@github.com:owner/repo.git", text: $remoteURL)
+                                    .textFieldStyle(.roundedBorder).font(K.F.mono(11))
+                                    .onSubmit { addRemote() }
+                                HStack {
+                                    Spacer()
+                                    Button("Cancel") { addingRemote = false }.buttonStyle(QuietButton())
+                                    Button("Add") { addRemote() }
+                                        .buttonStyle(QuietButton(tone: K.C.accent))
+                                        .disabled(remoteURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                                }
+                            }
+                            .padding(K.S.md).frame(width: 360)
+                        }
                 }
             }
             HStack(spacing: K.S.xs) {
@@ -74,6 +102,13 @@ struct GitPanel: View {
             }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+    }
+
+    private func addRemote() {
+        let url = remoteURL.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else { return }
+        addingRemote = false
+        Task { await model.remote("add", url: url) }
     }
 
     /// An icon, a tooltip, and a count when there is one. The word is in the tooltip.

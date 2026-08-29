@@ -7,6 +7,8 @@
 mod agent_instructions;
 mod ci;
 mod env_hygiene;
+mod hosting;
+mod practices;
 mod production_shape;
 mod secrets;
 mod tests_present;
@@ -27,5 +29,7 @@ pub fn default_checks() -> Vec<Box<dyn Check>> {
         Box::new(ci::ContinuousIntegration),
         Box::new(agent_instructions::AgentInstructions),
         Box::new(production_shape::ProductionShape),
+        Box::new(practices::ProductionPractices),
+        Box::new(hosting::HostingFit),
     ]
 }

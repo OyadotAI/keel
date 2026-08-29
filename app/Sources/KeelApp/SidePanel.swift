@@ -148,30 +148,132 @@ struct SessionsPanel: View {
 
 // MARK: - Readiness
 
+/// Not a list of complaints: what the repository is, where it runs, and the road from here
+/// to production in order — with the two actions that start the road, and the review a
+/// person would give beyond what a scanner can see.
 struct ReadinessPanel: View {
     let model: SessionModel
+    @State private var adopted: [String]?
+    @State private var busy = false
 
     var body: some View {
+        if let p = model.scan?.profile, p.template != "blank" || !p.hosting.isEmpty {
+            profileCard(p)
+        }
+        actions
         if model.findings.isEmpty {
             Empty(text: "Nothing blocking. Run a scan from the palette for the full report.")
-        }
-        ForEach(model.findings.prefix(30)) { f in
-            HoverRow {
-                VStack(alignment: .leading, spacing: K.S.xxs) {
-                    Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: K.S.xs) {
-                        // The severity as a word, not only a colour: a red dot and an amber dot
-                        // are the same dot to one person in twelve.
-                        Pill(text: f.severity.uppercased(), tone: tone(f.severity))
-                        Text(f.id).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                    }
+        } else if let plan = model.scan?.plan, !plan.isEmpty {
+            ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
+                RailHeader("\(i + 1). \(phase.title)", trailing: "\(phase.findings.count)")
+                Text(phase.why).font(K.F.micro).foregroundStyle(K.C.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, K.S.md).padding(.bottom, K.S.xs)
+                ForEach(phase.findings, id: \.self) { id in
+                    if let f = model.findings.first(where: { $0.id == id }) { row(f) }
                 }
-            } action: {
-                // Every finding carries a fix, so the useful click is "ask for it".
-                model.prompt = "Fix this readiness finding: \(f.title)\n\n\(f.detail)"
+            }
+        } else {
+            ForEach(model.findings.prefix(40)) { f in row(f) }
+        }
+    }
+
+    private func profileCard(_ p: Wire.Profile) -> some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.xs) {
+                Text("\(model.scan?.score ?? 0)").font(K.F.mono(18, .semibold))
+                    .foregroundStyle(score < 60 ? K.C.del : score < 85 ? K.C.warn : K.C.add)
+                Text("/100").font(K.F.micro).foregroundStyle(K.C.faint)
+                Spacer()
+            }
+            if p.template != "blank" {
+                HStack(spacing: K.S.xs) {
+                    Text("Looks like").font(K.F.micro).foregroundStyle(K.C.faint)
+                    Text(p.template_title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                    if !p.like.isEmpty { Text("like \(p.like)").font(K.F.micro).foregroundStyle(K.C.accent) }
+                    Text("\(p.confidence)%").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                }
+                .help("From: \(p.signals.joined(separator: ", ")). The template's practices are the target shape.")
+            }
+            if !p.hosting.isEmpty {
+                HStack(spacing: K.S.xs) {
+                    Text("Runs on").font(K.F.micro).foregroundStyle(K.C.faint)
+                    Text(p.hosting.map(hostName).joined(separator: " + ")).font(K.F.small).foregroundStyle(K.C.text)
+                }
+            }
+            if !p.stack.isEmpty {
+                Text(p.stack.joined(separator: " · ")).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(2)
             }
         }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+    }
+
+    private var score: Int { model.scan?.score ?? 0 }
+    private func hostName(_ h: String) -> String {
+        switch h {
+        case "Gcp": "Google Cloud"
+        case "Aws": "AWS"
+        case "Fly": "Fly.io"
+        default: h
+        }
+    }
+
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            // The review a scanner cannot do: read the code as a staff engineer, rank what
+            // hurts first, and lay out the PRs. Plan mode, so it changes nothing.
+            Button {
+                busy = true
+                Task { await model.requestReview(); busy = false }
+            } label: {
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "person.crop.rectangle.stack").font(.system(size: 10))
+                    Text("Staff-engineer review").font(K.F.small.weight(.semibold))
+                    Spacer()
+                    Text("plan mode · reads, changes nothing").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+            }
+            .buttonStyle(QuietButton(tone: K.C.accent))
+            .disabled(busy || model.running)
+            .help("Starts a turn that reviews the repository the way a staff engineer would: what it is, the five things that will hurt first, architecture, security, operability, and the PRs in order.")
+
+            if model.findings.contains(where: { $0.id == "agent/no-reviewers" }) || adopted != nil {
+                Button {
+                    busy = true
+                    Task { adopted = await model.adoptPractices(); busy = false }
+                } label: {
+                    HStack(spacing: K.S.xs) {
+                        Image(systemName: adopted == nil ? "checkmark.shield" : "checkmark.circle.fill").font(.system(size: 10))
+                        Text(adopted == nil ? "Add reviewers and production rules" : "Added \(adopted!.count) files").font(K.F.small.weight(.semibold))
+                        Spacer()
+                        if adopted == nil { Text("writes 4 files, overwrites none").font(K.F.micro).foregroundStyle(K.C.faint) }
+                    }
+                }
+                .buttonStyle(QuietButton(tone: adopted == nil ? K.C.accent : K.C.add))
+                .disabled(busy || adopted != nil)
+                .help(".claude/agents/{reviewer,security,reliability}.md and docs/PRODUCTION.md — the same files every Keel template ships. Existing files are left alone.")
+            }
+        }
+        .padding(.horizontal, K.S.sm).padding(.bottom, K.S.xs)
+    }
+
+    private func row(_ f: Wire.Finding) -> some View {
+        HoverRow {
+            VStack(alignment: .leading, spacing: K.S.xxs) {
+                Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: K.S.xs) {
+                    // The severity as a word, not only a colour: a red dot and an amber dot
+                    // are the same dot to one person in twelve.
+                    Pill(text: f.severity.uppercased(), tone: tone(f.severity))
+                    Text(f.id).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                }
+            }
+        } action: {
+            // Every finding carries a fix, so the useful click is "ask for it".
+            model.prompt = "Fix this readiness finding: \(f.title)\n\n\(f.detail)"
+        }
+        .help(f.detail)
     }
 
     private func tone(_ s: String) -> Pill.Tone {

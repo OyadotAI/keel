@@ -2,7 +2,6 @@
 
 pub fn files(name: &str) -> Vec<(&'static str, String)> {
     let f = |s: &str| s.replace("{{NAME}}", name);
-    let _ = &f;
     vec![
         ("backend/src/app.ts", LOOP_APP.into()),
         ("backend/src/store.ts", LOOP_STORE.into()),
@@ -10,6 +9,10 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/app.test.ts", LOOP_TEST.into()),
         ("backend/migrations/0002_runs.sql", LOOP_SQL.into()),
         ("frontend/app/page.tsx", f(LOOP_PAGE)),
+        ("CLAUDE.md", f(LOOP_CLAUDE_MD)),
+        ("AGENTS.md", f(LOOP_AGENTS_MD)),
+        ("README.md", f(LOOP_README_MD)),
+        (".claude/agents/agent-loop.md", LOOP_AGENT_REVIEW.into()),
     ]
 }
 
@@ -312,4 +315,398 @@ export default function Home() {
     </main>
   );
 }
+"##;
+
+const LOOP_CLAUDE_MD: &str = r##"# {{NAME}} — agent loop
+
+A ReAct agent service modelled on smolagents' `ToolCallingAgent`: each step is one model call
+that may request tool calls; the tools run; their observations go back as the next message; the
+loop ends when the model calls `final_answer`, answers in plain text, or runs out of steps and is
+asked once more for its best answer. Every step is a record — thought, calls, observations,
+tokens, milliseconds — streamed over SSE as it happens and stored so the run can be read back
+later. The model is a function, so the tests script it and never call a provider. "Done" here
+means a run's stored steps are enough to explain its answer, the gate is green with no network,
+and nothing in `agent.ts` knows about HTTP or Postgres.
+
+## Architecture
+
+| File | Owns |
+|---|---|
+| `backend/src/agent.ts` | The loop (`runAgent`), the `Model`/`ToolDef`/`Step` types, `TOOLS` (`calculator`, `web_search`, `final_answer`), `SYSTEM`, and `claude()` — the one provider. |
+| `backend/src/store.ts` | `Store`: `create`/`update`/`get`/`list` over `runs`; `pgStore` and `memoryStore`. |
+| `backend/src/app.ts` | Routes; the per-process `running` map of `AbortController`s and the `MAX_CONCURRENT_RUNS` gate. `AppType` is exported here. |
+| `backend/src/app.test.ts` | A scripted `Model` drives the loop; the route test reads the SSE text and the stored run. |
+| `backend/migrations/0002_runs.sql` | `runs`. |
+| `backend/src/db.ts`, `server.ts`, `migrate.ts` | Pool, listener with SIGTERM drain, migration runner — unchanged from the stack. |
+| `frontend/app/page.tsx` | Client component: `POST /api/runs`, parses the SSE by hand, renders each step as it arrives. |
+
+Request path for `POST /api/runs`:
+
+1. zod: `task` 1–4000 chars, `max_steps` 1–30 (default 10). Invalid → `400`.
+2. `running.size >= MAX_CONCURRENT_RUNS` → `429` with `Retry-After: 10`.
+3. `store.create(id, task)` — the row exists before the first model call, state `running`.
+4. The response is an SSE stream; first event `run` with `{id}`. Client disconnect aborts the run.
+5. `runAgent` loops: `model(SYSTEM, messages, tools)` → if `final_answer` is among the calls, done;
+   if no calls, the text is the answer; otherwise each tool runs (30 s cap, output cut at 8000
+   chars, errors become observations) and the results go back as `tool_result` blocks.
+6. After each step `onStep` runs: `store.update(id, {steps})` **then** `writeSSE("step")`.
+7. On return: `store.update` with state, answer and token totals; `done` event. On throw:
+   state `failed`, answer = the message, `error` event. Either way `running.delete(id)`.
+
+Data model — `runs`:
+
+| Column | Why |
+|---|---|
+| `id uuid` | Handed to the client in the first SSE event, so a dropped stream can `GET /api/runs/:id`. |
+| `task` | The prompt as given. |
+| `state` | `running` → `done` \| `failed` \| `stopped`. `stopped` means the abort signal was seen at a step boundary. |
+| `answer` | The final answer, or the error message when `failed`. |
+| `steps jsonb` | The full `Step[]`, rewritten after every step. `GET /api/runs` (the list) returns `[]` here on purpose. |
+| `input_tokens`, `output_tokens` | Summed from the provider's `usage`; no estimates. |
+
+## Invariants
+
+1. **The model is a parameter.** `runAgent(task, model, …)` and `createApp(store, model)`;
+   nothing in `agent.ts` reads the network except inside `claude()`. Guarded by every test in
+   `describe("agent loop")` passing with the `script()` model and no `ANTHROPIC_API_KEY`.
+2. **A tool error is an observation, never an exception.** Unknown tool, thrown error, timeout —
+   all become `{output: "Error: …", error: true}` and the model gets another turn. Guarded by
+   `a tool error is an observation the model can recover from`.
+3. **`final_answer` ends the loop, and so does a reply with no tool calls.** The answer is the
+   `answer` input or the text; empty text is `failed`. Guarded by
+   `calls a tool, reads the observation, and answers`.
+4. **`max_steps` bounds model calls at `max_steps + 1`**: the extra call has no tools and asks
+   for a best answer. Guarded by `max_steps ends the loop with a best answer` (`calls === 4` for 3).
+5. **Store before stream.** `onStep` writes the run and only then emits the SSE event, so a client
+   never sees a step that is not on disk. Guarded by `the route streams steps and stores the run`
+   (reads the run back by the id from the stream).
+6. **Tokens are the provider's numbers**, summed per run, including the best-answer call. Guarded
+   by the `input_tokens === 20` assertion in the first test.
+7. **Tool output is bounded**: 30 s (`Promise.race` with an unref'd timer) and 8000 characters.
+   A tool cannot stall a run or flood the context. No direct test; the cap is one line in
+   `runAgent` and a reviewer checks it stays.
+8. **The calculator never evaluates arbitrary code.** `Function()` runs only after the
+   `^[\d\s+\-*/().]+$` allowlist. Guarded by the `rm -rf /` case in the error test.
+9. **Stop is cooperative.** `POST /api/runs/:id/stop` aborts the controller; the loop checks the
+   signal at the top of each step, so a tool or model call in flight completes first. State is
+   then `stopped`, answer `null`.
+10. **The run row exists before the first model call and is finalised in `finally`.** A crash
+    mid-run leaves `failed` with the message, never `running` forever — except a process kill
+    (see Ceilings).
+11. **Concurrency is bounded per process** by `MAX_CONCURRENT_RUNS` and refused with `429` and
+    `Retry-After`, not queued. No test yet; add one with two scripted runs whose model awaits a
+    promise you resolve after asserting the third request is `429`.
+12. **A tool is a `ToolDef` in `TOOLS`** with a JSON schema; the model sees exactly
+    `{name, description, input_schema}` and `run` never leaves the process. Guarded by
+    `GET /api/tools` shape and the `TOOLS.some(final_answer)` assertion.
+
+## Extending it
+
+**Add a tool**: append a `ToolDef` to `TOOLS` in `agent.ts` — `name`, one-sentence `description`
+(the model reads it), `input_schema` as JSON Schema, `run(input) => Promise<string>`. Validate
+`input` inside `run` and throw on bad input; the throw is the model's feedback. Test: a scripted
+model that calls it, asserting the observation, in `describe("agent loop")`. No migration.
+
+**Add a provider** (OpenAI, a local model): a second `Model` factory beside `claude()` that maps
+the provider's response to `ModelReply` — `text`, `calls[{id,name,input}]`, `usage`, `stop`.
+Choose it in `createApp(pgStore(), pick())` at the bottom of `app.ts` from an env var. Test with
+`fetchImpl` injected: pass a fake `fetch` returning the provider's JSON and assert the mapping.
+
+**Change the system prompt or add per-run instructions**: `SYSTEM` is a const; to make it
+per-run, add `system?: string` to `runAgent`'s `opts` and to the `POST /api/runs` zod body, cap
+its length, and store it in a new column via `backend/migrations/0003_*.sql`.
+
+**Add planning steps** (smolagents' `planning_interval`): in `runAgent`, every N steps call the
+model with no tools and a "summarise progress and plan" user message, push the reply as a step
+with `calls: []`, and continue. Test with the `max_steps` pattern, asserting call count.
+
+**Persist conversation history across runs**: add `parent_run_id uuid` to `runs`, load the
+parent's steps in `POST /api/runs`, and rebuild `messages` from them before the loop. Test that a
+second run's first model call receives the first run's tool results.
+
+**Run tools in parallel**: the `for (const c of reply.calls)` loop is sequential; replace with
+`Promise.all` over the calls, keeping observation order equal to call order (the `tool_result`
+blocks must match `tool_use` ids). Test with two calls in one reply.
+
+**Add a route**: one more link in the chained `app` in `app.ts`, never a separate
+`app.get(...)`, or `AppType` drops it. Test through `app.request`.
+
+## Operating it
+
+| Env | Required | Meaning |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | yes, for real runs | Sent as `x-api-key` by `claude()`. Absent → every run `failed` with `anthropic 401`. |
+| `MODEL` | no (`claude-sonnet-4-20250514`) | The Messages API model id. |
+| `MAX_CONCURRENT_RUNS` | no (4) | Per process. Above it, `429`. |
+| `DATABASE_URL` | yes in the cluster | The pool in `db.ts`. |
+| `PORT` | no (8000) | Listener. |
+
+Scaling: a run holds one HTTP connection open for its whole life (tens of seconds to minutes)
+and makes one provider call per step, so the limit is provider rate and concurrent streams, not
+CPU. Replicas multiply `MAX_CONCURRENT_RUNS`. What is per-replica today:
+
+- **`running`** — the map from run id to `AbortController`. `POST /api/runs/:id/stop` only works
+  on the replica that owns the run; elsewhere it is `404`. With replicas, either route stops by
+  session affinity, or move the stop signal to Redis (`SET stop:<id>`) polled at each step boundary.
+- **The concurrency gate** — counts this process's runs only.
+
+Redis is provisioned by the stack and unused by this service.
+
+Failure modes:
+
+| What fails | The client sees | The row says |
+|---|---|---|
+| Provider 4xx/5xx | `error` event with `anthropic <status>: …` | `failed`, answer = message |
+| Tool throws or exceeds 30 s | nothing special: the next step's observation says `Error: …` | continues |
+| Client disconnects | — | `stopped` at the next step boundary (`onAbort` → `ctl.abort()`) |
+| `MAX_CONCURRENT_RUNS` reached | `429`, `Retry-After: 10` | no row |
+| Process killed mid-run | stream ends | `running` forever — see Ceilings |
+| Postgres down | `POST /api/runs` throws before the stream starts → `500` | — |
+
+Watch: runs by `state`, steps per run, `input_tokens + output_tokens` per run (cost), p95 step
+`ms`, `429` count, rows stuck in `running` older than a few minutes. Logs are the stack's
+one-JSON-line format; the run id is the correlation key.
+
+## Ceilings
+
+- **Stop and the concurrency gate are per process.** Upgrade: Redis for both, checked at the
+  step boundary where the abort signal is checked today.
+- **A killed process leaves `running` rows.** Upgrade: a sweeper (`update runs set state =
+  'failed' where state = 'running' and updated_at < now() - interval '10 minutes'`) in a
+  cron or at startup.
+- **The run lives inside the request.** Long tasks depend on the client holding the stream, and
+  a load balancer idle timeout ends the run. Upgrade: a worker that owns the loop, with the
+  route enqueueing and a separate `GET /api/runs/:id/events` that tails the stored steps.
+- **`web_search` scrapes DuckDuckGo's HTML** with a regex. It will break when the markup changes
+  and it is not rate-limited. Upgrade: a search API with a key, behind the same `ToolDef`.
+- **No auth on any route.** Anyone who can reach the service can spend provider tokens.
+  Upgrade: put it behind the stack's session and rate limit per principal.
+- **Tool timeout (30 s) and output cap (8000) are constants.** Upgrade: per-`ToolDef` fields.
+- **`steps` is rewritten whole after every step** (`update … set steps = …`). Fine to a few
+  hundred steps; `max_steps` is capped at 30. Upgrade: a `steps` table if that cap moves.
+- **`pgStore.list` returns `[]` for `steps`; `memoryStore.list` returns the full array.** The
+  tests cannot see the difference. Upgrade: strip steps in `memoryStore.list` too, and add a test.
+- **`steps` accumulate in memory in the route (`steps.push`)** as well as in the loop — two
+  copies per run. Harmless at 30 steps.
+
+The stack rules — gate, typed seam, production checklist, deploy — are in `docs/PRODUCTION.md`.
+They apply.
+"##;
+
+const LOOP_AGENTS_MD: &str = r##"# {{NAME}} — for agents
+
+`CLAUDE.md` has the rules. This is how to run and test the agent loop.
+
+## Run
+
+    echo ANTHROPIC_API_KEY=sk-ant-... >> backend/.env   # bun loads backend/.env
+    make demo                    # postgres + redis, migrate, seed, backend :8000, frontend :3000
+    make check                   # the gate: typecheck both halves, bun test the backend (no key needed)
+    make backend                 # API only, with reload
+
+## Routes, with bodies
+
+List the tools the model sees:
+
+    curl -s localhost:8000/api/tools
+    # {"tools":[{"name":"calculator","description":"Evaluate an arithmetic expression ...","input_schema":{...}},{"name":"web_search",...},{"name":"final_answer",...}]}
+
+Start a run and watch the steps (SSE; `-N` disables buffering):
+
+    curl -N -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+      -d '{"task":"What is 17 * 23, and is it prime?","max_steps":6}'
+    # event: run
+    # data: {"id":"6f1c..."}
+    #
+    # event: step
+    # data: {"n":1,"thought":"I'll compute it.","calls":[{"id":"toolu_..","name":"calculator","input":{"expression":"17*23"}}],"observations":[{"id":"toolu_..","output":"391"}],"input_tokens":412,"output_tokens":58,"ms":1830}
+    #
+    # event: step
+    # data: {"n":2,"thought":"","calls":[{"id":"toolu_..","name":"final_answer","input":{"answer":"391, and it is not prime (17 × 23)."}}],"observations":[],...}
+    #
+    # event: done
+    # data: {"state":"done","answer":"391, and it is not prime (17 × 23).","input_tokens":1020,"output_tokens":91}
+
+Invalid body, and the concurrency gate:
+
+    curl -si -X POST localhost:8000/api/runs -d '{}' | head -1                  # HTTP/1.1 400
+    # with MAX_CONCURRENT_RUNS runs in flight:                                    HTTP/1.1 429, Retry-After: 10
+
+Read a run back (full steps), list runs (steps omitted), stop one:
+
+    curl -s localhost:8000/api/runs/6f1c...        # {"id":"6f1c...","task":"...","state":"done","answer":"...","steps":[...],"input_tokens":1020,"output_tokens":91,"created_at":"..."}
+    curl -s localhost:8000/api/runs                 # {"runs":[{"id":"...","state":"done","steps":[],...}, ...]}  newest first, 50
+    curl -s -X POST localhost:8000/api/runs/6f1c.../stop   # {"ok":true}, or 404 if it is not running on this replica
+
+## Tests
+
+`backend/src/app.test.ts`, run by `bun test` (part of `make check`). No provider, no database:
+
+- `script([...replies])` returns a `Model` that replays a list of partial `ModelReply`s, one per
+  call, repeating the last. A reply is `{text, calls, input_tokens, output_tokens, stop}`; the
+  defaults are `10`/`5` tokens and `stop: "tool_use"`.
+- Loop tests call `runAgent(task, model, opts)` directly and assert on `state`, `answer`,
+  `steps[n].observations` and token totals.
+- The route test builds `createApp(memoryStore(), model)` and reads the SSE as text with
+  `app.request` (Hono, no port), then fetches `/api/runs/:id` to check what was stored.
+- The `max_steps` test uses a hand-written `Model` that looks at `tools.length` to tell the
+  normal call from the best-answer call.
+
+To add a test: for loop behaviour, script the model and assert on steps; for a tool, call
+`TOOLS.find(t => t.name === "…")!.run(input)` directly, or script a model that calls it. For a
+provider, inject `fetchImpl` into `claude(fetchImpl)` and return canned JSON. Nothing in this
+suite should need `ANTHROPIC_API_KEY`; if it does, the mapping and the loop are entangled.
+
+## Migrations
+
+`runs` is `backend/migrations/0002_runs.sql`. New columns: `0003_*.sql`, additive with a default;
+`make migrate` locally, the `migrate` init container in the cluster. `pgStore.update` coalesces
+each column, so a new column needs its own `coalesce` line and a field on `Run`.
+"##;
+
+const LOOP_README_MD: &str = r##"# {{NAME}}
+
+A tool-calling agent as a service: `POST` a task, watch each step stream back, read the whole
+run later. Modelled on smolagents' `ToolCallingAgent`, in TypeScript you own.
+
+## What you get
+
+- `POST /api/runs` — a ReAct loop (think → call tools → observe → repeat) streamed as
+  server-sent events: `run`, `step`…, `done` or `error`.
+- Three tools out of the box — `calculator`, `web_search`, `final_answer` — and a `ToolDef`
+  shape for adding yours in one place.
+- Every step persisted as it happens: thought, tool calls, observations, tokens, duration.
+  A dropped connection loses nothing; `GET /api/runs/:id` has it all.
+- Bounded by construction: `max_steps` (≤ 30) plus one best-answer call, 30 s per tool call,
+  8000 characters per observation, `MAX_CONCURRENT_RUNS` per process with `429` + `Retry-After`.
+- Tool errors are observations, so the model recovers instead of the run dying.
+- Claude through the Messages API; the model is a function, so the tests script it and run with
+  no key and no network.
+- A page that runs a task and shows the steps unfold; Compose locally; kustomize to a cluster.
+
+## Five minutes
+
+    echo ANTHROPIC_API_KEY=sk-ant-... >> backend/.env
+    make demo
+
+Then:
+
+    curl -N -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+      -d '{"task":"What is 17 * 23, and is it prime?"}'
+    # event: run   → {"id":"…"}
+    # event: step  → calculator({"expression":"17*23"}) → "391"
+    # event: step  → final_answer(...)
+    # event: done  → {"state":"done","answer":"391 …","input_tokens":…,"output_tokens":…}
+
+    curl -s localhost:8000/api/runs | head -c 300     # the list, newest first
+    curl -s localhost:8000/api/runs/<id>              # the run with every step
+    curl -s localhost:8000/api/tools                   # what the model can call
+
+`http://localhost:3000` does the same with a textarea and a step-by-step view.
+
+## API
+
+| Method | Path | Auth | What |
+|---|---|---|---|
+| POST | `/api/runs` | none | `{task, max_steps?}` → SSE stream of steps; `400` invalid, `429` busy |
+| GET | `/api/runs` | none | Last 50 runs, steps omitted |
+| GET | `/api/runs/:id` | none | One run with all steps, or `404` |
+| POST | `/api/runs/:id/stop` | none | Abort at the next step boundary; `404` if not running here |
+| GET | `/api/tools` | none | Tool names, descriptions and schemas |
+| GET | `/api/health`, `/api/health/ready` | none | Probes |
+
+## Compared with smolagents
+
+Same, so their docs transfer:
+
+- The `ToolCallingAgent` loop: model → tool calls → observations → repeat; `final_answer` as a
+  tool; a text reply with no calls ends the run; `max_steps` then one final "best answer" call.
+- A step record with thought, calls, observations, tokens and duration, and errors fed back as
+  observations rather than raised.
+- Tools as name + description + JSON schema + a function.
+
+Better here:
+
+- It is a service with a stable HTTP API and a typed client (`AppType`), not a library you wrap.
+- Steps are streamed and stored as they happen; smolagents keeps memory in the process and you
+  build persistence yourself.
+- Concurrency and stop are part of the API.
+- Tests need no model, no key and no network, and run in under a second.
+- One provider integration of 15 lines that you can read; token counts come from the provider.
+- Kubernetes manifests, probes, secrets rendering and CI that roll only what changed.
+
+Not here yet:
+
+- **`CodeAgent`** — actions as Python code in a sandbox. This is tool-calling only.
+- **Planning steps** (`planning_interval`), **managed/multi-agent** hierarchies, memory replay
+  and `reset=False` continuation across runs.
+- **Sandboxed executors** (E2B, Docker, Modal) and the vision and audio tools.
+- **Many model backends** — one (`claude()`); OpenAI, local and HF Inference are a `Model`
+  factory each.
+- **Hub sharing** of tools and agents, Gradio UI, OpenTelemetry instrumentation.
+- **Auth and per-user limits** — the routes are open.
+- **Multi-replica stop** — `stop` reaches the replica running the run.
+
+## Production
+
+- Envs: `ANTHROPIC_API_KEY`, `MODEL`, `MAX_CONCURRENT_RUNS`, `DATABASE_URL`, `PORT`. Rendered
+  from `backend/.env` into a Secret by `make k8s-secrets ENV=prod`; committed only as `.env.age`.
+- Scaling: each run is one open connection and one provider call per step; replicas multiply
+  the concurrency cap. Set the ingress idle timeout above your longest run, or move the loop to
+  a worker (Roadmap 1).
+- Probes: `/api/health` (liveness), `/api/health/ready` (readiness — does not yet check Postgres).
+- Migrations: `backend/migrations/*.sql`, run by the `migrate` init container before each rollout.
+- Deploy: `git push main` → dev; `make release` → prod. `k8s/README.md` explains the manifests.
+- What pages you: `failed` rate (the provider key, quota or an outage), `429` rate (raise the cap
+  or add replicas), rows stuck in `running` (a killed pod), token spend per hour.
+
+## Roadmap
+
+1. Move the loop to a worker; the route enqueues and clients tail stored steps.
+2. Redis-backed stop and concurrency, so replicas behave as one.
+3. A sweeper for `running` rows older than N minutes.
+4. Auth and per-principal rate limits on `POST /api/runs`.
+5. A search API behind `web_search` instead of scraped HTML.
+6. Per-tool timeouts and output caps on `ToolDef`.
+7. Planning steps and run continuation (`parent_run_id`).
+"##;
+
+const LOOP_AGENT_REVIEW: &str = r##"---
+name: agent-loop
+description: Run on any change to backend/src/agent.ts, TOOLS, the run routes or the SSE stream. Reads the change as the person who pays the provider bill and gets paged when a run never ends, and reports only what lets a run run away, leak, or lie about what it did.
+tools: Read, Grep, Glob, Bash
+---
+
+You review changes to an agent loop that spends money on every step and executes tool code on
+request. Report each finding as `path:line — what — the input or model reply that triggers it —
+the fix`.
+
+Check:
+1. Termination: every path out of the `for` loop in `runAgent` is `final_answer`, no calls,
+   abort, or `maxSteps`; the best-answer call passes `[]` tools so it cannot start a new step.
+2. Bounds: `max_steps` stays capped in the zod body (≤ 30); the tool `Promise.race` timeout and
+   the `slice(0, 8000)` on observations are still there and still apply to every tool.
+3. Tool safety: a new `ToolDef.run` validates its input before acting; nothing reaches `eval`,
+   `Function`, a shell, or the filesystem from model-controlled strings; the calculator's
+   allowlist regex still precedes `Function`.
+4. Outbound calls: every `fetch` in a tool or provider has a timeout or is inside the race, sends
+   no secret in the URL, and does not follow model-supplied URLs without an allowlist.
+5. Errors as observations: a thrown tool error becomes `{error: true}` and the loop continues;
+   an exception escaping `runAgent` is a bug unless it is the abort or provider failure.
+6. Message shape: every `tool_use` id in the assistant block has a matching `tool_result` in the
+   next user block, in the same order; a mismatch is a `400` from the provider on the next step.
+7. Persistence order: `store.update` runs before `writeSSE` in `onStep`, and the final update
+   runs before the `done` event; `running.delete` is in `finally`.
+8. Accounting: `input_tokens`/`output_tokens` are summed from provider `usage` for every call,
+   including the best-answer call; no estimates.
+9. Stop: the abort signal is checked at the step boundary and `s.onAbort` still calls
+   `ctl.abort()`, so a vanished client does not keep spending.
+10. Concurrency: `running.size` is checked before `store.create`, and the entry is removed on
+    every exit path.
+11. The route stays one chained expression so `AppType` includes it; the SSE event names
+    (`run`, `step`, `done`, `error`) match what `frontend/app/page.tsx` parses.
+12. Secrets: `ANTHROPIC_API_KEY` appears only in `claude()`'s header; provider error bodies are
+    truncated before they are stored in `answer` or logged.
+
+End with one line: `agent-loop: N findings`, and if 0, which of the above you ran.
 "##;

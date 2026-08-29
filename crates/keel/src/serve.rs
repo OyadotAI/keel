@@ -299,6 +299,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/branches", get(api_git_branches))
         .route("/api/git/branch", axum::routing::post(api_git_branch))
         .route("/api/git/remote", axum::routing::post(api_git_remote))
+        .route("/api/review", get(crate::review::api_review))
+        .route("/api/adopt", axum::routing::post(crate::review::api_adopt))
         .route("/api/git/stage-all", axum::routing::post(api_git_stage_all))
         .route(
             "/api/git/commit-staged",
@@ -635,6 +637,7 @@ async fn api_git_branch(
 #[derive(serde::Deserialize)]
 struct RemoteBody {
     action: String,
+    url: Option<String>,
 }
 
 async fn api_git_remote(
@@ -642,7 +645,7 @@ async fn api_git_remote(
     Json(b): Json<RemoteBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_remote_act(&repo, &b.action),
+        move || crate::api::git_remote_act(&repo, &b.action, b.url.as_deref()),
         Err("timed out".into()),
     )
     .await

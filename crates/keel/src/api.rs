@@ -1065,14 +1065,29 @@ pub fn git_branch_act(root: &Utf8Path, action: &str, name: &str) -> Result<Strin
     }
 }
 
-/// Fetch, pull, or push.
-pub fn git_remote_act(root: &Utf8Path, action: &str) -> Result<String, String> {
+/// Fetch, pull, push — or add `origin`, for a project that was never pushed anywhere.
+pub fn git_remote_act(root: &Utf8Path, action: &str, url: Option<&str>) -> Result<String, String> {
     match action {
         "fetch" => git_run(root, &["fetch", "--all", "--prune"]),
         // `--ff-only`: a merge commit nobody asked for is not a pull, and a conflict is a
         // decision for a person with a terminal.
         "pull" => git_run(root, &["pull", "--ff-only"]),
         "push" => git_push(root),
+        "add" => {
+            let url = url
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .ok_or("a remote URL is needed")?;
+            // Only URL-shaped remotes: `-` would be read as a flag, and a bare path is a
+            // mistake typed into a box, not a remote anyone meant.
+            let ok = url.starts_with("https://")
+                || url.starts_with("ssh://")
+                || url.starts_with("git@") && url.contains(':');
+            if !ok {
+                return Err("use an https://, ssh:// or git@host:owner/repo URL".into());
+            }
+            git_run(root, &["remote", "add", "origin", "--", url])
+        }
         _ => Err(format!("unknown remote action: {action}")),
     }
 }
@@ -1204,6 +1219,24 @@ mod attach_tests {
 #[cfg(test)]
 mod git_tests {
     use super::*;
+
+    #[test]
+    fn a_remote_can_be_added_once_and_only_as_a_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["init", "--quiet"])
+            .output()
+            .unwrap();
+        assert!(git_remote_act(&root, "add", None).is_err());
+        assert!(git_remote_act(&root, "add", Some("--upload-pack=x")).is_err());
+        assert!(git_remote_act(&root, "add", Some("/tmp/somewhere")).is_err());
+        git_remote_act(&root, "add", Some("git@github.com:o/r.git")).unwrap();
+        assert!(git_branches(&root).remotes.contains(&"origin".to_string()));
+        // A second origin is a real error from git, surfaced, not silently replaced.
+        assert!(git_remote_act(&root, "add", Some("https://x/y")).is_err());
+    }
 
     /// `git status --porcelain` reports an untracked *directory* as one entry ending in `/`, so a
     /// new folder of twelve files was one row whose basename was the empty string — a blank line

@@ -15,6 +15,25 @@ pub fn report(report: &Report) -> String {
         "not ready to deploy"
     };
     let _ = writeln!(out, "\nReadiness {}/100 — {verdict}\n", report.score);
+    if let Some(p) = &report.profile {
+        if p.template != "blank" {
+            let _ = writeln!(
+                out,
+                "Looks like: {} (like {}) · {}% · from {}",
+                p.template_title,
+                p.like,
+                p.confidence,
+                p.signals.join(", ")
+            );
+        }
+        if !p.hosting.is_empty() {
+            let hosts: Vec<&str> = p.hosting.iter().map(|h| h.name()).collect();
+            let _ = writeln!(out, "Runs on: {}", hosts.join(" + "));
+        }
+        if p.template != "blank" || !p.hosting.is_empty() {
+            let _ = writeln!(out);
+        }
+    }
 
     if report.findings.is_empty() {
         let _ = writeln!(out, "  Nothing to report.\n");
@@ -29,6 +48,19 @@ pub fn report(report: &Report) -> String {
                 let _ = writeln!(out, "        {path}");
             }
             let _ = writeln!(out, "        fix: {}", finding.fix.description());
+        }
+        let _ = writeln!(out);
+    }
+
+    if !report.plan.is_empty() {
+        let _ = writeln!(out, "The road to production, in order");
+        for (i, phase) in report.plan.iter().enumerate() {
+            let _ = writeln!(out, "  {}. {} — {}", i + 1, phase.title, phase.why);
+            for id in &phase.findings {
+                if let Some(f) = report.findings.iter().find(|f| f.id == *id) {
+                    let _ = writeln!(out, "       · {}", f.title);
+                }
+            }
         }
         let _ = writeln!(out);
     }

@@ -24,6 +24,7 @@ mod pr;
 mod prefs;
 mod project;
 mod render;
+mod review;
 mod serve;
 mod snapshot;
 mod stack;

@@ -116,7 +116,14 @@ pub async fn create(
         && let Some(pack) = req.pack.as_deref()
     {
         // A pack's file replaces the scaffold's at the same path; everything else is added.
-        for (rel, body) in crate::stack::pack(pack, &req.name) {
+        let packed = crate::stack::pack(pack, &req.name);
+        // A pack that brings its own CLAUDE.md is about the service; the stack's rules — the
+        // gate, the seam, the production checklist — still apply, so they move to a file the
+        // pack's CLAUDE.md points at rather than being lost.
+        if packed.iter().any(|(p, _)| *p == "CLAUDE.md") {
+            files.push(("docs/PRODUCTION.md", crate::stack::claude_md(&req.name)));
+        }
+        for (rel, body) in packed {
             files.retain(|(p, _)| *p != rel);
             files.push((rel, body));
         }
@@ -184,7 +191,7 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
     if template == Template::Stack {
         let mut files = crate::stack::files(name);
         files.push(("CLAUDE.md", crate::stack::claude_md(name)));
-        files.push(("README.md", f(README_MD)));
+        files.push(("README.md", f(STACK_README_MD)));
         files.push((".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()));
         files.push((
             ".claude/agents/security.md",
@@ -262,7 +269,7 @@ fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
 // scan. Hooks are the same story and worse — a shell command that runs on somebody else's machine
 // when they open the repo.
 
-const REVIEWER_AGENT: &str = r#"---
+pub const REVIEWER_AGENT: &str = r#"---
 name: reviewer
 description: "Use before reporting a change as done, after the gate is green. Reads the diff against what was asked and reports only what is actually wrong."
 tools: Read, Grep, Glob, Bash
@@ -394,6 +401,31 @@ change cannot:
 configuration: they execute on the machine of whoever opens this repo. Keel quarantines them before
 any agent runs and the scan rates them Critical. If this project needs an MCP server or a
 permission rule, it belongs in the user scope, not committed here.
+"#;
+
+/// The containers stack's README. The Cloudflare one below says "deployed as a Worker", which
+/// is wrong for a project that ships images to a cluster.
+const STACK_README_MD: &str = r#"# {{NAME}}
+
+```
+frontend/   Next.js, standalone build in a slim Node image, non-root
+backend/    Hono on Node, its own image; Postgres and Redis beside it
+nginx/      one origin locally: / to the app, /api to the API
+k8s/        kustomize base + dev/prod overlays
+```
+
+## Five minutes
+
+```
+make demo      # postgres + redis, migrate, seed, both halves — then open http://localhost:3000
+make check     # the gate: typecheck both halves, test the backend (no database needed)
+```
+
+## Ship
+
+`git push` to `main` deploys dev; `make release` tags and deploys prod. Images go to ghcr,
+secrets are rendered from `backend/.env.age`, and only what changed rolls. `k8s/README.md`
+says what the manifests insist on and why; `CLAUDE.md` holds the rules the reviewers enforce.
 "#;
 
 const README_MD: &str = r#"# {{NAME}}

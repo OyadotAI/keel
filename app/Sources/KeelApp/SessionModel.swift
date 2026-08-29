@@ -847,6 +847,35 @@ final class SessionModel: Identifiable {
     /// to change that.
     var sessions: [Wire.Session] = []
     var findings: [Wire.Finding] = []
+    /// The whole scan: score, profile, plan. `findings` stays the list the badge counts.
+    var scan: Wire.Scan?
+
+    struct Adopted: Decodable { var written: [String]; var skipped: [String] }
+    struct ReviewPrompt: Decodable { var system: String; var prompt: String }
+
+    /// Write the reviewers and the production checklist into the project (never overwriting),
+    /// then rescan so the finding clears.
+    func adoptPractices() async -> [String] {
+        var written: [String] = []
+        await attempt {
+            let a: Adopted = try await client.post("/api/adopt", body: Empty(), q(), as: Adopted.self)
+            written = a.written
+        }
+        await refreshState()
+        return written
+    }
+
+    /// Ask for the staff-engineer review: plan mode, so the turn reads and proposes and
+    /// changes nothing; the scan travels as evidence; the persona is part of the prompt.
+    func requestReview() async {
+        await attempt {
+            let r: ReviewPrompt = try await client.get("/api/review", q())
+            mode = "plan"
+            prompt = r.system + "\n\n---\n\n" + r.prompt
+            send()
+        }
+    }
+    struct Empty: Encodable {}
 
     /// Plugins the scanner recommends for this repository that are not installed.
     ///
@@ -975,6 +1004,7 @@ final class SessionModel: Identifiable {
         if s.projectOpen, !s.repo.isEmpty { Recents.remember(s.repo) }
         sessions = s.workspace.sessions
         findings = s.scan.findings
+        scan = s.scan
         workspace = s.workspace
         // The recommendations depend on what is installed, and every path that changes that —
         // install, uninstall, disable, the catalog closing — comes through here. One place,
@@ -1181,7 +1211,7 @@ final class SessionModel: Identifiable {
     }
 
     struct BranchBody: Encodable { var action: String; var name: String }
-    struct RemoteBody: Encodable { var action: String }
+    struct RemoteBody: Encodable { var action: String; var url: String? = nil }
     struct StageAllBody: Encodable { var stage: Bool }
 
     /// Any git verb from the panel. Busy while it runs, its output as the error if it fails,
@@ -1198,8 +1228,8 @@ final class SessionModel: Identifiable {
     func branch(_ action: String, _ name: String) async {
         await git(action) { _ = try await client.post("/api/git/branch", body: BranchBody(action: action, name: name), q(), as: String.self) }
     }
-    func remote(_ action: String) async {
-        await git(action) { _ = try await client.post("/api/git/remote", body: RemoteBody(action: action), q(), as: String.self) }
+    func remote(_ action: String, url: String? = nil) async {
+        await git(action) { _ = try await client.post("/api/git/remote", body: RemoteBody(action: action, url: url), q(), as: String.self) }
         if action == "push" { Telemetry.track("pushed") }
     }
     func stageAll(_ stage: Bool) async {

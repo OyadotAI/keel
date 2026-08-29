@@ -11,6 +11,13 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
         ("backend/src/app.test.ts", SANDBOX_TEST.into()),
         ("backend/migrations/0002_sandbox.sql", SANDBOX_SQL.into()),
         ("frontend/app/page.tsx", f(SANDBOX_PAGE)),
+        ("CLAUDE.md", f(SANDBOX_CLAUDE_MD)),
+        ("AGENTS.md", f(SANDBOX_AGENTS_MD)),
+        ("README.md", f(SANDBOX_README_MD)),
+        (
+            ".claude/agents/isolation.md",
+            SANDBOX_AGENT_ISOLATION.into(),
+        ),
     ]
 }
 
@@ -401,4 +408,295 @@ export default function Home() {
     </main>
   );
 }
+"##;
+
+const SANDBOX_CLAUDE_MD: &str = r##"# {{NAME}} — working agreement
+
+{{NAME}} is a code-runner service in the shape of Piston and E2B: POST source files, a worker
+runs them in a throwaway Docker container with no network and hard limits, and the result — stdout,
+stderr, exit code, whatever the program wrote to `/work/out` — is readable by id. "Done" means a
+`runs` row in `done` or `failed`, its `run` JSON in Piston's shape, and its artifacts stored with an
+expiry. The request path never starts a container; that is what the queue is for.
+
+## Architecture
+
+| File | Owns |
+|---|---|
+| `backend/src/app.ts` | The routes: `Body` schema with the clamps, queue/poll, artifact download, the Piston-compatible blocking alias. Exports `AppType`. |
+| `backend/src/store.ts` | `Store` interface, `pgStore` (`SKIP LOCKED` claim, `finish` in one transaction) and `memoryStore`. |
+| `backend/src/executor.ts` | `LANGUAGES`, `LIMITS`, `dockerArgv` (pure), `dockerExecutor` (spawn, capture, collect `/work/out`), `fakeExecutor`. |
+| `backend/src/worker.ts` | `tick`: claim one run, execute, store; the artifact expiry sweep. The `bun run worker` process. |
+| `backend/src/app.test.ts` | Five tests over `memoryStore` and `fakeExecutor`; no Docker. |
+| `backend/migrations/0002_sandbox.sql` | `runs`, `artifacts`. |
+| `frontend/app/page.tsx` | A playground: language, code, run, poll. |
+
+### Request path
+
+1. `POST /api/runs` — body parsed by `Body`: language in `LANGUAGES`, 1–20 files with safe names, `run_timeout ≤ 30 000 ms`, `run_memory_limit ≤ 512 MiB`. Anything above is `400`, not clamped down silently.
+2. Insert as `queued` with `version` taken from `LANGUAGES`, `202 {id, state}`.
+3. `worker.ts tick()` claims one queued run (`for update skip locked`).
+4. `dockerExecutor` writes the files into a `mkdtemp` directory and builds `dockerArgv`: `--network none`, `--memory` and `--memory-swap` equal (no swap), `--cpus`, `--pids-limit 64`, `--read-only`, `--cap-drop ALL`, `no-new-privileges`, user `65534`, the work dir bind-mounted at `/work`.
+5. `spawnCaptured` feeds `stdin`, caps each stream at 64 KiB, and `SIGKILL`s the docker client at `run_timeout`.
+6. Files under `/work/out` are read back as artifacts; the temp directory is removed in `finally`.
+7. `store.finish` writes the result and the artifacts (with `expires_at = now + 1h`) in one transaction. An executor exception writes `failed` with the message; never retried.
+8. `GET /api/runs/:id` returns the row plus unexpired artifacts; `GET /api/artifacts/:id` streams one as an attachment.
+
+`POST /api/v2/execute` does 1–2, then polls the store every 200 ms until the worker has finished, up to `LIMITS.timeout.max + 10 s`, and answers in Piston's `{language, version, run}` shape.
+
+### Data model
+
+| Table | Column | Why |
+|---|---|---|
+| `runs` | `files jsonb`, `stdin`, `args` | The whole job, so a worker needs nothing but the row. Stripped from the list route. |
+| | `run_timeout`, `run_memory_limit` | Stored as validated, so the executor trusts them. |
+| | `run jsonb` | `{stdout, stderr, code, signal, output}` — Piston's shape, verbatim. |
+| | `error` | Executor failure (docker missing, bad image), distinct from a program that exited non-zero. |
+| `artifacts` | `bytes bytea`, `expires_at` | Output files, in Postgres for now; the sweep deletes by `expires_at`. |
+| `runs_ready`, `artifacts_expiry` | indexes | The claim and the sweep. |
+
+## Invariants
+
+1. **The container has no network.** `--network none` is in `dockerArgv` unconditionally. Guarded by `the container gets no network and every limit`.
+2. **Every limit is on the command line**: memory (and swap equal to it), cpus, pids, read-only root, all capabilities dropped, no new privileges, unprivileged user. Same test asserts each flag and value.
+3. **Limits are clamped at the boundary, not in the executor.** `Body` refuses values above `LIMITS`; `dockerArgv` never sees one. Guarded by `limits above the ceiling and unknown languages are refused at the boundary`.
+4. **File names cannot traverse.** `^[\w.-]+$` in `Body` and again in `safeName`; `../etc/passwd` is `400`. Same test.
+5. **Only known languages run.** `language` must be a key of `LANGUAGES`; `cobol` is `400`. Same test.
+6. **A run is executed at most once.** The claim is `SKIP LOCKED`, and a throwing executor marks `failed` — never back to `queued`. Guarded by `a crashing executor marks the run failed, never retried` (a second `tick` finds nothing).
+7. **Results are in Piston's shape.** `run.run` is `{stdout, stderr, code, signal, output}` and `version` is the language's. Guarded by `queue → worker → result, in Piston's shape`.
+8. **Artifacts expire.** Listed and downloadable only while `expires_at > now`; `expire()` deletes them. Guarded by `output files are artifacts that expire`.
+9. **Output is bounded.** 64 KiB per stream in `spawnCaptured`; a program printing forever cannot fill the worker's memory. Not unit-tested (needs a process); keep `CAP` when touching it.
+10. **The work directory is always removed**, in `finally`, whether the run succeeded, timed out or threw.
+11. **The request path never spawns.** Only `worker.ts` calls the executor; `/api/v2/execute` waits on the store.
+
+## Extending it
+
+**Add a language.** One entry in `LANGUAGES`: `image`, `version`, `cmd(firstFile)`. Pull the image on the worker host. Add it to the `argv.slice(-4)` style assertion in the first test. The page's `<select>` is hard-coded — add the option. No migration.
+
+**Add a compile step** (C, Rust, Go). Extend the entry with `compile?: (file) => string[]`, run it first in `dockerExecutor` in the same work dir (it is the only writable path), and record a `compile` result beside `run`, as Piston does. Migration: `alter table runs add column compile jsonb`. Test: `dockerArgv` for the compile argv, and a `fakeExecutor` that returns both.
+
+**Raise a limit.** `LIMITS` is the single source; the schema reads `LIMITS.*.max`. Change the number, and the boundary test's `max + 1` moves with it. `RUN_CPUS` is already an env var.
+
+**Move artifacts to object storage.** Keep `Store.finish`'s signature; have `pgStore` upload `bytes` and store a key. `GET /api/artifacts/:id` becomes a signed redirect. `expire()` deletes both. The `memoryStore` path is unchanged, so the tests still run without S3.
+
+**Per-caller quotas.** Add a principal (API key) to `Body`'s context, a `runs.owner` column, and a count-per-window check before `enqueue`. Rate-limit here, at the boundary; the worker should never decide.
+
+**Packages / dependencies.** Not supported: the container has no network, so `pip install` cannot run inside it. Build a language image that already contains the packages, and register it as another `LANGUAGES` entry (`python-data`, say).
+
+## Operating it
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres; API and worker. |
+| `RUN_CPUS` | no | `--cpus` for every container; default `0.5`. |
+| `PORT` | no | API port, default 8000. |
+
+The worker needs a Docker daemon (`docker` on `PATH` and access to the socket) and the images pulled: `python:3.12-alpine`, `node:22-alpine`.
+
+**Processes.** `backend` is stateless. `worker` (`bun run worker`) runs one job at a time and sweeps expired artifacts once a minute; run more workers for throughput. Not in the image yet: add `src/worker.ts` to the Dockerfile's build line and a Deployment with the Docker socket mounted (see Ceilings before you do).
+
+**What is per-replica.** Nothing: queue, results and artifacts are all Postgres. Two workers both sweep; `delete … where expires_at <= now` is idempotent.
+
+**Failure modes.**
+
+| What | Caller sees |
+|---|---|
+| Program exits non-zero | `done`, `run.code` non-zero, stderr in `run.stderr`. |
+| Program exceeds `run_timeout` | `done`, `run.signal = "SIGKILL"`, `code = null`, partial output. |
+| Out of memory | `done`, `code = 137`, usually empty stdout. |
+| `docker` missing or image absent | `failed`, `error` from the spawn or docker's stderr. |
+| No worker running | `/api/runs/:id` stays `queued`; `/api/v2/execute` answers `504 timeout` after 40 s. |
+| Artifact requested after 1h | `404 no such artifact or expired`. |
+
+**Metrics and logs.** `runs.ms` per language; queue depth (`state = 'queued'`); `failed` count by `error` prefix (`docker:` means the host, not the user); artifact bytes per hour (Postgres growth). The worker logs one line at start; add one per run if you need timings without a query.
+
+## Ceilings
+
+- **One container per run, cold.** Alpine images start in ~200–500 ms; that is the floor on latency. Piston keeps a warm process tree; E2B keeps a Firecracker VM. Pre-pull and consider `--init` and a pool before optimising elsewhere.
+- **The timeout kills the docker client**, and the container is expected to die with it (`--rm`). Confirm on your daemon with `docker ps` after a timed-out run; if containers survive, name them (`--name run-<id>`) and `docker kill` in the timeout handler.
+- **Artifacts live in Postgres.** Fine to a few MB per run; object storage after that.
+- **`/api/v2/execute` holds a request** up to 40 s and polls the store 5×/s. It is there for Piston clients; new clients should queue and poll.
+- **The worker needs the Docker socket.** On Kubernetes that is root on the node. The upgrade path is running each job as a Kubernetes Job with a gVisor or Kata runtime class — `dockerArgv` becomes a pod spec; nothing else changes.
+- **No authentication, no quotas.** Anyone who can reach `:8000` gets 0.5 CPU × 30 s per request, as often as they like.
+- **Two languages, one version each.** `version` in the body is accepted (`*`) and ignored.
+- **The work dir is `mkdtemp` (mode 0700, the worker's uid) and the container runs as 65534.** On Docker Desktop the bind mount is mapped and writes work; on a Linux host `nobody` cannot create `out/` and artifacts silently never appear. `chmod 0777` the work dir in `dockerExecutor` (it is deleted after the run) or run the container as the worker's uid. The program must `mkdir out` itself either way.
+- **No compile stage**, no packages, no interactive stdin, no persistent sandbox.
+
+The stack rules — gate, typed seam, production checklist, deploy — are in `docs/PRODUCTION.md`. They apply.
+"##;
+
+const SANDBOX_AGENTS_MD: &str = r##"# {{NAME}} — for agents
+
+See `CLAUDE.md` for the rules. This is how to run it.
+
+## Run
+
+    make demo                              # postgres + redis, migrate, seed, API on :8000, page on :3000
+    make check                             # typecheck both halves, bun test the backend — no Docker needed
+    docker pull python:3.12-alpine node:22-alpine
+    cd backend && bun run worker           # runs jobs; needs a Docker daemon
+
+## Routes
+
+Queue and poll:
+
+    curl -s -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+      -d '{"language":"python","files":[{"name":"main.py","content":"import sys\nprint(sys.version.split()[0])\nimport os; os.makedirs(\"out\", exist_ok=True); open(\"out/hello.txt\",\"w\").write(\"hi\")"}],"stdin":"","args":[],"run_timeout":3000}'
+    # 202 {"id":"9b1e…","state":"queued"}
+
+    curl -s localhost:8000/api/runs/9b1e…
+    # {"id":"9b1e…","language":"python","version":"3.12","state":"done","ms":412,
+    #  "run":{"stdout":"3.12.7\n","stderr":"","code":0,"signal":null,"output":"3.12.7\n"},
+    #  "artifacts":[{"id":"c4d0…","run_id":"9b1e…","name":"hello.txt","expires_at":"…"}]}
+
+    curl -s -o hello.txt localhost:8000/api/artifacts/c4d0…       # attachment; 404 after an hour
+
+Piston-compatible, blocking:
+
+    curl -s -X POST localhost:8000/api/v2/execute -H 'content-type: application/json' \
+      -d '{"language":"javascript","files":[{"name":"main.js","content":"console.log(1+1)"}]}'
+    # {"language":"javascript","version":"22","run":{"stdout":"2\n","stderr":"","code":0,"signal":null,"output":"2\n"}}
+    # 504 {"message":"no worker picked up the run","code":"timeout"} when no worker is running
+
+Refused at the boundary (`400`, zod's flattened errors):
+
+    -d '{"language":"cobol",…}'                       # unsupported language
+    -d '{…,"run_timeout":60000}'                       # above LIMITS.timeout.max
+    -d '{…,"files":[{"name":"../x","content":""}]}'   # bad file name
+
+Runtimes and list:
+
+    curl -s localhost:8000/api/runtimes    # [{"language":"python","version":"3.12","image":"python:3.12-alpine"}, …]
+    curl -s localhost:8000/api/runs        # {"runs":[…]} latest 50, without files and stdin
+
+## Tests
+
+`backend/src/app.test.ts`, `bun test`, no Docker:
+
+- **`memoryStore()`** stands in for Postgres.
+- **`fakeExecutor(outputs?)`** pretends every program prints its first file, and returns the artifacts you give it.
+- **`dockerArgv` is pure**, so the isolation flags are asserted as strings without running anything.
+- **`tick(store, exec, now)`** takes the clock, so artifact expiry is tested by handing it a time an hour ago.
+
+To add a test: `createApp(memoryStore())`, `post(app, body)`, `tick(store, fakeExecutor(...))`, then read `/api/runs/:id`. A test that needs Docker belongs in a separate, opt-in file (`executor.docker.test.ts`, skipped unless `DOCKER=1`), not in the gate.
+"##;
+
+const SANDBOX_README_MD: &str = r##"# {{NAME}}
+
+Run untrusted code in a throwaway container with no network and hard limits, from one HTTP call.
+Piston's API shape, your own service.
+
+## What you get
+
+- `POST /api/runs` → queued; `GET /api/runs/:id` → `{stdout, stderr, code, signal, output}` plus any files the program wrote to `out/`.
+- `POST /api/v2/execute` — Piston's endpoint and response, blocking, so existing Piston clients work unchanged.
+- Every run in a fresh container: `--network none`, memory and swap capped, `--cpus`, `--pids-limit 64`, read-only root, no capabilities, `no-new-privileges`, user `nobody`. Killed at `run_timeout`.
+- Limits refused above the ceiling at the boundary (30 s, 512 MiB, 20 files, 200 KB per file), never silently clamped.
+- Artifacts downloadable for an hour, then swept.
+- A worker that scales separately from the API, and tests that run without Docker.
+- Python 3.12 and Node 22, one line each to add more.
+
+## Five minutes
+
+    make demo
+    docker pull python:3.12-alpine && (cd backend && bun run worker)
+
+    curl -s -X POST localhost:8000/api/v2/execute -H 'content-type: application/json' \
+      -d '{"language":"python","files":[{"name":"main.py","content":"print(sum(range(10)))"}]}'
+    # {"language":"python","version":"3.12","run":{"stdout":"45\n","stderr":"","code":0,"signal":null,"output":"45\n"}}
+
+    curl -s -X POST localhost:8000/api/v2/execute -H 'content-type: application/json' \
+      -d '{"language":"python","files":[{"name":"main.py","content":"import urllib.request\nurllib.request.urlopen(\"https://example.com\")"}]}'
+    # run.code 1, stderr ends "… Temporary failure in name resolution" — there is no network
+
+    curl -s -X POST localhost:8000/api/v2/execute -H 'content-type: application/json' \
+      -d '{"language":"python","files":[{"name":"main.py","content":"while True: pass"}],"run_timeout":1000}'
+    # run.signal "SIGKILL", code null, after one second
+
+    curl -s -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+      -d '{"language":"javascript","files":[{"name":"main.js","content":"const fs=require(\"fs\");fs.mkdirSync(\"out\",{recursive:true});fs.writeFileSync(\"out/a.json\",\"[1]\")"}]}'
+    # {"id":"…","state":"queued"} — then GET /api/runs/<id> lists a.json under artifacts
+
+Open `http://localhost:3000` for a playground.
+
+## API
+
+| Method | Path | Auth | What |
+|---|---|---|---|
+| GET | `/api/health` | none | liveness |
+| GET | `/api/health/ready` | none | readiness |
+| GET | `/api/runtimes` | none | languages, versions, images |
+| POST | `/api/runs` | none | queue a run → `202 {id, state}` |
+| GET | `/api/runs` | none | latest 50 (no files/stdin) |
+| GET | `/api/runs/:id` | none | the run and its unexpired artifacts |
+| GET | `/api/artifacts/:id` | none | download; 404 once expired |
+| POST | `/api/v2/execute` | none | Piston-compatible, blocks until done (≤ 40 s) |
+
+Request body (both POSTs): `language`, `files[{name, content}]`, optional `stdin`, `args`, `run_timeout` (ms, ≤ 30000), `run_memory_limit` (bytes, ≤ 536870912), `version` (accepted, ignored).
+
+## Compared with Piston / E2B
+
+**Same shape.** Piston's `/api/v2/execute` request and `{language, version, run: {stdout, stderr, code, signal, output}}` response; `run_timeout` and `run_memory_limit` names; output capped per stream; a runtimes listing. E2B's idea of files coming back out of a run.
+
+**Better here, specifically.**
+- A queue between the request and the container: the API never blocks on Docker, and workers scale on queue depth.
+- The isolation flags are one pure function (`dockerArgv`) with a test that asserts every one of them — a change that drops `--network none` fails `make check`.
+- Ceilings are refused, not clamped: a caller asking for 60 s gets a 400 that says so, not 30 s and a surprise.
+- Artifacts: anything under `out/` comes back with an expiry and a download route.
+- One TypeScript codebase, typed to the page, tests without Docker, and the stack's manifests, migrations and secrets handling.
+
+**Not here yet.**
+- Piston has ~50 languages with selectable versions and a compile stage (`compile_timeout`, `compile_memory_limit`); this has two languages, one version each, run only.
+- No package installation (Piston's `/api/v2/packages`); the container has no network, so dependencies must be baked into an image.
+- No interactive sessions, no WebSocket streaming of output, no stdin after start.
+- E2B's persistent sandboxes, filesystem API, SDKs and long-lived processes — none. A run here is one process, start to exit.
+- Docker isolation, not Firecracker or gVisor. Good against ordinary code; not a boundary you should sell to strangers without a stronger runtime.
+- No authentication, API keys or quotas.
+
+## Production
+
+- **Environments.** `DATABASE_URL`, `RUN_CPUS`. Separate databases per environment.
+- **Processes.** `backend` (stateless, HPA) and `worker` (needs Docker). Add `src/worker.ts` to the Dockerfile's `bun build` line and a `k8s/base/worker.yaml` with no Service or HTTP probes. The worker needs `/var/run/docker.sock` or a DinD sidecar — both mean node-level privilege; see Roadmap.
+- **Probes.** `/api/health`, `/api/health/ready` on the API. For the worker, alert on the oldest `queued` run's age.
+- **Migrations.** `0002_sandbox.sql`; the migrate init container runs it before each rollout. `artifacts` grows by output volume — the sweep runs every minute from the worker.
+- **Secrets.** None specific to this service; `DATABASE_URL` through `.env.age` → `k8s/secrets.yaml`.
+- **Images.** Pre-pull `python:3.12-alpine` and `node:22-alpine` on every worker node, or the first run of each pays the pull.
+- **Auth.** None. Put it behind ingress auth or an API key before exposing it; every request is 0.5 CPU for up to 30 s.
+- **What pages you.** `queued` older than 60 s (no worker, or Docker down); `failed` with `error like 'docker%'` (host problem, not user code); artifact table size.
+
+## Roadmap
+
+- Kubernetes Jobs with a gVisor/Kata runtime class instead of the Docker socket.
+- Compile stage and more languages; images with packages baked in.
+- Artifacts to object storage.
+- API keys and per-key quotas.
+- Named containers and explicit `docker kill` on timeout.
+- Streaming output over WebSocket.
+"##;
+
+const SANDBOX_AGENT_ISOLATION: &str = r##"---
+name: isolation
+description: Run on any change to executor.ts, worker.ts, the Body schema in app.ts, or LIMITS. Reads the change as someone who wants to escape the container, exhaust the host, or read another run's files, and reports only what works.
+tools: Read, Grep, Glob, Bash
+---
+
+You are the attacker whose code is about to run here. Report only what gets you out, gets you
+more than your share, or gets you someone else's data — each as `path:line — what — the payload — the fix`.
+
+Check:
+1. **`dockerArgv` flags.** `--network none`; `--memory` and `--memory-swap` equal (unequal means swap); `--cpus`; `--pids-limit`; `--read-only`; `--cap-drop ALL`; `--security-opt no-new-privileges`; `--user 65534:65534`; `--rm`. A flag made conditional is a flag that is off for some input.
+2. **The bind mount.** `-v ${workDir}:/work` only. No second `-v`, no `--privileged`, no `--device`, no `/var/run/docker.sock`.
+3. **File names.** `Body` regex `^[\w.-]+$` and `safeName` agree. `.` and `..` match `[\w.-]+` — confirm `writeFile(join(dir, ".."))` cannot escape (it targets the temp dir's parent as a file and fails, but check the current code still errors rather than writing).
+4. **Limits at the boundary.** `Body` maxes read `LIMITS`; no code path enqueues without `Body.safeParse` (`/api/v2/execute` and `/api/runs` share `enqueue`).
+5. **Output caps.** `CAP` per stream in `spawnCaptured`; `stdin` bounded by `Body` (200 000). A change that concatenates unbounded `data` events is a host OOM.
+6. **Timeout actually kills.** The timer sends `SIGKILL` to the docker client. Run `docker ps` after a `while True: pass` run with `run_timeout: 1000` — a container still alive is a finding; the fix is `--name run-<id>` plus `docker kill` in the timer.
+7. **Temp dir removal.** `rm(dir, {recursive: true, force: true})` in `finally`. Artifacts are read before it; a change that reads after leaks nothing but fails every run.
+8. **Artifact reads.** Only `/work/out` is read back, via `readdir` (one level). A symlink in `out/` to `/etc/passwd` on the worker host: the container user cannot create one outside `/work`, but confirm `readFile` follows nothing outside `dir` — resolve and check, or use `lstat`.
+9. **Artifact bytes are bounded.** They are not (no size check on `outputs`). A program writing 1 GB to `out/` puts 1 GB into Postgres. Flag this if the change touches artifacts; the fix is a size cap before `store.finish`.
+10. **No retry.** `tick`'s catch marks `failed`; nothing sets `queued` again. A retry runs the user's code twice.
+11. **The API never spawns.** `grep spawn\|execFile backend/src/app.ts` is empty.
+12. **Expiry is enforced on read**, not only by the sweep: `artifact(id, now)` and `artifacts(runId)` both compare `expires_at`.
+13. **Writable work dir.** `mkdtemp` is 0700 owned by the worker; the container user is 65534. On Linux the program cannot write `out/` — confirm with a run that writes an artifact on the target host, and `chmod` the dir in `dockerExecutor` if it comes back empty.
+14. **Worker privilege.** If the change adds a Kubernetes manifest for the worker, the Docker socket mount is node root — say so, and point at Jobs with a sandboxed runtime class.
+
+Run `cd backend && bun test`. End with `isolation: N findings` and, if 0, which of the above you read.
 "##;
