@@ -108,6 +108,16 @@ final class BudgetTests: XCTestCase {
         p.waitUntilExit()
     }
 
+    /// The packaged app carries its resources. `Bundle.module` trapped on every machine but the
+    /// one that built it, because the packaging script never copied SwiftPM's resource bundle —
+    /// the crash that hit the first testers on the first click into the Designer.
+    func testThePackagedAppCarriesThePicker() throws {
+        let bundle = try bundlePath()
+        let picker = bundle.appendingPathComponent("Contents/Resources/Picker.js")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: picker.path),
+                      "Picker.js is not in the app bundle; the Designer will crash on open")
+    }
+
     /// Orca ships a ~250 MB DMG. The whole argument for going native is that this does not have to.
     func testBundleStaysSmall() throws {
         let bundle = try bundlePath()

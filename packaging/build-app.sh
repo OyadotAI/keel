@@ -53,6 +53,13 @@ cp "app/$(swift build --package-path app -c release --show-bin-path)/KeelApp" \
         "$app/Contents/MacOS/KeelApp"
 cp target/release/keel "$app/Contents/MacOS/keel"
 bin="$(swift build --package-path app -c release --show-bin-path)"
+# SwiftPM resources. `Bundle.module` wants KeelApp_KeelApp.bundle beside the executable and
+# traps without it; the app looks in Contents/Resources first (Resources.swift), so the files
+# go there — and the bundle itself rides along for anything that still asks by that name.
+if [ -d "$bin/KeelApp_KeelApp.bundle" ]; then
+  cp -R "$bin/KeelApp_KeelApp.bundle/." "$app/Contents/Resources/"
+  cp -R "$bin/KeelApp_KeelApp.bundle" "$app/Contents/Resources/"
+fi
 if [ -d "$bin/Sparkle.framework" ]; then
   mkdir -p "$app/Contents/Frameworks"
   cp -R "$bin/Sparkle.framework" "$app/Contents/Frameworks/"
