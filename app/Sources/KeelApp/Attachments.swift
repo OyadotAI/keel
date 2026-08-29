@@ -18,6 +18,8 @@ struct Attachment: Identifiable, Hashable {
     let path: String
     let label: String
     let thumbnail: NSImage?
+    /// For filed text: the text itself, so it can be put back in the box or read.
+    var text: String? = nil
 
     func hash(into h: inout Hasher) { h.combine(id) }
     static func == (a: Attachment, b: Attachment) -> Bool { a.id == b.id }
@@ -28,9 +30,45 @@ extension SessionModel {
     /// someone composes by hand and well under the limits above.
     static let longPaste = 1500
 
+    /// The daemon's own body limit. Anything past it is refused here, with a sentence, rather
+    /// than read into memory, uploaded and refused there.
+    static let maxAttachment = 10 * 1024 * 1024
+
+    /// The chip's one line for a block of text: its first line, or its first sentence.
+    static func summary(of text: String) -> String {
+        let line = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? ""
+        let trimmed = line.count > 48 ? String(line.prefix(47)) + "…" : line
+        return trimmed.isEmpty ? "long text" : trimmed
+    }
+
+    /// Take a long block out of the box and file it. Called whenever the box grows past
+    /// `longPaste` by any route — a paste the text view swallowed before the paste handler saw
+    /// it, a drag of text, dictation — so nobody composes against a two-thousand-line prompt.
+    func fileLongText() {
+        let text = prompt
+        guard text.count > Self.longPaste else { return }
+        prompt = ""
+        attachText(text)
+    }
+
+    func attachText(_ text: String) {
+        let chars = text.count
+        attach(data: Data(text.utf8),
+               name: "paste-\(chars)-chars.txt",
+               label: "long text · \(chars.formatted()) chars · \(Self.summary(of: text))",
+               text: text)
+    }
+
     struct Attached: Decodable { var path: String; var bytes: Int }
 
-    func attach(data: Data, name: String, thumbnail: NSImage? = nil, label: String? = nil) {
+    func attach(data: Data, name: String, thumbnail: NSImage? = nil, label: String? = nil,
+                text: String? = nil) {
+        guard data.count <= Self.maxAttachment else {
+            lastError = "\(name) is \(Self.humanSize(data.count)); attachments are capped at 10 MB."
+            return
+        }
         Task { [client] in
             do {
                 var req = URLRequest(url: await client.base
@@ -49,7 +87,8 @@ extension SessionModel {
                 self.attachments.append(Attachment(
                     path: a.path,
                     label: label ?? "\(name) · \(Self.humanSize(a.bytes))",
-                    thumbnail: thumbnail))
+                    thumbnail: thumbnail,
+                    text: text))
             } catch {
                 self.lastError = error.localizedDescription
             }
@@ -82,19 +121,36 @@ extension SessionModel {
             return true
         }
         if let text = board.string(forType: .string), text.count > Self.longPaste {
-            let chars = text.count
-            attach(data: Data(text.utf8),
-                   name: "paste-\(chars)-chars.txt",
-                   label: "pasted text · \(chars.formatted()) chars")
+            attachText(text)
             return true
         }
         return false
     }
 
+    /// A file from the disk. Read off the main thread — a large file froze the window for as
+    /// long as it took to read and, worse, `NSImage(contentsOf:)` was asked to make a picture of
+    /// an HTML file, which is a long way to find out it is not one.
     func attach(fileURL url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        let image = NSImage(contentsOf: url)
-        attach(data: data, name: url.lastPathComponent, thumbnail: image)
+        Task.detached(priority: .userInitiated) {
+            let type = UTType(filenameExtension: url.pathExtension)
+            let isImage = type?.conforms(to: .image) ?? false
+            guard let data = try? Data(contentsOf: url) else { return }
+            let image = isImage ? NSImage(data: data) : nil
+            await MainActor.run {
+                self.attach(data: data, name: url.lastPathComponent, thumbnail: image)
+            }
+        }
+    }
+
+    /// The paperclip. Anything, several at once.
+    func chooseAttachments() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Attach"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { attach(fileURL: url) }
     }
 
     /// Attachments become `@path` mentions ahead of the prompt — the same shape the web UI sends,
@@ -135,8 +191,15 @@ struct AttachmentStrip: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1)
                     )
+                    .help(a.text.map { String($0.prefix(600)) } ?? a.path)
                     // A second way out, for when the pointer is not the fastest route.
                     .contextMenu {
+                        if let text = a.text {
+                            Button("Put back in the box") {
+                                model.prompt = text
+                                model.attachments.removeAll { $0.id == a.id }
+                            }
+                        }
                         Button("Remove") { model.attachments.removeAll { $0.id == a.id } }
                         Button("Remove all") { model.attachments.removeAll() }
                     }

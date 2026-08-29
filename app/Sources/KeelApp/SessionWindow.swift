@@ -232,6 +232,11 @@ struct SessionWindow: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        // The project, top left, where every editor puts it. It was a small label in the status
+        // bar, and nobody found out it was a menu until they were told.
+        ToolbarItem(placement: .navigation) {
+            ProjectMenu(model: model, prominent: true)
+        }
         ToolbarItem(placement: .primaryAction) {
             Button { withAnimation(K.M.quick) { paletteOpen.toggle() } } label: {
                 Image(systemName: "command")
@@ -509,6 +514,8 @@ struct StatusBar: View {
 /// project is open — so switching meant a raw folder picker and remembering where things live.
 struct ProjectMenu: View {
     let model: SessionModel
+    /// The toolbar version: bigger, labelled, with the verb in it.
+    var prominent = false
 
     var body: some View {
         Menu {
@@ -524,10 +531,10 @@ struct ProjectMenu: View {
                 }
             }
             Divider()
-            Button("Open Project…") {
+            Button("Open Another Project…   ⌘O") {
                 NotificationCenter.default.post(name: .keelOpenProject, object: nil)
             }
-            Button("New Project…") {
+            Button("New Project…   ⇧⌘N") {
                 NotificationCenter.default.post(name: .keelNewProject, object: nil)
             }
             Divider()
@@ -535,18 +542,26 @@ struct ProjectMenu: View {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: model.repoPath)
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "folder.fill").font(.system(size: 10))
+            HStack(spacing: prominent ? 6 : 4) {
+                Image(systemName: "folder.fill").font(.system(size: prominent ? 12 : 10))
                 Text((model.repoPath as NSString).lastPathComponent)
-                    .font(K.F.mono(10, .medium))
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 6, weight: .bold))
+                    .font(prominent ? K.F.ui(13, .semibold) : K.F.mono(10, .medium))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: prominent ? 9 : 6, weight: .bold))
+                if prominent {
+                    Text("switch").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
             }
-            .foregroundStyle(K.C.dim)
+            .foregroundStyle(prominent ? K.C.text : K.C.dim)
+            .padding(.horizontal, prominent ? K.S.sm : 0)
+            .padding(.vertical, prominent ? 3 : 0)
+            .background(prominent ? K.C.text.opacity(0.06) : .clear,
+                        in: RoundedRectangle(cornerRadius: K.R.sm))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(model.repoPath)
+        .hint("Project: \(model.repoPath). Click to switch, open another, or start a new one (⌘O)")
     }
 }
 

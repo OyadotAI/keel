@@ -414,6 +414,9 @@ final class SessionModel: Identifiable {
         await lanes?.refreshWorktrees()
         // The agent does not grade its own work.
         if mode != "plan" { await runGate(turn) }
+        // Accepted work becomes a commit, so the tree stays small and every step is a place
+        // to go back to.
+        if mode != "plan" { await commitTurn(turn) }
         // After the gate, not before: the notification carries the verdict, and a verdict that
         // arrives before the checks have run is the "done!" that started this whole argument.
         await checkDesign(turn)
@@ -677,12 +680,21 @@ final class SessionModel: Identifiable {
         var running: Bool
         var url: String?
         var detected: String?
+        var log: [String]?
     }
+
+    /// The dev server's last lines, for when the page is blank and the reason is in them.
+    var devLog: [String] = []
+    /// What went wrong loading the page, from the web view itself.
+    var previewProblem: String?
+    /// Bumped to ask the web view to reload the page it has.
+    var reloadTick = 0
 
     func refreshDev() async {
         guard let d: DevStatus = try? await client.get("/api/dev", q()) else { return }
         devRunning = d.running
         devDetected = d.detected
+        devLog = d.log ?? []
         if let u = d.url { previewURL = u }
     }
 
@@ -1021,6 +1033,54 @@ final class SessionModel: Identifiable {
             branch = s.branch
             changes = s.changes
         }
+        commits = (try? await client.get("/api/git/log", q(["n": "20"]))) ?? []
+    }
+
+    /// The last commits on this checkout, for the list beside the working tree.
+    var commits: [Wire.Commit] = []
+
+    /// One commit per accepted turn. On by default: a working tree that only grows is what
+    /// makes people nervous about an agent, and a row of small commits beside it is what makes
+    /// the same work read as progress — and gives every step a place to go back to.
+    var autoCommit: Bool {
+        get { UserDefaults.standard.object(forKey: "keel.autoCommit") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "keel.autoCommit") }
+    }
+
+    struct CommitBody: Encodable { var message: String }
+
+    /// Commit what this turn did, if the gate accepted it.
+    ///
+    /// Only after a pass (or when the project has no gate to say otherwise): a commit of work
+    /// the checks rejected is a commit someone has to know to undo. A failed gate leaves the
+    /// changes where they are, red, with the problems listed.
+    private func commitTurn(_ turn: Turn) async {
+        guard autoCommit, isRepo, turn.didWork, !changes.isEmpty else { return }
+        switch turn.gate {
+        case .passed, .none, .notRun: break
+        case .failed, .running: return
+        }
+        let first = turn.prompt.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty && !$0.hasPrefix("@") } ?? "agent turn"
+        let subject = String(first.prefix(72))
+        let body = "Made by the agent in Keel, lane \"\(title)\". The project's checks "
+            + (turn.gate == .notRun ? "were not run." : "passed.")
+        do {
+            _ = try await client.post("/api/git/commit",
+                                      body: CommitBody(message: subject + "\n\n" + body),
+                                      q(), as: Bool.self)
+            await refreshGit()
+            turn.commit = commits.first?.sha
+        } catch {
+            lastError = "Could not commit: " + error.localizedDescription
+        }
+    }
+
+    /// Take the last commit apart, keeping its changes. `--soft` on the daemon's side.
+    func uncommit() async {
+        await attempt { _ = try await client.post("/api/git/uncommit", body: Nothing(), q(), as: Bool.self) }
+        await refreshGit()
     }
 
     struct Nothing: Encodable {}

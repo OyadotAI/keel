@@ -120,6 +120,14 @@ struct PreviewPane: NSViewRepresentable {
             view.load(URLRequest(url: url))
         }
 
+        // The reload button used to re-poll the daemon and never touch the page. Now it asks
+        // the page to load again, which is what everyone pressing it meant.
+        if context.coordinator.reloaded != model.reloadTick {
+            context.coordinator.reloaded = model.reloadTick
+            model.previewProblem = nil
+            view.reload()
+        }
+
         // Only on a change: this runs on every render pass, and re-posting the mode each time
         // was a message per keystroke to every frame.
         if context.coordinator.picking != picking {
@@ -136,7 +144,17 @@ struct PreviewPane: NSViewRepresentable {
         /// pass of `updateNSView` — which would restart the page under you on every keystroke.
         var loaded: URL?
         var picking = false
+        var reloaded = 0
         init(model: SessionModel) { self.model = model }
+
+        /// A page that did not load says so, over the pane, rather than staying white.
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            model.previewProblem = error.localizedDescription
+            Task { await model.refreshDev() }
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            model.previewProblem = error.localizedDescription
+        }
 
         /// A message to the canvas script, in every frame — the one the dev server owns is the
         /// one that matters, and it is not the main frame.
@@ -175,8 +193,21 @@ struct PreviewPane: NSViewRepresentable {
         /// mid-edit, watch for the change to land: the `expect` sent before this load was lost
         /// with the old document.
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            model.previewProblem = nil
             model.syncCanvas()
             if model.running, model.editing != nil { send(["keel": "expect"]) }
+            // A page that loaded and painted nothing is the other blank: a 200 with an empty
+            // body, a client render that threw, a framework error overlay that is itself blank.
+            // Give it two seconds, then ask.
+            Task { [weak self, weak webView] in
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, let webView else { return }
+                let js = "(document.body && document.body.innerText.trim().length) || 0"
+                if let n = try? await webView.evaluateJavaScript(js) as? Int, n == 0 {
+                    await self.model.refreshDev()
+                    self.model.previewProblem = "The page loaded but rendered nothing."
+                }
+            }
         }
 
         /// A rect of the page, as it is right now.
@@ -236,6 +267,10 @@ struct PreviewSurface: View {
                 }
                 .padding(.horizontal, K.S.md).padding(.vertical, 4)
                 .background(K.C.accent.opacity(0.06))
+                Hairline()
+            }
+            if let problem = model.previewProblem {
+                PreviewProblem(model: model, problem: problem)
                 Hairline()
             }
             if let s = model.previewURL, let url = URL(string: s) {
@@ -356,13 +391,15 @@ struct PreviewSurface: View {
                     .buttonStyle(QuietButton())
             }
             Button {
+                model.reloadTick += 1
                 Task { await model.refreshDev() }
             } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 10))
                     .frame(width: 20, height: 18).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
-            .hint("Reload")
+            .hint("Reload the page (⌘R)")
+            .keyboardShortcut("r", modifiers: .command)
         }
         .padding(8)
     }
@@ -427,5 +464,65 @@ enum PreviewWidth: String, CaseIterable, Identifiable {
         case .tablet: "Tablet"
         case .phone: "Phone"
         }
+    }
+}
+
+
+/// Why the pane is blank, with the dev server's own last words underneath.
+///
+/// "It said it finished but the preview is white" was the report. White is what a page that
+/// failed to load, a page that threw during render, and a dev server that died all look like.
+/// The difference is in the error and in the log, so both go on screen.
+private struct PreviewProblem: View {
+    let model: SessionModel
+    let problem: String
+    @State private var showLog = false
+
+    /// The lines worth reading: the last ones, and any that say error.
+    private var lines: [String] {
+        let all = model.devLog
+        let bad = all.filter { $0.range(of: "error", options: .caseInsensitive) != nil }
+        return Array((bad.suffix(6) + all.suffix(6)).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                Text(problem).font(K.F.small).foregroundStyle(K.C.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if !model.devRunning, model.devDetected != nil {
+                    Button("Start the dev server") { Task { await model.startDev() } }
+                        .buttonStyle(QuietButton(tone: K.C.accent))
+                } else {
+                    Button("Reload") { model.reloadTick += 1 }.buttonStyle(QuietButton())
+                }
+                if !lines.isEmpty {
+                    Button(showLog ? "Hide output" : "Server output") { showLog.toggle() }
+                        .buttonStyle(QuietButton())
+                }
+            }
+            if !model.devRunning {
+                Text(model.devDetected == nil
+                     ? "No dev server is running and this project declares no dev command."
+                     : "The dev server is not running.")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+            }
+            if showLog {
+                ScrollView {
+                    Text(lines.joined(separator: "\n"))
+                        .font(K.F.codeSmall).foregroundStyle(K.C.dim)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .padding(K.S.sm)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            }
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .background(K.C.warn.opacity(0.08))
     }
 }

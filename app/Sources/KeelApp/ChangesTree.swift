@@ -132,12 +132,88 @@ struct ChangesTreeView: View {
         }
 
         if model.changes.isEmpty {
-            Text("Nothing uncommitted.")
+            Text(model.autoCommit ? "Nothing uncommitted — every accepted turn is a commit below."
+                                  : "Nothing uncommitted.")
                 .font(K.F.small).foregroundStyle(K.C.faint)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
         } else {
             ForEach(ChangeTree.build(model.changes)) { node in
                 ChangeRow(node: node, depth: 0, model: model)
+            }
+        }
+
+        CommitList(model: model)
+    }
+}
+
+/// What has been committed, newest first, with the way back.
+///
+/// For someone who has not lived in git, "the agent changed 40 files" is alarming and "the agent
+/// made 6 small commits, here they are, undo the last one if you like" is not. Same work.
+struct CommitList: View {
+    @Bindable var model: SessionModel
+    @State private var confirmingUndo = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: K.S.xs) {
+                Text("COMMITTED").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .foregroundStyle(K.C.faint)
+                Spacer()
+                Toggle("each turn", isOn: Binding(get: { model.autoCommit },
+                                                 set: { model.autoCommit = $0 }))
+                    .toggleStyle(.checkbox).controlSize(.mini)
+                    .font(K.F.micro).foregroundStyle(K.C.faint)
+                    .help("Commit the agent's work after each turn the project's checks accept")
+            }
+            .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
+
+            if model.commits.isEmpty {
+                Text("No commits yet.").font(K.F.small).foregroundStyle(K.C.faint)
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            }
+            ForEach(Array(model.commits.enumerated()), id: \.element.id) { i, c in
+                HoverRow {
+                    HStack(alignment: .top, spacing: K.S.sm) {
+                        Image(systemName: "circle.fill").font(.system(size: 5))
+                            .foregroundStyle(i == 0 ? K.C.accent : K.C.faint).padding(.top, 5)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(c.subject).font(K.F.small).foregroundStyle(K.C.text)
+                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: K.S.xs) {
+                                Text(c.sha).font(K.F.mono(10))
+                                Text(c.date, style: .relative).font(K.F.mono(10))
+                                Text("ago").font(K.F.mono(10))
+                                if c.files > 0 {
+                                    Text("· \(c.files) file\(c.files == 1 ? "" : "s")").font(K.F.mono(10))
+                                }
+                            }
+                            .foregroundStyle(K.C.faint)
+                        }
+                    }
+                }
+                .contextMenu {
+                    if i == 0, model.commits.count > 1 {
+                        Button("Undo this commit (keep the changes)") { confirmingUndo = true }
+                    }
+                    Button("Copy sha") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(c.sha, forType: .string)
+                    }
+                }
+            }
+            if model.commits.count > 1 {
+                Button("Undo last commit, keep the changes") { confirmingUndo = true }
+                    .buttonStyle(QuietButton())
+                    .padding(.horizontal, K.S.md).padding(.top, K.S.xs)
+                    .alert("Undo the last commit?", isPresented: $confirmingUndo) {
+                        Button("Undo") { Task { await model.uncommit() } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The commit goes away; every change in it stays in your files, "
+                             + "uncommitted, so you can look again or discard pieces.")
+                    }
             }
         }
     }

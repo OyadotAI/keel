@@ -810,6 +810,70 @@ fn one_hunk(raw: &str, n: usize) -> Option<String> {
     hunks.get(n).map(|h| header + h)
 }
 
+/// One commit, for the list beside the working tree.
+#[derive(Serialize)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+    /// Seconds since the epoch.
+    pub when: i64,
+    pub files: u32,
+}
+
+/// The last `n` commits on the current branch.
+///
+/// A working tree that only ever grows is what makes people nervous about an agent; a list of
+/// small commits beside it is what makes the same work look like progress.
+pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
+    let Some(raw) = git(
+        root,
+        &[
+            "log",
+            &format!("-{n}"),
+            "--format=%h%x1f%s%x1f%ct",
+            "--shortstat",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    // Headers carry the separator; the stat line for a commit follows its header, blank lines
+    // between, and the next header comes straight after the stat.
+    let mut out: Vec<Commit> = Vec::new();
+    for line in raw.lines() {
+        if line.contains('\x1f') {
+            let mut f = line.split('\x1f');
+            let (Some(sha), Some(subject), Some(when)) = (f.next(), f.next(), f.next()) else {
+                continue;
+            };
+            out.push(Commit {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+                when: when.parse().unwrap_or(0),
+                files: 0,
+            });
+        } else if line.contains("changed")
+            && let Some(last) = out.last_mut()
+            && let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok())
+        {
+            last.files = n;
+        }
+    }
+    out
+}
+
+/// Take the last commit apart, keeping its changes in the working tree.
+///
+/// `--soft`, never `--hard`: undoing a commit Keel made must not undo the work in it.
+pub fn git_uncommit(root: &Utf8Path) -> Result<(), String> {
+    let count = git(root, &["rev-list", "--count", "HEAD"])
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    if count < 2 {
+        return Err("This is the first commit; there is nothing to go back to.".into());
+    }
+    git_run(root, &["reset", "--soft", "HEAD~1"]).map(|_| ())
+}
+
 /// Uncommitted changes, which after an agent run is the answer to "what did it just do".
 pub fn git_status(root: &Utf8Path) -> GitStatus {
     // `-uall` rather than the default. Without it git collapses an untracked directory to a single
@@ -994,6 +1058,46 @@ mod git_tests {
         // A path that is not in the repository never reaches git.
         assert!(git_act(&root, "discard", "../../etc/hosts", None).is_err());
         assert!(git_act(&root, "nonsense", "a.txt", None).is_err());
+    }
+
+    /// The log reads back what was committed, and undoing keeps the work.
+    #[test]
+    fn the_log_lists_commits_and_uncommit_keeps_the_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+        assert!(git_uncommit(&root).is_err(), "the first commit stays");
+
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        std::fs::write(root.join("b.txt"), "new\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "turn 1: add b"]);
+
+        let log = git_log(&root, 10);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].subject, "turn 1: add b");
+        assert_eq!(log[0].files, 2);
+        assert!(log[0].when > 0);
+
+        git_uncommit(&root).unwrap();
+        assert_eq!(git_log(&root, 10).len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.txt")).unwrap(),
+            "new\n",
+            "the work survives"
+        );
     }
 
     /// Discarding one hunk leaves the other. The reason the action exists at all.
