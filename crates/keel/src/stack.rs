@@ -72,9 +72,7 @@ pub fn files(name: &str) -> Vec<(&'static str, String)> {
 /// A working feature pack for a template: files laid over the scaffold. Unknown ids get
 /// nothing, so a template without a pack is still the scaffold plus the agent's brief.
 pub fn pack(id: &str, name: &str) -> Vec<(&'static str, String)> {
-    let f = |s: &str| s.replace("{{NAME}}", name);
-    let _ = (id, &f);
-    Vec::new()
+    crate::packs::files(id, name)
 }
 
 /// The CLAUDE.md for this stack: the rules that came from running one for real.
@@ -701,7 +699,8 @@ const BACK_PACKAGE: &str = r#"{
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "migrate": "bun src/migrate.ts",
-    "seed": "bun src/seed.ts"
+    "seed": "bun src/seed.ts",
+    "worker": "bun src/worker.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
