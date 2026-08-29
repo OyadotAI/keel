@@ -26,6 +26,10 @@ struct Template: Identifiable, Hashable {
     let practices: [String]
     /// What the agent is asked to build, beyond the scaffold. Empty means open and say nothing.
     let brief: String
+    /// Working code ships with the scaffold: the gate passes and the page does something
+    /// before the agent has run once. The brief says "extend", not "build".
+    var runnable: Bool { Template.runnableIds.contains(id) }
+    static let runnableIds: Set<String> = ["api", "jobs", "llmproxy", "flags", "loop", "graph"]
     /// A file the brief needs attached first, and what to call it.
     let wants: String?
 
@@ -124,7 +128,7 @@ struct Template: Identifiable, Hashable {
                  ],
                  flow: ["Request arrives with an API key header", "Middleware hashes the key, loads its scopes and checks the Redis window", "zod validates the body against the route schema", "The handler runs one transaction and returns a typed response", "Errors return a stable shape with a request id; the same id is in the log line"],
                  practices: with(["Idempotency-Key on every mutating route: stored with the request hash and response for 24h; same key with a different body is 422", "Keyset pagination on (created_at, id), page size capped at 100 — never OFFSET", "429 with RateLimit-* headers from a token bucket per key; bounded body size; unknown fields rejected"]),
-                 brief: "Make the backend a standalone API service: resources in the database with migrations and typed Hono routes, API-key auth with keys stored hashed, per-key rate limiting in Redis, request validation with zod, idempotency keys on creates, cursor pagination, an OpenAPI document generated from the routes, and a docs page in the frontend that renders it. Run the gate when done.",
+                 brief: "The backend already runs: hashed API keys (POST /api/keys under ADMIN_TOKEN), per-key limits answered in RateLimit-* headers, Idempotency-Key on creates with request-hash mismatch detection, keyset pagination, and /api/openapi.json rendered by the frontend. Read backend/src/app.ts and its tests first. Then extend it: replace the `items` resource with the real ones for this product (migrations, zod schemas, routes, OpenAPI), move the rate-limit window to Redis so replicas share it, and keep every route covered in app.test.ts. Run the gate when done.",
                  wants: nil),
         Template(id: "jobs", category: .backend, title: "Webhooks & background jobs", like: "Inngest, BullMQ", icon: "arrow.triangle.2.circlepath.circle",
                  blurb: "Inbound events verified and queued; workers that retry with backoff; nothing processed twice, nothing lost.",
@@ -138,7 +142,7 @@ struct Template: Identifiable, Hashable {
                  ],
                  flow: ["Provider POSTs; signature verified before the body is parsed", "Event stored with its idempotency key; duplicate keys are acknowledged, not reprocessed", "Enqueued; the endpoint returns 202 in milliseconds", "A worker claims it, runs the handler, records the attempt", "Failure → backoff → retry; after N, dead-letter with a replay button in the admin page"],
                  practices: with(["Transactional outbox: the event row and the enqueue happen in one transaction, so a crash never loses an event", "Exactly-once is at-least-once plus an idempotent consumer: processed event ids recorded in the same transaction as the effect", "Dead-letter after N attempts; DLQ depth > 0 pages; every dead event is replayable from the admin page", "Workers scale on queue depth, separately from the API; bounded queues shed with 503 + Retry-After"]),
-                 brief: "Build an event-processing backend: webhook endpoints that verify signatures (Stripe and GitHub as examples) and enqueue to Redis streams, a separate worker Deployment that consumes with idempotency keys in the database, exponential backoff and a dead-letter table, a leader-elected scheduler for cron jobs, and an admin page listing events by state with a replay action. Run the gate when done.",
+                 brief: "The backend already runs: signed webhooks (HMAC, constant-time) stored with their jobs in one transaction, a worker (bun run worker) that claims with SKIP LOCKED, retries with jittered backoff, dead-letters after five attempts, and a page listing jobs with replay. Read backend/src/app.ts, worker.ts and their tests first. Then extend it: add the real event names to ROUTING and their handlers to HANDLERS, add a scheduled job (cron) with leader election, and keep the worker's retry path tested. Run the gate when done.",
                  wants: nil),
         Template(id: "pipeline", category: .backend, title: "Data pipeline", like: "Airflow, dbt", icon: "arrow.down.right.and.arrow.up.left",
                  blurb: "Ingest raw records, transform on a schedule, keep aggregates queryable — with backfill and replay from day one.",
@@ -284,7 +288,7 @@ struct Template: Identifiable, Hashable {
                     "Every step is durable before the next begins — a crashed worker resumes, never restarts",
                     "Tool results are truncated with a note, never silently; the model is told what it did not see",
                  ] + base,
-                 brief: "Build a loop agent: a worker that runs observe→think→act→check with the Claude API and a schema-validated tool registry, stop conditions (goal check, max steps, token budget, wall clock, and a no-progress detector), every step persisted to a trace table before the next runs so a crashed worker resumes, truncation of long tool results with an explicit note to the model, a run API to start/stop/replay, and a page that shows a run live step by step. Run the gate when done.",
+                 brief: "The backend already runs: a ReAct loop (backend/src/agent.ts) with a calculator, web search and final_answer, every step recorded with tokens and timing, max_steps with a best-answer call, tool errors as observations, runs streamed over SSE and stored, stop and concurrency caps, and a page that shows a run step by step. Read agent.ts and its tests first — the model is a function, so tests script it. Then extend it: add the tools this product needs, a per-user token budget in Redis, and a no-progress detector. Run the gate when done.",
                  wants: nil),
         Template(id: "graph", category: .agents, title: "Graph agent", like: "LangGraph, Mastra", icon: "point.3.filled.connected.trianglepath.dotted",
                  blurb: "A state machine of nodes and edges with checkpoints: pause for a human, resume, replay from any node.",
@@ -302,7 +306,7 @@ struct Template: Identifiable, Hashable {
                     "Every node is idempotent against its checkpoint: replay and time-travel re-execute nodes, so side effects carry (thread_id, step) keys",
                     "Cycles need a counter in the state and an edge that exits on it",
                  ] + base,
-                 brief: "Build a graph agent runtime: a typed graph definition (model, tool and code nodes; conditional edges as tested functions; entry and end), a Postgres checkpointer that saves state after every node per thread, a worker executor that runs nodes and evaluates edges, interrupt nodes that park a thread until a person resumes it with input through the API, replay from any checkpoint and branching, and a page showing the graph with the current node lit and the state beside it. Include one example graph with a cycle bounded by a counter. Run the gate when done.",
+                 brief: "The backend already runs: a StateGraph (backend/src/graph.ts) with reducers, conditional edges, a Postgres checkpointer, interrupt() for a human step and resume through the API, history and fork-from-checkpoint, plus an example draft → review → publish graph and a page that drives it. Read graph.ts and its tests first. Then extend it: replace the example with this product's graph, add a worker so long nodes run off the request path, and keep every edge function unit-tested. Run the gate when done.",
                  wants: nil),
         Template(id: "dag", category: .agents, title: "DAG agent", like: "Airflow, Temporal", icon: "arrow.triangle.branch",
                  blurb: "Deterministic fan-out and fan-in: a DAG of LLM and code steps with per-node retries, caching and cost.",
@@ -367,7 +371,7 @@ struct Template: Identifiable, Hashable {
                  ],
                  flow: ["An edit writes a new version and an audit row", "A snapshot is built and published; clients holding an SSE stream get it", "The SDK evaluates locally against the snapshot", "If the service is down, clients keep the last snapshot — never fail closed by accident"],
                  practices: with(["Evaluation is local and deterministic; the SDK keeps the last snapshot when the service is down", "Every change is attributable and reversible; a flag has an owner and a removal date", "Percentage rollouts hash a stable key so a user's bucket never flips", "Snapshots are versioned and swapped atomically — never partially applied"]),
-                 brief: "Build a feature-flag and config service: flags with rules, segments and percentage rollouts stored versioned in the database with an audit table, a snapshot per environment published through Redis and streamed to clients over SSE, a small TypeScript SDK that evaluates in memory and keeps the last snapshot on disconnect, and a console page to edit, target, roll out and kill. Run the gate when done.",
+                 brief: "The backend already runs: Unleash's client API (GET /api/client/features with ETag, metrics, an SSE update stream), local evaluation with flexibleRollout (murmur3, sticky per user), constraints, variants, an audited admin API, and a frontend endpoint that evaluates for one context. Read backend/src/app.ts, evaluate.ts and their tests first. Then extend it: add segments, per-environment snapshots published through Redis, and a console page to edit, target and roll out — keeping evaluation pure and covered by the reference tests. Run the gate when done.",
                  wants: nil),
         // ── proxies & gateways ────────────────────────────────────────────────────────────
         Template(id: "gateway", category: .proxies, title: "API gateway", like: "Kong, APISIX, Envoy Gateway", icon: "arrow.left.arrow.right",
@@ -396,7 +400,7 @@ struct Template: Identifiable, Hashable {
                  ],
                  flow: ["A client calls the proxy as if it were a provider", "The router picks the provider; a cache hit returns immediately", "Budget checked; the call is streamed through with the provider key from the environment", "Usage and cost recorded; a provider error falls back to the next"],
                  practices: with(["Provider keys never leave the proxy; rotation is a config change", "Budgets stop spend before it happens; cost is recorded per request", "Fallbacks are ordered, timed out individually, and observable as events", "Cache hits are served with a header saying so"]),
-                 brief: "Build an LLM proxy: an OpenAI-compatible streaming endpoint that routes model names to providers (Anthropic and OpenAI adapters) with ordered fallbacks, exact-match response caching in Redis, per-key budgets with hard stops, request logs with tokens, cost and latency in the database, provider keys only from the environment, and a console page with spend by key and recent requests. Run the gate when done.",
+                 brief: "The backend already runs: POST /v1/chat/completions (streaming as OpenAI chunks), GET /v1/models, POST /key/generate under MASTER_KEY, virtual keys with model allowlists and budgets, Anthropic and OpenAI adapters with the message mapping, ordered fallbacks, and a spend log with cost per call shown on the page. Read backend/src/app.ts, providers.ts and their tests first. Then extend it: add exact-match response caching in Redis, per-key RPM limits, and any providers this product needs — the tests use a fake fetch, keep it that way. Run the gate when done.",
                  wants: nil),
         Template(id: "aigateway", category: .proxies, title: "AI gateway", like: "Portkey gateway, Helicone", icon: "shield.lefthalf.filled",
                  blurb: "The policy layer for model traffic: virtual keys, guardrails, semantic cache, A/B routing, full observability.",

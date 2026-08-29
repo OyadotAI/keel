@@ -177,10 +177,21 @@ struct StartProject: View {
                         }
                     }
                     Spacer()
+                    if template.runnable {
+                        // The difference between a plan and a product: this one runs before the
+                        // agent has done anything.
+                        Pill(text: "RUNS IN 5 MIN", tone: .good)
+                            .help("Working code ships with the scaffold: `make check` passes and the page does something. The agent's first brief extends it.")
+                    }
                     Text(template.category.rawValue).font(K.F.micro).foregroundStyle(K.C.faint)
                 }
                 Text(template.blurb).font(K.F.body).foregroundStyle(K.C.dim)
                     .fixedSize(horizontal: false, vertical: true)
+                if template.runnable {
+                    Text("Ships working: `make demo` starts Postgres, migrates, seeds and opens both halves; the tests pass without a database. Modelled on \(template.like).")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if !template.components.isEmpty {
                     section("Architecture", "square.stack.3d.up")

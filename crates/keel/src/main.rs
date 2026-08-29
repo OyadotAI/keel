@@ -15,6 +15,7 @@ mod fsops;
 mod gui;
 mod mcp;
 mod names;
+mod packs;
 mod pair;
 mod path;
 mod permissions;
