@@ -60,13 +60,17 @@ struct FileSurface: View {
             let shown = lines.prefix(Self.maxLines)
             GeometryReader { geo in
                 ScrollView([.vertical, .horizontal]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // A plain VStack: a lazy one sizes rows to the proposed width, so every
+                    // line past the pane's edge was ellipsised instead of scrolling. The file
+                    // is capped at maxLines, so eagerness costs nothing.
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(shown.enumerated()), id: \.offset) { i, line in
                             HStack(alignment: .top, spacing: 0) {
                                 Text("\(i + 1)").frame(width: 44, alignment: .trailing)
                                     .foregroundStyle(K.C.faint).padding(.trailing, K.S.sm)
                                 Text(line.isEmpty ? " " : String(line))
                                     .foregroundStyle(K.C.text).textSelection(.enabled).lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .font(K.F.code)
                         }
@@ -76,7 +80,8 @@ struct FileSurface: View {
                         }
                     }
                     .padding(.vertical, K.S.sm)
-                    .frame(minWidth: max(geo.size.width, 1), alignment: .leading)
+                    .frame(minWidth: max(geo.size.width, 1), minHeight: max(geo.size.height, 1),
+                           alignment: .topLeading)
                 }
             }
         } else if data != nil {
