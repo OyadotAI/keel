@@ -220,6 +220,12 @@ pub fn settings_json(repo: &Utf8Path, port: u16, session: Option<&str>) -> Strin
             allow.push(tool.to_string());
         }
     }
+    // Keel's own question tool is never a permission question.
+    allow.push(format!(
+        "mcp__{}__{}",
+        crate::askmcp::SERVER,
+        crate::askmcp::TOOL
+    ));
     let mut settings = serde_json::json!({ "permissions": { "allow": allow } });
 
     // Without an executable there is nothing to point the hook at, and a hook that cannot run

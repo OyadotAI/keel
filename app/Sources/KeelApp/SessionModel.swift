@@ -426,7 +426,7 @@ final class SessionModel: Identifiable {
             if isolated, worktree == nil {
                 await makeWorktree()
             }
-            var query = sq(["prompt": full, "mode": mode])
+            var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString])
             if let sessionId { query["session"] = sessionId }
             if let system = nextSystem { query["system"] = system; nextSystem = nil }
 
@@ -809,7 +809,7 @@ final class SessionModel: Identifiable {
             // Weak, so a closed lane stops polling instead of living on inside its own task.
             while !Task.isCancelled {
                 guard let self else { return }
-                var q: [String: String] = [:]
+                var q: [String: String] = ["lane": self.id.uuidString]
                 if let id = self.sessionId { q["session"] = id }
                 if let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q), !found.isEmpty {
                     self.pending.append(contentsOf: found)
@@ -1393,11 +1393,13 @@ final class SessionModel: Identifiable {
         let body = "Made by the agent in Keel, lane \"\(title)\". The project's checks "
             + (turn.gate == .notRun ? "were not run." : "passed.")
         do {
-            _ = try await client.post("/api/git/commit",
-                                      body: CommitBody(message: subject + "\n\n" + body),
-                                      q(), as: Bool.self)
+            let committed = try await client.post("/api/git/commit",
+                                                  body: CommitBody(message: subject + "\n\n" + body),
+                                                  q(), as: Bool.self)
             await refreshGit()
-            turn.commit = commits.first?.sha
+            // Only a commit that happened is this turn's; otherwise the footer would show the
+            // previous one as if it were new.
+            if committed { turn.commit = commits.first?.sha }
         } catch {
             lastError = "Could not commit: " + error.localizedDescription
         }

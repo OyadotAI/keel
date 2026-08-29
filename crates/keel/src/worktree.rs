@@ -180,16 +180,23 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
 }
 
 /// Commit everything in a checkout. Nothing to commit is not an error.
-pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<(), String> {
+/// Stage everything and commit. `Ok(false)` when there was nothing to commit — which
+/// includes a nested repository with changes of its own: `status` reports it as "untracked
+/// content" but `add -A` stages nothing for it, and git's "no changes added to commit" used to
+/// surface as a red error under every turn.
+pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("a commit needs a message".into());
     }
     git(checkout, &["add", "-A"])?;
-    if git(checkout, &["status", "--porcelain"])?.is_empty() {
-        return Ok(());
+    if git(checkout, &["diff", "--cached", "--name-only"])?
+        .trim()
+        .is_empty()
+    {
+        return Ok(false);
     }
-    git(checkout, &["commit", "-q", "-m", message]).map(|_| ())
+    git(checkout, &["commit", "-q", "-m", message]).map(|_| true)
 }
 
 /// Merge the lane into the project's branch and remove the checkout.
@@ -350,7 +357,7 @@ pub async fn api_commit(
 ) -> Result<Json<bool>, (StatusCode, String)> {
     off_thread(move || commit_all(&checkout, &body.message))
         .await
-        .map(|()| Json(true))
+        .map(Json)
 }
 
 #[cfg(test)]
