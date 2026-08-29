@@ -149,20 +149,19 @@ struct SettingsPage: View {
 
 /// The one thing in here that is about Keel rather than about the project.
 struct AppearanceSettings: View {
-    @AppStorage("keel.appearance") private var appearance = "dark"
+    @State private var mode = Appearance.current
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
-            Text("Keel is a reading surface for code and diffs, so it is dark by default. The "
-                 + "light palette is complete and contrast-checked; it is just not what this is "
-                 + "for.")
+            Text("System follows the Mac. Both palettes are complete and contrast-checked; dark "
+                 + "is the one the diffs were designed in. The icon in the toolbar switches too.")
                 .font(K.F.body).foregroundStyle(K.C.dim)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 0) {
-                ForEach(["dark", "light"], id: \.self) { mode in
-                    let on = appearance == mode
-                    Text(mode.capitalized)
+                ForEach(Appearance.allCases) { a in
+                    let on = mode == a
+                    Label(a.title, systemImage: a.icon)
                         .font(K.F.small.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? K.C.text : K.C.faint)
                         .padding(.horizontal, K.S.md).padding(.vertical, 5)
@@ -171,11 +170,7 @@ struct AppearanceSettings: View {
                                 .fill(on ? K.C.raised : .clear).padding(1)
                         )
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            appearance = mode
-                            NSApp.appearance = NSAppearance(
-                                named: mode == "light" ? .aqua : .darkAqua)
-                        }
+                        .asButton { mode = a; Appearance.current = a }
                 }
             }
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
