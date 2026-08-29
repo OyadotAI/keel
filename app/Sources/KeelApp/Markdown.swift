@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The agent's replies, rendered as what they are.
@@ -286,6 +287,7 @@ struct CodeBlock: View {
 /// table at all.
 struct Table: View {
     let rows: [[String]]
+    @State private var copied = false
 
     private var columns: Int { rows.map(\.count).max() ?? 0 }
 
@@ -299,31 +301,55 @@ struct Table: View {
         }
     }
 
+    /// The table back as Markdown, so what is copied pastes as a table anywhere.
+    private var markdown: String {
+        guard let head = rows.first else { return "" }
+        let sep = "| " + head.map { _ in "---" }.joined(separator: " | ") + " |"
+        let line = { (r: [String]) in "| " + r.map { $0.replacingOccurrences(of: "|", with: "\\|") }.joined(separator: " | ") + " |" }
+        return ([line(head), sep] + rows.dropFirst().map(line)).joined(separator: "\n")
+    }
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
-                    if i == 1 { Rectangle().fill(K.C.line).frame(height: 1) }
-                    HStack(spacing: 0) {
-                        ForEach(0..<columns, id: \.self) { c in
-                            Text(row.indices.contains(c) ? row[c] : "")
-                                .font(i == 0 ? K.F.mono(11, .semibold) : K.F.mono(11))
-                                .foregroundStyle(i == 0 ? K.C.dim : K.C.text)
-                                .monospacedDigit()
-                                .lineLimit(1)
-                                .frame(minWidth: 54,
-                                       alignment: numeric(c) ? .trailing : .leading)
-                                .padding(.horizontal, K.S.sm)
-                                .padding(.vertical, 3)
-                        }
+        // A Grid, so every row shares the column widths — a stack of HStacks sized each row
+        // to its own cells and nothing lined up. Text wraps; a table that scrolls sideways
+        // is a table nobody reads to the end.
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                GridRow {
+                    ForEach(0..<columns, id: \.self) { c in
+                        Text(row.indices.contains(c) ? row[c] : "")
+                            .font(i == 0 ? K.F.small.weight(.semibold) : K.F.small)
+                            .foregroundStyle(i == 0 ? K.C.dim : K.C.text)
+                            .monospacedDigit()
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: numeric(c) ? .trailing : .leading)
+                            .gridColumnAlignment(numeric(c) ? .trailing : .leading)
+                            .padding(.horizontal, K.S.sm)
+                            .padding(.vertical, 4)
+                            .background(i > 0 && i.isMultiple(of: 2) ? K.C.text.opacity(0.03) : .clear)
                     }
-                    .background(i > 0 && i.isMultiple(of: 2)
-                                ? K.C.text.opacity(0.03) : .clear)
+                }
+                if i == 0 {
+                    GridRow { Rectangle().fill(K.C.line).frame(height: 1).gridCellColumns(columns) }
                 }
             }
-            .padding(.vertical, 2)
         }
+        .padding(.vertical, 2)
         .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(markdown, forType: .string)
+                copied = true
+                Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(copied ? K.C.add : K.C.faint)
+                    .padding(4)
+            }
+            .buttonStyle(.plain)
+            .help("Copy the table as Markdown")
+        }
     }
 }

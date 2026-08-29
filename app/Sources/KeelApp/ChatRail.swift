@@ -211,11 +211,12 @@ private struct ChatTurn: View {
                 Spacer(minLength: 64)
                 Text(turn.prompt)
                     .font(K.F.body)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(K.C.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(Bubble.blue, in: Bubble(tail: .trailing))
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                    .background(K.C.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: K.R.md))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
                     .frame(maxWidth: 560, alignment: .trailing)
             }
 
@@ -237,14 +238,11 @@ private struct ChatTurn: View {
             }
 
             // The reply, on the left, in grey. No border: the fill is the shape.
+            // The reply, on the left, as prose: it is the long half, and a box around three
+            // paragraphs and a table is a box around the page.
             if !turn.text.isEmpty {
-                HStack(alignment: .bottom) {
-                    Markdown(turn.text)
-                        .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(Bubble.grey, in: Bubble(tail: .leading))
-                        .frame(maxWidth: 620, alignment: .leading)
-                    Spacer(minLength: 32)
-                }
+                Markdown(turn.text)
+                    .padding(.trailing, K.S.lg)
             }
 
             // The caption Messages puts under a bubble — here, the turn and the ways to copy
@@ -496,37 +494,5 @@ struct SendButton: ButtonStyle {
                     .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
                                   : K.C.line)
             )
-    }
-}
-
-
-/// A message bubble with the tail Messages draws: the bottom corner on the speaker's side
-/// sweeps out and back rather than ending in a point.
-struct Bubble: Shape {
-    enum Tail { case leading, trailing }
-    let tail: Tail
-
-    static let blue = Color(red: 0.05, green: 0.52, blue: 1.0)
-    static var grey: Color { K.C.pair(0xE9E9EB, 0x3B3B3D) }
-
-    func path(in r: CGRect) -> Path {
-        let radius: CGFloat = min(18, r.height / 2)
-        var p = Path(roundedRect: r, cornerRadius: radius)
-        var t = Path()
-        switch tail {
-        case .trailing:
-            t.move(to: CGPoint(x: r.maxX - radius, y: r.maxY))
-            t.addLine(to: CGPoint(x: r.maxX - 10, y: r.maxY - 14))
-            t.addQuadCurve(to: CGPoint(x: r.maxX + 6, y: r.maxY), control: CGPoint(x: r.maxX - 1, y: r.maxY - 1))
-            t.addQuadCurve(to: CGPoint(x: r.maxX - radius, y: r.maxY), control: CGPoint(x: r.maxX - 4, y: r.maxY + 1))
-        case .leading:
-            t.move(to: CGPoint(x: r.minX + radius, y: r.maxY))
-            t.addLine(to: CGPoint(x: r.minX + 10, y: r.maxY - 14))
-            t.addQuadCurve(to: CGPoint(x: r.minX - 6, y: r.maxY), control: CGPoint(x: r.minX + 1, y: r.maxY - 1))
-            t.addQuadCurve(to: CGPoint(x: r.minX + radius, y: r.maxY), control: CGPoint(x: r.minX + 4, y: r.maxY + 1))
-        }
-        t.closeSubpath()
-        p.addPath(t)
-        return p
     }
 }

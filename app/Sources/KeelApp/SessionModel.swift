@@ -29,6 +29,8 @@ final class SessionModel: Identifiable {
     /// Whether this lane gets a checkout of its own. Set at creation; a lane that shares the
     /// project's working tree is for reading and planning beside one that is editing.
     var isolated = false
+    /// Not a tab: a lane doing work on the person's behalf, surfaced when it has something.
+    var hidden = false
 
     /// The query every checkout-scoped request carries, so the daemon reads and writes this
     /// lane's tree rather than the project's.
@@ -889,8 +891,9 @@ final class SessionModel: Identifiable {
     func requestReview() async {
         // Never in the lane being worked in: a review is a second reader, and it gets its own
         // tab. An empty lane is fine to use — nothing is displaced.
-        let target: SessionModel = (turns.isEmpty && !running) ? self : (lanes?.reviewLane(beside: self) ?? self)
-        if target === self { title = "Staff review" }
+        // Always its own lane, hidden until it has something: a tab that appears on its own
+        // and starts talking is what made the review look like an intruder.
+        let target: SessionModel = lanes?.reviewLane(beside: self) ?? self
         await target.attempt {
             let r: ReviewPrompt = try await target.client.get("/api/review", target.q())
             target.mode = "plan"
@@ -902,10 +905,16 @@ final class SessionModel: Identifiable {
         lastReview = Date()
     }
 
-    /// The lane holding the latest review, for saving it: this one, or the review tab.
+    /// The lane holding the latest review: this one, or the hidden one beside it.
     var reviewLane: SessionModel? {
         if title == "Staff review" { return self }
         return lanes?.lanes.last(where: { $0.title == "Staff review" })
+    }
+    /// Bring the review's lane forward as a tab.
+    func openReview() {
+        guard let lane = reviewLane, let lanes else { return }
+        lane.hidden = false
+        lanes.activeID = lane.id
     }
 
     /// Rewrite the agent instructions to the template standard, in a mode that may edit. The
