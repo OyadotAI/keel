@@ -25,7 +25,7 @@
   <key>KeelPostHogHost</key><string>__POSTHOG_HOST__</string>
   <!-- Sparkle. The feed is the latest GitHub release's appcast; the public key pairs with the
        private one on the release machine's keychain. Empty key = updater never starts. -->
-  <key>SUFeedURL</key><string>https://github.com/OyadotAI/keel/releases/latest/download/appcast.xml</string>
+  <key>SUFeedURL</key><string>https://github.com/OyadotAI/keel-releases/releases/latest/download/appcast.xml</string>
   <key>SUPublicEDKey</key><string>__SU_PUBLIC_KEY__</string>
   <key>SUEnableInstallerLauncherService</key><true/>
   <key>SUAutomaticallyUpdate</key><true/>
