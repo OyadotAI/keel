@@ -46,6 +46,13 @@ actor Client {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// Bytes, for a file the viewer shows.
+    func raw(_ path: String, _ query: [String: String] = [:]) async throws -> Data {
+        let (data, response) = try await session.data(from: url(path, query))
+        try check(data, response)
+        return data
+    }
+
     @discardableResult
     func post<T: Decodable>(_ path: String, body: some Encodable, _ query: [String: String] = [:],
                             as: T.Type = T.self) async throws -> T {

@@ -42,7 +42,7 @@ final class RenderTests: XCTestCase {
         for p in SessionWindow.Panel.allCases {
             layout(SidePanel(panel: p, model: m))
         }
-        layout(LaneRail(lanes: lanes))
+        layout(LaneTabs(lanes: lanes))
         layout(DiffSurface(model: m, path: "a/b.txt"))
     }
 }

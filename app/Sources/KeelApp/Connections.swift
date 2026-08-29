@@ -40,7 +40,13 @@ struct ConnectionsSettings: View {
             // times to find the two.
             Section {
                 if tools.isEmpty {
-                    Text("Checking…").font(K.F.small).foregroundStyle(K.C.faint)
+                    // Seconds, because each tool is asked "who am I" in turn. Motion says it is
+                    // working; a grey word says it is stuck.
+                    HStack(spacing: K.S.sm) {
+                        Sweep()
+                        Text("Checking which tools are installed and signed in…")
+                            .font(K.F.small).foregroundStyle(K.C.dim)
+                    }
                 } else if broken.isEmpty {
                     HStack(spacing: K.S.sm) {
                         Image(systemName: "checkmark.circle.fill")
@@ -65,55 +71,15 @@ struct ConnectionsSettings: View {
                 }
             }
 
-            ForEach(tools) { t in
-                Section {
-                    HStack(spacing: 8) {
-                        // The state as a word too, beside the name: three colours of dot are
-                        // one dot to some people.
-                        Pill(text: t.authenticated ? "OK" : (t.installed ? "SIGN IN" : "MISSING"),
-                             tone: t.authenticated ? .good : (t.installed ? .warn : .neutral))
-                        Text(t.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
-                        Spacer()
-                        Text(t.identity ?? (t.installed ? "not connected" : "not installed"))
-                            .font(K.F.small).foregroundStyle(K.C.dim)
-                            .lineLimit(1)
-                    }
-
-                    if let why = t.blocked {
-                        Text(why).font(K.F.small).foregroundStyle(K.C.dim)
-                    }
-
-                    HStack(spacing: 8) {
-                        if !t.installed {
-                            Button(busy == t.id ? "Installing…" : "Install") {
-                                stream("/api/cli/install", ["id": t.id], t.id)
-                            }
-                            .buttonStyle(QuietButton(tone: K.C.accent))
-                            .disabled(busy != nil)
-                        } else if !t.authenticated {
-                            // `setup` is the daemon saying "this one cannot be connected from the
-                            // UI". Tailscale is the case: `tailscale up` opens a browser and can
-                            // ask for rights Keel does not have, so it has no login flow at all
-                            // and a Sign in button here would do nothing at all.
-                            if t.setup?.isEmpty ?? true {
-                                Button(busy == t.id ? "Signing in…" : "Sign in") {
-                                    stream("/api/cli/login", ["id": t.id], t.id)
-                                }
-                                .buttonStyle(QuietButton(tone: K.C.accent))
-                                .disabled(busy != nil)
-                            } else if let setup = t.setup {
-                                // A flow Keel cannot drive — a password prompt, a browser
-                                // handshake — is offered as the command to run rather than as a
-                                // button that would do nothing.
-                                Text(setup)
-                                    .font(K.F.code)
-                                    .textSelection(.enabled)
-                                    .padding(.horizontal, K.S.half).padding(.vertical, 3)
-                                    .background(K.C.well, in: RoundedRectangle(cornerRadius: 3))
-                                Text("run this in the terminal")
-                                    .font(K.F.micro).foregroundStyle(K.C.faint)
-                            }
-                        }
+            // A grid of cards, not a section per tool: nine sections was a page of scrolling
+            // to answer "is docker signed in".
+            Section {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: K.S.sm)],
+                          alignment: .leading, spacing: K.S.sm) {
+                    ForEach(tools) { t in
+                        ToolCard(tool: t, busy: busy == t.id, anyBusy: busy != nil,
+                                 install: { stream("/api/cli/install", ["id": t.id], t.id) },
+                                 login: { stream("/api/cli/login", ["id": t.id], t.id) })
                     }
                 }
             }
@@ -345,5 +311,77 @@ private struct AwsSso: View {
                 failed = true
             }
         }
+    }
+}
+
+
+/// One tool: its state, and every way of fixing it — the command Keel can run, the installer
+/// you can download, and the command to paste when Keel cannot drive the flow.
+private struct ToolCard: View {
+    let tool: ConnectionsSettings.Tool
+    let busy: Bool
+    let anyBusy: Bool
+    let install: () -> Void
+    let login: () -> Void
+
+    /// Where the official installer lives, for the people who would rather click than brew.
+    private static let installers: [String: String] = [
+        "gh": "https://cli.github.com",
+        "wrangler": "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
+        "gcloud": "https://cloud.google.com/sdk/docs/install",
+        "kubectl": "https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/",
+        "docker": "https://www.docker.com/products/docker-desktop/",
+        "aws": "https://aws.amazon.com/cli/",
+        "tailscale": "https://tailscale.com/download/mac",
+        "bun": "https://bun.sh",
+        "node": "https://nodejs.org/en/download",
+        "claude": "https://docs.claude.com/en/docs/claude-code/setup",
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Pill(text: tool.authenticated ? "OK" : (tool.installed ? "SIGN IN" : "MISSING"),
+                     tone: tool.authenticated ? .good : (tool.installed ? .warn : .neutral))
+                Text(tool.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
+                Spacer()
+                if let v = tool.version { Text(v).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1) }
+            }
+            Text(tool.identity ?? (tool.installed ? "not connected" : "not installed"))
+                .font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1)
+            if let why = tool.blocked {
+                Text(why).font(K.F.micro).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: K.S.sm) {
+                if !tool.installed {
+                    Button(busy ? "Installing…" : "Install") { install() }
+                        .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
+                } else if !tool.authenticated, tool.setup?.isEmpty ?? true {
+                    Button(busy ? "Signing in…" : "Sign in") { login() }
+                        .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
+                }
+                if let page = Self.installers[tool.id], let url = URL(string: page) {
+                    Button(tool.installed ? "Website" : "Download installer") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(QuietButton())
+                }
+            }
+            if !tool.authenticated, tool.installed, let setup = tool.setup, !setup.isEmpty {
+                // A flow Keel cannot drive — a password prompt, a browser handshake — is
+                // offered as the command to run rather than as a button that would do nothing.
+                VStack(alignment: .leading, spacing: K.S.xxs) {
+                    Text(setup).font(K.F.code).textSelection(.enabled)
+                        .padding(.horizontal, K.S.half).padding(.vertical, 3)
+                        .background(K.C.well, in: RoundedRectangle(cornerRadius: 3))
+                    Text("run this in the terminal").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+            }
+        }
+        .padding(K.S.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
     }
 }
