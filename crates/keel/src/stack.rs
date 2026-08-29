@@ -1301,6 +1301,36 @@ turns every frontend call into `any`.
   the migrate init container before a rollout. No ORM owns the schema.
 - Logs are one JSON object per line: `{"level","msg",...}`. No bare `console.log` in the backend.
 
+## Production rules
+
+Checked by the `reliability` and `security` reviewers; argue with the rule here, not in a PR.
+
+- Handlers are stateless; session and rate-limit state live in Redis or a signed cookie.
+- Every outbound call has a timeout shorter than its caller's, and the deadline travels in a
+  header. Retries: max 3, exponential backoff with full jitter, idempotent operations only.
+- Every mutating route that a client may retry takes `Idempotency-Key`, stored with the request
+  hash and the response for 24h. Exactly-once is at-least-once plus an idempotent consumer.
+- "Write the row and publish the event" is one transaction through an outbox; consumers record
+  the event id in the same transaction as their effect. Every consumer has a dead-letter path
+  that pages when non-empty and a replay tool.
+- Pagination is keyset on `(created_at, id)`, capped at 100. IDs are UUIDv7.
+- Cache entries carry TTL + jitter and refresh single-flight. Authenticated responses are
+  `Cache-Control: private, no-store`.
+- Pools are sized to the database: replicas × pool < `max_connections`.
+- Schema changes are expand/contract, N−1 compatible, one step per deploy; never a rename in
+  place. Large append-only tables are partitioned by time and pruned by dropping partitions.
+- Three probes with three meanings: startup (still loading), readiness (can serve; checks
+  dependencies), liveness (alive; never checks dependencies). Drain on SIGTERM.
+- Circuit breakers and per-dependency concurrency limits on every external call; degrade with
+  a typed "unavailable" value rather than 500.
+- Rate limits per principal (token bucket, `429` + `RateLimit-*`); auth endpoints also lock out.
+- Logs are one JSON line with `request_id`, `trace_id` and `tenant_id`, propagated through
+  queues. RED metrics per route. Alerts fire on SLO burn rate, never on CPU, and link to a
+  runbook.
+- Inputs are validated once at the boundary with a schema; unknown fields are rejected; bodies
+  are bounded. Between services: short-lived signed tokens with an audience, verified per hop.
+- Backups are only real once restored: PITR on, a restore drill on the calendar.
+
 ## Deploying
 
 `git push` to `main` deploys dev; `make release` tags and deploys prod. Both build images to
