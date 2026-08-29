@@ -138,6 +138,25 @@ enum Wire {
         var id: String { path }
     }
 
+    struct Branch: Decodable, Identifiable, Sendable {
+        var name: String
+        var current: Bool
+        var upstream: String?
+        var ahead: Int
+        var behind: Int
+        var subject: String
+        var id: String { name }
+    }
+
+    struct Branches: Decodable, Sendable {
+        var current: String?
+        var local: [Branch]
+        var remote: [String]
+        var remotes: [String]
+        var staged: Int
+        var unstaged: Int
+    }
+
     /// One commit on the current branch.
     struct Commit: Decodable, Identifiable, Sendable {
         var sha: String

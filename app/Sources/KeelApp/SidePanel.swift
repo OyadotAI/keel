@@ -18,6 +18,7 @@ struct SidePanel: View {
                     } else {
                     switch panel {
                     case .changes: ChangesTreeView(model: model)
+                    case .git: GitPanel(model: model)
                     case .files: FileTree(model: model)
                     case .sessions: SessionsPanel(model: model)
                     case .readiness: ReadinessPanel(model: model)
@@ -61,6 +62,7 @@ struct SidePanel: View {
         let n: Int
         switch panel {
         case .changes: n = model.changes.count
+        case .git: return model.branch
         case .sessions: n = model.sessions.count
         case .readiness: n = model.findings.count
         case .skills: n = model.workspace.skills.count

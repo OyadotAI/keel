@@ -904,6 +904,181 @@ pub fn git_push(root: &Utf8Path) -> Result<String, String> {
     git_run(root, &["push", "-u", "origin", "HEAD"])
 }
 
+// ── branches and remotes: the rest of a git client ───────────────────────────
+
+#[derive(Serialize)]
+pub struct Branch {
+    pub name: String,
+    pub current: bool,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Last commit's subject, for the list.
+    pub subject: String,
+}
+
+#[derive(Serialize)]
+pub struct Branches {
+    pub current: Option<String>,
+    pub local: Vec<Branch>,
+    /// `origin/feature`, without the ones a local branch already tracks.
+    pub remote: Vec<String>,
+    pub remotes: Vec<String>,
+    pub staged: u32,
+    pub unstaged: u32,
+}
+
+/// Every branch, with how far each local one is from its upstream.
+pub fn git_branches(root: &Utf8Path) -> Branches {
+    let current = git(root, &["branch", "--show-current"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let raw = git(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(subject)",
+            "refs/heads",
+        ],
+    )
+    .unwrap_or_default();
+    let mut tracked = std::collections::HashSet::new();
+    let local: Vec<Branch> = raw
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\x1f');
+            let name = f.next()?.to_string();
+            let upstream = f.next().filter(|u| !u.is_empty()).map(str::to_string);
+            let track = f.next().unwrap_or_default();
+            let subject = f.next().unwrap_or_default().to_string();
+            if let Some(u) = &upstream {
+                tracked.insert(u.clone());
+            }
+            let count = |key: &str| -> u32 {
+                track
+                    .split(|c: char| !c.is_alphanumeric())
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .find(|w| w[0] == key)
+                    .and_then(|w| w[1].parse().ok())
+                    .unwrap_or(0)
+            };
+            Some(Branch {
+                current: Some(&name) == current.as_ref(),
+                ahead: count("ahead"),
+                behind: count("behind"),
+                name,
+                upstream,
+                subject,
+            })
+        })
+        .collect();
+    let remote: Vec<String> = git(
+        root,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(str::to_string)
+    .filter(|r| !r.ends_with("/HEAD") && !tracked.contains(r))
+    .collect();
+    let remotes: Vec<String> = git(root, &["remote"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let status = git(root, &["status", "--porcelain"]).unwrap_or_default();
+    let staged = status
+        .lines()
+        .filter(|l| l.len() > 1 && !l.starts_with([' ', '?']))
+        .count() as u32;
+    let unstaged = status
+        .lines()
+        .filter(|l| l.len() > 1 && (l.as_bytes()[1] != b' ' || l.starts_with("??")))
+        .count() as u32;
+    Branches {
+        current,
+        local,
+        remote,
+        remotes,
+        staged,
+        unstaged,
+    }
+}
+
+fn valid_branch(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.starts_with('-')
+        || name.contains("..")
+        || name
+            .chars()
+            .any(|c| c.is_whitespace() || c == '~' || c == '^' || c == ':')
+    {
+        return Err(format!("{name:?} is not a branch name"));
+    }
+    Ok(())
+}
+
+/// Switch, create, or delete a branch. Delete is `-d`: a branch git will not delete safely is
+/// one whose commits would vanish, and that is not a panel button's decision to make.
+pub fn git_branch_act(root: &Utf8Path, action: &str, name: &str) -> Result<String, String> {
+    valid_branch(name)?;
+    match action {
+        // `switch` refuses when it would lose work, which is the behaviour a button needs.
+        "checkout" => {
+            if name.contains('/')
+                && git(
+                    root,
+                    &["rev-parse", "--verify", &format!("refs/heads/{name}")],
+                )
+                .is_none()
+            {
+                // A remote branch: make the tracking branch on the way.
+                let short = name.split_once('/').map(|x| x.1).unwrap_or(name);
+                git_run(root, &["switch", "--track", "-c", short, name])
+            } else {
+                git_run(root, &["switch", name])
+            }
+        }
+        "create" => git_run(root, &["switch", "-c", name]),
+        "delete" => git_run(root, &["branch", "-d", name]),
+        _ => Err(format!("unknown branch action: {action}")),
+    }
+}
+
+/// Fetch, pull, or push.
+pub fn git_remote_act(root: &Utf8Path, action: &str) -> Result<String, String> {
+    match action {
+        "fetch" => git_run(root, &["fetch", "--all", "--prune"]),
+        // `--ff-only`: a merge commit nobody asked for is not a pull, and a conflict is a
+        // decision for a person with a terminal.
+        "pull" => git_run(root, &["pull", "--ff-only"]),
+        "push" => git_push(root),
+        _ => Err(format!("unknown remote action: {action}")),
+    }
+}
+
+/// Stage or unstage everything.
+pub fn git_stage_all(root: &Utf8Path, stage: bool) -> Result<(), String> {
+    if stage {
+        git_run(root, &["add", "-A"]).map(|_| ())
+    } else {
+        git_run(root, &["reset", "-q"]).map(|_| ())
+    }
+}
+
+/// Commit what is staged, and only that.
+pub fn git_commit_staged(root: &Utf8Path, message: &str) -> Result<(), String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("a commit needs a message".into());
+    }
+    if git(root, &["diff", "--cached", "--quiet"]).is_some() {
+        return Err("Nothing is staged. Stage files first, or commit everything.".into());
+    }
+    git_run(root, &["commit", "-q", "-m", message]).map(|_| ())
+}
+
 /// Take the last commit apart, keeping its changes in the working tree.
 ///
 /// `--soft`, never `--hard`: undoing a commit Keel made must not undo the work in it.
@@ -1101,6 +1276,49 @@ mod git_tests {
         // A path that is not in the repository never reaches git.
         assert!(git_act(&root, "discard", "../../etc/hosts", None).is_err());
         assert!(git_act(&root, "nonsense", "a.txt", None).is_err());
+    }
+
+    /// Branches: create, switch, list with tracking; stage-all and a staged-only commit.
+    #[test]
+    fn branches_can_be_made_switched_and_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+
+        git_branch_act(&root, "create", "feature").unwrap();
+        let b = git_branches(&root);
+        assert_eq!(b.current.as_deref(), Some("feature"));
+        assert_eq!(b.local.len(), 2);
+        assert!(b.local.iter().any(|x| x.name == "main" && !x.current));
+
+        std::fs::write(root.join("b.txt"), "x\n").unwrap();
+        assert_eq!(git_branches(&root).unstaged, 1);
+        assert!(git_commit_staged(&root, "nothing staged").is_err());
+        git_stage_all(&root, true).unwrap();
+        assert_eq!(git_branches(&root).staged, 1);
+        git_commit_staged(&root, "add b").unwrap();
+        assert_eq!(git_branches(&root).staged, 0);
+
+        git_branch_act(&root, "checkout", "main").unwrap();
+        assert!(!root.join("b.txt").exists(), "switched");
+        assert!(
+            git_branch_act(&root, "delete", "feature").is_err(),
+            "unmerged: -d refuses"
+        );
+        assert!(git_branch_act(&root, "create", "bad name").is_err());
+        assert!(git_branch_act(&root, "create", "-x").is_err());
     }
 
     /// The log reads back what was committed, and undoing keeps the work.

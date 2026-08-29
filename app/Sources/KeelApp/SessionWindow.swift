@@ -19,6 +19,8 @@ struct SessionWindow: View {
     @State private var showSettings = false
     /// How wide the record beside the conversation is. Yours to drag; remembered.
     @AppStorage("keel.stageWidth") private var stageWidth: Double = 460
+    /// And the side panel.
+    @AppStorage("keel.panelWidth") private var panelWidth: Double = 256
 
     /// The two things the right pane can be.
     ///
@@ -31,13 +33,14 @@ struct SessionWindow: View {
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
     /// 256pt rail and no room for any of them to have actions.
     enum Panel: String, CaseIterable, Identifiable {
-        case changes, files, sessions, readiness
+        case changes, git, files, sessions, readiness
         case skills, agents, mcp, hooks, plugins
         var id: String { rawValue }
 
         var icon: String {
             switch self {
             case .changes: "plusminus"
+            case .git: "arrow.triangle.branch"
             case .files: "folder"
             case .sessions: "clock.arrow.circlepath"
             case .readiness: "checkmark.shield"
@@ -51,6 +54,7 @@ struct SessionWindow: View {
         var title: String {
             switch self {
             case .changes: "Changes"
+            case .git: "Git"
             case .files: "Files"
             case .sessions: "History"
             case .readiness: "Readiness"
@@ -107,8 +111,8 @@ struct SessionWindow: View {
 
                 if let panel {
                     SidePanel(panel: panel, model: model)
-                        .frame(width: 256)
-                    Rectangle().fill(K.C.line).frame(width: 1)
+                        .frame(width: panelWidth)
+                    SplitHandle(width: $panelWidth, range: 200...520, reset: 256, leading: true)
                 }
 
                 if showSettings {
@@ -764,6 +768,8 @@ private struct SplitHandle: View {
     @Binding var width: Double
     let range: ClosedRange<Double>
     let reset: Double
+    /// The pane being sized is to the left of the handle (drag right = wider).
+    var leading = false
     @State private var hovering = false
     @State private var start: Double?
     @State private var pushed = false
@@ -784,8 +790,10 @@ private struct SplitHandle: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { g in
                         if start == nil { start = width }
-                        // The stage is on the right, so dragging left makes it wider.
-                        width = min(max((start ?? width) - g.translation.width, range.lowerBound),
+                        // The stage is on the right, so dragging left makes it wider; a pane
+                        // on the left is the other way round.
+                        let delta = leading ? g.translation.width : -g.translation.width
+                        width = min(max((start ?? width) + delta, range.lowerBound),
                                     range.upperBound)
                     }
                     .onEnded { _ in start = nil }

@@ -1128,6 +1128,48 @@ final class SessionModel: Identifiable {
 
     /// The last commits on this checkout, for the list beside the working tree.
     var commits: [Wire.Commit] = []
+
+    // MARK: - The git client
+
+    var branches: Wire.Branches?
+    var gitBusy: String?
+
+    func refreshBranches() async {
+        branches = try? await client.get("/api/git/branches", q())
+    }
+
+    struct BranchBody: Encodable { var action: String; var name: String }
+    struct RemoteBody: Encodable { var action: String }
+    struct StageAllBody: Encodable { var stage: Bool }
+
+    /// Any git verb from the panel. Busy while it runs, its output as the error if it fails,
+    /// and everything the panels read refreshed afterwards.
+    func git(_ what: String, _ work: () async throws -> Void) async {
+        gitBusy = what
+        defer { gitBusy = nil }
+        await attempt(work)
+        await refreshGit()
+        await refreshBranches()
+        await refreshTree()
+    }
+
+    func branch(_ action: String, _ name: String) async {
+        await git(action) { _ = try await client.post("/api/git/branch", body: BranchBody(action: action, name: name), q(), as: String.self) }
+    }
+    func remote(_ action: String) async {
+        await git(action) { _ = try await client.post("/api/git/remote", body: RemoteBody(action: action), q(), as: String.self) }
+        if action == "push" { Telemetry.track("pushed") }
+    }
+    func stageAll(_ stage: Bool) async {
+        await git(stage ? "stage" : "unstage") { _ = try await client.post("/api/git/stage-all", body: StageAllBody(stage: stage), q(), as: Bool.self) }
+    }
+    func commit(_ message: String, all: Bool) async {
+        await git("commit") {
+            _ = try await client.post(all ? "/api/git/commit" : "/api/git/commit-staged",
+                                      body: CommitBody(message: message), q(), as: Bool.self)
+        }
+        Telemetry.track("commit_made", ["manual": true, "all": all])
+    }
     /// The commit whose diff is on screen.
     var viewingCommit: Wire.Commit?
 
