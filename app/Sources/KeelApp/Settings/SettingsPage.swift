@@ -17,7 +17,7 @@ struct SettingsPage: View {
     @State private var section: Section = .connections
 
     enum Section: String, CaseIterable, Identifiable {
-        case connections, permissions, devices, appearance
+        case connections, permissions, devices, appearance, privacy
         var id: String { rawValue }
 
         var title: String {
@@ -26,6 +26,7 @@ struct SettingsPage: View {
             case .permissions: "Permissions"
             case .devices: "Devices"
             case .appearance: "Appearance"
+            case .privacy: "Privacy"
             }
         }
         var icon: String {
@@ -34,6 +35,7 @@ struct SettingsPage: View {
             case .permissions: "lock"
             case .devices: "iphone"
             case .appearance: "paintbrush"
+            case .privacy: "hand.raised"
             }
         }
         var blurb: String {
@@ -42,6 +44,7 @@ struct SettingsPage: View {
             case .permissions: "what the agent may run here"
             case .devices: "what can reach this Mac"
             case .appearance: "how Keel looks"
+            case .privacy: "crash reports and usage"
             }
         }
     }
@@ -114,6 +117,7 @@ struct SettingsPage: View {
                                                        sessionId: model.sessionId)
                 case .devices: PairingSettings(model: pairing)
                 case .appearance: AppearanceSettings()
+                case .privacy: PrivacySettings()
                 }
             }
             .frame(maxWidth: 640, alignment: .leading)
@@ -156,6 +160,48 @@ struct AppearanceSettings: View {
             }
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+        }
+    }
+}
+
+
+/// What leaves the machine, and the switches that stop it.
+struct PrivacySettings: View {
+    @State private var crashes = Telemetry.crashReports
+    @State private var usage = Telemetry.usage
+    @State private var sent = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            Text("Two things can leave this Mac, and nothing else: a crash report when Keel "
+                 + "crashes, and counts of what was used — \"a turn finished, the checks passed, "
+                 + "three files\". Never a prompt, a file, a path, or a repository name.")
+                .font(K.F.body).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Send crash reports", isOn: $crashes)
+                .toggleStyle(.switch)
+                .onChange(of: crashes) { Telemetry.crashReports = crashes }
+                .disabled(!Telemetry.sentryConfigured)
+            Toggle("Send anonymous usage", isOn: $usage)
+                .toggleStyle(.switch)
+                .onChange(of: usage) { Telemetry.usage = usage }
+                .disabled(!Telemetry.posthogConfigured)
+
+            if !Telemetry.sentryConfigured && !Telemetry.posthogConfigured {
+                Text("This build has no reporting keys, so nothing is sent either way.")
+                    .font(K.F.small).foregroundStyle(K.C.faint)
+            } else if Telemetry.sentryConfigured {
+                Button(sent ? "Sent — check the dashboard" : "Send a test report") {
+                    Telemetry.sendTest(); sent = true
+                }
+                .buttonStyle(QuietButton())
+                .disabled(!crashes)
+            }
+
+            Text("Version \(Telemetry.version)"
+                 + (Updater.shared.available ? " · updates automatically" : ""))
+                .font(K.F.micro).foregroundStyle(K.C.faint)
         }
     }
 }

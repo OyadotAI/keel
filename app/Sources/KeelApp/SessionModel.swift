@@ -159,6 +159,7 @@ final class SessionModel: Identifiable {
             pins[i].before = before ?? pins[i].before
         } else {
             pins.append(Pin(picked: p, before: before))
+            Telemetry.track("pin_added", ["hints": p.hints.count])
             if let before, let tiff = before.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 attach(data: png, name: "before-\(p.tag).png", thumbnail: before,
@@ -276,6 +277,15 @@ final class SessionModel: Identifiable {
     /// The file whose diff is on screen, picked from the changes tree.
     var viewingDiff: String?
 
+    /// The one sheet the window can show, presented from the side panel's root rather than
+    /// from a row: a `.sheet` on a row inside a lazy stack loses its anchor when the row is
+    /// recycled, and a sheet with no anchor is a crash on the way out of it.
+    enum Sheet: String, Identifiable {
+        case pr, skills, subagent, mcp
+        var id: String { rawValue }
+    }
+    var sheet: Sheet?
+
     /// What the right pane is inspecting, when it is not showing a turn or the preview.
     ///
     /// Clicking a skill or a hook has to lead somewhere: a row you cannot open is a row that only
@@ -363,6 +373,9 @@ final class SessionModel: Identifiable {
 
         let full = promptWithAttachments(instruction)
         attachments.removeAll()
+        Telemetry.track("turn_started", ["mode": mode, "pins": designInFlight.count,
+                                         "attachments": attachments.count])
+        Telemetry.breadcrumb("turn started")
         let turn = Turn(prompt: full)
         turns.append(turn)
         running = true
@@ -421,6 +434,11 @@ final class SessionModel: Identifiable {
         // arrives before the checks have run is the "done!" that started this whole argument.
         await checkDesign(turn)
         Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
+        Telemetry.track("turn_finished", [
+            "gate": gateName(turn.gate), "files": turn.files.count,
+            "calls": turn.calls.count, "seconds": (turn.durationMS ?? 0) / 1000,
+            "committed": turn.commit != nil,
+        ])
         if !queued.isEmpty { start(queued.removeFirst()) }
     }
 
@@ -506,12 +524,18 @@ final class SessionModel: Identifiable {
             var type: String
             var id: String?
             var name: String?
+            var text: String?
             var input: [String: JSONValue]?
             var tool_use_id: String?
             var content: JSONValue?
             var is_error: Bool?
         }
-        struct StreamEvent: Decodable { var delta: Delta? }
+        struct StreamEvent: Decodable {
+            var type: String?
+            var delta: Delta?
+            var content_block: ContentBlock?
+        }
+        struct ContentBlock: Decodable { var type: String? }
         struct Delta: Decodable {
             var type: String?
             var text: String?
@@ -527,12 +551,28 @@ final class SessionModel: Identifiable {
             sessionId = r.session_id ?? sessionId
 
         case "stream_event":
+            // A new text block after a tool call is a new paragraph. Without this the second
+            // message's first word landed flush against the first message's last one.
+            if r.event?.type == "content_block_start", r.event?.content_block?.type == "text",
+               !turn.text.isEmpty, !turn.text.hasSuffix("\n\n") {
+                turn.text += turn.text.hasSuffix("\n") ? "\n" : "\n\n"
+            }
             guard let d = r.event?.delta else { return }
-            if d.type == "text_delta", let t = d.text { turn.text += t }
+            if d.type == "text_delta", let t = d.text { turn.text += t; turn.streamedText = true }
             if d.type == "thinking_delta", let t = d.thinking { turn.thinking += t }
 
         case "assistant":
             if let u = r.message?.usage, u.context > 0 { turn.contextTokens = u.context }
+            // Without partial messages the prose arrives only here, whole. Take it when nothing
+            // streamed it first.
+            if turn.streamedText == false {
+                for b in r.message?.content ?? [] where b.type == "text" {
+                    if let t = b.text, !t.isEmpty {
+                        if !turn.text.isEmpty { turn.text += "\n\n" }
+                        turn.text += t
+                    }
+                }
+            }
             for b in r.message?.content ?? [] where b.type == "tool_use" {
                 guard let id = b.id, let name = b.name else { continue }
                 turn.begin(call: id, tool: name, input: b.input ?? [:],
@@ -718,8 +758,10 @@ final class SessionModel: Identifiable {
         approvalTask?.cancel()
         approvalTask = nil
         guard on else { pending = []; return }
-        approvalTask = Task { [client] in
+        approvalTask = Task { [weak self, client] in
+            // Weak, so a closed lane stops polling instead of living on inside its own task.
             while !Task.isCancelled {
+                guard let self else { return }
                 var q: [String: String] = [:]
                 if let id = self.sessionId { q["session"] = id }
                 if let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q), !found.isEmpty {
@@ -743,6 +785,7 @@ final class SessionModel: Identifiable {
     /// Answer a question. The text is what the agent reads as the tool's result.
     func answer(_ p: Wire.Pending, text: String) {
         pending.removeAll { $0.id == p.id }
+        Telemetry.track("question_answered")
         let body = Answer(id: p.id, decision: "deny", rules: [], scope: "session",
                           session: sessionId, answer: text)
         Task { [client] in
@@ -791,6 +834,26 @@ final class SessionModel: Identifiable {
         missingSuggestions = c.suggested.filter { !$0.installed }
     }
 
+    /// Which plugin is installing right now, and what it printed.
+    var installing: String?
+    var installLog = ""
+
+    /// Install a recommended plugin from the panel, and refresh everything the badge reads.
+    func installPlugin(_ e: SkillCatalog.Entry) async {
+        installing = e.id
+        installLog = ""
+        defer { installing = nil }
+        do {
+            for try await ev in client.events("/api/plugins/install",
+                                              ["name": e.name, "marketplace": e.marketplace]) {
+                if ev.name == "line" || ev.name == "fatal" { installLog += ev.data + "\n" }
+            }
+        } catch { installLog += error.localizedDescription }
+        Telemetry.track("plugin_installed", ["recommended": true])
+        await refreshSuggestions()
+        await refreshState()
+    }
+
     var tree: [Wire.Node] = []
     /// Every path, flat — for the filter and the mention picker.
     var files: [String] = []
@@ -835,6 +898,8 @@ final class SessionModel: Identifiable {
     func openProject(_ path: String) async throws {
         _ = try await client.post("/api/open", body: OpenBody(path: path), as: Opened.self)
         projectOpenKnown = true
+        Telemetry.track("project_opened")
+        Telemetry.breadcrumb("project opened")
         turns.removeAll()
         sessionId = nil
         title = "New session"
@@ -955,6 +1020,14 @@ final class SessionModel: Identifiable {
 
     struct SessionRename: Encodable { var id: String; var title: String }
 
+    /// Name this lane. When it has a session, History gets the same name.
+    func rename(to name: String) {
+        let t = name.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        title = String(t.prefix(60))
+        if let sessionId { Task { await rename(session: sessionId, to: title) } }
+    }
+
     /// Name a session. Kept in Keel's own store — Claude Code's transcript is not touched to
     /// achieve it.
     func rename(session id: String, to title: String) async {
@@ -1074,6 +1147,15 @@ final class SessionModel: Identifiable {
             turn.commit = commits.first?.sha
         } catch {
             lastError = "Could not commit: " + error.localizedDescription
+        }
+    }
+
+    private func gateName(_ g: Turn.Gate) -> String {
+        switch g {
+        case .passed: "passed"
+        case .failed: "failed"
+        case .none: "no_gate"
+        case .notRun, .running: "not_run"
         }
     }
 

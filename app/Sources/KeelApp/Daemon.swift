@@ -55,6 +55,10 @@ final class Daemon {
         // project from: it is `/`, and the default would open the whole filesystem as a repo.
         p.arguments = ["serve", "--port", String(port), "--no-open",
                        "--exit-with-parent", "--resume-last"]
+        // The daemon reports crashes under the app's key, tagged as the daemon.
+        if let dsn = Bundle.main.infoDictionary?["KeelSentryDSN"] as? String, !dsn.isEmpty {
+            p.arguments! += ["--sentry-dsn", dsn]
+        }
         try p.run()
         process = p
 

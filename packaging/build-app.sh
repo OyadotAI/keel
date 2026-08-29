@@ -18,8 +18,29 @@ app="dist/Keel.app"
 echo "==> building the keel daemon $version (release)"
 cargo build --release --quiet
 
+# Reporting keys and the update key, from the environment or a gitignored .env beside this
+# script's repo. Empty is fine: the SDK stays off and the updater never starts.
+[ -f .env ] && set -a && . ./.env && set +a
+: "${KEEL_SENTRY_DSN:=}"
+: "${KEEL_POSTHOG_KEY:=}"
+: "${KEEL_POSTHOG_HOST:=}"
+: "${KEEL_SPARKLE_PUBLIC_KEY:=}"
+# The PostHog project is shared with A2ABase, so its public client key is read from there
+# when this repo does not set one. Events are told apart by the `app=keel` property.
+if [ -z "$KEEL_POSTHOG_KEY" ] && [ -f ../A2ABaseAI/frontend/.env.local ]; then
+  KEEL_POSTHOG_KEY="$(sed -n 's/^NEXT_PUBLIC_POSTHOG_KEY=//p' ../A2ABaseAI/frontend/.env.local | tr -d '"' | head -1)"
+  KEEL_POSTHOG_HOST="$(sed -n 's/^NEXT_PUBLIC_POSTHOG_HOST=//p' ../A2ABaseAI/frontend/.env.local | tr -d '"' | head -1)"
+fi
+if [ -z "$KEEL_SPARKLE_PUBLIC_KEY" ] && command -v packaging/sparkle/bin/generate_keys >/dev/null 2>&1; then
+  KEEL_SPARKLE_PUBLIC_KEY="$(packaging/sparkle/bin/generate_keys -p 2>/dev/null || true)"
+fi
+echo "    sentry: $([ -n "$KEEL_SENTRY_DSN" ] && echo on || echo off)"
+echo "    posthog: $([ -n "$KEEL_POSTHOG_KEY" ] && echo on || echo off)"
+echo "    updates: $([ -n "$KEEL_SPARKLE_PUBLIC_KEY" ] && echo on || echo off)"
+
 echo "==> building the Keel app (release)"
-swift build --package-path app -c release
+# The rpath is for Sparkle, which is a dynamic framework and rides in Contents/Frameworks.
+swift build --package-path app -c release -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 
 echo "==> assembling $app"
 rm -rf "$app"
@@ -31,7 +52,17 @@ cp "app/$(swift build --package-path app -c release --show-bin-path)/KeelApp" \
   || cp "$(swift build --package-path app -c release --show-bin-path)/KeelApp" \
         "$app/Contents/MacOS/KeelApp"
 cp target/release/keel "$app/Contents/MacOS/keel"
-sed "s/__VERSION__/$version/g" packaging/Info.plist > "$app/Contents/Info.plist"
+bin="$(swift build --package-path app -c release --show-bin-path)"
+if [ -d "$bin/Sparkle.framework" ]; then
+  mkdir -p "$app/Contents/Frameworks"
+  cp -R "$bin/Sparkle.framework" "$app/Contents/Frameworks/"
+fi
+sed -e "s/__VERSION__/$version/g" \
+    -e "s|__SENTRY_DSN__|$KEEL_SENTRY_DSN|g" \
+    -e "s|__POSTHOG_KEY__|$KEEL_POSTHOG_KEY|g" \
+    -e "s|__POSTHOG_HOST__|$KEEL_POSTHOG_HOST|g" \
+    -e "s|__SU_PUBLIC_KEY__|$KEEL_SPARKLE_PUBLIC_KEY|g" \
+    packaging/Info.plist > "$app/Contents/Info.plist"
 
 echo "==> rendering the icon"
 python3 packaging/icon.py dist/icon >/dev/null

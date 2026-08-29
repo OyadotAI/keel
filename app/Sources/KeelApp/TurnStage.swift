@@ -210,7 +210,9 @@ struct TurnCard: View {
                 ProblemList(problems: problems, model: model)
             }
 
-            ForEach(model.pending) { p in
+            // On the newest card only: the same card body is rendered once per turn, and a
+            // question rendered N times registers its shortcuts N times.
+            ForEach(turn.id == model.turns.last?.id ? model.pending : []) { p in
                 if p.isQuestion {
                     QuestionCard(pending: p, model: model)
                 } else {

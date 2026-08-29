@@ -50,6 +50,11 @@ struct Welcome: View {
             openSection
 
             Spacer()
+
+            Text("Keel sends crash reports and anonymous usage counts — never prompts, files "
+                 + "or repository names. Turn either off in Settings › Privacy.")
+                .font(K.F.micro).foregroundStyle(K.C.faint)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(K.S.xxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

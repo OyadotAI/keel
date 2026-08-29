@@ -34,7 +34,7 @@ struct DesignStrip: View {
                         Text("CHANGED ON SCREEN")
                             .font(.system(size: 10, weight: .semibold)).tracking(0.6)
                             .foregroundStyle(K.C.accent)
-                        ForEach(Array(design.regions.prefix(6).enumerated()), id: \.element.id) { i, r in
+                        ForEach(Array(design.regions.prefix(6).enumerated()), id: \.offset) { i, r in
                             HStack(spacing: K.S.xs) {
                                 Text("\(i + 1)").font(K.F.mono(10, .semibold)).foregroundStyle(K.C.accent)
                                     .frame(width: 14)

@@ -9,16 +9,27 @@ import SwiftUI
 /// without asking, and a plugin is the parcel the first two arrive in. Each gets its own icon.
 struct SkillsPanel: View {
     let model: SessionModel
-    @State private var browsing = false
 
     var body: some View {
         Group {
+            // Skills arrive inside plugins, so a gap shows up there; this is the pointer.
+            if !model.missingSuggestions.isEmpty {
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                        .foregroundStyle(K.C.warn)
+                    Text("\(model.missingSuggestions.count) recommended plugin\(model.missingSuggestions.count == 1 ? "" : "s") "
+                         + "would add skills for this repository — see Plugins.")
+                        .font(K.F.micro).foregroundStyle(K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            }
             if model.workspace.skills.isEmpty {
                 Blank(title: "No skills yet",
                       body: "A skill teaches the agent a task — a review checklist, a deploy "
                           + "runbook, a way to call an API. They live in `~/.claude`, so they work "
                           + "here, in every other project, and in the terminal.",
-                      action: "Browse skills") { browsing = true }
+                      action: "Browse skills") { model.sheet = .skills }
             } else {
                 ForEach(model.workspace.skills) { s in
                     ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
@@ -26,13 +37,7 @@ struct SkillsPanel: View {
                         model.inspecting = .skill(s)
                     }
                 }
-                PanelAction("Add skills…", icon: "plus.circle") { browsing = true }
-            }
-        }
-        .sheet(isPresented: $browsing) {
-            SkillCatalog(client: model.client) {
-                browsing = false
-                Task { await model.refreshState() }
+                PanelAction("Add skills…", icon: "plus.circle") { model.sheet = .skills }
             }
         }
     }
@@ -40,7 +45,6 @@ struct SkillsPanel: View {
 
 struct AgentsPanel: View {
     let model: SessionModel
-    @State private var creating = false
 
     var body: some View {
         Group {
@@ -49,7 +53,7 @@ struct AgentsPanel: View {
                       body: "A subagent is a delegate with its own instructions and its own "
                           + "context. The main agent reads its description to decide whether to "
                           + "hand work over, so that description is the whole interface.",
-                      action: "Create one") { creating = true }
+                      action: "Create one") { model.sheet = .subagent }
             } else {
                 ForEach(model.workspace.agents) { a in
                     ItemRow(name: a.name, detail: a.description, fromRepo: a.fromRepo,
@@ -57,13 +61,7 @@ struct AgentsPanel: View {
                         model.inspecting = .agent(a)
                     }
                 }
-                PanelAction("Create a subagent…", icon: "plus.circle") { creating = true }
-            }
-        }
-        .sheet(isPresented: $creating) {
-            NewSubagent(client: model.client) {
-                creating = false
-                Task { await model.refreshState() }
+                PanelAction("Create a subagent…", icon: "plus.circle") { model.sheet = .subagent }
             }
         }
     }
@@ -71,7 +69,6 @@ struct AgentsPanel: View {
 
 struct MCPPanel: View {
     let model: SessionModel
-    @State private var adding = false
 
     var body: some View {
         Group {
@@ -81,7 +78,7 @@ struct MCPPanel: View {
                           + "tracker, a database, a browser. Keel never writes one into the "
                           + "repository, because that is configuring a command to run on someone "
                           + "else's machine.",
-                      action: "Add a server…") { adding = true }
+                      action: "Add a server…") { model.sheet = .mcp }
             } else {
                 ForEach(model.workspace.mcpServers) { s in
                     ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
@@ -89,13 +86,7 @@ struct MCPPanel: View {
                         model.inspecting = .mcp(s)
                     }
                 }
-                PanelAction("Add a server…", icon: "plus.circle") { adding = true }
-            }
-        }
-        .sheet(isPresented: $adding) {
-            AddMCP(client: model.client) {
-                adding = false
-                Task { await model.refreshState() }
+                PanelAction("Add a server…", icon: "plus.circle") { model.sheet = .mcp }
             }
         }
     }
@@ -138,15 +129,15 @@ struct HooksPanel: View {
 
 struct PluginsPanel: View {
     let model: SessionModel
-    @State private var browsing = false
 
     var body: some View {
         Group {
+            Recommended(model: model)
             if model.workspace.plugins.isEmpty {
                 Blank(title: "No plugins",
                       body: "Plugins are how skills, subagents and commands are distributed. They "
                           + "come from marketplaces you have added to `claude`.",
-                      action: "Browse plugins") { browsing = true }
+                      action: "Browse plugins") { model.sheet = .skills }
             } else {
                 ForEach(model.workspace.plugins) { p in
                     ItemRow(name: p.name,
@@ -157,13 +148,7 @@ struct PluginsPanel: View {
                         model.inspecting = .plugin(p)
                     }
                 }
-                PanelAction("Browse plugins…", icon: "plus.circle") { browsing = true }
-            }
-        }
-        .sheet(isPresented: $browsing) {
-            SkillCatalog(client: model.client) {
-                browsing = false
-                Task { await model.refreshState() }
+                PanelAction("Browse plugins…", icon: "plus.circle") { model.sheet = .skills }
             }
         }
     }
@@ -233,6 +218,55 @@ struct PanelAction: View {
         }
         .buttonStyle(.plain)
         .font(K.F.small).foregroundStyle(K.C.accent)
+    }
+}
+
+/// What this repository is missing, at the top of the panel, with the button beside the reason.
+///
+/// It was a dialog behind a badge. A recommendation nobody opens does nothing, and a badge
+/// that stayed lit after the install did the opposite of what a badge is for.
+struct Recommended: View {
+    let model: SessionModel
+
+    var body: some View {
+        if !model.missingSuggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                        .foregroundStyle(K.C.warn)
+                    Text("RECOMMENDED FOR THIS REPOSITORY")
+                        .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                        .foregroundStyle(K.C.warn)
+                }
+                .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
+
+                ForEach(model.missingSuggestions) { e in
+                    VStack(alignment: .leading, spacing: K.S.xxs) {
+                        HStack(spacing: K.S.sm) {
+                            Text(e.name).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
+                            Spacer()
+                            Button(model.installing == e.id ? "Installing…" : "Install") {
+                                Task { await model.installPlugin(e) }
+                            }
+                            .buttonStyle(QuietButton(tone: K.C.accent))
+                            .disabled(model.installing != nil)
+                        }
+                        Text(e.reason ?? e.description ?? "")
+                            .font(K.F.micro).foregroundStyle(K.C.dim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                }
+                if !model.installLog.isEmpty {
+                    Text(model.installLog.suffix(400))
+                        .font(K.F.codeSmall).foregroundStyle(K.C.faint)
+                        .lineLimit(4)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                }
+                Hairline().padding(.top, K.S.xs)
+            }
+            .background(K.C.warn.opacity(0.06))
+        }
     }
 }
 

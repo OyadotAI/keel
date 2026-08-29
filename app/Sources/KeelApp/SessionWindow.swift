@@ -9,6 +9,7 @@ import SwiftUI
 struct SessionWindow: View {
     @State var lanes: Lanes
     let pairing: PairingModel
+    var app: AppModel? = nil
     @State private var panel: Panel? = .changes
     @State private var stage: Stage = .turn
     @State private var showTerminal = false
@@ -67,7 +68,7 @@ struct SessionWindow: View {
     }
 
     /// The lane in focus. Every pane below draws this one; the rail shows all of them.
-    private var model: SessionModel { lanes.active ?? lanes.lanes[0] }
+    private var model: SessionModel { lanes.active }
 
     var body: some View {
         Group {
@@ -87,6 +88,10 @@ struct SessionWindow: View {
 
     private var workbench: some View {
         VStack(spacing: 0) {
+            if let app, !app.crashes.isEmpty {
+                CrashBar(reports: app.crashes) { Crashes.markSeen(); app.crashes = [] }
+                Hairline()
+            }
             HStack(spacing: 0) {
                 ActivityRail(panel: $panel, model: model) {
                     withAnimation(K.M.quick) { showSettings.toggle() }
@@ -204,7 +209,10 @@ struct SessionWindow: View {
                             .fill(on ? K.C.text.opacity(0.07) : .clear)
                     )
                     .contentShape(Rectangle())
-                    .asButton { stage = s; model.viewingDiff = nil; model.inspecting = nil }
+                    .asButton {
+                        stage = s; model.viewingDiff = nil; model.inspecting = nil
+                        Telemetry.breadcrumb("stage: \(s.rawValue)")
+                    }
                     .accessibilityAddTraits(on ? .isSelected : [])
             }
             Spacer()
@@ -268,7 +276,7 @@ struct ActivityRail: View {
                     icon: p.icon,
                     help: help(p),
                     badge: badge(p),
-                    badgeTone: p == .hooks || p == .readiness ? K.C.warn : K.C.accent,
+                    badgeTone: p == .hooks || p == .readiness || p == .plugins ? K.C.warn : K.C.accent,
                     selected: panel == p
                 ) {
                     withAnimation(K.M.quick) { panel = (panel == p) ? nil : p }
@@ -316,8 +324,10 @@ struct ActivityRail: View {
     private func help(_ p: SessionWindow.Panel) -> String {
         let n = model.missingSuggestions.count
         switch p {
-        case .skills, .plugins where n > 0:
-            return "\(p.title) — \(n) suggested for this repository, not installed"
+        case .plugins where n > 0:
+            return "Plugins — \(n) recommended for this repository, not installed"
+        case .skills:
+            return "Skills — \(model.workspace.skills.count) installed"
         case .hooks:
             let repo = model.workspace.hooks.filter(\.fromRepo).count
             return repo > 0
@@ -345,9 +355,10 @@ struct ActivityRail: View {
         // Hooks that came with the repository are the one count worth shouting: each is a shell
         // command someone else wrote that runs on this machine.
         case .hooks: model.workspace.hooks.filter(\.fromRepo).count.nonZero
-        // What this repository is missing. A recommendation nobody sees does nothing, and both
-        // panels can install it, so both carry the count.
-        case .skills, .plugins: model.missingSuggestions.count.nonZero
+        // What this repository is missing, on the panel that installs it. Skills get no number
+        // of their own: a plugin is what carries them, and the same count on two icons read as
+        // one bug.
+        case .plugins: model.missingSuggestions.count.nonZero
         default: nil
         }
     }
@@ -740,6 +751,7 @@ private struct SplitHandle: View {
     let reset: Double
     @State private var hovering = false
     @State private var start: Double?
+    @State private var pushed = false
 
     var body: some View {
         Rectangle()
@@ -747,7 +759,12 @@ private struct SplitHandle: View {
             .frame(width: 1)
             .padding(.horizontal, 3)
             .contentShape(Rectangle())
-            .onHover { hovering = $0; if $0 { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .onHover { over in
+                hovering = over
+                // Only pop what was pushed: a hover-out can arrive without a hover-in.
+                if over, !pushed { NSCursor.resizeLeftRight.push(); pushed = true }
+                if !over, pushed { NSCursor.pop(); pushed = false }
+            }
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { g in

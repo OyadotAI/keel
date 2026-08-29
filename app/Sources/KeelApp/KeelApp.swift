@@ -12,7 +12,7 @@ struct KeelApp: App {
         // exactly the "three tabs, one session" it looked like. There is one window here by
         // design; concurrency lives in the lanes inside it.
         Window("Keel", id: "main") {
-            SessionWindow(lanes: app.lanes, pairing: app.pairing)
+            SessionWindow(lanes: app.lanes, pairing: app.pairing, app: app)
                 .task {
                     delegate.app = app
                     await app.start()
@@ -28,6 +28,10 @@ struct KeelApp: App {
         .commands {
             // Replaced so ⌘N is a lane. Left alone, SwiftUI's New Window is a second copy of the
             // same window.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updater.shared.check() }
+                    .disabled(!Updater.shared.available)
+            }
             CommandGroup(replacing: .newItem) {
                 NewSessionCommand()
                 Button("New Project…") {
@@ -198,6 +202,10 @@ final class AppModel {
     func start() async {
         guard !started else { return }
         started = true
+        Telemetry.start()
+        Telemetry.track("app_opened")
+        Updater.shared.start()
+        crashes = Crashes.unseen()
         Notifications.prepare()
         do { try await daemon.start() } catch { failure = error.localizedDescription }
         ready = true
@@ -217,6 +225,9 @@ final class AppModel {
         let repo = (state?.repo as NSString?)?.lastPathComponent ?? "a project"
         bonjour.advertise(port: daemon.port, repo: repo)
     }
+
+    /// Reports macOS wrote for crashes since the last launch that looked.
+    var crashes: [Crashes.Report] = []
 
     /// One workspace of lanes, shared by the window. Sessions used to be one model per window,
     /// which is why several could not be seen at once.

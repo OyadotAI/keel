@@ -13,7 +13,7 @@ struct Palette: View {
     @FocusState private var focused: Bool
 
     struct Item: Identifiable {
-        var id: String { title }
+        var id: String { detail + "|" + title }
         let title: String
         let detail: String
         /// The key that does the same thing without the palette, shown beside the row: the
@@ -217,9 +217,12 @@ enum Fuzzy {
     /// The matched characters in bold, so the row says why it is there.
     static func highlight(_ query: String, in text: String) -> AttributedString {
         var out = AttributedString(text)
-        let q = Array(query.lowercased()), t = Array(text.lowercased())
+        // Walk the original's characters and lowercase each for the comparison. Lowercasing the
+        // whole string first can change its character count, and an offset from one string
+        // applied to the other walks off the end.
+        let q = Array(query.lowercased()), t = Array(text)
         var qi = 0
-        for (i, c) in t.enumerated() where qi < q.count && c == q[qi] {
+        for (i, ch) in t.enumerated() where qi < q.count && Character(ch.lowercased()) == q[qi] {
             let lo = out.index(out.startIndex, offsetByCharacters: i)
             let hi = out.index(lo, offsetByCharacters: 1)
             out[lo..<hi].font = K.F.small.weight(.bold)
