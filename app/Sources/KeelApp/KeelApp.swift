@@ -142,11 +142,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// dark-first — light exists and is complete, but it is not what this is for.
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
-        if UserDefaults.standard.object(forKey: "keel.appearance") == nil {
-            UserDefaults.standard.set("dark", forKey: "keel.appearance")
-        }
-        NSApp.appearance = UserDefaults.standard.string(forKey: "keel.appearance") == "light"
-            ? NSAppearance(named: .aqua) : NSAppearance(named: .darkAqua)
+        // The Mac's own setting unless someone chose otherwise. Dark-by-default was the
+        // design's preference; the person's is the one that counts.
+        Appearance.current.apply()
     }
 
     /// Closing the window quits, because a Keel with no window is a daemon with a Dock icon.

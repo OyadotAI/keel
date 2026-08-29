@@ -247,6 +247,9 @@ struct SessionWindow: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
+            AppearanceMenu()
+        }
+        ToolbarItem(placement: .primaryAction) {
             Button { withAnimation(K.M.quick) { paletteOpen.toggle() } } label: {
                 Image(systemName: "command")
             }
