@@ -42,7 +42,7 @@ struct FileTree: View {
                         .font(K.F.mono(11))
                         .lineLimit(1).truncationMode(.head)
                     } action: {
-                        model.mention(path)
+                        model.viewingFile = path
                     }
                 }
             }
@@ -78,7 +78,11 @@ private struct TreeRow: View {
             }
             .padding(.leading, CGFloat(depth) * 11)
         } action: {
-            if node.dir { withAnimation(K.M.quick) { open.toggle() } } else { model.mention(node.path) }
+            if node.dir { withAnimation(K.M.quick) { open.toggle() } } else {
+                // Open it. Attaching is the menu; a click that silently added context looked
+                // like a click that did nothing.
+                model.viewingFile = node.path
+            }
         }
         .contextMenu {
             Button("Attach as context") { model.mention(node.path) }

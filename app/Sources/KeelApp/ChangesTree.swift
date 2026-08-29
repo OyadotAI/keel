@@ -157,6 +157,13 @@ struct CommitList: View {
             HStack(spacing: K.S.xs) {
                 Text("COMMITTED").font(.system(size: 10, weight: .semibold)).tracking(0.7)
                     .foregroundStyle(K.C.faint)
+                let local = model.commits.filter { !$0.pushed }.count
+                if local > 0 {
+                    Button(model.pushing ? "Pushing…" : "Push \(local)") { Task { await model.push() } }
+                        .buttonStyle(QuietButton(tone: K.C.accent))
+                        .disabled(model.pushing)
+                        .help("\(local) commit\(local == 1 ? "" : "s") only on this Mac. Send them to the remote.")
+                }
                 Spacer()
                 Toggle("each turn", isOn: Binding(get: { model.autoCommit },
                                                  set: { model.autoCommit = $0 }))
@@ -171,7 +178,7 @@ struct CommitList: View {
                     .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
             }
             ForEach(Array(model.commits.enumerated()), id: \.element.id) { i, c in
-                HoverRow {
+                HoverRow(selected: model.viewingCommit?.sha == c.sha) {
                     HStack(alignment: .top, spacing: K.S.sm) {
                         Image(systemName: "circle.fill").font(.system(size: 5))
                             .foregroundStyle(i == 0 ? K.C.accent : K.C.faint).padding(.top, 5)
@@ -179,6 +186,8 @@ struct CommitList: View {
                             Text(c.subject).font(K.F.small).foregroundStyle(K.C.text)
                                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                             HStack(spacing: K.S.xs) {
+                                // Where it is: on this Mac only, or on the remote too.
+                                Pill(text: c.pushed ? "PUSHED" : "LOCAL", tone: c.pushed ? .good : .warn)
                                 Text(c.sha).font(K.F.mono(10))
                                 Text(c.date, style: .relative).font(K.F.mono(10))
                                 Text("ago").font(K.F.mono(10))
@@ -189,6 +198,10 @@ struct CommitList: View {
                             .foregroundStyle(K.C.faint)
                         }
                     }
+                } action: {
+                    model.viewingCommit = c
+                    model.viewingDiff = nil
+                    model.inspecting = nil
                 }
                 .contextMenu {
                     if i == 0, model.commits.count > 1 {
@@ -466,5 +479,94 @@ private struct ChangeRow: View {
         if s.hasPrefix("D") { return K.C.del }
         if s.hasPrefix("A") { return K.C.add }
         return K.C.warn
+    }
+}
+
+
+/// One commit, file by file, in the stage.
+///
+/// Clicking a commit in the panel did nothing, which is the one thing a list of commits must
+/// not do. The files are the working-tree diff view with a different source.
+struct CommitSurface: View {
+    let model: SessionModel
+    let commit: Wire.Commit
+    @State private var diffs: [Wire.Diff] = []
+    @State private var loading = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: K.S.sm) {
+                Pill(text: commit.pushed ? "PUSHED" : "LOCAL", tone: commit.pushed ? .good : .warn)
+                Text(commit.subject).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                    .lineLimit(1)
+                Text(commit.sha).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                Spacer()
+                Text("\(diffs.count) file\(diffs.count == 1 ? "" : "s")")
+                    .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                CloseButton(label: "Close commit") { model.viewingCommit = nil }
+            }
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            .background(K.C.surface)
+            Hairline()
+            if loading {
+                Text("Reading…").font(K.F.small).foregroundStyle(K.C.faint)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: K.S.sm) {
+                        ForEach(diffs, id: \.path) { d in
+                            CommitFile(diff: d, model: model)
+                        }
+                    }
+                    .padding(K.S.md)
+                }
+            }
+        }
+        .background(K.C.bg)
+        .task(id: commit.sha) {
+            loading = true
+            diffs = await model.commitDiff(commit.sha)
+            loading = false
+        }
+    }
+}
+
+private struct CommitFile: View {
+    let diff: Wire.Diff
+    let model: SessionModel
+    @State private var open = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: open ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .bold)).foregroundStyle(K.C.faint).frame(width: 10)
+                Text(diff.path).font(K.F.mono(11.5, .medium)).foregroundStyle(K.C.text)
+                    .lineLimit(1).truncationMode(.head)
+                Spacer()
+                let adds = diff.hunks.flatMap(\.lines).count { $0.kind == "add" }
+                let dels = diff.hunks.flatMap(\.lines).count { $0.kind == "del" }
+                DiffBar(adds: adds, dels: dels)
+                Text("+\(adds)").font(K.F.mono(10)).foregroundStyle(K.C.add)
+                Text("−\(dels)").font(K.F.mono(10)).foregroundStyle(K.C.del)
+            }
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            .contentShape(Rectangle())
+            .asButton { withAnimation(K.M.quick) { open.toggle() } }
+            if open {
+                Hairline()
+                ForEach(Array(diff.hunks.enumerated()), id: \.offset) { _, hunk in
+                    Text(hunk.header).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .padding(.horizontal, K.S.md).padding(.vertical, 3)
+                        .frame(maxWidth: .infinity, alignment: .leading).background(K.C.well)
+                    let marks = Intraline.marks(hunk.lines)
+                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in
+                        DiffLineRow(line: line, mark: marks[li], path: diff.path, model: model)
+                    }
+                }
+            }
+        }
+        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
     }
 }

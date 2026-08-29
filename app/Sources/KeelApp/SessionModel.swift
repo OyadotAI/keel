@@ -276,6 +276,13 @@ final class SessionModel: Identifiable {
 
     /// The file whose diff is on screen, picked from the changes tree.
     var viewingDiff: String?
+    /// The file whose contents are on screen, picked from the file tree.
+    var viewingFile: String?
+
+    /// A file's bytes, for the viewer. Bounded to the repository by the daemon.
+    func raw(_ path: String) async -> Data? {
+        try? await client.raw("/api/raw", q(["path": path]))
+    }
 
     /// The one sheet the window can show, presented from the side panel's root rather than
     /// from a row: a `.sheet` on a row inside a lazy stack loses its anchor when the row is
@@ -548,7 +555,14 @@ final class SessionModel: Identifiable {
 
         switch r.type {
         case "system" where r.subtype == "init":
+            let fresh = sessionId == nil && r.session_id != nil
             sessionId = r.session_id ?? sessionId
+            // Claude Code only titles a session when its own UI asks for one, so a session
+            // Keel drove would list as a bare id. The lane's title is the first ask; it goes
+            // into Keel's own name store, which is what History reads.
+            if fresh, let id = sessionId, title != "Untitled" {
+                Task { await rename(session: id, to: title) }
+            }
 
         case "stream_event":
             // A new text block after a tool call is a new paragraph. Without this the second
@@ -1114,6 +1128,25 @@ final class SessionModel: Identifiable {
 
     /// The last commits on this checkout, for the list beside the working tree.
     var commits: [Wire.Commit] = []
+    /// The commit whose diff is on screen.
+    var viewingCommit: Wire.Commit?
+
+    func commitDiff(_ sha: String) async -> [Wire.Diff] {
+        (try? await client.get("/api/git/commit/diff", q(["sha": sha]))) ?? []
+    }
+
+    /// Send the branch up. The remote's answer is shown either way.
+    var pushing = false
+    func push() async {
+        pushing = true
+        defer { pushing = false }
+        do {
+            _ = try await client.post("/api/git/push", body: Nothing(), q(), as: String.self)
+            lastError = nil
+            Telemetry.track("pushed")
+        } catch { lastError = "Push failed: " + error.localizedDescription }
+        await refreshGit()
+    }
 
     /// One commit per accepted turn. On by default: a working tree that only grows is what
     /// makes people nervous about an agent, and a row of small commits beside it is what makes

@@ -818,6 +818,9 @@ pub struct Commit {
     /// Seconds since the epoch.
     pub when: i64,
     pub files: u32,
+    /// Whether the upstream branch has it. `true` when there is no upstream at all is a lie, so
+    /// that case is `false` too: nothing has been pushed anywhere.
+    pub pushed: bool,
 }
 
 /// The last `n` commits on the current branch.
@@ -836,6 +839,15 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
     ) else {
         return Vec::new();
     };
+    // What the upstream does not have yet. No upstream means nothing is pushed.
+    let unpushed: std::collections::HashSet<String> = git(root, &["rev-list", "@{u}..HEAD"])
+        .map(|s| s.lines().map(|l| l.trim().to_string()).collect())
+        .unwrap_or_default();
+    let has_upstream = git(root, &["rev-parse", "--abbrev-ref", "@{u}"]).is_some();
+    let full: Vec<String> = git(root, &["log", &format!("-{n}"), "--format=%H"])
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+
     // Headers carry the separator; the stat line for a commit follows its header, blank lines
     // between, and the next header comes straight after the stat.
     let mut out: Vec<Commit> = Vec::new();
@@ -845,11 +857,13 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
             let (Some(sha), Some(subject), Some(when)) = (f.next(), f.next(), f.next()) else {
                 continue;
             };
+            let long = full.get(out.len()).cloned().unwrap_or_default();
             out.push(Commit {
                 sha: sha.to_string(),
                 subject: subject.to_string(),
                 when: when.parse().unwrap_or(0),
                 files: 0,
+                pushed: has_upstream && !unpushed.contains(&long),
             });
         } else if line.contains("changed")
             && let Some(last) = out.last_mut()
@@ -859,6 +873,35 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
         }
     }
     out
+}
+
+/// One commit's diff, file by file, in the shape the working-tree diff already has.
+pub fn git_commit_diff(root: &Utf8Path, sha: &str) -> Result<Vec<DiffResponse>, String> {
+    if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) || sha.len() > 40 {
+        return Err("not a commit id".into());
+    }
+    let files = git_run(root, &["show", "--format=", "--name-only", sha])?;
+    Ok(files
+        .lines()
+        .filter(|f| !f.is_empty())
+        .map(|path| {
+            let raw = git(
+                root,
+                &["show", "--format=", "--no-color", "-U3", sha, "--", path],
+            )
+            .unwrap_or_default();
+            DiffResponse {
+                path: path.to_string(),
+                hunks: parse_hunks(&raw),
+                untracked: false,
+            }
+        })
+        .collect())
+}
+
+/// Send the branch to its remote, setting the upstream on the first push.
+pub fn git_push(root: &Utf8Path) -> Result<String, String> {
+    git_run(root, &["push", "-u", "origin", "HEAD"])
 }
 
 /// Take the last commit apart, keeping its changes in the working tree.
@@ -1199,6 +1242,15 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
         git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default()
     };
 
+    DiffResponse {
+        path: path.to_string(),
+        hunks: parse_hunks(&raw),
+        untracked,
+    }
+}
+
+/// `@@` blocks with numbered lines, from any unified diff.
+fn parse_hunks(raw: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let (mut old_no, mut new_no) = (0u32, 0u32);
 
@@ -1247,10 +1299,5 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
             text: text.to_string(),
         });
     }
-
-    DiffResponse {
-        path: path.to_string(),
-        hunks,
-        untracked,
-    }
+    hunks
 }

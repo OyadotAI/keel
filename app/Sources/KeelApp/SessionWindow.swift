@@ -56,7 +56,7 @@ struct SessionWindow: View {
             case .readiness: "Readiness"
             case .skills: "Skills"
             case .agents: "Subagents"
-            case .mcp: "MCP servers"
+            case .mcp: "MCP"
             case .hooks: "Hooks"
             case .plugins: "Plugins"
             }
@@ -92,25 +92,21 @@ struct SessionWindow: View {
                 CrashBar(reports: app.crashes) { Crashes.markSeen(); app.crashes = [] }
                 Hairline()
             }
+            // The lanes are always on screen, across the top. They are the reason this is a
+            // window and not a terminal: several agents working at once, and you can see all
+            // of them.
+            LaneTabs(lanes: lanes)
+            Hairline()
             HStack(spacing: 0) {
                 ActivityRail(panel: $panel, model: model) {
                     withAnimation(K.M.quick) { showSettings.toggle() }
                 }
 
-                // The lanes are always on screen. They are the reason this is a window and not a
-                // terminal: several agents working at once, and you can see all of them.
-                VStack(spacing: 0) {
-                    LaneRail(lanes: lanes)
-                    Hairline()
-                    if let panel {
-                        SidePanel(panel: panel, model: model)
-                    } else {
-                        Spacer()
-                    }
+                if let panel {
+                    SidePanel(panel: panel, model: model)
+                        .frame(width: 256)
+                    Rectangle().fill(K.C.line).frame(width: 1)
                 }
-                // Collapsing the panel gives the width back; the lanes alone need less.
-                .frame(width: panel == nil ? 200 : 256)
-                Rectangle().fill(K.C.line).frame(width: 1)
 
                 if showSettings {
                     SettingsPage(model: model, pairing: pairing) {
@@ -126,7 +122,8 @@ struct SessionWindow: View {
         }
         .overlay(alignment: .top) { paletteOverlay }
         .toolbar { toolbar }
-        .navigationTitle(model.title)
+        .navigationTitle((model.repoPath as NSString).lastPathComponent.isEmpty
+                         ? "Keel" : (model.repoPath as NSString).lastPathComponent)
         .navigationSubtitle(subtitle)
         .modifier(WindowEvents(
             lanes: lanes, model: model,
@@ -176,6 +173,10 @@ struct SessionWindow: View {
                 Group {
                     if let target = model.inspecting {
                         Inspector(model: model, target: target)
+                    } else if let commit = model.viewingCommit {
+                        CommitSurface(model: model, commit: commit)
+                    } else if let file = model.viewingFile {
+                        FileSurface(model: model, path: file)
                     } else if let path = model.viewingDiff {
                         DiffSurface(model: model, path: path)
                     } else {
@@ -200,6 +201,7 @@ struct SessionWindow: View {
         HStack(spacing: K.S.xs) {
             ForEach(Stage.allCases, id: \.self) { s in
                 let on = stage == s && model.viewingDiff == nil && model.inspecting == nil
+                    && model.viewingCommit == nil && model.viewingFile == nil
                 Text(s.rawValue)
                     .font(K.F.small.weight(on ? .semibold : .regular))
                     .foregroundStyle(on ? K.C.text : K.C.faint)
@@ -211,6 +213,7 @@ struct SessionWindow: View {
                     .contentShape(Rectangle())
                     .asButton {
                         stage = s; model.viewingDiff = nil; model.inspecting = nil
+                        model.viewingCommit = nil; model.viewingFile = nil
                         Telemetry.breadcrumb("stage: \(s.rawValue)")
                     }
                     .accessibilityAddTraits(on ? .isSelected : [])
@@ -240,11 +243,6 @@ struct SessionWindow: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        // The project, top left, where every editor puts it. It was a small label in the status
-        // bar, and nobody found out it was a menu until they were told.
-        ToolbarItem(placement: .navigation) {
-            ProjectMenu(model: model, prominent: true)
-        }
         ToolbarItem(placement: .primaryAction) {
             Button { withAnimation(K.M.quick) { paletteOpen.toggle() } } label: {
                 Image(systemName: "command")
@@ -274,6 +272,7 @@ struct ActivityRail: View {
             ForEach(SessionWindow.Panel.allCases) { p in
                 RailButton(
                     icon: p.icon,
+                    label: p.title,
                     help: help(p),
                     badge: badge(p),
                     badgeTone: p == .hooks || p == .readiness || p == .plugins ? K.C.warn : K.C.accent,
@@ -292,10 +291,12 @@ struct ActivityRail: View {
             // fails silently when the selector does not match the OS version, which is exactly
             // what it was doing — the button was wired to nothing.
             Button { onSettings() } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14))
+                VStack(spacing: 3) {
+                    Image(systemName: "gearshape").font(.system(size: 17))
+                    Text("Settings").font(.system(size: 10))
+                }
                     .foregroundStyle(toolsNeedAttention > 0 ? K.C.warn : K.C.faint)
-                    .frame(width: 44, height: 32)
+                    .frame(width: 60, height: 46)
                     .overlay(alignment: .topTrailing) {
                         if toolsNeedAttention > 0 {
                             Text("\(toolsNeedAttention)")
@@ -315,7 +316,7 @@ struct ActivityRail: View {
                   : "Settings (⌘,)")
         }
         .padding(.vertical, K.S.sm)
-        .frame(width: 44)
+        .frame(width: 60)
         .background(K.C.surface)
         .overlay(alignment: .trailing) { Rectangle().fill(K.C.line).frame(width: 1) }
     }
@@ -370,6 +371,8 @@ private extension Int {
 
 struct RailButton: View {
     let icon: String
+    /// Under the icon. Nine unlabelled glyphs in a column is a riddle; testers said so.
+    var label: String? = nil
     let help: String
     let badge: Int?
     /// Warn for something wrong, accent for something available. A suggestion is an opportunity,
@@ -386,14 +389,19 @@ struct RailButton: View {
             // selection bar can sit on the rail's own edge rather than 4pt inside it.
             Rectangle()
                 .fill(hovering ? K.C.text.opacity(0.06) : .clear)
-                .frame(width: 44, height: 32)
+                .frame(width: 60, height: 46)
                 // Centred, which is the whole point of the fixed frame. This was a
                 // `ZStack(alignment: .topTrailing)` so the badge would sit in the corner — and
                 // that alignment applied to the icon too, pushing every one of them right.
                 .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(selected ? K.C.text : (hovering ? K.C.dim : K.C.faint))
+                    VStack(spacing: 3) {
+                        Image(systemName: icon).font(.system(size: 17, weight: .regular))
+                        if let label {
+                            Text(label).font(.system(size: 10)).lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
+                    .foregroundStyle(selected ? K.C.text : (hovering ? K.C.dim : K.C.faint))
                 )
                 // The badge is positioned on its own, so it cannot move the icon.
                 .overlay(alignment: .topTrailing) {
@@ -403,7 +411,7 @@ struct RailButton: View {
                             .foregroundStyle(K.C.bg)
                             .padding(.horizontal, 3).padding(.vertical, 1)
                             .background(badgeTone, in: Capsule())
-                            .offset(x: -4, y: 2)
+                            .offset(x: -8, y: 3)
                     }
                 }
                 .contentShape(Rectangle())
@@ -428,7 +436,6 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: K.S.md) {
-            ProjectMenu(model: model)
             if model.isRepo {
                 item("arrow.triangle.branch", model.branch ?? "—")
             } else {

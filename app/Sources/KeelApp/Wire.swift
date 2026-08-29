@@ -144,6 +144,7 @@ enum Wire {
         var subject: String
         var when: Int
         var files: Int
+        var pushed: Bool
         var id: String { sha }
         var date: Date { Date(timeIntervalSince1970: TimeInterval(when)) }
     }

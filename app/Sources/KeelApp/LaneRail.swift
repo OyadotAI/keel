@@ -5,43 +5,54 @@ import SwiftUI
 /// The point of the window. A lane that is waiting on you says so from here without you switching
 /// to it, and a lane that failed its gate says so too — which is the difference between running
 /// three agents and running one agent three times.
-struct LaneRail: View {
+struct LaneTabs: View {
     @Bindable var lanes: Lanes
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: K.S.xs) {
-                Text("SESSIONS").font(.system(size: 10, weight: .semibold)).tracking(0.7)
-                    .foregroundStyle(K.C.faint)
-                if lanes.runningCount > 0 {
-                    Text("\(lanes.runningCount) running")
-                        .font(K.F.mono(10)).foregroundStyle(K.C.accent)
-                }
-                Spacer()
-                // Click for a lane with its own checkout; the menu for one that shares the tree,
-                // which is the right shape for reading or reviewing beside an agent that edits.
-                Menu {
-                    Button("New lane on its own branch") { lanes.newLane(isolated: true) }
-                    Button("New lane sharing the working tree") { lanes.newLane() }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                } primaryAction: {
-                    lanes.newLane(isolated: true)
-                }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .foregroundStyle(K.C.faint)
-                .hint("New lane in its own checkout (⌘N). The menu offers one that "
-                      + "shares the working tree instead.")
-            }
-            .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
+        HStack(spacing: 0) {
+            // The project first, then its sessions — the way a browser puts the site before the
+            // tabs. This used to be a small menu in the status bar and a column on the left;
+            // both were places people did not look for either.
+            ProjectMenu(model: lanes.active, prominent: true)
+                .padding(.horizontal, K.S.sm)
+            Rectangle().fill(K.C.line).frame(width: 1, height: 20)
 
-            ForEach(lanes.lanes) { lane in
-                LaneRow(lane: lane, lanes: lanes)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(lanes.lanes) { lane in
+                        LaneRow(lane: lane, lanes: lanes)
+                    }
+                }
+                .padding(.horizontal, K.S.xs)
+            }
+
+            // Click for a lane with its own checkout; the menu for one that shares the tree,
+            // which is the right shape for reading or reviewing beside an agent that edits.
+            Menu {
+                Button("New lane on its own branch") { lanes.newLane(isolated: true) }
+                Button("New lane sharing the working tree") { lanes.newLane() }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            } primaryAction: {
+                lanes.newLane(isolated: true)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .foregroundStyle(K.C.faint)
+            .hint("New lane in its own checkout (⌘N). The menu offers one that "
+                  + "shares the working tree instead.")
+
+            Spacer(minLength: 0)
+            if lanes.runningCount > 0 {
+                Text("\(lanes.runningCount) running")
+                    .font(K.F.mono(10)).foregroundStyle(K.C.accent)
+                    .padding(.trailing, K.S.md)
             }
         }
+        .frame(height: 36)
+        .background(K.C.surface)
     }
 }
 
@@ -59,27 +70,21 @@ private struct LaneRow: View {
     private var checkout: Wire.Worktree? { lanes.worktree(of: lane) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: K.S.sm) {
+        HStack(spacing: K.S.sm) {
             marker
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: K.S.xs) {
-                    Text(lane.title)
-                        .font(K.F.small.weight(selected ? .semibold : .regular))
-                        .foregroundStyle(lane.turns.isEmpty ? K.C.faint : K.C.text)
-                        .italic(lane.turns.isEmpty)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if lane.pending.count > 0 {
-                        Pill(text: "ASKS", tone: .warn)
-                    }
-                    // Per lane, so three agents' spend is three numbers before it is one bill.
-                    if let cost = lane.sessionCost {
-                        Text(String(format: "$%.2f", cost))
-                            .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
-                    }
-                }
-                activityLine
-                if let wt = checkout { branchLine(wt) }
+            Text(lane.title)
+                .font(K.F.small.weight(selected ? .semibold : .regular))
+                .foregroundStyle(lane.turns.isEmpty ? K.C.faint : K.C.text)
+                .italic(lane.turns.isEmpty)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: 200, alignment: .leading)
+            if lane.pending.count > 0 {
+                Pill(text: "ASKS", tone: .warn)
+            }
+            if let wt = checkout {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: 10))
+                    .foregroundStyle(wt.dirty ? K.C.accent : K.C.faint)
+                    .help(branchText(wt))
             }
             if hovering {
                 Button { newTitle = lane.title; renaming = true } label: {
@@ -137,16 +142,34 @@ private struct LaneRow: View {
             Text(discarding ?? "")
         }
         .padding(.horizontal, K.S.md).padding(.vertical, 5)
-        .background(selected ? K.C.accent.opacity(0.14)
-                             : (hovering ? K.C.text.opacity(0.05) : .clear))
-        .overlay(alignment: .leading) {
-            if selected { Rectangle().fill(K.C.accent).frame(width: 2) }
+        .background(
+            RoundedRectangle(cornerRadius: K.R.sm)
+                .fill(selected ? K.C.bg : (hovering ? K.C.text.opacity(0.05) : .clear))
+        )
+        .overlay(alignment: .bottom) {
+            if selected { Rectangle().fill(K.C.accent).frame(height: 2).padding(.horizontal, K.S.xs) }
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .asButton { lanes.activeID = lane.id }
+        .help(tooltip)
         .accessibilityLabel("\(lane.title), \(activityText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// What the row used to show on its second and third lines, now the tooltip.
+    private var tooltip: String {
+        var parts = [activityText]
+        if let wt = checkout { parts.append(branchText(wt)) }
+        if let cost = lane.sessionCost { parts.append(String(format: "$%.2f", cost)) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func branchText(_ wt: Wire.Worktree) -> String {
+        var t = wt.branch
+        if wt.ahead > 0 { t += " · \(wt.ahead) ahead" }
+        if wt.dirty { t += " · edited" }
+        return t
     }
 
     private var marker: some View {
@@ -165,19 +188,6 @@ private struct LaneRow: View {
             }
         }
         .frame(width: 10)
-        .padding(.top, 4)
-    }
-
-    /// Which checkout, and how far it has gone — the line every worktree tool is asked for and
-    /// most are missing: where is this lane's work, right now.
-    private func branchLine(_ wt: Wire.Worktree) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "arrow.triangle.branch").font(.system(size: 10))
-            Text(wt.branch).lineLimit(1).truncationMode(.middle)
-            if wt.ahead > 0 { Text("· \(wt.ahead) ahead") }
-            if wt.dirty { Text("· edited") }
-        }
-        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
     }
 
     /// The activity as words, for VoiceOver.
@@ -187,26 +197,6 @@ private struct LaneRow: View {
         case .waiting: "needs you"
         case .failed: "gate failed"
         case .idle: lane.turns.isEmpty ? "empty" : "\(lane.turns.count) turns"
-        }
-    }
-
-    /// One line saying what it is doing, so the rail answers "what is happening" without a click.
-    @ViewBuilder
-    private var activityLine: some View {
-        switch lane.activity {
-        case .working(let what):
-            HStack(spacing: 4) {
-                Sweep().scaleEffect(0.7, anchor: .leading).frame(width: 32, height: 3)
-                Text(what).font(K.F.mono(10)).foregroundStyle(K.C.accent)
-                    .lineLimit(1).truncationMode(.head)
-            }
-        case .waiting:
-            Text("needs you").font(K.F.mono(10)).foregroundStyle(K.C.warn)
-        case .failed:
-            Text("gate failed").font(K.F.mono(10)).foregroundStyle(K.C.del)
-        case .idle:
-            Text(lane.turns.isEmpty ? "empty" : "\(lane.turns.count) turn\(lane.turns.count == 1 ? "" : "s")")
-                .font(K.F.mono(10)).foregroundStyle(K.C.faint)
         }
     }
 }

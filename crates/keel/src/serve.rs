@@ -277,6 +277,8 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/git/act", axum::routing::post(api_git_act))
         .route("/api/git/init", axum::routing::post(api_git_init))
         .route("/api/git/log", get(api_git_log))
+        .route("/api/git/commit/diff", get(api_git_commit_diff))
+        .route("/api/git/push", axum::routing::post(api_git_push))
         .route("/api/git/uncommit", axum::routing::post(api_git_uncommit))
         .route(
             "/api/git/commit",
@@ -552,6 +554,33 @@ async fn api_git_log(
     Query(q): Query<LogQuery>,
 ) -> Json<Vec<crate::api::Commit>> {
     Json(blocking(move || crate::api::git_log(&repo, q.n.min(100)), Vec::new()).await)
+}
+
+#[derive(serde::Deserialize)]
+struct ShaQuery {
+    sha: String,
+}
+
+async fn api_git_commit_diff(
+    Checkout(repo): Checkout,
+    Query(q): Query<ShaQuery>,
+) -> Result<Json<Vec<crate::api::DiffResponse>>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_commit_diff(&repo, &q.sha),
+        Err("timed out".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+async fn api_git_push(
+    Checkout(repo): Checkout,
+) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    blocking(move || crate::api::git_push(&repo), Err("timed out".into()))
+        .await
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_git_uncommit(
