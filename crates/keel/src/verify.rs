@@ -23,6 +23,13 @@ pub struct Check {
     pub command: String,
     /// Why Keel picked it.
     pub source: &'static str,
+    /// Where to run it, relative to the opened folder. Empty is the folder itself.
+    ///
+    /// Every probe here used to be `root.join(...)`, so a workspace holding `backend/` and
+    /// `frontend/` — each with its own tests — detected nothing, the gate never ran, and
+    /// auto-commit committed the agent's work ungated. `dev.rs` learned this lesson; this had not.
+    #[serde(default)]
+    pub dir: String,
 }
 
 /// Work out how to verify a repository, in order of how much the project itself has decided.
@@ -37,6 +44,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: "make check".into(),
             source: "the `check` target in your Makefile",
+            dir: String::new(),
         });
     }
 
@@ -48,6 +56,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: "just check".into(),
             source: "the `check` recipe in your justfile",
+            dir: String::new(),
         });
     }
 
@@ -74,6 +83,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
             return Some(Check {
                 command: format!("{runner} check"),
                 source: "the `check` script in your package.json",
+                dir: String::new(),
             });
         }
 
@@ -92,6 +102,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
             return Some(Check {
                 command: parts.join(" && "),
                 source: "the scripts in your package.json",
+                dir: String::new(),
             });
         }
     }
@@ -100,6 +111,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: "cargo test".into(),
             source: "this being a Cargo project",
+            dir: String::new(),
         });
     }
 
@@ -121,6 +133,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: command.into(),
             source: "the tests in this Python project",
+            dir: String::new(),
         });
     }
 
@@ -128,6 +141,7 @@ pub fn detect(root: &Utf8Path) -> Option<Check> {
         return Some(Check {
             command: "go test ./...".into(),
             source: "this being a Go module",
+            dir: String::new(),
         });
     }
 
@@ -194,7 +208,7 @@ pub fn parse_problem(line: &str) -> Option<Problem> {
     if let (Some(path), Some(l), Some(c), Some(rest)) =
         (parts.next(), parts.next(), parts.next(), parts.next())
         && let (Ok(line_no), Ok(col)) = (l.trim().parse::<u32>(), c.trim().parse::<u32>())
-        && path.contains('/')
+        && looks_like_a_file(path)
     {
         let rest = rest.trim();
         let severity = if rest.starts_with("warning") {
@@ -218,9 +232,55 @@ pub fn parse_problem(line: &str) -> Option<Problem> {
     None
 }
 
+/// Whether this is a path rather than the left-hand side of something that merely has colons in
+/// it, like a timestamp.
+///
+/// It used to require a `/`, which is wrong for a file at the top of its own project — `app.ts:3:1`
+/// from a tool run inside `frontend/`. That was survivable while every gate ran at the repository
+/// root and most paths had a directory in them; in a folder of projects it silently dropped the
+/// problems of whichever half keeps its sources at the top.
+fn looks_like_a_file(path: &str) -> bool {
+    if path.contains('/') {
+        return true;
+    }
+    // An extension, and a name in front of it: `app.ts` yes, `12` no, `1.5` no.
+    match path.trim().rsplit_once('.') {
+        Some((name, ext)) => {
+            !name.is_empty()
+                && !name.chars().all(|c| c.is_ascii_digit())
+                && (1..=5).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+                && ext.chars().any(|c| c.is_ascii_alphabetic())
+        }
+        None => false,
+    }
+}
+
 /// Report which check would run, without running it.
 pub async fn plan(Checkout(repo): Checkout) -> axum::Json<Option<Check>> {
     axum::Json(detect(&repo))
+}
+
+/// Every check this folder has: the project's own, or one per repository it holds.
+///
+/// The root wins when it declares one — a workspace with a Makefile that runs both halves is the
+/// project stating its own gate, exactly as `detect` treats it. Only when the root says nothing
+/// does each repository answer for itself, and then all of them run.
+pub fn detect_all(root: &Utf8Path) -> Vec<Check> {
+    if let Some(check) = detect(root) {
+        return vec![check];
+    }
+    let mut out = Vec::new();
+    for found in crate::gitroots::find(root) {
+        if found.dir.is_empty() {
+            continue;
+        }
+        if let Some(mut check) = detect(&root.join(&found.dir)) {
+            check.dir = found.dir.clone();
+            out.push(check);
+        }
+    }
+    out
 }
 
 /// Run the check and stream its output.
@@ -228,7 +288,8 @@ pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, I
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     tokio::spawn(async move {
-        let Some(check) = detect(&repo) else {
+        let checks = detect_all(&repo);
+        if checks.is_empty() {
             let _ = tx
                 .send(Ok(Event::default().event("none").data(
                     "No check command found. Add a `check` target to your Makefile, or \
@@ -236,46 +297,62 @@ pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, I
                 )))
                 .await;
             return;
-        };
+        }
 
-        let _ = tx
-            .send(Ok(Event::default()
-                .event("start")
-                .data(check.command.clone())))
-            .await;
+        // Every repository's gate, in turn. One `done` at the end carrying the worst code, so a
+        // green frontend cannot hide a red backend — and so the app needs no change to read it.
+        let mut worst = 0;
+        for check in &checks {
+            let where_ = if check.dir.is_empty() {
+                check.command.clone()
+            } else {
+                format!("{} · {}", check.dir, check.command)
+            };
+            let _ = tx
+                .send(Ok(Event::default().event("start").data(where_)))
+                .await;
 
-        // Through a shell, because the detected command is a pipeline of the project's own scripts.
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&check.command)
-            .current_dir(&repo)
-            // Nothing to read from. The gate inherited the daemon's stdin, so a check that asks a
-            // question — a prompt, a confirmation, a login — blocked forever with the gate stuck
-            // on "running" and no way to end it. There is nobody to answer it here.
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // Through a shell, because the detected command is a pipeline of the project's own
+            // scripts.
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg(&check.command)
+                .current_dir(repo.join(&check.dir))
+                // Nothing to read from. The gate inherited the daemon's stdin, so a check that
+                // asks a question — a prompt, a confirmation, a login — blocked forever with the
+                // gate stuck on "running" and no way to end it. There is nobody to answer it here.
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
 
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tx
-                    .send(Ok(Event::default().event("fatal").data(e.to_string())))
-                    .await;
-                return;
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(Event::default().event("fatal").data(e.to_string())))
+                        .await;
+                    return;
+                }
+            };
+
+            let (out, err) = (child.stdout.take(), child.stderr.take());
+            tokio::join!(
+                scan_pipe(out, tx.clone(), &check.dir),
+                scan_pipe(err, tx.clone(), &check.dir)
+            );
+
+            let code = child
+                .wait()
+                .await
+                .map(|s| s.code().unwrap_or(-1))
+                .unwrap_or(-1);
+            if code != 0 && worst == 0 {
+                worst = code;
             }
-        };
+        }
 
-        let (out, err) = (child.stdout.take(), child.stderr.take());
-        tokio::join!(scan_pipe(out, tx.clone()), scan_pipe(err, tx.clone()));
-
-        let code = child
-            .wait()
-            .await
-            .map(|s| s.code().unwrap_or(-1))
-            .unwrap_or(-1);
         let _ = tx
-            .send(Ok(Event::default().event("done").data(code.to_string())))
+            .send(Ok(Event::default().event("done").data(worst.to_string())))
             .await;
     });
 
@@ -289,6 +366,7 @@ pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, I
 async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
     pipe: Option<R>,
     tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    dir: &str,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -305,6 +383,18 @@ async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
         if let Some(mut p) = parse_problem(&line) {
             if p.message.is_empty() {
                 p.message = std::mem::take(&mut last_message);
+            }
+            // A problem in a workspace has to say which repository it is in, or clicking it opens
+            // a path that does not exist from where the person is looking.
+            //
+            // Defensively, because tools disagree about what they print: some paths are relative
+            // to the directory the command ran in, some are already relative to the repository,
+            // and some are absolute. Prefixing blindly produced `frontend/frontend/app.ts`.
+            if !dir.is_empty()
+                && !p.file.starts_with('/')
+                && !p.file.starts_with(&format!("{dir}/"))
+            {
+                p.file = format!("{dir}/{}", p.file);
             }
             if let Ok(json) = serde_json::to_string(&p)
                 && tx
@@ -323,6 +413,103 @@ async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
         {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+
+    fn tmp(name: &str) -> Utf8PathBuf {
+        let dir = Utf8PathBuf::from_path_buf(std::env::temp_dir())
+            .unwrap()
+            .join(format!("keel-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn repo_with(at: &Utf8Path, file: &str, body: &str) {
+        std::fs::create_dir_all(at).unwrap();
+        std::fs::write(at.join(file), body).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "t@e.com"],
+            vec!["config", "user.name", "t"],
+        ] {
+            std::process::Command::new("git")
+                .current_dir(at)
+                .args(args)
+                .output()
+                .unwrap();
+        }
+    }
+
+    /// The hole this closes: every probe was `root.join(...)`, so a folder holding two projects
+    /// detected nothing, the gate never ran, and auto-commit committed the agent's work ungated.
+    #[test]
+    fn each_repository_in_a_workspace_gets_its_own_gate() {
+        let root = tmp("workspace");
+        repo_with(&root.join("backend"), "Makefile", "check:\n\techo ok\n");
+        repo_with(
+            &root.join("frontend"),
+            "package.json",
+            r#"{"scripts":{"test":"echo ok"}}"#,
+        );
+
+        let checks = detect_all(&root);
+        assert_eq!(checks.len(), 2, "one gate per repository, not none");
+        let dirs: Vec<_> = checks.iter().map(|c| c.dir.as_str()).collect();
+        assert_eq!(dirs, ["backend", "frontend"]);
+        assert_eq!(checks[0].command, "make check");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A workspace whose root declares its own gate is the project stating it, and that wins —
+    /// the same rule `detect` has always followed, and the same one `dev::detect` follows.
+    #[test]
+    fn a_gate_at_the_root_still_wins() {
+        let root = tmp("rootwins");
+        std::fs::write(root.join("Makefile"), "check:\n\techo both\n").unwrap();
+        repo_with(&root.join("backend"), "Makefile", "check:\n\techo be\n");
+
+        let checks = detect_all(&root);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].command, "make check");
+        assert_eq!(
+            checks[0].dir, "",
+            "run at the root, which is what it describes"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A tool run inside a sub-project prints a path with no directory in it, and requiring a `/`
+    /// dropped every one of those problems on the floor.
+    #[test]
+    fn a_file_at_the_top_of_its_project_is_still_a_problem() {
+        let p = parse_problem("app.ts:3:1: error: something is wrong").expect("a problem");
+        assert_eq!(p.file, "app.ts");
+        assert_eq!((p.line, p.col), (3, 1));
+    }
+
+    /// And the reason the `/` was there: things with colons that are not files.
+    #[test]
+    fn a_timestamp_is_not_a_problem() {
+        assert!(parse_problem("12:34:56 building…").is_none());
+        assert!(parse_problem("make: *** [check] Error 1").is_none());
+        assert!(parse_problem("warning: 3 targets:1:1 skipped").is_none());
+    }
+
+    /// And an ordinary project is untouched.
+    #[test]
+    fn one_project_detects_exactly_one_gate() {
+        let root = tmp("single");
+        std::fs::write(root.join("Makefile"), "check:\n\techo ok\n").unwrap();
+        let checks = detect_all(&root);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].dir, "");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
