@@ -36,6 +36,9 @@ struct ReviewPacketView: View {
     @State private var message = ""
     @State private var exported: String?
     @State private var identityOpen = false
+    /// Open when something failed: a command that did not work is evidence you should not have to
+    /// go looking for.
+    @State private var commandsOpen = false
 
     private var packet: ReviewPacket { ReviewPacket(model: model) }
 
@@ -147,23 +150,57 @@ struct ReviewPacketView: View {
     }
 
     @ViewBuilder private var commands: some View {
-        section("Commands run") {
+        // Folded, and one line each.
+        //
+        // A turn that reads a codebase runs thirty commands, each a `cd … && for f in …` long
+        // enough to wrap to two lines, each followed by "No intent supplied by the agent" in
+        // warning orange. That is a page of scolding between the person and the merge decision
+        // this screen exists for — and the commands are evidence you consult, not the verdict.
+        //
+        // Failures open the section by themselves, because a command that failed is not evidence
+        // you have to go looking for.
+        section("Commands run", detail: commandsSummary) {
             if packet.commands.isEmpty {
                 empty("No shell commands recorded")
             } else {
-                ForEach(packet.commands) { call in
-                    HStack(alignment: .top, spacing: K.S.sm) {
-                        Image(systemName: call.failed ? "xmark.circle.fill" : "terminal")
-                            .foregroundStyle(call.failed ? K.C.del : K.C.faint)
-                        VStack(alignment: .leading, spacing: K.S.xxs) {
-                            Text(call.subject).font(K.F.code).foregroundStyle(K.C.text).lineLimit(2)
-                            Text(call.reason ?? "No intent supplied by the agent")
-                                .font(K.F.micro).foregroundStyle(call.reason == nil ? K.C.warn : K.C.faint)
+                DisclosureGroup(isExpanded: $commandsOpen) {
+                    VStack(alignment: .leading, spacing: K.S.xs) {
+                        ForEach(packet.commands) { call in
+                            HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
+                                Image(systemName: call.failed ? "xmark.circle.fill" : "terminal")
+                                    .font(K.F.tiny)
+                                    .foregroundStyle(call.failed ? K.C.del : K.C.faint)
+                                    .accessibilityHidden(true)
+                                Text(call.subject)
+                                    .font(K.F.codeSmall).foregroundStyle(K.C.text)
+                                    .lineLimit(1).truncationMode(.middle)
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 0)
+                                if let reason = call.reason, !reason.isEmpty {
+                                    Text(reason).font(K.F.tiny).foregroundStyle(K.C.faint)
+                                        .lineLimit(1)
+                                }
+                            }
                         }
                     }
+                    .padding(.top, K.S.xs)
+                } label: {
+                    Text(commandsOpen ? "Hide the list" : "Show all \(packet.commands.count)")
+                        .font(K.F.small).foregroundStyle(K.C.accent)
                 }
+                .disclosureGroupStyle(.automatic)
+                .onAppear { commandsOpen = packet.commands.contains(where: \.failed) }
             }
         }
+    }
+
+    /// What the list says without being opened: how many, and whether any failed.
+    private var commandsSummary: String? {
+        guard !packet.commands.isEmpty else { return nil }
+        let failed = packet.commands.count(where: \.failed)
+        let n = packet.commands.count
+        let ran = "\(n) command\(n == 1 ? "" : "s")"
+        return failed > 0 ? "\(ran), \(failed) failed" : ran
     }
 
     private var gates: some View {

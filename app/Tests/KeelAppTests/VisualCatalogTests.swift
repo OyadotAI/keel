@@ -131,7 +131,7 @@ final class VisualCatalogTests: XCTestCase {
         try capture(ChatRail(model: model), named: "conversation", in: directory)
         try capture(TurnStage(model: model), named: "trace", in: directory)
         for panel in SessionWindow.Panel.allCases {
-            try capture(SidePanel(panel: panel, model: model), named: "panel-\(panel.rawValue)",
+            try capture(SidePanel(panel: panel, model: model) {}, named: "panel-\(panel.rawValue)",
                         in: directory, size: CGSize(width: 320, height: 760))
         }
 

@@ -201,22 +201,30 @@ enum K {
 struct RailHeader: View {
     let title: String
     var trailing: String?
+    /// Only the panel's own header has one: a way out that does not require knowing the rail icon
+    /// toggles. ⌘⇧E does it too, and a shortcut is not an affordance.
+    var onClose: (() -> Void)?
 
-    init(_ title: String, trailing: String? = nil) {
+    init(_ title: String, trailing: String? = nil, onClose: (() -> Void)? = nil) {
         self.title = title
         self.trailing = trailing
+        self.onClose = onClose
     }
 
     var body: some View {
         HStack(spacing: K.S.xs) {
             Text(title)
                 .font(K.F.small.weight(.medium))
+                .foregroundStyle(K.C.dim)
             Spacer()
             if let trailing {
-                Text(trailing).font(K.F.mono(10)).monospacedDigit()
+                Text(trailing).font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.dim)
+            }
+            if let onClose {
+                CloseButton(label: "Close the \(title) panel (⌘⇧E)", action: onClose)
+                    .padding(.leading, K.S.xxs)
             }
         }
-        .foregroundStyle(K.C.dim)
         .padding(.horizontal, K.S.md)
         .padding(.top, K.S.lg)
         .padding(.bottom, K.S.sm)
