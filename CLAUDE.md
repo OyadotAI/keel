@@ -331,3 +331,7 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 ## Verification
 
 `make check`. Dogfood with `make scan`, and against `../A2ABaseAI` for a repo with real CI and tests.
+
+## Production
+
+The production checklist the reviewers enforce is in `docs/PRODUCTION.md`. It applies.

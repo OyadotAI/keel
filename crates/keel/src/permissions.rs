@@ -77,7 +77,7 @@ fn sane(rule: &str) -> bool {
         return false;
     }
     let Some(inner) = rule.strip_prefix("Bash(").and_then(|r| r.strip_suffix(')')) else {
-        // A bare tool name — `Edit`, `Write`, `Bash`. Nothing to check.
+        // A bare tool name — `Edit`, `Write`, `Bash`, or an `mcp__…` tool. Nothing to check.
         return true;
     };
     let program = inner.trim_end_matches(" *").trim();
@@ -342,7 +342,12 @@ fn valid_rule(rule: &str) -> bool {
     !rule.is_empty()
         && rule.len() <= 200
         && !rule.contains('\n')
-        && rule.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        // An MCP tool rule is the one legitimate lowercase shape — `mcp__server` allows a whole
+        // connector, `mcp__server__tool` one of its tools. Keel writes one itself for its own ask
+        // server, so requiring an uppercase first letter meant a rule Keel emits was a rule Keel
+        // refused to store: a hand-added `mcp__…` was dropped on read, silently, and the connector
+        // stayed refused however many times you restarted.
+        && (rule.starts_with("mcp__") || rule.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
 }
 
 /// Store a rule. Shared by the HTTP handler and by an approval answered while the agent waits.
@@ -530,6 +535,9 @@ mod tests {
         assert!(valid_rule("Bash(bun *)"));
         assert!(valid_rule("Edit"));
         assert!(!valid_rule("bun install")); // a shell command, not a rule
+        assert!(valid_rule("mcp__claude_ai_Figma"));
+        assert!(valid_rule("mcp__claude_ai_Figma__get_metadata"));
+        assert!(sane("mcp__claude_ai_Figma")); // survives the read filter, which is where it died
         assert!(!valid_rule(""));
         assert!(!valid_rule("Bash(x)\nBash(y)"));
     }
