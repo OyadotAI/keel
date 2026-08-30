@@ -514,7 +514,16 @@ extension UITests {
         let m = SessionModel(client: Client(port: 0))
         m.loaded = true
         m.isRepo = true
-        m.repoPath = "/Users/engineer/Projects/payments"
+        // A real directory: a tool reports an absolute path, and a path that is no longer on disk
+        // is deliberately dropped from this list, so the fixture has to exist.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("keel-changes-\(UUID().uuidString)")
+        let clock = root.appendingPathComponent("Sources/Checkout/Clock.swift")
+        try? FileManager.default.createDirectory(at: clock.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try? Data("struct Clock {}".utf8).write(to: clock)
+        defer { try? FileManager.default.removeItem(at: root) }
+        m.repoPath = root.path
 
         let turn = Turn(prompt: "Refactor the retry policy")
         turn.finished = true
@@ -527,7 +536,7 @@ extension UITests {
             "docs/retries.md",
             "Package.swift",
             // Absolute, the way a tool reports one — stripped back to a repo-relative path.
-            "/Users/engineer/Projects/payments/Sources/Checkout/Clock.swift",
+            clock.path,
             "Sources/Checkout/Deadline.swift",
             "Sources/Checkout/Budget.swift",
             "Sources/Checkout/Telemetry.swift",
@@ -554,6 +563,48 @@ extension UITests {
             shot.detail(in: CGRect(x: 0, y: 60, width: 320, height: 400)), 600,
             "the panel drew a count and no rows"
         )
+    }
+
+    /// Reported from the first real session: the Changes panel disagreed with the repository.
+    ///
+    /// A scratch file the agent wrote and deleted again stayed listed for the rest of the session,
+    /// above a diff with nothing in it; and every file it had written still said "written" long
+    /// after Keel's own auto-commit had committed them.
+    func testTheChangesPanelAgreesWithTheDisk() {
+        let m = SessionModel(client: Client(port: 0))
+        m.loaded = true
+        m.isRepo = true
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("keel-agrees-\(UUID().uuidString)")
+        let kept = root.appendingPathComponent("src/kept.ts")
+        let scratch = root.appendingPathComponent("scratch.sh")
+        try? FileManager.default.createDirectory(at: kept.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try? Data("export const x = 1".utf8).write(to: kept)
+        try? Data("#!/bin/sh".utf8).write(to: scratch)
+        defer { try? FileManager.default.removeItem(at: root) }
+        m.repoPath = root.path
+
+        let turn = Turn(prompt: "Add the client")
+        turn.finished = true
+        turn.begin(call: "a", tool: "Write", input: ["file_path": .string(kept.path)])
+        turn.begin(call: "b", tool: "Write", input: ["file_path": .string(scratch.path)])
+        m.turns = [turn]
+        XCTAssertEqual(m.editedThisSession.count, 2, "both were written")
+
+        // Still uncommitted: git's own word for the file wins.
+        m.changes = [Wire.Change(path: "src/kept.ts", status: "??", label: "untracked")]
+        XCTAssertEqual(m.editedThisSession.first?.label, "untracked")
+
+        // Keel commits a passing turn by itself, and after that nothing is outstanding.
+        m.changes = []
+        XCTAssertEqual(m.editedThisSession.first?.label, "committed",
+                       "saying 'written' about a file already committed is the panel disagreeing "
+                       + "with the repository")
+
+        try? FileManager.default.removeItem(at: scratch)
+        XCTAssertEqual(m.editedThisSession.map(\.path), ["src/kept.ts"],
+                       "a file that is not on disk any more is not a change to review")
     }
 
     /// A number on a rail icon is a promise about what is behind it.

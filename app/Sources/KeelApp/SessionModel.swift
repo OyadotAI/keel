@@ -108,12 +108,39 @@ final class SessionModel: Identifiable {
                     path = String(path.split(separator: "/.keel/worktrees/\(wt)/", maxSplits: 1).last ?? Substring(path))
                 }
                 guard !path.isEmpty, !path.hasPrefix("/") else { continue }
-                let status = call.tool == "Write" && seen[path] == nil ? "A" : "M"
-                if seen[path] == nil { order.append(path) }
-                seen[path] = Wire.Change(path: path, status: status, label: call.tool == "Write" ? "written" : "edited")
+                // A scratch file the agent wrote and deleted again is not a change to review. It
+                // used to sit here for the rest of the session, above a diff with nothing in it.
+                // The daemon runs on this Mac, so the file is simply there or it is not.
+                if call.subject.hasPrefix("/"),
+                   !FileManager.default.fileExists(atPath: call.subject) {
+                    seen[path] = nil
+                    continue
+                }
+                let first = seen[path] == nil
+                if first, !order.contains(path) { order.append(path) }
+                seen[path] = Wire.Change(path: path, status: call.tool == "Write" && first ? "A" : "M",
+                                         label: call.tool == "Write" ? "written" : "edited")
             }
         }
-        return order.compactMap { seen[$0] }
+        // What git says now wins over what the tool call said then. Keel commits a passing turn by
+        // itself, so a file this list still called "written" had usually been committed minutes
+        // ago — the panel disagreeing with the repository about the same file.
+        // ponytail: a file the repository ignores is never in `changes` either, so it reads as
+        // committed; its diff still shows the whole file, and telling the two apart would need a
+        // tracked/untracked round trip per row.
+        let pending = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        return order.compactMap { path in
+            guard var change = seen[path] else { return nil }
+            guard isRepo else { return change }
+            if let live = pending[path] {
+                change.status = live.status
+                change.label = live.label
+            } else {
+                change.status = "C"
+                change.label = "committed"
+            }
+            return change
+        }
     }
     var pending: [Wire.Pending] = []
     /// Every failure the person is shown passes through here, from ~25 call sites. The reporting
@@ -551,6 +578,10 @@ final class SessionModel: Identifiable {
         repoPath = other.repoPath
         sessions = other.sessions
         findings = other.findings
+        // With the findings, not without them: the panel keys "has this been scanned" off `scan`,
+        // so a lane that adopted the findings alone said "Readiness not checked" above a list of
+        // findings it was already holding.
+        scan = other.scan
         workspace = other.workspace
         trusted = other.trusted
         gateCommand = other.gateCommand
@@ -874,6 +905,11 @@ final class SessionModel: Identifiable {
         editing = nil
         watchApprovals(false)
         await refreshGit()
+        await refreshTree()
+        // The turn just changed the repository, and readiness is a reading of the repository.
+        // Without this the panel kept the findings from before the fix — including the one the
+        // person clicked "Fix this" on — until they went and pressed rescan themselves.
+        await refreshState()
         await lanes?.refreshWorktrees()
         // The agent does not grade its own work.
         if mode != "plan" { await runGate(turn) }
@@ -1700,6 +1736,9 @@ final class SessionModel: Identifiable {
         scanning = true
         await refreshState()
         scanning = false
+        // A scan that could not run looks exactly like a scan that found nothing new: the panel
+        // keeps what it had and the click reads as a button that does nothing. Say so instead.
+        if let why = loadFailed { fail("The scan did not run: " + why, category: "scan") }
         Telemetry.track("rescanned")
     }
 

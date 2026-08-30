@@ -51,14 +51,14 @@ pub fn tree(root: &Utf8Path) -> Vec<Node> {
         let Some(path) = Utf8Path::from_path(entry.path()) else {
             continue;
         };
-        if path
-            .components()
-            .any(|c| matches!(c.as_str(), ".git" | ".keel" | "target" | "node_modules"))
-        {
-            continue;
-        }
+        // Asked of the path *inside* the checkout: a lane lives at
+        // `<project>/.keel/worktrees/<name>`, and matching the absolute path skipped every file it
+        // held — an isolated lane showed an empty file tree and an empty mention picker.
         if let Ok(rel) = path.strip_prefix(root)
             && !rel.as_str().is_empty()
+            && !rel
+                .components()
+                .any(|c| matches!(c.as_str(), ".git" | ".keel" | "target" | "node_modules"))
         {
             paths.push(rel.to_owned());
         }
@@ -1166,6 +1166,7 @@ pub fn git_commit_diff(root: &Utf8Path, sha: &str) -> Result<Vec<DiffResponse>, 
                 path: path.to_string(),
                 hunks: parse_hunks(&raw),
                 untracked: false,
+                note: None,
             }
         })
         .collect())
@@ -1868,6 +1869,63 @@ mod git_tests {
         );
         assert!(git_act(&root, "discard-hunk", "a.txt", None).is_err());
     }
+
+    /// The one every tester hit: auto-commit is on, so seconds after the agent writes a file the
+    /// change is in a commit and `git diff` says nothing. Every diff in the window went blank, and
+    /// a blank pane reads as "Keel lost my change".
+    #[test]
+    fn a_committed_change_is_still_shown_and_says_where_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "--quiet", "-m", "seed"]);
+
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        let uncommitted = git_diff(&root, "a.txt");
+        assert!(!uncommitted.hunks.is_empty());
+        assert_eq!(uncommitted.note, None, "the working tree needs no excuse");
+
+        // Staged, then committed — the two states a turn passes through.
+        run(&["add", "-A"]);
+        let staged = git_diff(&root, "a.txt");
+        assert!(!staged.hunks.is_empty(), "staged work is still work");
+        assert_eq!(staged.note.as_deref(), Some("Staged, not yet committed."));
+
+        run(&["commit", "--quiet", "-m", "turn 1: change a"]);
+        let committed = git_diff(&root, "a.txt");
+        assert!(
+            committed
+                .hunks
+                .iter()
+                .flat_map(|h| &h.lines)
+                .any(|l| l.kind == "add" && l.text == "two"),
+            "the change is shown from the commit that holds it"
+        );
+        let note = committed.note.expect("says where the change went");
+        assert!(note.contains("turn 1: change a"), "{note}");
+
+        // A file the agent wrote and deleted again is not a bug in Keel, and says so.
+        std::fs::write(root.join("scratch.txt"), "temp\n").unwrap();
+        assert!(!git_diff(&root, "scratch.txt").hunks.is_empty());
+        std::fs::remove_file(root.join("scratch.txt")).unwrap();
+        let gone = git_diff(&root, "scratch.txt");
+        assert!(gone.hunks.is_empty());
+        assert_eq!(
+            gone.note.as_deref(),
+            Some("This file is not on disk any more.")
+        );
+    }
 }
 
 fn label_for(status: &str) -> &'static str {
@@ -1889,6 +1947,12 @@ pub struct DiffResponse {
     pub hunks: Vec<Hunk>,
     /// True when the file is untracked, so there is no baseline to diff against.
     pub untracked: bool,
+    /// Where these hunks came from when they are not the working tree, or why there are none.
+    ///
+    /// Keel commits a passing turn by itself, so by the time anyone clicks the file the change is
+    /// usually *already committed* and `git diff` is empty. A blank pane then reads as "Keel lost
+    /// my change"; this says which commit holds it.
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1915,28 +1979,67 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
     // An untracked file has no baseline; show it as entirely added rather than an empty diff.
     let untracked = git(root, &["ls-files", "--error-unmatch", path]).is_none();
 
-    let raw = if untracked {
-        std::fs::read_to_string(root.join(path))
-            .map(|content| {
+    let (raw, note) = if untracked {
+        match std::fs::read_to_string(root.join(path)) {
+            Ok(content) => {
                 let n = content.lines().count();
-                format!(
-                    "@@ -0,0 +1,{n} @@\n{}",
-                    content
-                        .lines()
-                        .map(|l| format!("+{l}\n"))
-                        .collect::<String>()
-                )
-            })
-            .unwrap_or_default()
+                let body = content
+                    .lines()
+                    .map(|l| format!("+{l}\n"))
+                    .collect::<String>();
+                (format!("@@ -0,0 +1,{n} @@\n{body}"), None)
+            }
+            // Written and then deleted again, which is what a scratch file is. Saying so beats an
+            // empty pane that looks like a bug in Keel.
+            Err(_) => (
+                String::new(),
+                Some("This file is not on disk any more.".to_string()),
+            ),
+        }
     } else {
-        git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default()
+        let unstaged = git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default();
+        if !unstaged.trim().is_empty() {
+            (unstaged, None)
+        } else {
+            let staged = git(root, &["diff", "--cached", "--no-color", "-U3", "--", path])
+                .unwrap_or_default();
+            if !staged.trim().is_empty() {
+                (staged, Some("Staged, not yet committed.".to_string()))
+            } else {
+                committed_diff(root, path)
+            }
+        }
     };
 
     DiffResponse {
         path: path.to_string(),
         hunks: parse_hunks(&raw),
         untracked,
+        note,
     }
+}
+
+/// The commit that last touched this file, when the working tree has nothing to show.
+///
+/// The everyday case rather than the corner: auto-commit is on by default, so a turn's work is in
+/// a commit seconds after it is written, and every diff in the window went blank at that moment.
+fn committed_diff(root: &Utf8Path, path: &str) -> (String, Option<String>) {
+    let Some(head) = git(root, &["log", "-1", "--format=%h %s", "--", path]) else {
+        return (String::new(), Some("No changes to show.".to_string()));
+    };
+    let head = head.trim();
+    let Some((sha, subject)) = head.split_once(' ') else {
+        return (String::new(), Some("No changes to show.".to_string()));
+    };
+    let raw = git(
+        root,
+        &["show", "--no-color", "-U3", "--format=", sha, "--", path],
+    )
+    .unwrap_or_default();
+    (
+        raw,
+        Some(format!("Already committed, in {sha} — {subject}")),
+    )
 }
 
 /// `@@` blocks with numbered lines, from any unified diff.
@@ -2171,14 +2274,6 @@ pub fn importers_of(root: &Utf8Path, file: &str) -> Vec<String> {
         let Some(path) = Utf8Path::from_path(entry.path()) else {
             continue;
         };
-        if path.components().any(|c| {
-            matches!(
-                c.as_str(),
-                ".git" | ".keel" | "target" | "node_modules" | "dist"
-            )
-        }) {
-            continue;
-        }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -2191,6 +2286,16 @@ pub fn importers_of(root: &Utf8Path, file: &str) -> Vec<String> {
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
+        // Relative, not absolute: a lane's checkout is under `.keel/worktrees/`, and asking of the
+        // absolute path there excluded the whole repository.
+        if rel.components().any(|c| {
+            matches!(
+                c.as_str(),
+                ".git" | ".keel" | "target" | "node_modules" | "dist"
+            )
+        }) {
+            continue;
+        }
         if rel.as_str() == file {
             continue; // a file does not import itself
         }

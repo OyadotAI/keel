@@ -148,7 +148,12 @@ fn walk(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
         let Some(p) = Utf8Path::from_path(e.path()) else {
             continue;
         };
-        if p.components().any(|c| {
+        let Ok(rel) = p.strip_prefix(repo) else {
+            continue;
+        };
+        // The path inside the repository, not the absolute one: a lane's checkout is itself under
+        // `.keel/worktrees/`, and matching there hid every file from the review.
+        if rel.components().any(|c| {
             matches!(
                 c.as_str(),
                 ".git"
@@ -163,9 +168,7 @@ fn walk(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
         }) {
             continue;
         }
-        if let Ok(rel) = p.strip_prefix(repo) {
-            out.push(rel.to_owned());
-        }
+        out.push(rel.to_owned());
         if out.len() > 20_000 {
             break;
         }
