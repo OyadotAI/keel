@@ -107,12 +107,34 @@ struct SessionsPanel: View {
     let model: SessionModel
     @State private var renaming: String?
     @State private var newTitle = ""
+    @State private var query = ""
+
+    private var visible: [Wire.Session] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return model.sessions }
+        return model.sessions.filter {
+            ($0.title ?? $0.id).localizedCaseInsensitiveContains(q)
+            || ($0.cwd ?? "").localizedCaseInsensitiveContains(q)
+        }
+    }
 
     var body: some View {
+        if !model.sessions.isEmpty {
+            HStack(spacing: K.S.xs) {
+                Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(K.C.faint)
+                TextField("Find a session", text: $query).textFieldStyle(.plain).font(K.F.small)
+                if !query.isEmpty { CloseButton(size: 9) { query = "" } }
+            }
+            .padding(.horizontal, K.S.sm).padding(.vertical, 6)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .padding(K.S.sm)
+        }
         if model.sessions.isEmpty {
             Empty(text: "Past agent sessions appear here after the first task starts. Current work stays in the task tabs above.")
+        } else if visible.isEmpty {
+            Empty(text: "No sessions match “\(query)”.")
         }
-        ForEach(model.sessions) { s in
+        ForEach(visible) { s in
             HoverRow(selected: s.id == model.sessionId) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(s.title ?? String(s.id.prefix(8)))
@@ -171,7 +193,7 @@ struct ReadinessPanel: View {
     let model: SessionModel
     @State private var saved: String?
     @State private var busy = false
-    @State private var closed: Set<String> = []
+    @State private var opened: Set<String> = []
     @State private var openFinding: String?
 
     var body: some View {
@@ -181,15 +203,30 @@ struct ReadinessPanel: View {
         } else if model.findings.isEmpty {
             Empty(text: "No readiness findings. Keel checks again whenever the repository changes.")
         } else if let plan = model.scan?.plan, !plan.isEmpty {
+            if let next = model.findings.first { nextAction(next) }
             ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
-                // Open, all of them: a collapsed list of headings is a report you have to
-                // click five times to read.
-                phaseRows(i, phase, expanded: !closed.contains(phase.id))
+                phaseRows(i, phase, expanded: opened.contains(phase.id))
             }
         } else {
             ForEach(model.findings.prefix(40)) { f in row(f) }
         }
         ignoredRow
+    }
+
+    private func nextAction(_ finding: Wire.Finding) -> some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            Text("FIX NEXT").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                .foregroundStyle(K.C.warn)
+            Text(finding.title).font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(finding.detail).font(K.F.micro).foregroundStyle(K.C.dim).lineLimit(3)
+            Button("Fix this") { Task { await model.fix(finding) } }
+                .buttonStyle(FilledButton()).disabled(model.running)
+        }
+        .padding(K.S.md)
+        .background(K.C.warn.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.sm)
     }
 
     // MARK: The card: the score, what it is, where it runs, and the one thing to do next.
@@ -320,7 +357,7 @@ struct ReadinessPanel: View {
             }
         } action: {
             withAnimation(K.M.quick) {
-                if closed.contains(phase.id) { closed.remove(phase.id) } else { closed.insert(phase.id) }
+                if opened.contains(phase.id) { opened.remove(phase.id) } else { opened.insert(phase.id) }
             }
         }
         .help(phase.why)

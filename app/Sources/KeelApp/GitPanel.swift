@@ -16,6 +16,9 @@ struct GitPanel: View {
     @State private var creating = false
     @State private var allBranches = false
     @State private var allRemote = false
+    @State private var showFiles = true
+    @State private var showBranches = false
+    @State private var showHistory = false
 
     private var b: Wire.Branches? { model.branches }
     private var busy: Bool { model.gitBusy != nil }
@@ -27,13 +30,43 @@ struct GitPanel: View {
             } else {
                 branchHeader
                 commitBox
-                workingTree
-                branches
-                CommitList(model: model)
+                disclosure("Changed files", count: model.changes.count, open: $showFiles) {
+                    workingTree
+                }
+                disclosure("Branches", count: b?.local.count ?? 0, open: $showBranches) {
+                    branches
+                }
+                disclosure("History", count: model.commits.count, open: $showHistory) {
+                    CommitList(model: model)
+                }
             }
         }
         .task { await model.refreshBranches() }
         .onChange(of: model.commits.count) { Task { await model.refreshBranches() } }
+    }
+
+    private func disclosure<Content: View>(_ title: String, count: Int,
+                                           open: Binding<Bool>,
+                                           @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(K.M.flow) { open.wrappedValue.toggle() }
+            } label: {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+                    Text(title).font(K.F.small.weight(.semibold))
+                    Spacer()
+                    Text("\(count)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                }
+                .foregroundStyle(K.C.text)
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open.wrappedValue { content().transition(.opacity.combined(with: .move(edge: .top))) }
+        }
+        .overlay(alignment: .top) { Hairline() }
     }
 
     // MARK: Where you are
@@ -133,7 +166,6 @@ struct GitPanel: View {
     @ViewBuilder
     private var workingTree: some View {
         if !model.changes.isEmpty {
-            RailHeader("Uncommitted", trailing: "\(model.changes.count)")
             ForEach(ChangeTree.build(model.changes)) { node in
                 ChangeRow(node: node, depth: 0, model: model)
             }
@@ -192,7 +224,6 @@ struct GitPanel: View {
 
     private var branches: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RailHeader("Branches", trailing: b.map { "\($0.local.count)" })
             // The current one first, then the rest; the last commit's subject is the tooltip.
             let local = (b?.local ?? []).sorted { ($0.current ? 0 : 1, $0.name) < ($1.current ? 0 : 1, $1.name) }
             ForEach(allBranches ? local : Array(local.prefix(6))) { br in
