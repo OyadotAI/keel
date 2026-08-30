@@ -252,9 +252,20 @@ struct SessionWindow: View {
             ForEach(Stage.allCases, id: \.self) { s in
                 let on = stage == s && model.viewingDiff == nil && model.inspecting == nil
                     && model.viewingCommit == nil && model.viewingFile == nil
+                let active = tabActivity(for: s) && !on
                 HStack(spacing: K.S.half) {
                     Image(systemName: stageIcon(s)).font(.system(size: 11, weight: .medium))
                     Text(s.rawValue).font(K.F.small.weight(on ? .semibold : .regular))
+                    if active {
+                        Circle()
+                            .fill(K.C.accent)
+                            .frame(width: 5, height: 5)
+                            .transition(.scale.combined(with: .opacity))
+                            .phaseAnimator([false, true], trigger: model.running) { dot, pulse in
+                                dot.opacity(pulse ? 0.35 : 1)
+                                    .scaleEffect(pulse ? 0.78 : 1)
+                            } animation: { _ in .easeInOut(duration: 0.8) }
+                    }
                 }
                     .foregroundStyle(on ? K.C.text : K.C.dim)
                     .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
@@ -282,6 +293,14 @@ struct SessionWindow: View {
         case .review: "checkmark.shield"
         case .turn: "list.bullet.rectangle"
         case .preview: "cursorarrow.motionlines"
+        }
+    }
+
+    private func tabActivity(for stage: Stage) -> Bool {
+        switch stage {
+        case .turn: return model.running
+        case .preview: return model.editing != nil
+        case .review: return model.running && model.lastReview != nil
         }
     }
 
