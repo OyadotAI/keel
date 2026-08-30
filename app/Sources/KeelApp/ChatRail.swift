@@ -346,47 +346,92 @@ struct Composer: View {
     @Bindable var model: SessionModel
     @FocusState.Binding var focused: Bool
     @State private var dropping = false
-    /// The `@` mention being typed: the query after it, and where the `@` sits in the prompt.
-    @State private var mentioning: Mention?
-    @State private var mentionPick = 0
+    /// The completion being typed: which sigil started it, the query after it, and where it sits.
+    ///
+    /// One mechanism for `@` and `/` rather than two copies of it. They differ in three things —
+    /// the character, where it is allowed, and what a pick does — and everything else about
+    /// finding, ranking, showing and keying through them is identical.
+    ///
+    /// Derived from the prompt, not stored beside it. As `@State` set in `onChange` it was empty
+    /// for any prompt that did not arrive one keystroke at a time — a restored draft, a palette
+    /// insertion, a test — which is the same way the approval card managed to render invisible.
+    /// State that mirrors other state is state that can be wrong.
+    private var completing: Completion? { completion(in: model.prompt) }
+    /// Which row is highlighted. This one is genuinely the view's own.
+    @State private var pick = 0
+    /// Dismissed with Escape, until the text changes again.
+    @State private var dismissed = ""
 
-    struct Mention: Equatable {
+    struct Completion: Equatable {
+        enum Kind { case file, command }
+        var kind: Kind
         var query: String
         var start: String.Index
     }
 
-    /// The word being typed after a bare `@`, if the caret is still inside it.
+    /// What is being typed, if anything.
     ///
     /// Read from the prompt rather than tracked as the person types: a paste, an undo and a
     /// deletion all have to reach the same answer, and only the text knows.
-    private func mention(in prompt: String) -> Mention? {
+    private func completion(in prompt: String) -> Completion? {
+        // `/` only at the very start. Mid-sentence it is a path or a date, not a command, and a
+        // picker that opens on `and/or` is a picker people learn to fight.
+        if prompt.hasPrefix("/") {
+            let query = String(prompt.dropFirst())
+            if !query.contains(" "), !query.contains("\n") {
+                return Completion(kind: .command, query: query, start: prompt.startIndex)
+            }
+        }
         guard let at = prompt.lastIndex(of: "@") else { return nil }
         // Only at a word start, so an email address or a `@path` already inserted is left alone.
         let before = at == prompt.startIndex ? " " : String(prompt[prompt.index(before: at)])
         guard before == " " || before == "\n" else { return nil }
         let query = String(prompt[prompt.index(after: at)...])
         guard !query.contains(" "), !query.contains("\n") else { return nil }
-        return Mention(query: query, start: at)
+        return Completion(kind: .file, query: query, start: at)
+    }
+
+    /// One row: what it is called, and what it is.
+    struct Hit: Equatable {
+        var value: String
+        var detail: String
     }
 
     /// At most eight, because a list that fills the window is a palette and there is one of those.
-    private var mentionHits: [String] {
-        guard let m = mentioning else { return [] }
-        guard !m.query.isEmpty else { return Array(model.files.prefix(8)) }
-        return model.files
-            .compactMap { f in Fuzzy.score(m.query, in: f).map { (f, $0) } }
+    private var hits: [Hit] {
+        guard let c = completing, model.prompt != dismissed else { return [] }
+        let all: [Hit]
+        switch c.kind {
+        case .file:
+            all = model.files.map { Hit(value: $0, detail: "") }
+        case .command:
+            let own = SessionModel.ownCommands.map { Hit(value: $0.name, detail: $0.detail) }
+            // Keel's own first: they are the two that do something to the task rather than ask
+            // the agent for something, and there are two of them against eighty-odd.
+            all = own + model.slashCommands
+                .filter { name in !own.contains { $0.value == name } }
+                .map { Hit(value: $0, detail: "") }
+        }
+        guard !c.query.isEmpty else { return Array(all.prefix(8)) }
+        return all
+            .compactMap { h in Fuzzy.score(c.query, in: h.value).map { (h, $0) } }
             .sorted { $0.1 > $1.1 }
             .prefix(8)
             .map(\.0)
     }
 
-    /// Attach the file and take the `@query` back out of the prompt — it was the gesture, not text
-    /// the agent should read.
-    private func take(_ path: String) {
-        if let m = mentioning { model.prompt.removeSubrange(m.start...) }
-        model.mention(path)
-        mentioning = nil
-        mentionPick = 0
+    /// Take the pick. A file becomes an attachment and the `@query` goes — it was the gesture, not
+    /// text the agent should read. A command *is* the text, so it stays and waits for Return.
+    private func take(_ hit: Hit) {
+        guard let c = completing else { return }
+        switch c.kind {
+        case .file:
+            model.prompt.removeSubrange(c.start...)
+            model.mention(hit.value)
+        case .command:
+            model.prompt = "/" + hit.value
+        }
+        pick = 0
         focused = true
     }
 
@@ -394,7 +439,7 @@ struct Composer: View {
         VStack(spacing: K.S.sm) {
             PinList(model: model)
             AttachmentStrip(model: model)
-            mentionList
+            completionList
 
             if !model.notes.isEmpty {
                 Button {
@@ -446,24 +491,36 @@ struct Composer: View {
         .background(K.C.bg)
     }
 
-    /// The `@` file picker the paperclip's tooltip and `docs/features.md` have both promised for
-    /// as long as they have existed, and which nothing implemented.
+    /// The `@` file picker the paperclip's tooltip and `docs/features.md` both promised, and the
+    /// `/` command picker that closes the gap with the terminal.
+    ///
+    /// Claude Code reports every command it accepts on its `init` record — built-ins, the
+    /// project's own, every plugin's and every skill — so this is *its* list rather than one Keel
+    /// assembled and would then have to keep in step.
     @ViewBuilder
-    private var mentionList: some View {
-        if !mentionHits.isEmpty {
+    private var completionList: some View {
+        if !hits.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(mentionHits.enumerated()), id: \.element) { i, path in
-                    HoverRow(selected: i == mentionPick) {
+                ForEach(Array(hits.enumerated()), id: \.element.value) { i, hit in
+                    HoverRow(selected: i == pick) {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "doc").font(K.F.tiny)
-                                .foregroundStyle(K.C.faint)
-                            Text(Fuzzy.highlight(mentioning?.query ?? "", in: path))
+                            Image(systemName: completing?.kind == .command
+                                  ? "chevron.right.square" : "doc")
+                                .font(K.F.tiny).foregroundStyle(K.C.faint)
+                                .accessibilityHidden(true)
+                            Text(Fuzzy.highlight(completing?.query ?? "", in: hit.value))
                                 .font(K.F.small).foregroundStyle(K.C.text)
-                                .lineLimit(1).truncationMode(.head)
+                                .lineLimit(1)
+                                .truncationMode(completing?.kind == .command ? .tail : .head)
+                            if !hit.detail.isEmpty {
+                                Text(hit.detail).font(K.F.tiny).foregroundStyle(K.C.dim)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
                         }
                         .padding(.vertical, K.S.hair)
                     } action: {
-                        take(path)
+                        take(hit)
                     }
                 }
             }
@@ -485,7 +542,7 @@ struct Composer: View {
             // The button has always drawn a `return` glyph; until now Return only inserted a
             // newline and ⌘Return was the real key, so the control lied about itself. ⇧Return
             // still makes a new line, which is the convention every chat composer uses.
-            .onSubmit { if mentioning == nil { model.send() } }
+            .onSubmit { if hits.isEmpty { model.send() } }
             .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
                 if !model.takePaste(.general) {
                     model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
@@ -495,30 +552,37 @@ struct Composer: View {
             // the composer grows naturally until eight lines and then becomes scrollable.
             .onChange(of: model.prompt) {
                 if model.prompt.count > SessionModel.longPaste { model.fileLongText() }
-                let found = mention(in: model.prompt)
-                if found != mentioning { mentionPick = 0 }
-                mentioning = found
+                pick = 0
             }
             // Arrow keys and Return belong to the list while it is up, and to the composer
             // otherwise — the same rule the palette follows.
             .onKeyPress(.upArrow) {
-                guard !mentionHits.isEmpty else { return .ignored }
-                mentionPick = max(0, mentionPick - 1)
+                guard !hits.isEmpty else { return .ignored }
+                pick = max(0, pick - 1)
                 return .handled
             }
             .onKeyPress(.downArrow) {
-                guard !mentionHits.isEmpty else { return .ignored }
-                mentionPick = min(mentionHits.count - 1, mentionPick + 1)
+                guard !hits.isEmpty else { return .ignored }
+                pick = min(hits.count - 1, pick + 1)
+                return .handled
+            }
+            .onKeyPress(.tab) {
+                guard !hits.isEmpty else { return .ignored }
+                take(hits[pick])
                 return .handled
             }
             .onKeyPress(.return) {
-                guard !mentionHits.isEmpty else { return .ignored }
-                take(mentionHits[mentionPick])
+                guard !hits.isEmpty else { return .ignored }
+                // A file is inserted and you carry on typing; a command *is* the whole prompt, so
+                // completing it and sending it are one gesture, the way the terminal does it.
+                let kind = completing?.kind
+                take(hits[pick])
+                if kind == .command { model.send() }
                 return .handled
             }
             .onKeyPress(.escape) {
-                guard mentioning != nil else { return .ignored }
-                mentioning = nil
+                guard !hits.isEmpty else { return .ignored }
+                dismissed = model.prompt
                 return .handled
             }
             .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in

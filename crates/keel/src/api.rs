@@ -320,6 +320,23 @@ fn system_prompt(repo: &Utf8Path) -> String {
         None => out.push_str("- This project has no check command configured.\n"),
     }
 
+    // The answer to "run it", which the agent otherwise goes and rediscovers: read the package
+    // manifest, look for a script, work out which package in a monorepo. Keel already found it —
+    // it is what the Designer's Run button starts — and not saying so turns a two-word ask into a
+    // research detour every time.
+    if let Some(dev) = crate::dev::detect(repo) {
+        out.push_str(&format!(
+            "- `{}` starts this project's dev server{}. Keel starts it from the Designer tab and \
+             points the preview at whatever URL it announces, so there is nothing to work out.\n",
+            dev.command,
+            if dev.dir.is_empty() {
+                String::new()
+            } else {
+                format!(", run in `{}`", dev.dir)
+            }
+        ));
+    }
+
     let (_manager, present, absent) = crate::clitools::toolchain();
     out.push_str(&format!("- On this machine: {}.", present.join(", ")));
     if !absent.is_empty() {
@@ -413,6 +430,44 @@ mod prompt_tests {
             "{prompt}"
         );
         assert!(prompt.contains("Keel runs it after each of your turns"));
+    }
+
+    /// "Run it" is two words and used to become a research detour: the agent read the manifest,
+    /// hunted for a script and worked out which package in a monorepo owned it. Keel already knows
+    /// — it is what the Designer's Run button starts — so it says so.
+    #[test]
+    fn the_prompt_names_how_to_run_the_project() {
+        let (_d, root) = repo_with(&[(
+            "package.json",
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15"}}"#,
+        )]);
+        let prompt = system_prompt(&root);
+        assert!(
+            prompt.contains("`npm run dev` starts this project's dev server"),
+            "{prompt}"
+        );
+    }
+
+    /// In a monorepo the directory is half the answer, and the half that is actually annoying.
+    #[test]
+    fn the_prompt_names_the_directory_the_dev_server_runs_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Utf8Path::from_path(dir.path()).expect("utf8");
+        std::fs::create_dir_all(root.join("dashboard")).unwrap();
+        std::fs::write(
+            root.join("dashboard/package.json"),
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15"}}"#,
+        )
+        .unwrap();
+        let prompt = system_prompt(root);
+        assert!(prompt.contains("run in `dashboard`"), "{prompt}");
+    }
+
+    /// A repository with nothing to run says nothing, rather than inventing a command.
+    #[test]
+    fn a_project_with_no_dev_server_is_not_given_one() {
+        let (_d, root) = repo_with(&[("README.md", "x")]);
+        assert!(!system_prompt(&root).contains("dev server"));
     }
 
     #[test]
