@@ -294,7 +294,7 @@ struct ChangedFiles: View {
                 }
                 .padding(.horizontal, K.S.sm)
                 .padding(.bottom, K.S.sm)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity)
             }
         }
         .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.md))
@@ -392,7 +392,7 @@ private struct CommandList: View {
                 ForEach(shown) { group in
                     GroupRow(group: group,
                              live: !turn.finished && group.id == groups.last?.id)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .transition(.opacity)
                 }
 
                 if groups.count > Self.visible {
@@ -478,7 +478,7 @@ struct GroupRow: View {
                 }
                 .padding(.leading, K.S.xl)
                 .padding(.bottom, K.S.xs)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .animation(K.M.flow, value: open)
@@ -540,7 +540,7 @@ private struct CallDetail: View {
                     }
                 }
                 .padding(.leading, K.S.lg)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                        .transition(.opacity)
             }
 
             if open, !call.output.isEmpty {
@@ -554,7 +554,7 @@ private struct CallDetail: View {
                 .frame(maxHeight: 240)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .padding(.trailing, K.S.md).padding(.bottom, K.S.xs)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .animation(K.M.flow, value: open)

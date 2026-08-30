@@ -142,7 +142,8 @@ enum K {
         static let quick = Animation.easeOut(duration: 0.12)
         static let settle = Animation.easeOut(duration: 0.18)
         /// A restrained spring for live evidence entering and sections changing size.
-        static let flow = Animation.spring(duration: 0.32, bounce: 0.08)
+        // Panels should feel responsive and calm; spring overshoot makes dense rows jump.
+        static let flow = Animation.easeInOut(duration: 0.22)
     }
 }
 

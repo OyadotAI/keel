@@ -64,7 +64,7 @@ struct GitPanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if open.wrappedValue { content().transition(.opacity.combined(with: .move(edge: .top))) }
+            if open.wrappedValue { content().transition(.opacity) }
         }
         .overlay(alignment: .top) { Hairline() }
     }
