@@ -286,8 +286,8 @@ final class SessionModel: Identifiable {
         /// For the tab, where there is room for a badge and not for a sentence.
         var short: String {
             switch self {
-            case .claude: "CC"
-            case .codex: "CODEX"
+            case .claude: "Claude"
+            case .codex: "Codex"
             }
         }
 
