@@ -93,6 +93,7 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
     );
     let pending = Pending {
         id: id.clone(),
+        lane: lane.unwrap_or_default().to_string(),
         tool: "AskUserQuestion".into(),
         command: String::new(),
         rules: Vec::new(),

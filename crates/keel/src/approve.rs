@@ -48,11 +48,18 @@ pub struct HookInput {
     pub tool_use_id: String,
     #[serde(default)]
     pub session_id: String,
+    /// The window that started this turn. Claude Code does not send it — Keel puts it on the
+    /// hook's command line — and it is the only id that exists on a lane's first turn.
+    #[serde(default)]
+    pub lane: String,
 }
 
 #[derive(Serialize, Clone)]
 pub struct Pending {
     pub id: String,
+    /// The window this belongs to, when Keel knew it — the hook is told on its command line.
+    #[serde(default)]
+    pub lane: String,
     pub tool: String,
     /// The command, for a Bash call. Empty for anything else.
     pub command: String,
@@ -323,6 +330,7 @@ pub async fn ask(
 
     let pending = Pending {
         id: id.clone(),
+        lane: hook.lane.clone(),
         tool: hook.tool_name.clone(),
         command: hook
             .tool_input
@@ -380,6 +388,10 @@ pub struct PollQuery {
     /// Take everything regardless of session: for a CLI or a debugger, never a window.
     #[serde(default)]
     pub all: bool,
+    /// The window's own id. The reliable half of the match: a lane knows this before it knows
+    /// its session, and a first-turn question belonged to nobody the poll could name.
+    #[serde(default)]
+    pub lane: Option<String>,
 }
 
 /// What the UI is waiting to show. Polled rather than pushed: the chat already holds an SSE stream
@@ -400,8 +412,14 @@ pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
     // queue on the strength of that — including a question meant for a lane that could see it.
     // It takes only what belongs to nobody; the rest waits for the window that owns it.
     let session = q.session.filter(|s| !s.is_empty());
+    let lane = q.lane.clone().filter(|l| !l.is_empty());
     let (mine, theirs): (Vec<Pending>, Vec<Pending>) = queue.drain(..).partition(|p| {
-        p.session_id.is_empty() || session.as_deref() == Some(p.session_id.as_str())
+        // The lane is the reliable half: the window knows its own id before it knows the
+        // session's, and a first-turn question used to match nothing and time out.
+        (!p.lane.is_empty() && lane.as_deref() == Some(p.lane.as_str()))
+            || (p.lane.is_empty()
+                && (p.session_id.is_empty() || session.as_deref() == Some(p.session_id.as_str())))
+            || (!p.session_id.is_empty() && session.as_deref() == Some(p.session_id.as_str()))
     });
     *queue = theirs;
     Json(mine)
@@ -537,6 +555,41 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_first_turn_question_reaches_the_lane_that_provoked_it() {
+        use super::*;
+        let _guard = lock().await;
+        let q = queue();
+        q.lock().unwrap().clear();
+        // The hook knows the Claude session; the window does not yet, and polls by lane only.
+        q.lock().unwrap().push(Pending {
+            id: "1".into(),
+            lane: "LANE-A".into(),
+            tool: "Bash".into(),
+            command: "ls".into(),
+            rules: vec![],
+            input: serde_json::json!({}),
+            session_id: "s-new".into(),
+        });
+        let other = poll(Query(PollQuery {
+            session: None,
+            all: false,
+            lane: Some("LANE-B".into()),
+        }))
+        .await;
+        assert!(other.0.is_empty(), "another window's question stays queued");
+        let mine = poll(Query(PollQuery {
+            session: None,
+            all: false,
+            lane: Some("LANE-A".into()),
+        }))
+        .await;
+        assert_eq!(
+            mine.0.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["1"]
+        );
+    }
+
+    #[tokio::test]
     async fn a_window_without_a_session_never_takes_another_windows_question() {
         use super::*;
         let _guard = lock().await;
@@ -544,6 +597,7 @@ pub(crate) mod tests {
         q.lock().unwrap().clear();
         q.lock().unwrap().push(Pending {
             id: "1".into(),
+            lane: String::new(),
             tool: "Bash".into(),
             command: "ls".into(),
             rules: vec![],
@@ -552,6 +606,7 @@ pub(crate) mod tests {
         });
         q.lock().unwrap().push(Pending {
             id: "2".into(),
+            lane: String::new(),
             tool: "Bash".into(),
             command: "ls".into(),
             rules: vec![],
@@ -561,6 +616,7 @@ pub(crate) mod tests {
         let got = poll(Query(PollQuery {
             session: None,
             all: false,
+            lane: None,
         }))
         .await;
         assert_eq!(
@@ -570,6 +626,7 @@ pub(crate) mod tests {
         let got = poll(Query(PollQuery {
             session: Some("s-other".into()),
             all: false,
+            lane: None,
         }))
         .await;
         assert_eq!(
@@ -584,6 +641,7 @@ pub(crate) mod tests {
     fn pending(id: &str, session: &str) -> Pending {
         Pending {
             id: id.into(),
+            lane: String::new(),
             tool: "Bash".into(),
             command: "ls".into(),
             rules: vec!["Bash(ls *)".into()],
@@ -614,6 +672,7 @@ pub(crate) mod tests {
         let mine = poll(Query(PollQuery {
             session: Some("session-a".into()),
             all: false,
+            lane: None,
         }))
         .await;
         let got: Vec<&str> = mine.0.iter().map(|p| p.id.as_str()).collect();
@@ -626,6 +685,7 @@ pub(crate) mod tests {
         let theirs = poll(Query(PollQuery {
             session: Some("session-b".into()),
             all: false,
+            lane: None,
         }))
         .await;
         assert_eq!(
