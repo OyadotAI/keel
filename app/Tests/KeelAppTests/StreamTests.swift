@@ -153,6 +153,36 @@ final class StreamTests: XCTestCase {
         XCTAssertEqual(t.text, "")
     }
 
+    func testCodexEventsBecomeReviewEvidence() {
+        let m = model(), t = Turn(prompt: "fix it")
+        m.provider = .codex
+
+        feed(#"{"type":"thread.started","thread_id":"thread-1"}"#, m, t)
+        feed(#"{"type":"item.started","item":{"id":"cmd-1","type":"command_execution","command":"swift test","status":"in_progress"}}"#, m, t)
+        feed(#"{"type":"item.completed","item":{"id":"cmd-1","type":"command_execution","command":"swift test","aggregated_output":"All tests passed","exit_code":0,"status":"completed"}}"#, m, t)
+        feed(#"{"type":"item.completed","item":{"id":"patch-1","type":"file_change","changes":[{"path":"Sources/App.swift","kind":"update"}],"status":"completed"}}"#, m, t)
+        feed(#"{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"Fixed the race."}}"#, m, t)
+        feed(#"{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":30}}"#, m, t)
+
+        XCTAssertEqual(m.sessionId, "thread-1")
+        XCTAssertEqual(t.calls.count, 1)
+        XCTAssertEqual(t.calls[0].subject, "swift test")
+        XCTAssertEqual(t.calls[0].output, "All tests passed")
+        XCTAssertFalse(t.calls[0].failed)
+        XCTAssertEqual(t.files, ["Sources/App.swift"])
+        XCTAssertEqual(t.text, "Fixed the race.")
+        XCTAssertEqual(t.tokens, Turn.Tokens(input: 120, output: 30, cacheRead: 20, cacheWrite: 0))
+    }
+
+    func testCodexFailuresSurfaceWithoutCrashingTheStream() {
+        let m = model(), t = Turn(prompt: "fix it")
+        m.provider = .codex
+
+        feed(#"{"type":"turn.failed","error":{"message":"sandbox denied the command"}}"#, m, t)
+
+        XCTAssertEqual(m.lastError, "sandbox denied the command")
+    }
+
     /// Review notes are keyed by file and line, and survive the view that made them.
     func testCommentsBecomeAPrompt() {
         let m = model()

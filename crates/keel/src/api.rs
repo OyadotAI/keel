@@ -248,6 +248,8 @@ pub struct ChatQuery {
     pub lane: Option<String>,
     /// `--model`, when the person chose one; absent means the CLI's own default.
     pub model: Option<String>,
+    /// Agent runtime. Unsupported values fail rather than silently selecting another provider.
+    pub provider: Option<String>,
 }
 
 /// Run `claude` in the repository and stream its events to the browser.
@@ -532,55 +534,107 @@ pub async fn chat(
     let port = state.port();
 
     tokio::spawn(async move {
-        let mut command = Command::new("claude");
-        command
-            .current_dir(&cwd)
-            .arg("-p")
-            .arg(&query.prompt)
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose")
-            .arg("--include-partial-messages")
-            .arg("--permission-mode")
-            .arg(match query.mode.as_deref() {
-                Some("acceptEdits") => "acceptEdits",
-                _ => "plan",
-            })
-            // acceptEdits covers file writes but not arbitrary shell, and headless has nobody to
-            // ask. These are the rules the user approved in the IDE.
-            .arg("--settings")
-            .arg(crate::permissions::settings_json(
-                &repo,
-                port,
-                query.session.as_deref(),
-                query.lane.as_deref(),
-            ))
-            // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
-            .arg("--mcp-config")
-            .arg(crate::askmcp::config(port, query.lane.as_deref()))
-            .arg("--append-system-prompt")
-            .arg(
-                match query
-                    .system
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                {
-                    Some(extra) => format!("{}\n\n{extra}", system_prompt(&cwd)),
-                    None => system_prompt(&cwd),
-                },
-            )
-            // Note what is deliberately *not* in that prompt: an instruction to avoid shell
-            // expansion. It was tried, and with and without it the first command out was
-            // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
-            // refusal text either way, so it bought nothing and cost tokens every turn. The fix
-            // that works is in the UI, which says what an expansion refusal is.
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let provider = query.provider.as_deref().unwrap_or("claude");
+        let mut command = if provider == "codex" {
+            let mut command = Command::new("codex");
+            command.current_dir(&cwd).arg("exec");
+            if let Some(session) = &query.session {
+                command
+                    .arg("resume")
+                    .arg("--json")
+                    .arg(session)
+                    .arg(&query.prompt);
+            } else {
+                command
+                    .arg("--json")
+                    .arg("--color")
+                    .arg("never")
+                    .arg("--sandbox")
+                    .arg(match query.mode.as_deref() {
+                        Some("acceptEdits") => "workspace-write",
+                        _ => "read-only",
+                    })
+                    .arg("--ask-for-approval")
+                    .arg("never")
+                    .arg("--cd")
+                    .arg(&cwd)
+                    .arg(
+                        match query
+                            .system
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            Some(extra) => format!(
+                                "{}\n\n{extra}\n\nTask:\n{}",
+                                system_prompt(&cwd),
+                                query.prompt
+                            ),
+                            None => format!("{}\n\nTask:\n{}", system_prompt(&cwd), query.prompt),
+                        },
+                    );
+            }
+            command
+        } else if provider == "claude" {
+            let mut command = Command::new("claude");
+            command
+                .current_dir(&cwd)
+                .arg("-p")
+                .arg(&query.prompt)
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--include-partial-messages")
+                .arg("--permission-mode")
+                .arg(match query.mode.as_deref() {
+                    Some("acceptEdits") => "acceptEdits",
+                    _ => "plan",
+                })
+                // acceptEdits covers file writes but not arbitrary shell, and headless has nobody to
+                // ask. These are the rules the user approved in the IDE.
+                .arg("--settings")
+                .arg(crate::permissions::settings_json(
+                    &repo,
+                    port,
+                    query.session.as_deref(),
+                    query.lane.as_deref(),
+                ))
+                // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
+                .arg("--mcp-config")
+                .arg(crate::askmcp::config(port, query.lane.as_deref()))
+                .arg("--append-system-prompt")
+                .arg(
+                    match query
+                        .system
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        Some(extra) => format!("{}\n\n{extra}", system_prompt(&cwd)),
+                        None => system_prompt(&cwd),
+                    },
+                )
+                // Note what is deliberately *not* in that prompt: an instruction to avoid shell
+                // expansion. It was tried, and with and without it the first command out was
+                // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
+                // refusal text either way, so it bought nothing and cost tokens every turn. The fix
+                // that works is in the UI, which says what an expansion refusal is.
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
 
-        if let Some(session) = &query.session {
-            command.arg("--resume").arg(session);
-        }
+            if let Some(session) = &query.session {
+                command.arg("--resume").arg(session);
+            }
+            command
+        } else {
+            let _ = tx
+                .send(Ok(Event::default()
+                    .event("fatal")
+                    .data(format!("unsupported agent provider `{provider}`"))))
+                .await;
+            return;
+        };
+
         if let Some(model) = query.model.as_deref().filter(|m| {
             !m.is_empty()
                 && m.chars()
@@ -594,7 +648,7 @@ pub async fn chat(
             Err(e) => {
                 let _ = tx
                     .send(Ok(Event::default().event("fatal").data(format!(
-                        "could not start `claude`: {e}. Is the CLI installed and on PATH?"
+                        "could not start `{provider}`: {e}. Is the CLI installed and on PATH?"
                     ))))
                     .await;
                 return;

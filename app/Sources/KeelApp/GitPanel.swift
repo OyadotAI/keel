@@ -124,15 +124,17 @@ struct GitPanel: View {
         Task { await model.remote("add", url: url) }
     }
 
-    /// An icon, a tooltip, and a count when there is one. The word is in the tooltip.
+    /// A labelled compact action. Tooltips alone made Git's four most important operations
+    /// impossible to discover and reduced the panel to an unexplained icon strip.
     private func verb(_ title: String, _ icon: String, _ action: String, enabled: Bool) -> some View {
         let n = action == "pull" ? (current?.behind ?? 0) : action == "push" ? (current?.ahead ?? 0) : 0
         return Button { Task { await model.remote(action) } } label: {
             HStack(spacing: 3) {
                 Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(title).font(K.F.micro)
                 if n > 0 { Text("\(n)").font(K.F.mono(10)) }
             }
-            .frame(minWidth: 22, minHeight: 16)
+            .frame(minHeight: 16)
         }
         .buttonStyle(QuietButton(tone: enabled ? K.C.accent : K.C.faint))
         .disabled(busy || !enabled)

@@ -266,15 +266,17 @@ private struct ChatTurn: View {
                 .help("Show this turn in the trace")
                 if !turn.text.isEmpty {
                     CopyChip(label: "reply", copied: copied == "reply") { put(turn.text, "reply") }
+                        .opacity(hovering || copied != nil ? 1 : 0)
+                        .allowsHitTesting(hovering || copied != nil)
                 }
                 CopyChip(label: "both", copied: copied == "both") { put("> \(turn.prompt)\n\n\(turn.text)", "both") }
+                    .opacity(hovering || copied != nil ? 1 : 0)
+                    .allowsHitTesting(hovering || copied != nil)
                 Spacer()
             }
             .padding(.leading, K.S.xs)
             .frame(minHeight: 18)
             .contentShape(Rectangle())
-            .opacity(hovering || copied != nil ? 1 : 0)
-            .allowsHitTesting(hovering || copied != nil)
             .animation(K.M.quick, value: hovering)
         }
         // The whole column is the hover target, gaps included: without a shape, the pointer

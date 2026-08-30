@@ -195,6 +195,9 @@ struct TurnCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             header
+            Text(turn.prompt)
+                .font(K.F.small).foregroundStyle(K.C.dim)
+                .lineLimit(2).truncationMode(.tail)
 
             if !turn.files.isEmpty { ChangedFiles(turn: turn, model: model) }
             if !turn.calls.isEmpty { CommandList(turn: turn) }
@@ -223,8 +226,8 @@ struct TurnCard: View {
         )
     }
 
-    /// Which turn, and when. Not what was asked — that is the conversation in the middle of the
-    /// window, and printing it here again was the duplication between the two panes.
+    /// Which turn and when. The compact prompt beneath this header anchors execution evidence to
+    /// intent without repeating the full conversation.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
             Text("TURN \(number)")

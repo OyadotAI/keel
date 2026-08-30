@@ -25,7 +25,7 @@ struct SkillsPanel: View {
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
             }
             if model.workspace.skills.isEmpty {
-                Blank(title: "No skills yet",
+                Blank(icon: "sparkles", title: "No skills yet",
                       body: "A skill teaches the agent a task — a review checklist, a deploy "
                           + "runbook, a way to call an API. They live in `~/.claude`, so they work "
                           + "here, in every other project, and in the terminal.",
@@ -49,7 +49,7 @@ struct AgentsPanel: View {
     var body: some View {
         Group {
             if model.workspace.agents.isEmpty {
-                Blank(title: "No subagents",
+                Blank(icon: "person.2", title: "No subagents",
                       body: "A subagent is a delegate with its own instructions and its own "
                           + "context. The main agent reads its description to decide whether to "
                           + "hand work over, so that description is the whole interface.",
@@ -73,7 +73,7 @@ struct MCPPanel: View {
     var body: some View {
         Group {
             if model.workspace.mcpServers.isEmpty {
-                Blank(title: "No MCP servers",
+                Blank(icon: "cable.connector", title: "No MCP servers",
                       body: "An MCP server gives the agent tools from somewhere else — an issue "
                           + "tracker, a database, a browser. Keel never writes one into the "
                           + "repository, because that is configuring a command to run on someone "
@@ -102,7 +102,7 @@ struct HooksPanel: View {
 
     var body: some View {
         if model.workspace.hooks.isEmpty {
-            Blank(title: "No hooks",
+            Blank(icon: "bolt.horizontal", title: "No hooks",
                   body: "A hook runs a shell command around the agent's tool calls. Keel "
                       + "quarantines any that arrive with a repository before the agent starts, "
                       + "because that command runs on the machine of whoever opened the repo.",
@@ -134,7 +134,7 @@ struct PluginsPanel: View {
         Group {
             Recommended(model: model)
             if model.workspace.plugins.isEmpty {
-                Blank(title: "No plugins",
+                Blank(icon: "puzzlepiece.extension", title: "No plugins",
                       body: "Plugins are how skills, subagents and commands are distributed. They "
                           + "come from marketplaces you have added to `claude`.",
                       action: "Browse plugins") { model.sheet = .skills }
@@ -272,12 +272,14 @@ struct Recommended: View {
 
 /// An empty panel that says what the thing is for, rather than a heading with nothing under it.
 struct Blank: View {
+    let icon: String
     let title: String
     let body_: String
     let action: String?
     let run: () -> Void
 
-    init(title: String, body: String, action: String?, run: @escaping () -> Void) {
+    init(icon: String, title: String, body: String, action: String?, run: @escaping () -> Void) {
+        self.icon = icon
         self.title = title
         self.body_ = body
         self.action = action
@@ -285,17 +287,22 @@ struct Blank: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            Text(title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+        VStack(alignment: .leading, spacing: K.S.md) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .medium)).foregroundStyle(K.C.accent)
+                .frame(width: 32, height: 32)
+                .background(K.C.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: K.R.md))
+            Text(title).font(K.F.title).foregroundStyle(K.C.text)
             Text(.init(body_))
-                .font(K.F.micro).foregroundStyle(K.C.dim)
+                .font(K.F.small).foregroundStyle(K.C.dim)
                 .fixedSize(horizontal: false, vertical: true)
             if let action {
                 Button(action, action: run)
-                    .buttonStyle(SendButtonWide())
+                    .buttonStyle(FilledButton())
                     .padding(.top, K.S.xs)
             }
         }
-        .padding(K.S.md)
+        .padding(K.S.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -144,13 +144,15 @@ struct CommitList: View {
                         .help("\(local) commit\(local == 1 ? "" : "s") only on this Mac. Send them to the remote.")
                 }
                 Spacer()
-                Toggle("each turn", isOn: Binding(get: { model.autoCommit },
-                                                 set: { model.autoCommit = $0 }))
-                    .toggleStyle(.checkbox).controlSize(.mini)
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
-                    .help("Commit the agent's work after each turn the project's checks accept")
             }
             .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
+
+            Toggle("Auto-commit turns after checks pass",
+                   isOn: Binding(get: { model.autoCommit }, set: { model.autoCommit = $0 }))
+                .toggleStyle(.checkbox).controlSize(.mini)
+                .font(K.F.micro).foregroundStyle(K.C.dim)
+                .padding(.horizontal, K.S.md).padding(.bottom, K.S.xs)
+                .help("Commit the agent's work after each turn the project's checks accept")
 
             if model.commits.isEmpty {
                 Text("No commits yet.").font(K.F.small).foregroundStyle(K.C.faint)
@@ -278,6 +280,11 @@ struct PullRequest: View {
                 }
             }
 
+            if let blocker = model.mergeBlocker {
+                Text(blocker).font(K.F.small).foregroundStyle(K.C.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             field("Title", "left empty, gh writes it from your commits", $title)
             editor("Description", $body_)
             Toggle("Open as a draft", isOn: $draft)
@@ -309,13 +316,20 @@ struct PullRequest: View {
                 if url == nil {
                     Button(running ? "Opening…" : "Create") { create() }
                         .buttonStyle(SendButtonWide())
-                        .disabled(running)
+                        .disabled(running || model.mergeBlocker != nil)
                 }
             }
         }
         .padding(K.S.xl)
         .frame(width: 520)
         .background(K.C.bg)
+        .task {
+            if title.isEmpty { title = model.title }
+            if body_.isEmpty {
+                do { body_ = try PacketStore.markdown(model: model) }
+                catch { model.lastError = error.localizedDescription }
+            }
+        }
         .task(id: attempt) { if attempt > 0 { await run() } }
     }
 
@@ -354,9 +368,9 @@ struct PullRequest: View {
         failed = false
         defer { running = false }
             do {
-                for try await e in model.client.events("/api/github/pr", [
+                for try await e in model.client.events("/api/github/pr", model.q([
                     "title": title, "body": body_, "draft": draft ? "true" : "false",
-                ]) {
+                ])) {
                     switch e.name {
                     case "line":
                         log += e.data + "\n"

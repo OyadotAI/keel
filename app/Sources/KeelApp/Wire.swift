@@ -11,11 +11,26 @@ enum Wire {
         var projectOpen: Bool
         var scan: Scan
         var workspace: Workspace
+        var policy: Policy?
 
         enum CodingKeys: String, CodingKey {
             case repo
             case projectOpen = "project_open"
-            case scan, workspace
+            case scan, workspace, policy
+        }
+    }
+
+    struct Policy: Decodable, Sendable {
+        var maxFiles: Int
+        var requireIsolation: Bool
+        var allowedProviders: [String]
+        var sources: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case maxFiles = "max_files"
+            case requireIsolation = "require_isolation"
+            case allowedProviders = "allowed_providers"
+            case sources
         }
     }
 

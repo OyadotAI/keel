@@ -25,10 +25,11 @@ final class LanesTests: XCTestCase {
         let data = UserDefaults.standard.data(forKey: "keel.lanes." + repo)
         XCTAssertNotNil(data, "nothing was written for this project")
 
-        struct Saved: Decodable { var sessions: [String]; var active: Int }
+        struct Saved: Decodable { var sessions: [String]; var active: Int; var tasks: [UUID]? }
         let saved = try! JSONDecoder().decode(Saved.self, from: data!)
         XCTAssertEqual(saved.sessions, ["aaa", "bbb"])
         XCTAssertEqual(saved.active, 1, "the focused lane is remembered too")
+        XCTAssertEqual(saved.tasks, l.lanes.map(\.id))
     }
 
     /// A lane that never ran a turn has nothing to come back to. Restoring a row of empty lanes
@@ -123,5 +124,37 @@ final class LanesTests: XCTestCase {
         await ports.release(7778)
         let reused = await ports.reserve { _ in false }
         XCTAssertEqual(reused, 7778)
+    }
+
+    func testMergeRequiresPassingIndependentProjectGate() {
+        let model = SessionModel(client: Client(port: 0))
+        model.isolated = true
+        model.worktree = "task-123"
+        let turn = Turn(prompt: "change it")
+        turn.begin(call: "1", tool: "Edit", input: ["file_path": .string("src/app.swift")])
+        turn.finish(call: "1", output: "ok", failed: false)
+        turn.finished = true
+        model.turns = [turn]
+
+        XCTAssertEqual(model.mergeBlocker, "A project quality gate has not run.")
+        turn.gate = .passed("make check", 1)
+        XCTAssertNil(model.mergeBlocker)
+    }
+
+    func testMergeStopsOversizedAgentChanges() {
+        let model = SessionModel(client: Client(port: 0))
+        model.isolated = true
+        model.worktree = "task-123"
+        let turn = Turn(prompt: "change everything")
+        for index in 0...8 {
+            let id = "\(index)"
+            turn.begin(call: id, tool: "Edit", input: ["file_path": .string("src/\(index).swift")])
+            turn.finish(call: id, output: "ok", failed: false)
+        }
+        turn.finished = true
+        turn.gate = .passed("make check", 1)
+        model.turns = [turn]
+
+        XCTAssertTrue(model.mergeBlocker?.contains("8-file budget") == true)
     }
 }

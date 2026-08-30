@@ -8,6 +8,7 @@ struct SidePanel: View {
     var body: some View {
         VStack(spacing: 0) {
             RailHeader(panel.title, trailing: count)
+            Hairline()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     // Before the daemon has answered once, an empty list means "not yet", and
@@ -91,9 +92,13 @@ struct SidePanel: View {
 private struct Empty: View {
     let text: String
     var body: some View {
-        Text(text)
-            .font(K.F.small).foregroundStyle(K.C.faint)
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        HStack(alignment: .top, spacing: K.S.sm) {
+            Image(systemName: "info.circle").foregroundStyle(K.C.faint)
+            Text(text).font(K.F.small).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(K.S.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -105,7 +110,9 @@ struct SessionsPanel: View {
     @State private var newTitle = ""
 
     var body: some View {
-        if model.sessions.isEmpty { Empty(text: "No features in this project yet.") }
+        if model.sessions.isEmpty {
+            Empty(text: "Past agent sessions appear here after the first task starts. Current work stays in the task tabs above.")
+        }
         ForEach(model.sessions) { s in
             HoverRow(selected: s.id == model.sessionId) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -170,8 +177,10 @@ struct ReadinessPanel: View {
 
     var body: some View {
         card
-        if model.findings.isEmpty {
-            Empty(text: "Nothing outstanding. The checks re-run every time the project is read.")
+        if model.scan == nil {
+            Empty(text: "Repository readiness has not been scanned yet. Use refresh above to run the checks.")
+        } else if model.findings.isEmpty {
+            Empty(text: "No readiness findings. Keel checks again whenever the repository changes.")
         } else if let plan = model.scan?.plan, !plan.isEmpty {
             ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
                 // Open, all of them: a collapsed list of headings is a report you have to

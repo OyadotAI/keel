@@ -13,7 +13,7 @@ struct SessionWindow: View {
     /// A torn-out window shows one lane and only that one; the main window follows the tabs.
     var pinned: SessionModel? = nil
     @State private var panel: Panel? = .changes
-    @State private var stage: Stage = .turn
+    @State private var stage: Stage = .review
     @State private var showTerminal = false
     @State private var terminalTitle = "shell"
     @State private var terminalCommand: String?
@@ -31,7 +31,7 @@ struct SessionWindow: View {
     /// "Trace" rather than "Turn": the pane is the record of what the agent did, and a turn is the
     /// unit inside it. "Designer" rather than "Preview": you do not only look at the page there,
     /// you pick things in it and change them.
-    enum Stage: String, CaseIterable { case turn = "Trace", preview = "Designer" }
+    enum Stage: String, CaseIterable { case review = "Review", turn = "Trace", preview = "Designer" }
 
     /// One icon per thing, because they are different things. Grouping skills, subagents, MCP
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
@@ -230,6 +230,7 @@ struct SessionWindow: View {
                         DiffSurface(model: model, path: path)
                     } else {
                         switch stage {
+                        case .review: ReviewPacketView(model: model, lanes: lanes)
                         case .turn: TurnStage(model: model)
                         case .preview: PreviewSurface(model: model)
                         }
@@ -247,18 +248,20 @@ struct SessionWindow: View {
 
     /// A segmented control drawn by hand: the stock one is a rounded capsule that reads as iOS.
     private var stageBar: some View {
-        HStack(spacing: K.S.xs) {
+        HStack(spacing: K.S.xxs) {
             ForEach(Stage.allCases, id: \.self) { s in
                 let on = stage == s && model.viewingDiff == nil && model.inspecting == nil
                     && model.viewingCommit == nil && model.viewingFile == nil
-                Text(s.rawValue)
-                    .font(K.F.small.weight(on ? .semibold : .regular))
-                    .foregroundStyle(on ? K.C.text : K.C.faint)
-                    .padding(.horizontal, K.S.sm).padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: K.R.sm)
-                            .fill(on ? K.C.text.opacity(0.07) : .clear)
-                    )
+                HStack(spacing: K.S.half) {
+                    Image(systemName: stageIcon(s)).font(.system(size: 11, weight: .medium))
+                    Text(s.rawValue).font(K.F.small.weight(on ? .semibold : .regular))
+                }
+                    .foregroundStyle(on ? K.C.text : K.C.dim)
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                    .background(on ? K.C.raised : .clear, in: RoundedRectangle(cornerRadius: K.R.md))
+                    .overlay {
+                        if on { RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line) }
+                    }
                     .contentShape(Rectangle())
                     .asButton {
                         stage = s; model.viewingDiff = nil; model.inspecting = nil
@@ -270,8 +273,16 @@ struct SessionWindow: View {
             Spacer()
         }
         .padding(.horizontal, K.S.md)
-        .padding(.vertical, K.S.sm)
+        .padding(.vertical, K.S.half)
         .background(K.C.surface)
+    }
+
+    private func stageIcon(_ stage: Stage) -> String {
+        switch stage {
+        case .review: "checkmark.shield"
+        case .turn: "list.bullet.rectangle"
+        case .preview: "cursorarrow.motionlines"
+        }
     }
 
     private var terminalPane: some View {
@@ -698,6 +709,13 @@ struct WindowEvents: ViewModifier {
             .task(id: model.id) { await lanes.refreshShared() }
             .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
                                   showSettings: $showSettings))
+            .onReceive(NotificationCenter.default.publisher(for: .keelReviewTask)) { _ in
+                model.viewingDiff = nil
+                model.viewingFile = nil
+                model.viewingCommit = nil
+                model.inspecting = nil
+                withAnimation(K.M.quick) { stage = .review; showSettings = false }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .keelPalette)) { _ in
                 withAnimation(K.M.quick) { paletteOpen.toggle() }
             }
