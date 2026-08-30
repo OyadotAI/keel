@@ -1595,6 +1595,43 @@ mod git_tests {
         assert!(git_ignore_path(&root, "../escape").is_err());
     }
 
+    /// A path that is not a file in this checkout is not a new file. The changes list can be a
+    /// moment out of date — a commit in the terminal, a revert in another lane — and clicking one
+    /// of its rows then asked for a diff of a path git has never heard of.
+    #[test]
+    fn a_path_that_is_not_there_is_not_reported_as_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "seed"]);
+
+        let gone = git_diff(&root, "was-deleted-or-never-here.txt");
+        assert!(!gone.untracked, "no NEW badge for a path with no file");
+        assert!(gone.hunks.is_empty());
+
+        // A file that is genuinely new still reads as new, whole.
+        std::fs::write(root.join("new.txt"), "x\ny\n").unwrap();
+        let fresh = git_diff(&root, "new.txt");
+        assert!(fresh.untracked);
+        assert_eq!(fresh.hunks.len(), 1);
+
+        // And a tracked file that matches HEAD is neither new nor changed.
+        let same = git_diff(&root, "a.txt");
+        assert!(!same.untracked);
+        assert!(same.hunks.is_empty());
+    }
+
     #[test]
     fn discard_all_restores_tracked_and_trashes_untracked_but_keeps_ignored() {
         let dir = tempfile::tempdir().unwrap();
@@ -1913,7 +1950,12 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
     let (root, path) = crate::gitroots::resolve(root, path);
     let (root, path) = (root.as_path(), path.as_str());
     // An untracked file has no baseline; show it as entirely added rather than an empty diff.
-    let untracked = git(root, &["ls-files", "--error-unmatch", path]).is_none();
+    //
+    // It has to exist for that to mean anything. "git does not know this path" also answers for a
+    // path git cannot match at all — one from a stale changes list, or from another checkout —
+    // and calling that untracked put a NEW badge on a diff with nothing under it.
+    let untracked =
+        root.join(path).exists() && git(root, &["ls-files", "--error-unmatch", path]).is_none();
 
     let raw = if untracked {
         std::fs::read_to_string(root.join(path))

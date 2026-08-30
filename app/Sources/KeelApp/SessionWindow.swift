@@ -13,7 +13,10 @@ struct SessionWindow: View {
     /// A torn-out window shows one lane and only that one; the main window follows the tabs.
     var pinned: SessionModel? = nil
     @State private var panel: Panel? = .changes
-    @State private var stage: Stage = .review
+    @State private var stage: Stage = .turn
+    /// A turn ran while the person was looking at something else. The Trace tab keeps moving until
+    /// they look at it — see `stageBar`.
+    @State private var traceUnread = false
     @State private var showTerminal = false
     @State private var terminalTitle = "shell"
     @State private var terminalCommand: String?
@@ -31,7 +34,10 @@ struct SessionWindow: View {
     /// "Trace" rather than "Turn": the pane is the record of what the agent did, and a turn is the
     /// unit inside it. "Designer" rather than "Preview": you do not only look at the page there,
     /// you pick things in it and change them.
-    enum Stage: String, CaseIterable { case review = "Review", turn = "Trace", preview = "Designer" }
+    ///
+    /// Trace is first, and the one a new window opens on: the centre of a window is the turn, and
+    /// the readiness report is something you go and ask for.
+    enum Stage: String, CaseIterable { case turn = "Trace", review = "Review", preview = "Designer" }
 
     /// One icon per thing, because they are different things. Grouping skills, subagents, MCP
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
@@ -112,6 +118,14 @@ struct SessionWindow: View {
         }
         .onChange(of: lanes.activeID) {
             if pinned == nil { lanes.remember(repo: model.repoPath) }
+        }
+        // The working tree also changes when Keel is not the one changing it — a commit in the
+        // terminal, a revert in another lane, an editor saving a file. Nothing re-read git status
+        // between turns, so the Changes panel kept listing files that were no longer changed and
+        // clicking one opened a diff of nothing. Coming back to the window is the moment to look.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshGit(); await model.refreshTree() }
         }
     }
 
@@ -213,6 +227,12 @@ struct SessionWindow: View {
             // Only the window you are in: a sheet in every window at once is a modal maze.
             if pinned == nil { startingFeature = true }
         }
+        // A turn arriving while you are on the Designer or the readiness report is the case where
+        // the record is written and never read. Marked unread there, and read the moment the Trace
+        // is on the stage — however you got there, clicking the tab included.
+        .onChange(of: model.turns.count) { if stage != .turn { traceUnread = true } }
+        .onChange(of: stage) { if stage == .turn { traceUnread = false } }
+        .onChange(of: model.id) { traceUnread = false }
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
@@ -386,7 +406,11 @@ struct SessionWindow: View {
                 // not describe — no tab lit, no name for where you were, no way back but an ✕.
                 // The tab is where you came from; `detourBar` below says where you have gone.
                 let on = stage == s
-                let active = tabActivity(for: s) && !on
+                // A turn ran somewhere you were not looking — nearly always because the Designer
+                // took the stage — and the record of it sits behind a tab nobody clicked. The dot
+                // keeps pulsing until you do, rather than blinking once and going still.
+                let unread = s == .turn && traceUnread && !on
+                let active = (tabActivity(for: s) || unread) && !on
                 HStack(spacing: K.S.half) {
                     Image(systemName: stageIcon(s)).font(K.F.micro.weight(.medium))
                     Text(s.rawValue).font(K.F.small.weight(on ? .semibold : .regular))
@@ -395,7 +419,7 @@ struct SessionWindow: View {
                             .fill(K.C.accent)
                             .frame(width: 5, height: 5)
                             .transition(.scale.combined(with: .opacity))
-                            .phaseAnimator([false, true], trigger: model.running) { dot, pulse in
+                            .phaseAnimator([false, true]) { dot, pulse in
                                 dot.opacity(pulse ? 0.35 : 1)
                                     .scaleEffect(pulse ? 0.78 : 1)
                             } animation: { _ in .easeInOut(duration: 0.8) }
@@ -407,6 +431,7 @@ struct SessionWindow: View {
                     .overlay {
                         if on { RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line) }
                     }
+                    .modifier(Nudge(active: unread))
                     .contentShape(Rectangle())
                     .asButton {
                         stage = s
@@ -475,6 +500,22 @@ struct SessionWindow: View {
         case .review: "checkmark.shield"
         case .turn: "list.bullet.rectangle"
         case .preview: "cursorarrow.motionlines"
+        }
+    }
+
+    /// The tab is unread and the person is somewhere else: a short jiggle, a long pause, repeat.
+    /// It runs only while `active`, because a control that moves forever is one you stop seeing.
+    private struct Nudge: ViewModifier {
+        let active: Bool
+
+        func body(content: Content) -> some View {
+            if active {
+                content.phaseAnimator([0.0, -2.5, 2.5, 0.0]) { tab, x in
+                    tab.offset(x: x)
+                } animation: { x in .easeInOut(duration: x == 0 ? 1.4 : 0.12) }
+            } else {
+                content
+            }
         }
     }
 
