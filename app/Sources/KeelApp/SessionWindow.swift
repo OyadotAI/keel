@@ -87,14 +87,22 @@ struct SessionWindow: View {
         .animation(K.M.quick, value: model.loaded)
         .background(K.C.bg)
         .task {
+            // Only the window that owns the tabs. A torn-out window ran this too, and restore
+            // replaces the whole lane list — including the lane the window was showing, which
+            // then resolved to nothing and went white.
+            guard pinned == nil else { return }
             await lanes.refreshShared()
             // Restore once the project is known: the saved lanes are keyed by it.
             await lanes.restore(repo: model.repoPath)
         }
         // Anything that changes which conversations are open is worth writing down: a lane that
         // has just been given a session id, one closed, or a different one focused.
-        .onChange(of: lanes.lanes.compactMap(\.sessionId)) { lanes.remember(repo: model.repoPath) }
-        .onChange(of: lanes.activeID) { lanes.remember(repo: model.repoPath) }
+        .onChange(of: lanes.lanes.compactMap(\.sessionId)) {
+            if pinned == nil { lanes.remember(repo: model.repoPath) }
+        }
+        .onChange(of: lanes.activeID) {
+            if pinned == nil { lanes.remember(repo: model.repoPath) }
+        }
     }
 
     private var workbench: some View {
