@@ -142,10 +142,9 @@ private struct LaneRow: View {
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
             .opacity(hovering ? 1 : 0.4)
             .hint("Rename this feature (double-click also works)")
-            if lanes.lanes.count > 1 && lane.worktree == nil {
-                CloseButton(size: 10, label: "Close this feature") { lanes.close(lane) }
-                    .opacity(hovering ? 1 : 0.4)
-            }
+            CloseButton(size: 10, label: closeLabel) { lanes.close(lane) }
+                .opacity(hovering ? 1 : 0.4)
+                .hint(closeLabel)
         }
         .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
         .alert("Rename feature", isPresented: $renaming) {
@@ -183,6 +182,7 @@ private struct LaneRow: View {
                     finishing = true
                 }
                 .disabled(!lane.readyToMerge)
+                Button("Close tab, keep the branch") { lanes.close(lane) }
                 Button("Discard feature…", role: .destructive) {
                     Task {
                         // Ask the daemon first: it knows how many commits are on the branch.
@@ -242,6 +242,13 @@ private struct LaneRow: View {
         .help(tooltip)
         .accessibilityLabel("\(lane.title), \(lane.provider.rawValue), \(activityText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// Closing a lane with a checkout is not discarding it, and the difference is worth the words.
+    private var closeLabel: String {
+        lane.worktree == nil
+            ? "Close this feature"
+            : "Close this tab — the branch and its checkout stay"
     }
 
     /// What the row used to show on its second and third lines, now the tooltip.
