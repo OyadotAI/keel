@@ -45,7 +45,7 @@ struct Template: Identifiable, Hashable {
         case backend = "Backend & workers"
         case fullstack = "Full-stack"
         case agents = "Agents"
-        case control = "Control planes"
+        case control = "Control pfeatures"
         case proxies = "Proxies & gateways"
         case harness = "IDEs & harnesses"
         case builders = "Agent builders"

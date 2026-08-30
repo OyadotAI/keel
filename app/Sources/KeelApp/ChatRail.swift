@@ -137,7 +137,7 @@ struct ChatRail: View {
     private var hint: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             if model.isolated {
-                Text("This lane gets its own checkout and branch on the first send, so it can "
+                Text("This feature gets its own checkout and branch on the first send, so it can "
                      + "edit while the others do. Finish it from the rail to merge.")
                     .font(K.F.micro).foregroundStyle(K.C.dim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -146,11 +146,11 @@ struct ChatRail: View {
                     Text("A second agent, on the same files")
                         .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                     Text(lanes.wouldOverlap
-                         ? "Another lane is editing right now. These share one working tree, so "
+                         ? "Another feature is editing right now. These share one working tree, so "
                            + "give this one reading or planning work — two agents writing the same "
                            + "files will overwrite each other."
                          : "These share one working tree. Good alongside work: reading, planning, "
-                           + "reviewing what another lane just did, or resuming an old session.")
+                           + "reviewing what another feature just did, or resuming an old one.")
                         .font(K.F.micro).foregroundStyle(lanes.wouldOverlap ? K.C.warn : K.C.dim)
                         .fixedSize(horizontal: false, vertical: true)
                 }

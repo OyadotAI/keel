@@ -31,6 +31,8 @@ final class SessionModel: Identifiable {
     var isolated = false
     /// Not a tab: a lane doing work on the person's behalf, surfaced when it has something.
     var hidden = false
+    /// Torn out into a window of its own: the main window's tabs leave it alone while it is.
+    var detached = false
 
     /// The query every checkout-scoped request carries, so the daemon reads and writes this
     /// lane's tree rather than the project's.
@@ -527,21 +529,23 @@ final class SessionModel: Identifiable {
 
     // MARK: - The checkout
 
-    struct WorktreeName: Encodable { var name: String }
+    struct WorktreeName: Encodable { var name: String; var from: String? }
+    /// The branch this lane was told to start from, when the person chose one.
+    var baseBranch: String?
 
     /// Create this lane's checkout, named from its title.
     func makeWorktree() async {
         let name = Self.slug(title) + "-" + String(UUID().uuidString.prefix(3)).lowercased()
         do {
             let made: Wire.Worktree = try await client.post("/api/worktree/create",
-                                                            body: WorktreeName(name: name))
+                                                            body: WorktreeName(name: name, from: baseBranch))
             worktree = made.name
             await refreshGit()
             await refreshTree()
             await lanes?.refreshWorktrees()
         } catch {
             isolated = false
-            lastError = "This lane shares the project's working tree: " + error.localizedDescription
+            lastError = "This feature shares the project's working tree: " + error.localizedDescription
         }
     }
 
@@ -1125,7 +1129,7 @@ final class SessionModel: Identifiable {
         Telemetry.breadcrumb("project opened")
         turns.removeAll()
         sessionId = nil
-        title = "New session"
+        title = "New feature"
         await refreshGit()
         await refreshState()
         await refreshTree()

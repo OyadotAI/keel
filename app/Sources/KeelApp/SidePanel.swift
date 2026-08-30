@@ -105,7 +105,7 @@ struct SessionsPanel: View {
     @State private var newTitle = ""
 
     var body: some View {
-        if model.sessions.isEmpty { Empty(text: "No sessions in this project yet.") }
+        if model.sessions.isEmpty { Empty(text: "No features in this project yet.") }
         ForEach(model.sessions) { s in
             HoverRow(selected: s.id == model.sessionId) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -136,7 +136,7 @@ struct SessionsPanel: View {
         }
         // Rendered once, outside the loop: an alert per row is an alert per row.
         Color.clear.frame(height: 0)
-            .alert("Rename session", isPresented: Binding(
+            .alert("Rename feature", isPresented: Binding(
                 get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $newTitle)
                 Button("Cancel", role: .cancel) { renaming = nil }
