@@ -392,6 +392,469 @@ fn eval_10_a_slash_command_is_resolved_by_claude_for_nothing() {
     );
 }
 
+// ── the second ten: what Keel promises about itself ──────────────────────────────────────────
+//
+// `CLAUDE.md` lists eleven non-negotiables and says they are enforced by tests. #6 — "Stop sends
+// SIGINT" — was false for months, so the claim was worth checking. Four more of them had no test
+// that ran the real thing, and they are here.
+//
+// All ten cost nothing. Three of them run a *stubbed* agent, which is how the command line Keel
+// actually builds becomes observable: `keel-harness` has a unit test that `--bare` is never
+// passed, but the daemon builds its own command in `api.rs` and nothing checked that one.
+
+/// A fake `claude` on the daemon's PATH that records its arguments and emits a valid stream.
+///
+/// The daemon takes its PATH from the login shell (`$SHELL -lic 'printf %s "$PATH"'`), so
+/// pointing `SHELL` at a script that prints the directory we want puts the stub first. Nothing
+/// else can: an inherited `PATH` is appended *after* the shell's, behind the real `claude`.
+fn stub_agent(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin = dir.join("stub-bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let argv = dir.join("argv.txt");
+
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >> {argv}\n\
+             printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"stub-1\",\"slash_commands\":[\"compact\"]}}'\n\
+             printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"stub-1\",\"num_turns\":1,\"total_cost_usd\":0}}'\n",
+            argv = argv.display()
+        ),
+    )
+    .expect("stub");
+    chmod_x(&claude);
+
+    let shell = dir.join("stub-shell");
+    std::fs::write(
+        &shell,
+        format!("#!/bin/sh\nprintf %s \"{}:$PATH\"\n", bin.display()),
+    )
+    .expect("shell");
+    chmod_x(&shell);
+    (shell, argv)
+}
+
+fn chmod_x(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path).expect("stat").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod");
+}
+
+/// A project whose daemon runs the stub agent instead of the real one.
+fn stubbed_project() -> (tempfile::TempDir, u16, Child, std::path::PathBuf) {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let dir = repo.path();
+    std::fs::write(dir.join("Makefile"), "check:\n\ttrue\n").expect("Makefile");
+    std::fs::write(dir.join("README.md"), "eval\n").expect("README");
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "-A"],
+        vec![
+            "-c",
+            "user.email=e@k",
+            "-c",
+            "user.name=Evals",
+            "commit",
+            "-qm",
+            "start",
+        ],
+    ] {
+        assert!(
+            Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .status()
+                .expect("git")
+                .success()
+        );
+    }
+    let (shell, argv) = stub_agent(dir);
+    let port = free_port();
+    let daemon = Command::new(env!("CARGO_BIN_EXE_keel"))
+        .arg("serve")
+        .arg(dir)
+        .args(["--port", &port.to_string(), "--no-open"])
+        .env("SHELL", &shell)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("daemon");
+    wait_for_daemon(port);
+    (repo, port, daemon, argv)
+}
+
+/// Everything the stub was invoked with.
+fn argv_of(path: &std::path::Path) -> String {
+    for _ in 0..40 {
+        if let Ok(s) = std::fs::read_to_string(path)
+            && !s.trim().is_empty()
+        {
+            return s;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    String::new()
+}
+
+/// 11. Non-negotiable #2: `--bare` is never passed, because bare mode never reads the OAuth
+///     credentials a subscription depends on — and the flags that make the session safe are.
+///
+/// `keel-harness` asserts this about the invocation *it* builds. The daemon builds its own, and
+/// that is the one that runs.
+#[test]
+fn eval_11_the_command_line_keel_actually_runs_is_the_documented_one() {
+    let (_repo, port, mut daemon, argv) = stubbed_project();
+    let _ = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&prompt={}",
+        urlencode("hello")
+    ));
+    let line = argv_of(&argv);
+    stop_daemon(&mut daemon);
+
+    assert!(!line.is_empty(), "the agent was never invoked");
+    assert!(
+        !line.contains("--bare"),
+        "`--bare` was passed, which never reads OAuth credentials — every subscription session \
+         would fail to authenticate:\n{line}"
+    );
+    for flag in [
+        "--output-format",
+        "stream-json",
+        "--settings",
+        "--mcp-config",
+    ] {
+        assert!(
+            line.contains(flag),
+            "`{flag}` is missing from the command line:\n{line}"
+        );
+    }
+}
+
+/// 12. The mode on the command line is the mode the lane is in. `plan` explores and changes
+///     nothing; sending it as `acceptEdits` would let a planning turn write to the repository.
+#[test]
+fn eval_12_the_permission_mode_matches_the_lane() {
+    let (_repo, port, mut daemon, argv) = stubbed_project();
+    for mode in ["plan", "acceptEdits"] {
+        let _ = curl_stream(&format!(
+            "http://127.0.0.1:{port}/api/chat?provider=claude&mode={mode}&lane=l&prompt={}",
+            urlencode("hello")
+        ));
+    }
+    let line = argv_of(&argv);
+    stop_daemon(&mut daemon);
+
+    assert!(
+        line.contains("--permission-mode plan"),
+        "a plan turn did not run in plan mode:\n{line}"
+    );
+    assert!(
+        line.contains("--permission-mode acceptEdits"),
+        "an edit turn did not run in acceptEdits mode:\n{line}"
+    );
+}
+
+/// 13. A resumed turn continues a conversation rather than starting one. Without `--resume` the
+///     agent has no memory of the session and the transcript forks.
+#[test]
+fn eval_13_a_resumed_turn_passes_the_session_it_resumes() {
+    let (_repo, port, mut daemon, argv) = stubbed_project();
+    let _ = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&session=abc-123&prompt={}",
+        urlencode("hello")
+    ));
+    let line = argv_of(&argv);
+    stop_daemon(&mut daemon);
+
+    assert!(
+        line.contains("--resume abc-123"),
+        "the session was not resumed, so the turn forked a new conversation:\n{line}"
+    );
+}
+
+/// 14. Non-negotiable #7: listing sessions never shows what was said.
+///
+/// The switcher polls this constantly. Reading a transcript to render a list is not licence to
+/// display it, and a leak here puts one project's conversation in another's window.
+#[test]
+fn eval_14_listing_sessions_never_returns_what_was_said() {
+    let (repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    let secret = "PINEAPPLE-QUADRANT-77";
+
+    // A transcript in the shape Claude Code writes, carrying something unmistakable.
+    let home = repo.path().join("fake-claude");
+    let key = crate_project_key(repo.path());
+    let dir = home.join("projects").join(&key);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("sess-1.jsonl"),
+        format!(
+            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{secret}\"}}}}\n"
+        ),
+    )
+    .expect("transcript");
+
+    let listing = get(port, "/api/state").unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        !listing.contains(secret),
+        "a session listing carried the text of a message — the switcher polls this constantly:\n\
+         {listing}"
+    );
+}
+
+/// Claude Code's own directory name for a project: the path with separators flattened.
+fn crate_project_key(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace(['/', '.'], "-")
+}
+
+/// 15. Non-negotiable #8: a question belongs to one conversation.
+///
+/// Windows are per-session. The old `mem::take` meant whichever polled first swallowed every
+/// window's questions and the others timed out into a refusal nobody saw.
+#[test]
+fn eval_15_a_question_belongs_to_one_conversation() {
+    let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+
+    for lane in ["alpha", "beta"] {
+        let l = lane.to_string();
+        std::thread::spawn(move || {
+            post(
+                port,
+                "/api/approve/ask",
+                &format!(
+                    r#"{{"tool_name":"Bash","tool_input":{{"command":"echo {l}"}},"session_id":"","lane":"{l}","tool_use_id":"t-{l}"}}"#
+                ),
+            );
+        });
+    }
+    std::thread::sleep(Duration::from_secs(2));
+
+    let mine = get(port, "/api/approve/poll?lane=alpha").unwrap_or_default();
+    let theirs = get(port, "/api/approve/poll?lane=beta").unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        mine.contains("alpha"),
+        "alpha's own question did not reach it: {mine}"
+    );
+    assert!(
+        !mine.contains("beta"),
+        "alpha was handed beta's question — one window swallowing another's is how they used to \
+         time out into refusals nobody saw: {mine}"
+    );
+    assert!(
+        theirs.contains("beta"),
+        "beta's question was taken by alpha: {theirs}"
+    );
+}
+
+/// 16. Non-negotiable #9: "allow once, this session" means *that* session.
+#[test]
+fn eval_16_a_session_rule_does_not_leak_to_another_conversation() {
+    let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+
+    post(
+        port,
+        "/api/permissions/add",
+        r#"{"rule":"Bash(docker *)","scope":"session","session":"session-A"}"#,
+    );
+    let a = get(port, "/api/permissions?session=session-A").unwrap_or_default();
+    let b = get(port, "/api/permissions?session=session-B").unwrap_or_default();
+    let none = get(port, "/api/permissions").unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        a.contains("docker"),
+        "the rule did not apply to the session that made it: {a}"
+    );
+    assert!(
+        !b.contains("docker"),
+        "another conversation inherited a rule scoped to one — \"once, this session\" has to mean \
+         that session: {b}"
+    );
+    assert!(
+        !none.contains("docker"),
+        "a session rule became a project rule: {none}"
+    );
+}
+
+/// 17. Non-negotiable #10: Keel refuses to leave loopback until something is paired.
+///
+/// The check is at the bind, not in the settings UI, so a hand-edited `state.json` cannot open a
+/// port either.
+#[test]
+fn eval_17_nothing_is_served_off_loopback_until_a_device_is_paired() {
+    let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    let lan = lan_address();
+    let reachable = lan.is_some_and(|ip| {
+        std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::new(ip, port),
+            Duration::from_millis(500),
+        )
+        .is_ok()
+    });
+    let loopback = get(port, "/api/state").is_some();
+    stop_daemon(&mut daemon);
+
+    assert!(loopback, "the daemon was not reachable on loopback at all");
+    assert!(
+        !reachable,
+        "the daemon answered on this machine's network address with nothing paired — the whole \
+         repository, its sessions and its credentials, to anyone on the network"
+    );
+}
+
+/// This machine's first non-loopback IPv4 address, if it has one.
+fn lan_address() -> Option<std::net::IpAddr> {
+    let out = Command::new("sh")
+        .args(["-lc", "ipconfig getifaddr en0 || ipconfig getifaddr en1"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    text.parse().ok()
+}
+
+/// 18. The one hook Keel ships: a repository's own `.claude/settings.json` is moved aside before
+///     any agent runs.
+///
+/// `--bare` is never passed, because bare mode never reads the OAuth credentials a subscription
+/// depends on — and the price is that the repository's own settings load. A hook there is a shell
+/// command that runs on the machine of whoever opens the repo.
+///
+/// `keel-harness::quarantine` existed for exactly this and was wired only to the `keel trust`
+/// subcommand, which the application never runs. Opening somebody else's repository and taking one
+/// turn executed their `SessionStart` hook with no prompt — verified by running a real turn
+/// against a repo whose hook touched a file, and finding the file. This is that test.
+#[test]
+fn eval_18_a_repositorys_own_hooks_are_quarantined_before_the_agent_runs() {
+    let (repo, port, mut daemon, argv) = stubbed_project_with(&[
+        (
+            ".claude/settings.json",
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}"#,
+        ),
+        (
+            ".mcp.json",
+            r#"{"mcpServers":{"theirs":{"command":"true"}}}"#,
+        ),
+    ]);
+    let dir = repo.path().to_path_buf();
+
+    let _ = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&prompt={}",
+        urlencode("hello")
+    ));
+    let _ = argv_of(&argv);
+    stop_daemon(&mut daemon);
+
+    for rel in [".claude/settings.json", ".mcp.json"] {
+        assert!(
+            !dir.join(rel).exists(),
+            "`{rel}` was still in place when the agent started — it is a shell command that runs \
+             on the machine of whoever opens the repository"
+        );
+        assert!(
+            dir.join(".keel/quarantine").join(rel).exists(),
+            "`{rel}` was removed rather than quarantined — it is the person's own repository \
+             content and they have to be able to read it"
+        );
+    }
+}
+
+/// 19. Every turn is preceded by a snapshot, so it can be rewound.
+///
+/// A git tree from a throwaway index and no refs: the repository's own history is untouched by
+/// something whose whole job is to be undone.
+#[test]
+fn eval_19_a_turn_can_be_rewound_to_the_tree_before_it() {
+    let (repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    let dir = repo.path().to_path_buf();
+    std::fs::write(dir.join("keep.txt"), "before\n").expect("write");
+
+    let snap = post_read(port, "/api/git/snapshot", "{}").unwrap_or_default();
+    let tree = field(&snap, "tree").unwrap_or_default();
+
+    std::fs::write(dir.join("keep.txt"), "after\n").expect("write");
+    std::fs::write(dir.join("stray.txt"), "new\n").expect("write");
+
+    let back =
+        post_read(port, "/api/git/restore", &format!(r#"{{"tree":"{tree}"}}"#)).unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        !tree.is_empty(),
+        "no snapshot was taken, so the turn could never be undone: {snap}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("keep.txt")).unwrap_or_default(),
+        "before\n",
+        "the file was not put back: {back}"
+    );
+}
+
+/// 20. Trust stops at the edge of the project it was granted for.
+///
+/// "Trust this project" is stored in one repository's own `.keel/permissions.json`, and that
+/// scoping is why it is safe to offer. The trust check used to run *before* the "does this edit
+/// leave the repository" check, so on a trusted project an edit to `/tmp`, to the home directory
+/// or to another checkout was allowed without a question.
+#[test]
+fn eval_20_trust_does_not_cover_an_edit_that_leaves_the_project() {
+    let (repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    post(port, "/api/permissions/trust", r#"{"trusted":true}"#);
+
+    let inside = repo.path().join("inside.txt");
+    std::thread::spawn(move || {
+        post(
+            port,
+            "/api/approve/ask",
+            &format!(
+                r#"{{"tool_name":"Write","tool_input":{{"file_path":"{}"}},"session_id":"","lane":"t","tool_use_id":"w-out"}}"#,
+                "/tmp/keel-eval-outside.txt"
+            ),
+        );
+    });
+    std::thread::sleep(Duration::from_secs(2));
+    let queued = get(port, "/api/approve/poll?lane=t").unwrap_or_default();
+
+    // And an edit that stays inside is not asked about, or trust would be worth nothing.
+    let body = format!(
+        r#"{{"tool_name":"Write","tool_input":{{"file_path":"{}"}},"session_id":"","lane":"t2","tool_use_id":"w-in"}}"#,
+        inside.display()
+    );
+    let answered = post_read(port, "/api/approve/ask", &body).unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        queued.contains("w-out"),
+        "a trusted project let an edit to /tmp through without a question — trust is scoped to one \
+         repository and this is not in it: {queued}"
+    );
+    assert!(
+        answered.contains("defer"),
+        "an edit inside a trusted project was still asked about, which is the toll trust exists to \
+         remove: {answered}"
+    );
+}
+
+/// A stubbed project with extra files in place before the daemon starts.
+fn stubbed_project_with(
+    files: &[(&str, &str)],
+) -> (tempfile::TempDir, u16, Child, std::path::PathBuf) {
+    let (repo, port, daemon, argv) = stubbed_project();
+    let dir = repo.path();
+    for (name, body) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, body).expect("write");
+    }
+    (repo, port, daemon, argv)
+}
+
 // ── the harness ──────────────────────────────────────────────────────────────────────────────
 
 /// A git repository with a daemon serving it. Every eval starts here.
