@@ -42,6 +42,11 @@ struct ApprovalCard: View {
                 .font(K.F.code)
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
+                // Belt and braces with the daemon's own cap. `fixedSize` asks the layout to
+                // measure the whole string at once, and a command carrying a heredoc hung the
+                // main thread inside CoreText for seconds — on the one card that must appear
+                // instantly, because the turn has stopped and is waiting on it.
+                .lineLimit(24)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(K.S.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
