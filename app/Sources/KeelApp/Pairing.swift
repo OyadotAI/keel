@@ -66,13 +66,13 @@ struct PairingSettings: View {
                             .tracking(6)
                             .monospacedDigit()
                         Text("Type this on the other device within two minutes.")
-                            .font(K.F.micro).foregroundStyle(.secondary)
+                            .font(K.F.micro).foregroundStyle(K.C.dim)
                     }
                 } else {
                     Button("Pair a device") { Task { await model.begin() } }
                 }
                 if let e = model.error {
-                    Text(e).font(K.F.micro).foregroundStyle(.red)
+                    ErrorRow(message: e)
                 }
             } header: {
                 Text("Pairing")
@@ -85,13 +85,12 @@ struct PairingSettings: View {
                      + "same network, or anywhere over Tailscale. There are no push notifications "
                      + "to a backgrounded phone: that needs a relay server, and Keel does not have "
                      + "one so that your code never leaves your machine.")
-                    .font(K.F.micro).foregroundStyle(.secondary)
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
             }
 
             Section("Paired devices") {
                 if model.devices.isEmpty {
-                    Text("None. Keel listens only on this machine until a device is paired.")
-                        .font(K.F.micro).foregroundStyle(.secondary)
+                    EmptyState("Keel listens only on this machine until a device is paired.")
                 }
                 ForEach(model.devices) { d in
                     HStack {

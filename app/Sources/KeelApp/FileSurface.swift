@@ -49,7 +49,7 @@ struct FileSurface: View {
     @ViewBuilder
     private var content: some View {
         if loading {
-            Text("Reading…").font(K.F.small).foregroundStyle(K.C.faint)
+            Loading()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let data, isImage, let image = NSImage(data: data) {
             ScrollView([.vertical, .horizontal]) {

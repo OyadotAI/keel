@@ -100,21 +100,14 @@ struct ChangesTreeView: View {
         // The pull request lives in the Git panel with the rest of the branch work; a big
         // button here read as the thing to click and was the thing nobody wanted.
 
-        if let err = model.lastError {
-            Text(err).font(K.F.micro).foregroundStyle(K.C.del)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, K.S.md).padding(.bottom, K.S.sm)
-        }
-
         // What the agent changed in this conversation, as a tree. Git's own view — staged,
         // unstaged, committed — is the Git tab's.
         let edited = model.editedThisSession
         if edited.isEmpty {
-            Text(model.turns.isEmpty ? "Nothing yet. Files the agent writes in this conversation appear here."
-                                     : "The agent has not written a file in this conversation.")
-                .font(K.F.small).foregroundStyle(K.C.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            EmptyState(icon: "plusminus", title: "No changes yet",
+                       model.turns.isEmpty
+                       ? "Every file the agent writes in this conversation appears here, as a diff."
+                       : "The agent has not written a file in this conversation.")
         } else {
             ForEach(ChangeTree.build(edited)) { node in
                 ChangeRow(node: node, depth: 0, model: model)
@@ -155,8 +148,7 @@ struct CommitList: View {
                 .help("Commit the agent's work after each turn the project's checks accept")
 
             if model.commits.isEmpty {
-                Text("No commits yet.").font(K.F.small).foregroundStyle(K.C.faint)
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                EmptyState("No commits yet.")
             }
             ForEach(Array(model.commits.enumerated()), id: \.element.id) { i, c in
                 HoverRow(selected: model.viewingCommit?.sha == c.sha) {
@@ -502,7 +494,7 @@ struct CommitSurface: View {
             .background(K.C.surface)
             Hairline()
             if loading {
-                Text("Reading…").font(K.F.small).foregroundStyle(K.C.faint)
+                Loading()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {

@@ -143,10 +143,6 @@ struct GitPanel: View {
                 .menuStyle(.borderlessButton).fixedSize()
                 .disabled(busy)
             }
-            if let err = model.lastError {
-                Text(err).font(K.F.micro).foregroundStyle(K.C.del)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             if let done = model.discarded {
                 Text(done).font(K.F.micro).foregroundStyle(K.C.add)
             }

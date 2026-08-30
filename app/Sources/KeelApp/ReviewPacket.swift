@@ -237,7 +237,7 @@ struct ReviewPacketView: View {
     }
 
     private func empty(_ text: String) -> some View {
-        Text(text).font(K.F.small).foregroundStyle(K.C.faint)
+        EmptyState(text).padding(.vertical, -K.S.sm)
     }
 
     private func gatePassed(_ gate: Turn.Gate) -> Bool {

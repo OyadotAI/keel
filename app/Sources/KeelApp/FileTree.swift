@@ -11,30 +11,18 @@ struct FileTree: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xxs) {
-            HStack(spacing: K.S.xs) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(K.F.tiny).foregroundStyle(K.C.faint)
-                TextField("Filter", text: $filter)
-                    .textFieldStyle(.plain)
-                    .font(K.F.codeSmall)
-            }
-            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
-            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-            .padding(.horizontal, K.S.sm)
-            .padding(.bottom, K.S.xs)
+            SearchField(prompt: "Find a file", text: $filter)
 
             if filter.isEmpty {
                 if model.tree.isEmpty {
-                    VStack(alignment: .leading, spacing: K.S.xs) {
-                        Label("No repository files", systemImage: "folder")
-                            .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                        Text("Files appear after the project tree finishes loading. Generated and ignored directories stay hidden.")
-                            .font(K.F.micro).foregroundStyle(K.C.dim)
-                            .fixedSize(horizontal: false, vertical: true)
+                    // An empty tree and a tree that has not arrived are not the same thing, and
+                    // this said "no files" for both until `loaded` was consulted.
+                    if model.loaded {
+                        EmptyState(icon: "folder", title: "No repository files",
+                                   "Generated and ignored directories stay hidden.")
+                    } else {
+                        Loading("Reading the project tree…")
                     }
-                    .padding(K.S.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(model.tree) { node in
                         TreeRow(node: node, depth: 0, model: model)

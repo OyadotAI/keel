@@ -57,6 +57,12 @@ final class SessionModel: Identifiable {
     /// Whether the daemon has answered `/api/state` at least once. Before that, every empty
     /// list is "not loaded yet", not "nothing here".
     var loaded = false
+    /// Why the last state refresh failed, when it did.
+    ///
+    /// `loaded` alone could only say "not yet". Every panel refresh was a `try? … else { return }`,
+    /// so a daemon that had stopped answering rendered as a permanently empty Files, Git,
+    /// Readiness or Plugins panel — which reads as "your project has none of these".
+    var loadFailed: String?
 
     var turns: [Turn] = []
     var running = false
@@ -1340,7 +1346,14 @@ final class SessionModel: Identifiable {
     }
 
     func refreshState() async {
-        guard let s: Wire.State = try? await client.get("/api/state") else { return }
+        let s: Wire.State
+        do {
+            s = try await client.get("/api/state")
+        } catch {
+            loadFailed = error.localizedDescription
+            return
+        }
+        loadFailed = nil
         loaded = true
         projectOpenKnown = s.projectOpen
         repoPath = s.repo

@@ -14,8 +14,14 @@ struct SidePanel: View {
                     // Before the daemon has answered once, an empty list means "not yet", and
                     // showing "nothing here" for it is a lie that lasts half a second and is
                     // believed for longer.
-                    if !model.loaded {
-                        Empty(text: "Reading…")
+                    if let why = model.loadFailed, !model.loaded {
+                        EmptyState(icon: "exclamationmark.triangle",
+                                   title: "Keel cannot read this project",
+                                   why, actionLabel: "Try again") {
+                            Task { await model.refreshState() }
+                        }
+                    } else if !model.loaded {
+                        Loading()
                     } else {
                     switch panel {
                     case .changes: ChangesTreeView(model: model)
@@ -74,7 +80,9 @@ struct SidePanel: View {
     private var count: String? {
         let n: Int
         switch panel {
-        case .changes: n = model.changes.count
+        // What the tree below actually shows. It counted every uncommitted file while the tree
+        // listed only what the agent wrote here, so the header disagreed with the list under it.
+        case .changes: n = model.editedThisSession.count
         case .git: return nil
         case .sessions: n = model.sessions.count
         case .readiness: n = model.findings.count
@@ -86,18 +94,6 @@ struct SidePanel: View {
         case .files: return nil
         }
         return n == 0 ? nil : "\(n)"
-    }
-}
-
-private struct Empty: View {
-    let text: String
-    var body: some View {
-        HStack(alignment: .top, spacing: K.S.sm) {
-            Text(text).font(K.F.small).foregroundStyle(K.C.dim)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -120,19 +116,15 @@ struct SessionsPanel: View {
 
     var body: some View {
         if !model.sessions.isEmpty {
-            HStack(spacing: K.S.xs) {
-                Image(systemName: "magnifyingglass").font(K.F.tiny).foregroundStyle(K.C.faint)
-                TextField("Find a session", text: $query).textFieldStyle(.plain).font(K.F.small)
-                if !query.isEmpty { CloseButton(size: 9) { query = "" } }
-            }
-            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.half)
-            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-            .padding(K.S.sm)
+            SearchField(prompt: "Find a session", text: $query)
         }
         if model.sessions.isEmpty {
-            Empty(text: "Past agent sessions appear here after the first task starts. Current work stays in the task tabs above.")
+            EmptyState(icon: "clock.arrow.circlepath", title: "No past sessions",
+                       "Sessions appear here once a task has run. Current work stays in the task "
+                       + "tabs above.")
         } else if visible.isEmpty {
-            Empty(text: "No sessions match “\(query)”.")
+            EmptyState(icon: "magnifyingglass", title: "Nothing matches",
+                       "No past session mentions “\(query)”.")
         }
         ForEach(visible) { s in
             HoverRow(selected: s.id == model.sessionId) {
@@ -199,9 +191,12 @@ struct ReadinessPanel: View {
     var body: some View {
         card
         if model.scan == nil {
+            // Nothing below the card until there is something to say — the card is already the
+            // whole state, and a second empty state under it read as a panel that had broken.
             EmptyView()
         } else if model.findings.isEmpty {
-            Empty(text: "No readiness findings. Keel checks again whenever the repository changes.")
+            EmptyState(icon: "checkmark.seal", title: "Nothing outstanding",
+                       "Keel checks again whenever the repository changes.")
         } else if let plan = model.scan?.plan, !plan.isEmpty {
             if let next = model.findings.first { nextAction(next) }
             ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
@@ -241,18 +236,21 @@ struct ReadinessPanel: View {
         }
     }
 
+    /// Never scanned, or scanned and it failed. The second case used to be indistinguishable from
+    /// the first: `rescan` went through a `try?`, so a scan that could not run left the panel
+    /// saying "not checked" with a Scan button that appeared to do nothing.
+    @ViewBuilder
     private var unscanned: some View {
-        HStack(spacing: K.S.sm) {
-            VStack(alignment: .leading, spacing: K.S.xxs) {
-                Text("Readiness not checked").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                Text("Scan the repository for release blockers.").font(K.F.micro).foregroundStyle(K.C.dim)
-            }
-            Spacer()
-            Button("Scan") { Task { await model.rescan() } }
-                .buttonStyle(QuietButton(tone: K.C.accent))
-                .disabled(model.scanning)
+        if model.scanning {
+            Loading("Scanning the repository…")
+        } else if let why = model.loadFailed {
+            EmptyState(icon: "exclamationmark.triangle", title: "The scan did not run", why,
+                       actionLabel: "Try again") { Task { await model.rescan() } }
+        } else {
+            EmptyState(icon: "checkmark.shield", title: "Readiness not checked",
+                       "Keel reads the repository for release blockers — no network, nothing sent.",
+                       actionLabel: "Scan") { Task { await model.rescan() } }
         }
-        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
     }
 
     private var scanned: some View {

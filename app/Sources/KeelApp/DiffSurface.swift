@@ -77,7 +77,7 @@ struct DiffSurface: View {
     @ViewBuilder
     private var content: some View {
         if loading {
-            centred("Reading…")
+            Loading()
         } else if let diff, !diff.hunks.isEmpty {
             ScrollViewReader { proxy in
                 // Vertical only. Two axes with a lazy stack centred the content in the pane and
