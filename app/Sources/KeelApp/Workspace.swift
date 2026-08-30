@@ -13,6 +13,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class Workspace {
+    private static let ports = PortReservations(first: 7778, count: 40)
+
     let port: UInt16
     let client: Client
     let lanes: Lanes
@@ -32,11 +34,12 @@ final class Workspace {
 
     /// A port nothing is listening on. Probed rather than assumed: a second window on a machine
     /// that already had a stale daemon used to attach to it and mirror the first window again.
-    static func freePort(after first: UInt16 = 7778) async -> UInt16 {
-        for port in first..<(first + 40) where !(await Daemon(port: port).answering()) {
-            return port
-        }
-        return first
+    static func reservePort() async -> UInt16? {
+        await ports.reserve { await Daemon(port: $0).answering() }
+    }
+
+    static func releasePort(_ port: UInt16) async {
+        await ports.release(port)
     }
 
     /// Start the daemon, open `project`, and resume `session` when there is one.
@@ -58,9 +61,37 @@ final class Workspace {
         }
     }
 
+    func reportFailure(_ message: String) {
+        failure = message
+    }
+
     func shutdown() {
         for lane in lanes.lanes { lane.stop() }
         daemon.stop()
+        let port = port
+        Task { await Self.releasePort(port) }
+    }
+}
+
+actor PortReservations {
+    private let ports: Range<UInt16>
+    private var reserved: Set<UInt16> = []
+
+    init(first: UInt16, count: UInt16) {
+        ports = first..<(first + count)
+    }
+
+    func reserve(occupied: @Sendable (UInt16) async -> Bool) async -> UInt16? {
+        for port in ports where !reserved.contains(port) {
+            reserved.insert(port)
+            if !(await occupied(port)) { return port }
+            reserved.remove(port)
+        }
+        return nil
+    }
+
+    func release(_ port: UInt16) {
+        reserved.remove(port)
     }
 }
 

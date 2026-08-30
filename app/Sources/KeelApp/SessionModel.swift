@@ -729,8 +729,8 @@ final class SessionModel: Identifiable {
     var gateCommand: String?
 
     func refreshGatePlan() async {
-        if let c: Wire.Check? = try? await client.get("/api/verify/plan", q()) {
-            gateCommand = c?.command
+        if let check: Wire.Check = try? await client.get("/api/verify/plan", q()) {
+            gateCommand = check.command
         }
     }
 

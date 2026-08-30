@@ -309,9 +309,9 @@ struct DefaultEmptyString: Decodable, Sendable {
 
 extension KeyedDecodingContainer {
     func decode<T>(_ type: DefaultEmpty<T>.Type, forKey key: Key) throws -> DefaultEmpty<T> {
-        (try? decodeIfPresent(type, forKey: key)) as? DefaultEmpty<T> ?? DefaultEmpty<T>()
+        (try? decodeIfPresent(type, forKey: key)) ?? DefaultEmpty<T>()
     }
     func decode(_ type: DefaultEmptyString.Type, forKey key: Key) throws -> DefaultEmptyString {
-        (try? decodeIfPresent(type, forKey: key)) as? DefaultEmptyString ?? DefaultEmptyString()
+        (try? decodeIfPresent(type, forKey: key)) ?? DefaultEmptyString()
     }
 }
