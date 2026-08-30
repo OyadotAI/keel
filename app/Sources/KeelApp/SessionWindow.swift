@@ -137,7 +137,7 @@ struct SessionWindow: View {
 
                 if let panel {
                     SidePanel(panel: panel, model: model)
-                        .frame(width: panelWidth)
+                        .frame(width: panelFit)
                     SplitHandle(width: $panelWidth, range: 200...520, reset: 256, leading: true)
                 }
 
@@ -150,6 +150,7 @@ struct SessionWindow: View {
                     working
                 }
             }
+            .onGeometryChange(for: Double.self) { $0.size.width } action: { available = $0 }
             // Dimmed while a switch is in flight, so the old project's content reads as
             // "going away" rather than as the new one.
             .opacity(model.opening == nil ? 1 : 0.45)
@@ -270,8 +271,45 @@ struct SessionWindow: View {
                     }
                 }
             }
-            .frame(width: stageWidth)
+            .frame(width: stageFit)
         }
+    }
+
+    // MARK: - Making the columns fit the window
+
+    /// The width of the row the columns live in, or 0 before it has been laid out.
+    ///
+    /// `onGeometryChange` rather than a `GeometryReader`: it reports the size without taking part
+    /// in layout, so there is no proposal to divide by and nothing to draw at zero.
+    @State private var available: Double = 0
+
+    /// Everything in the row that is not one of the two resizable columns.
+    private static let fixedWidth: Double = 60 + 9 + 9   // activity rail, two split handles
+    private static let chatMinWidth: Double = 420
+
+    /// What is left for the panel and the stage once the rail, the handles and the conversation
+    /// have taken theirs.
+    private var roomForColumns: Double {
+        available - Self.fixedWidth + (panel == nil ? 9 : 0) - Self.chatMinWidth
+    }
+
+    /// The stored widths, clamped to what the window can actually show.
+    ///
+    /// Both columns were rigid `.frame(width:)` reading straight from `@AppStorage`, and nothing
+    /// checked them against the window. Dragged out to a 299pt panel and a 720pt stage, the row
+    /// needed 1517pt — wider than the whole 1512pt screen of a 14" MacBook Pro — so the activity
+    /// rail was pushed off the left edge and there was no way to get it back.
+    ///
+    /// The stored width is a preference, not a measurement: it is left alone, and only what gets
+    /// drawn is clamped. Widen the window and the pane you asked for comes back.
+    private var panelFit: Double {
+        guard available > 0 else { return panelWidth }
+        return max(200, min(panelWidth, roomForColumns - 340))
+    }
+
+    private var stageFit: Double {
+        guard available > 0 else { return stageWidth }
+        return max(340, min(stageWidth, roomForColumns - (panel == nil ? 0 : panelFit)))
     }
 
     private var subtitle: String {
