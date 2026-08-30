@@ -204,13 +204,13 @@ fn read_transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
-    std::fs::read_to_string(
-        claude_home
-            .join("projects")
-            .join(project_key(repo))
-            .join(format!("{id}.jsonl")),
-    )
-    .ok()
+    // Every directory the listing draws from, not just the repository's own. A session listed
+    // from a parent folder or a lane's checkout could be seen in History and then opened to
+    // nothing, because this looked in one place and the list came from several.
+    session_dirs(repo, claude_home)
+        .into_iter()
+        .map(|(dir, scope)| project_dir(&dir, claude_home, scope).join(format!("{id}.jsonl")))
+        .find_map(|path| std::fs::read_to_string(path).ok())
 }
 
 /// Read one session's transcript for display.
@@ -318,25 +318,34 @@ pub fn session_dirs(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<(Utf8PathBuf
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with(&prefix) {
                 // The key is lossy; the real path is in each transcript's `cwd`, read later.
-                out.push((
-                    Utf8PathBuf::from(format!("{}/{}", claude_home, name)),
-                    "below",
-                ));
+                //
+                // This joined `claude_home` and the key directly, leaving out `projects` — a
+                // directory that does not exist, whose `read_dir` failed, which `continue`
+                // skipped. Every session run in a subdirectory was therefore missing from
+                // History, and every lane is a subdirectory: `.keel/worktrees/<name>`. So a
+                // feature you named, worked in and closed left no trace anywhere in the app.
+                out.push((claude_home.join("projects").join(&name), "below"));
             }
         }
     }
     out
 }
 
+/// Where a scope's transcripts actually live. `below` already names its own project directory;
+/// the others name a working directory that has to be keyed first.
+fn project_dir(dir: &Utf8Path, claude_home: &Utf8Path, scope: &str) -> Utf8PathBuf {
+    if scope == "below" {
+        dir.to_owned()
+    } else {
+        claude_home.join("projects").join(project_key(dir))
+    }
+}
+
 /// Every session recorded for `repo` and the directories around it, most recently active first.
 pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session> {
     let mut sessions: Vec<Session> = Vec::new();
     for (dir, scope) in session_dirs(repo, claude_home) {
-        let project = if scope == "below" {
-            dir
-        } else {
-            claude_home.join("projects").join(project_key(&dir))
-        };
+        let project = project_dir(&dir, claude_home, scope);
         let Ok(entries) = std::fs::read_dir(&project) else {
             continue;
         };
@@ -483,6 +492,37 @@ mod tests {
             !json.contains("secret"),
             "message bodies must never leave the transcript"
         );
+    }
+
+    /// A lane is a checkout under `.keel/worktrees/<name>`, so every feature Keel starts is a
+    /// session in a subdirectory. The subdirectory's project path was built without `projects`,
+    /// so `read_dir` failed and the whole scope was skipped: a feature you named, worked in and
+    /// closed was in no list anywhere.
+    #[test]
+    fn a_session_run_in_a_lane_is_listed_and_can_be_opened() {
+        let transcript = concat!(
+            r#"{"type":"ai-title","aiTitle":"the lane"}"#,
+            "\n",
+            r#"{"type":"user","cwd":"/repo/.keel/worktrees/pricing","timestamp":"2026-01-01T00:00:00Z","message":{"content":"go"}}"#,
+            "\n",
+        );
+        let (_d, home) = home_with("-repo--keel-worktrees-pricing", "lane-1.jsonl", transcript);
+
+        let sessions = discover_sessions(Utf8Path::new("/repo"), &home);
+        assert_eq!(
+            sessions.len(),
+            1,
+            "the lane's session is part of the repository"
+        );
+        assert_eq!(sessions[0].scope, "below");
+        assert_eq!(sessions[0].title.as_deref(), Some("the lane"));
+
+        // And listed is not enough: opening it looked only in the repository's own directory.
+        assert_eq!(transcript_turns(&home).len(), 1);
+    }
+
+    fn transcript_turns(home: &Utf8Path) -> Vec<Turn> {
+        transcript(Utf8Path::new("/repo"), home, "lane-1")
     }
 
     #[test]

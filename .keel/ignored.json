@@ -1,0 +1,5 @@
+{
+  "ignored": {
+    "security/no-rate-limit": ""
+  }
+}

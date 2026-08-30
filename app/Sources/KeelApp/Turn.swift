@@ -162,8 +162,25 @@ final class Turn: Identifiable {
         var output: String = ""
         var failed = false
         var running = true
+        /// When it started and — once it has — when it stopped. A list of commands that cannot say
+        /// how long one took cannot tell you whether the one you are watching is slow or stuck.
+        let started = Date()
+        var ended: Date?
         /// Calls a subagent made on this call's behalf. Only a `Task` has any.
         var children: [Call] = []
+
+        var duration: TimeInterval? { ended.map { $0.timeIntervalSince(started) } }
+
+        /// How much this call could change, read off its own text.
+        ///
+        /// Display only, and it must stay that way: the decision that actually gates a command is
+        /// the approval hook, which parses properly in Rust and never consults this. What this
+        /// buys is that `rm -rf` and `ls` are not the same grey dot in a list of a hundred rows.
+        var risk: Risk {
+            if Turn.writeTools.contains(tool) { return .warn }
+            guard tool == "Bash" else { return .safe }
+            return Turn.risk(of: subject)
+        }
 
         /// The call doing something right now, however deep.
         var deepestRunning: Call? {
@@ -177,7 +194,7 @@ final class Turn: Identifiable {
     /// Tools whose use means a file changed. Mirrors `WRITE_TOOLS` in the web UI, deliberately:
     /// the two must agree about what "the agent edited something" means or the two renderings of
     /// the same turn disagree.
-    static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"]
+    nonisolated static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"]
 
     func noteEdit(_ path: String?) {
         guard let path, !path.isEmpty, !files.contains(path) else { return }
@@ -214,12 +231,77 @@ final class Turn: Identifiable {
             calls[pi].children[ci].output = output
             calls[pi].children[ci].failed = failed
             calls[pi].children[ci].running = false
+            calls[pi].children[ci].ended = Date()
             return
         }
         guard let i = callIndex[id] else { return }
         calls[i].output = output
         calls[i].failed = failed
         calls[i].running = false
+        calls[i].ended = Date()
+    }
+
+    // MARK: - Risk
+
+    /// What a call could do, in three tiers.
+    enum Risk: Int, Comparable {
+        /// Reads something and changes nothing.
+        case safe
+        /// Writes, installs, commits, or runs something Keel cannot vouch for. The default for an
+        /// unrecognised program: "we do not know this reads only" is the honest answer, and
+        /// claiming safety for an unknown binary is the one mistake this must not make.
+        case warn
+        /// Destroys or publishes. Irreversible, or reversible only by someone who notices.
+        case danger
+
+        static func < (a: Risk, b: Risk) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    /// Programs that only read. Everything else is at least `warn`.
+    private nonisolated static let readers: Set<String> = [
+        "ls", "cat", "head", "tail", "wc", "grep", "rg", "egrep", "find", "fd", "echo", "pwd",
+        "which", "file", "stat", "du", "df", "ps", "date", "tree", "jq", "yq", "diff", "sort",
+        "uniq", "cut", "tr", "basename", "dirname", "printf", "sed", "awk", "less", "column",
+        "nl", "seq", "true", "type", "id", "whoami", "hostname", "uname", "man", "open",
+    ]
+
+    /// `git` and friends are read or write depending on the next word alone.
+    private nonisolated static let readSubcommands: Set<String> = [
+        "git status", "git diff", "git log", "git show", "git branch", "git blame", "git ls-files",
+        "git rev-parse", "git remote", "git config", "git describe", "git stash list",
+        "cargo tree", "cargo metadata", "npm ls", "brew list", "docker ps", "docker images",
+        "kubectl get", "kubectl describe", "gh pr view", "gh run list",
+    ]
+
+    /// Irreversible, or reversible only by whoever notices. Matched as substrings because what
+    /// makes them dangerous is usually a flag, not the program.
+    private nonisolated static let dangerous: [String] = [
+        "rm -r", "rm -f", "rm *", "sudo ", "doas ", "dd if=", "mkfs", "shutdown", "reboot",
+        "killall", "chmod 777", "chmod -r 777", "git push --force", "git push -f", "git reset --hard",
+        "git clean -", "git checkout -- .", "branch -d", "sed -i", "npm publish", "cargo publish",
+        "docker system prune", "> /dev/sd", "curl -fssl", "| sh", "| bash", "drop table",
+        "truncate ", "shred ", "history -c", "wrangler delete", "kubectl delete",
+    ]
+
+    /// Reads a command well enough to colour it, and no further.
+    nonisolated static func risk(of command: String) -> Risk {
+        let text = command.lowercased()
+        for phrase in dangerous where text.contains(phrase) { return .danger }
+
+        var worst = Risk.safe
+        // `&&`, `||`, `;` and pipes each start a new program; the whole line is only as safe as
+        // its least safe segment, so `ls && cargo install x` is not a read.
+        for segment in text.split(whereSeparator: { "|&;".contains($0) }) {
+            let words = segment.split(separator: " ").map(String.init)
+            // Leading `FOO=bar` is not the program, the same reason the Rust side steps over it.
+            guard let raw = words.first(where: { !$0.contains("=") }) else { continue }
+            let program = raw.split(separator: "/").last.map(String.init) ?? raw
+            if readers.contains(program) { continue }
+            let pair = words.count > 1 ? "\(program) \(words[1])" : program
+            if readSubcommands.contains(pair) { continue }
+            worst = max(worst, .warn)
+        }
+        return worst
     }
 
     /// A run of consecutive calls to the same tool, shown as one row.
@@ -230,6 +312,14 @@ final class Turn: Identifiable {
         var failed: Bool { calls.contains(where: \.failed) }
         var running: Bool { calls.contains(where: \.running) }
         var first: Call { calls[0] }
+        /// The row is as risky as its worst call: a run of five `Bash`es collapsed into one line
+        /// must not hide the one of them that was `rm -rf`.
+        var risk: Risk { calls.map(\.risk).max() ?? .safe }
+        /// What the whole run took, once all of it has finished.
+        var duration: TimeInterval? {
+            let done = calls.compactMap(\.duration)
+            return done.count == calls.count ? done.reduce(0, +) : nil
+        }
     }
 
     /// Consecutive calls to the same tool collapse into one row.

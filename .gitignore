@@ -6,6 +6,9 @@ dist/
 # Quarantined repository-supplied agent config. Never committed: it is untrusted by definition.
 .keel/quarantine/
 
+# What someone dropped or pasted into the composer. Belongs to the machine, not the repository.
+.keel/attachments/
+
 .env
 .env.*
 !.env.example
