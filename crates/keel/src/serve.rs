@@ -308,6 +308,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             axum::routing::post(crate::review::api_memory),
         )
         .route("/api/readiness/ignore", axum::routing::post(api_ignore))
+        .route("/api/git/ignore", axum::routing::post(api_git_ignore))
         .route("/api/review", get(crate::review::api_review))
         .route(
             "/api/review/save",
@@ -762,11 +763,43 @@ async fn api_git_init(
 }
 
 async fn api_git_act(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Json(req): Json<GitActRequest>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    // A lane's checkout does not hold every file the panel can show — a session edit may have
+    // been made in the project itself, or in a nested repository — and "no such file" for a
+    // path the person is looking at is the least useful error there is. The project root is
+    // the second place to look, and `resolve` still refuses anything outside it.
+    let root = state.repo();
     blocking(
-        move || crate::api::git_act(&repo, &req.action, &req.path, req.hunk),
+        move || {
+            let first = crate::api::git_act(&repo, &req.action, &req.path, req.hunk);
+            match first {
+                Err(e) if e.contains("no such file") && root != repo => {
+                    crate::api::git_act(&root, &req.action, &req.path, req.hunk)
+                }
+                other => other,
+            }
+        },
+        Err("timed out".into()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(serde::Deserialize)]
+struct GitIgnoreBody {
+    path: String,
+}
+
+async fn api_git_ignore(
+    Checkout(repo): Checkout,
+    Json(b): Json<GitIgnoreBody>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    blocking(
+        move || crate::api::git_ignore_path(&repo, &b.path),
         Err("timed out".into()),
     )
     .await

@@ -553,6 +553,7 @@ pub async fn chat(
                 &repo,
                 port,
                 query.session.as_deref(),
+                query.lane.as_deref(),
             ))
             // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
             .arg("--mcp-config")
@@ -1062,6 +1063,32 @@ pub fn git_discard_all(root: &Utf8Path) -> Result<(u32, u32), String> {
     Ok((tracked, untracked.len() as u32))
 }
 
+/// Add a path to the repository's `.gitignore`, and stop tracking it if it was tracked.
+///
+/// The file stays on disk: this is "git should stop watching this", which is what somebody
+/// means when they point at `.env.local` in the panel — not "delete my configuration".
+pub fn git_ignore_path(root: &Utf8Path, path: &str) -> Result<(), String> {
+    let path = path.trim().trim_start_matches("./");
+    if path.is_empty() || path.starts_with('/') || path.contains("..") {
+        return Err("that is not a path in this repository".into());
+    }
+    let file = root.join(".gitignore");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    if !existing.lines().any(|l| l.trim() == path) {
+        let mut next = existing;
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(path);
+        next.push('\n');
+        std::fs::write(&file, next).map_err(|e| e.to_string())?;
+    }
+    // Tracked files keep being reported until the index forgets them; --cached leaves the disk
+    // alone. A path git never knew is not an error here.
+    let _ = git_run(root, &["rm", "-r", "--cached", "-q", "--", path]);
+    Ok(())
+}
+
 /// Stage or unstage everything.
 pub fn git_stage_all(root: &Utf8Path, stage: bool) -> Result<(), String> {
     if stage {
@@ -1189,6 +1216,37 @@ mod attach_tests {
 #[cfg(test)]
 mod git_tests {
     use super::*;
+
+    #[test]
+    fn ignoring_a_path_writes_gitignore_once_and_leaves_the_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join(".env.local"), "SECRET=1").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "seed"]);
+
+        git_ignore_path(&root, ".env.local").unwrap();
+        git_ignore_path(&root, ".env.local").unwrap();
+        let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert_eq!(ignore.matches(".env.local").count(), 1, "{ignore}");
+        assert!(root.join(".env.local").exists(), "the file is not deleted");
+        let status = git(&root, &["status", "--porcelain"]).unwrap();
+        assert!(
+            status.contains("D  .env.local"),
+            "untracked in the index: {status}"
+        );
+        assert!(git_ignore_path(&root, "../escape").is_err());
+    }
 
     #[test]
     fn discard_all_restores_tracked_and_trashes_untracked_but_keeps_ignored() {

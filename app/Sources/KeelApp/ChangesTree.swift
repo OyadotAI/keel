@@ -441,6 +441,9 @@ struct ChangeRow: View {
                 Button("Unstage") { Task { await model.gitAct("unstage", node.path) } }
                 Button("Attach as context") { model.mention(node.path) }
                 Button("Reveal in Finder") { Task { await model.reveal(node.path) } }
+                // The answer to "why is my .env.local in here": git should not be watching it.
+                // The file stays on disk; the index forgets it.
+                Button("Add to .gitignore") { Task { await model.gitIgnore(node.path) } }
                 Divider()
                 Button("Discard changes", role: .destructive) {
                     Task { await model.gitAct("discard", node.path) }

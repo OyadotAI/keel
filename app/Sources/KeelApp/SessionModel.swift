@@ -514,11 +514,7 @@ final class SessionModel: Identifiable {
         // arrives before the checks have run is the "done!" that started this whole argument.
         await checkDesign(turn)
         Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
-        Telemetry.track("turn_finished", [
-            "gate": gateName(turn.gate), "files": turn.files.count,
-            "calls": turn.calls.count, "seconds": (turn.durationMS ?? 0) / 1000,
-            "committed": turn.commit != nil,
-        ])
+        reportTurn(turn)
         if !queued.isEmpty { start(queued.removeFirst()) }
     }
 
@@ -856,7 +852,12 @@ final class SessionModel: Identifiable {
                     Notifications.approvalWaiting(lane: self, found.count)
                     // So a tester's "it just sat there" can be read against "a question was
                     // shown and never answered": the tool, not the command.
-                    for p in found { Telemetry.track("approval_shown", ["tool": p.tool, "question": p.isQuestion]) }
+                    for p in found {
+                        self.approvalsThisTurn += 1
+                        Telemetry.track("approval_shown", ["tool": p.tool, "question": p.isQuestion,
+                                                           "rules": p.rules.count, "mode": self.mode])
+                        Telemetry.breadcrumb("approval shown: \(p.tool)")
+                    }
                 }
                 // A turn with no output for five minutes is the thing testers describe as
                 // "stuck on thinking". Said once per turn, with what it was doing.
@@ -1257,6 +1258,43 @@ final class SessionModel: Identifiable {
 
     /// Run a request whose failure must be seen. A discard that fails and looks like it worked
     /// is the kind of silence that costs someone an afternoon.
+    /// What a finished turn cost and whether it was any good — the numbers behind "it went in
+    /// circles for ten minutes". Counts only; nothing said or written.
+    func reportTurn(_ turn: Turn) {
+        var props: [String: Any] = [
+            "mode": mode,
+            "calls": turn.calls.count,
+            "failed_calls": turn.calls.count(where: { $0.failed }),
+            "files": turn.files.count,
+            "seconds": (turn.durationMS ?? 0) / 1000,
+            "replayed": turn.replayed,
+            "approvals": approvalsThisTurn,
+            "model": claudeModel.isEmpty ? "default" : claudeModel,
+        ]
+        if let t = turn.tokens {
+            props["input_tokens"] = t.input + t.cacheRead + t.cacheWrite
+            props["output_tokens"] = t.output
+            props["cached"] = Int(t.cached * 100)
+        }
+        if let c = turn.cost { props["cost_cents"] = Int(c * 100) }
+        props["committed"] = turn.commit != nil
+        switch turn.gate {
+        case .passed: props["gate"] = "passed"
+        case .failed(_, let problems): props["gate"] = "failed"; props["problems"] = problems.count
+        case .running: props["gate"] = "running"
+        case .notRun: props["gate"] = "not_run"
+        case .none: props["gate"] = "none"
+        }
+        Telemetry.track("turn_finished", props)
+        // A turn that failed the gate or ran no tools is the shape of a bad experience; a
+        // warning so it is findable next to the crashes rather than buried in a funnel.
+        if case .failed = turn.gate {
+            Telemetry.warn("turn failed the gate", ["mode": mode, "calls": "\(turn.calls.count)"])
+        }
+        approvalsThisTurn = 0
+    }
+    var approvalsThisTurn = 0
+
     private func attempt(_ work: () async throws -> Void) async {
         do { try await work(); lastError = nil } catch {
             lastError = error.localizedDescription
@@ -1419,6 +1457,14 @@ final class SessionModel: Identifiable {
         Telemetry.track("discarded_all")
         Task { try? await Task.sleep(for: .seconds(6)); discarded = nil }
     }
+    struct GitIgnoreBody: Encodable { var path: String }
+    /// Stop git watching a file, keeping it on disk — what somebody means when they point at
+    /// `.env.local` in the panel.
+    func gitIgnore(_ path: String) async {
+        await git("ignore") { _ = try await client.post("/api/git/ignore", body: GitIgnoreBody(path: path), q(), as: Bool.self) }
+        Telemetry.track("path_gitignored")
+    }
+
     func stageAll(_ stage: Bool) async {
         await git(stage ? "stage" : "unstage") { _ = try await client.post("/api/git/stage-all", body: StageAllBody(stage: stage), q(), as: Bool.self) }
     }
