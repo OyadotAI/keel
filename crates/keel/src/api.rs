@@ -554,8 +554,6 @@ pub async fn chat(
                         Some("acceptEdits") => "workspace-write",
                         _ => "read-only",
                     })
-                    .arg("--ask-for-approval")
-                    .arg("never")
                     .arg("--cd")
                     .arg(&cwd)
                     .arg(
