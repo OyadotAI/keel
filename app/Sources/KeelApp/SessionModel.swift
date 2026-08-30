@@ -68,6 +68,8 @@ final class SessionModel: Identifiable {
     var running = false
     /// When the stream last said anything; the working bar reads silence off it.
     var lastEventAt = Date()
+    /// So the fresh-conversation retry happens once and cannot become a loop.
+    private var retriedFresh = false
     /// One stall report per turn.
     var stallReported = false
     var prompt = ""
@@ -663,6 +665,7 @@ final class SessionModel: Identifiable {
                         if let data = event.data.data(using: .utf8) { self.record(data, into: turn) }
                     case "fatal":
                         self.lastError = event.data
+                        if Self.sessionIsGone(event.data) { self.sessionId = nil }
                     case "done":
                         break
                     default:
@@ -672,8 +675,31 @@ final class SessionModel: Identifiable {
             } catch {
                 self.lastError = error.localizedDescription
             }
+            // A turn that failed only because the conversation it resumed is gone is worth
+            // retrying once, on a fresh one. The alternative is what shipped: an empty card, and
+            // the same failure again on every send until the lane is thrown away.
+            if turn.failed, self.sessionId == nil, !self.retriedFresh, turn.files.isEmpty {
+                self.retriedFresh = true
+                self.turns.removeAll { $0 === turn }
+                self.running = false
+                self.watchApprovals(false)
+                self.start(full)
+                return
+            }
             await self.endTurn(turn)
         }
+    }
+
+    /// The conversation Keel was resuming no longer exists.
+    ///
+    /// It happens after a re-login, a cleared history, or a lane opened on another machine —
+    /// and it is self-perpetuating, because Keel kept handing the same dead id to `--resume` on
+    /// every retry. The provider prints this on stderr and puts nothing but `is_error` on stdout,
+    /// so before the daemon drained stderr there was nothing to notice.
+    static func sessionIsGone(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("no conversation found") || m.contains("session id")
+            && (m.contains("not found") || m.contains("does not exist"))
     }
 
     private func endTurn(_ turn: Turn) async {
@@ -776,6 +802,11 @@ final class SessionModel: Identifiable {
         var model: String?
         var total_cost_usd: Double?
         var duration_ms: Int?
+        /// On a `result`: whether the run failed outright, and what it said about it. Read from
+        /// tool results all along and never from the turn's own result — so a run that failed
+        /// drew a card indistinguishable from a quiet success.
+        var is_error: Bool?
+        var result: String?
         var message: Message?
         var event: StreamEvent?
         /// On a `result`: the whole turn's tokens.
@@ -893,6 +924,15 @@ final class SessionModel: Identifiable {
             }
 
         case "result":
+            // `is_error` was read from tool results and ignored on the turn's own result, so a
+            // run that failed outright drew a card that looked like a quiet success. The text is
+            // often absent (a `--resume` against a missing conversation sets the flag and says
+            // why on stderr), so the daemon's `fatal` fills that in.
+            if r.is_error == true {
+                let said = r.result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                turn.failed = true
+                if !said.isEmpty { lastError = said }
+            }
             if let c = r.total_cost_usd { turn.cost = c }
             turn.durationMS = r.duration_ms
             if let u = r.usage {
@@ -1734,7 +1774,10 @@ final class SessionModel: Identifiable {
         Task { try? await Task.sleep(for: .seconds(5)); remembered = nil }
     }
 
-    struct SessionRename: Encodable { var id: String; var title: String }
+    /// The daemon's field is `name`. It was sent as `title`, which axum rejected with a 422 that
+    /// `try?` swallowed — so renaming a tab changed the tab and nothing else, and the session kept
+    /// its old name in History where people then went looking for it. Pinned by a test.
+    struct SessionRename: Encodable { var id: String; var name: String }
 
     /// Name this lane. When it has a session, History gets the same name.
     func rename(to name: String) {
@@ -1747,9 +1790,16 @@ final class SessionModel: Identifiable {
     /// Name a session. Kept in Keel's own store — Claude Code's transcript is not touched to
     /// achieve it.
     func rename(session id: String, to title: String) async {
-        struct Ok: Decodable {}
-        _ = try? await client.post("/api/session/rename",
-                                   body: SessionRename(id: id, title: title), as: Bool.self)
+        /// What the daemon answers with. It was decoded as `Bool`, which never matched either —
+        /// two swallowed mismatches on one call is how a rename came to fail in silence.
+        struct Renamed: Decodable { var name: String }
+        do {
+            _ = try await client.post("/api/session/rename",
+                                      body: SessionRename(id: id, name: title), as: Renamed.self)
+        } catch {
+            lastError = "Renamed the tab, but History kept the old name: "
+                + error.localizedDescription
+        }
         await refreshState()
     }
 

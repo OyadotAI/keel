@@ -767,6 +767,31 @@ pub async fn chat(
             stopper.mark_running(&lane, pid);
         }
 
+        // Drained, always, and not only to report it.
+        //
+        // A piped stream nobody reads fills its buffer and then *blocks the child mid-write* —
+        // measured here at 64KB, past which stdout never closes again and the turn hangs with the
+        // app showing "thinking" forever. Reading it concurrently is what makes that impossible.
+        //
+        // It is also the only place the reason for some failures is written: `--resume` against a
+        // conversation that no longer exists prints "No conversation found with session ID: …"
+        // here and puts nothing but `is_error` on stdout.
+        let errors = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let errors = errors.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut held = errors.lock().expect("stderr lock");
+                    // Capped: a runaway process must not become a runaway allocation.
+                    if held.len() < 16_384 {
+                        held.push_str(&line);
+                        held.push('\n');
+                    }
+                }
+            });
+        }
+
         if let Some(stdout) = child.stdout.take() {
             let mut lines = BufReader::new(stdout).lines();
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
@@ -788,6 +813,28 @@ pub async fn chat(
         let status = child.wait().await;
         stopper.clear_running(&lane, pid);
         let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+
+        // A provider that failed and said why on stderr used to say it to nobody: the app was
+        // handed `done` with a code it ignored, and drew an empty turn card. An exit of 0 is
+        // silent as before — plenty of tools warn on stderr and succeed.
+        if code != 0 {
+            let why = errors.lock().expect("stderr lock").trim().to_string();
+            if !why.is_empty() {
+                let tail: String = why
+                    .lines()
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = tx
+                    .send(Ok(Event::default().event("fatal").data(tail)))
+                    .await;
+            }
+        }
+
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
@@ -1842,6 +1889,46 @@ fn model_arg(model: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The other half of the same mistake: a pipe that is created and never read.
+    ///
+    /// A child blocks mid-write once a pipe nobody drains fills its buffer — measured on macOS at
+    /// somewhere past 64KB. `stderr` was piped and read by nobody, so a provider that said enough
+    /// on it stopped being able to write to *stdout* as well, `next_line()` waited forever, and
+    /// `child.wait()` was never reached. The turn never ended and the app sat on "thinking" with
+    /// no error, no exit code and nothing to stop.
+    ///
+    /// The test spawns exactly that shape and proves the reader must be concurrent: draining
+    /// stdout alone never sees the last line.
+    #[tokio::test]
+    async fn an_undrained_stderr_wedges_the_child() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("echo first; yes padding | head -c 300000 >&2; echo last")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("could not spawn `sh`");
+
+        // Exactly what the handler used to do: stdout to EOF, stderr untouched.
+        let stdout = child.stdout.take().expect("piped");
+        let read_everything = async {
+            let mut lines = BufReader::new(stdout).lines();
+            let mut seen = Vec::new();
+            while let Ok(Some(line)) = lines.next_line().await {
+                seen.push(line);
+            }
+            seen
+        };
+        let wedged = tokio::time::timeout(std::time::Duration::from_secs(5), read_everything).await;
+        let _ = child.start_kill();
+        assert!(
+            wedged.is_err(),
+            "a child writing 300KB to an undrained stderr reached EOF on stdout — if this now \
+             passes the platform buffers it, and the concurrent drain is still what makes the \
+             guarantee rather than the buffer size"
+        );
+    }
 
     /// The bug that made Codex do nothing at all.
     ///
