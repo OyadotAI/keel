@@ -103,25 +103,9 @@ struct SessionsPanel: View {
                        "No past session mentions “\(query)”.")
         }
         ForEach(visible) { s in
-            HoverRow(selected: s.id == model.sessionId) {
-                VStack(alignment: .leading, spacing: K.S.hair) {
-                    Text(s.title ?? String(s.id.prefix(8)))
-                        .font(K.F.small.weight(s.id == model.sessionId ? .semibold : .regular))
-                        .foregroundStyle(K.C.text)
-                        .lineLimit(1)
-                    HStack(spacing: K.S.xs) {
-                        Text("\(s.messages) msg").font(K.F.codeTiny)
-                        if let t = s.lastActive { Text(short(t)).font(K.F.codeTiny) }
-                        // Started in the folder above or below: said, because resuming it
-                        // runs the agent there.
-                        if let from = s.elsewhere {
-                            Text("· in \(from)/").font(K.F.codeTiny)
-                                .help("Started in \(s.cwd ?? from). Resuming runs the agent there.")
-                        }
-                    }
-                    .foregroundStyle(K.C.faint)
-                }
-            } action: {
+            PanelRow(name: s.title ?? String(s.id.prefix(8)),
+                     detail: detail(s),
+                     selected: s.id == model.sessionId) {
                 // Resumed into its own lane, so opening an old session does not evict the one
                 // that is running.
                 Task { await model.lanes?.open(session: s.id) }
@@ -141,6 +125,16 @@ struct SessionsPanel: View {
                     renaming = nil
                 }
             }
+    }
+
+    /// One line under the title: how much was said, when, and — because resuming runs the agent
+    /// there — whether it started somewhere other than this folder. It was three monospace
+    /// fragments with no separators, reading `42 msg 09:14`.
+    private func detail(_ s: Wire.Session) -> String {
+        var parts = ["\(s.messages) message\(s.messages == 1 ? "" : "s")"]
+        if let t = s.lastActive { parts.append(short(t)) }
+        if let from = s.elsewhere { parts.append("in \(from)/") }
+        return parts.joined(separator: " · ")
     }
 
     /// `2026-08-29T04:12:…` is not a time. The date, or the clock if it is today.

@@ -402,14 +402,17 @@ struct Composer: View {
                 ErrorRow(message: err) { model.lastError = nil }
             }
 
-            VStack(spacing: K.S.xs) {
+            VStack(spacing: 0) {
                 field
-                controls
+                controls.overlay(alignment: .top) { Hairline() }
             }
-            .padding(K.S.xs)
             .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
-            .overlay(RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: K.R.lg)
+                    .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
+                            lineWidth: dropping ? 2 : 1)
+            )
+            .animation(K.M.quick, value: focused)
             memoryNote
         }
         .padding(.horizontal, K.S.xxl)
@@ -454,13 +457,7 @@ struct Composer: View {
             .font(K.F.reading)
             .lineSpacing(3)
             .lineLimit(1...8)
-            .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
-            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
-            .overlay(
-                RoundedRectangle(cornerRadius: K.R.md)
-                    .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
-                            lineWidth: dropping ? 2 : 1)
-            )
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
             .focused($focused)
             // The button has always drawn a `return` glyph; until now Return only inserted a
             // newline and ⌘Return was the real key, so the control lied about itself. ⇧Return
@@ -530,7 +527,8 @@ struct Composer: View {
             ModelPicker(model: model)
             Button { model.chooseAttachments() } label: {
                 Image(systemName: "paperclip").font(K.F.micro)
-                    .frame(width: 22, height: 20).contentShape(Rectangle())
+                    .frame(width: 24, height: 22)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
             .hint("Attach files (or paste, drop, or type @)")
@@ -554,8 +552,8 @@ struct Composer: View {
                 .hint("Send (Return, or ⌘Return). ⇧Return for a new line.")
             }
         }
-        .padding(.horizontal, K.S.xs)
-        .padding(.bottom, K.S.xs)
+        .padding(.horizontal, K.S.md)
+        .padding(.vertical, K.S.half)
     }
 }
 
@@ -611,9 +609,10 @@ struct ModelPicker: View {
             }
         } label: {
             Text(Self.choices.first { $0.0 == model.claudeModel }?.1 ?? model.claudeModel)
-                .font(K.F.micro).foregroundStyle(K.C.faint)
+                .font(K.F.micro).foregroundStyle(K.C.dim)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("Which Claude answers — the same choice /model makes in the terminal. Applies from the next turn.")
+        .menuStyle(.borderlessButton).fixedSize()
+        .hint("Which Claude answers — the same choice /model makes in the terminal. "
+              + "Applies from the next turn.")
     }
 }
