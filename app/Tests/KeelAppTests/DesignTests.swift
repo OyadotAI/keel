@@ -172,6 +172,12 @@ final class CanvasTests: XCTestCase {
 
     /// A page file is a URL when there is exactly one; a dynamic segment is not.
     func testAPageFileIsARoute() {
+        // The shape a real project has, where the app directory is one of several packages.
+        XCTAssertEqual(Frontend.route(for: "dashboard/app/reseller-onboarding/page.tsx"),
+                       "/reseller-onboarding")
+        // A component is not a page. Saying so is what sends `Frontend.page(containing:)` up the
+        // import graph instead of leaving the preview where it was.
+        XCTAssertNil(Frontend.route(for: "components/reseller-onboarding/domain-step.tsx"))
         XCTAssertEqual(Frontend.route(for: "frontend/app/page.tsx"), "/")
         XCTAssertEqual(Frontend.route(for: "app/pricing/page.tsx"), "/pricing")
         XCTAssertEqual(Frontend.route(for: "app/(marketing)/about/page.tsx"), "/about")
