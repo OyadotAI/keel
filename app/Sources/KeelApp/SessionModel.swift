@@ -282,9 +282,38 @@ final class SessionModel: Identifiable {
             case .codex: "codex"
             }
         }
+
+        /// For the tab, where there is room for a badge and not for a sentence.
+        var short: String {
+            switch self {
+            case .claude: "CC"
+            case .codex: "CODEX"
+            }
+        }
+
+        /// What the model picker offers, which is not the same list for both.
+        ///
+        /// An empty value means "whatever the CLI's own config says", and it is the default for
+        /// exactly that reason: a hardcoded list cannot know about a model somebody put in their
+        /// `~/.codex/config.toml`, and offering a name their account cannot use is worse than
+        /// offering none. Everything else here is a name that CLI answers to.
+        var models: [(value: String, label: String)] {
+            switch self {
+            case .claude:
+                [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+            case .codex:
+                [("", "Default"), ("gpt-5-codex", "GPT-5 Codex"), ("gpt-5", "GPT-5"), ("o3", "o3")]
+            }
+        }
     }
 
-    var provider: Provider = .claude
+    var provider: Provider = .claude {
+        didSet {
+            // The names do not transfer. Carrying "opus" onto a Codex lane asks `codex` for a
+            // model it has never heard of, which is the bug this whole pass started from.
+            if oldValue != provider { claudeModel = "" }
+        }
+    }
     var scopeFileLimit = 8
     var policySources: [String] = []
     var allowedProviders: Set<String> = ["claude", "codex"]

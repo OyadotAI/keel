@@ -594,25 +594,29 @@ struct ModeToggle: View {
 /// The model, the way `/model` picks it in the terminal. Default means the CLI's own choice.
 struct ModelPicker: View {
     let model: SessionModel
-    private static let choices: [(String, String)] = [
-        ("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"),
-    ]
+
+    private var choices: [(value: String, label: String)] { model.provider.models }
+
     var body: some View {
         let _ = model.modelTick
         Menu {
-            ForEach(Self.choices, id: \.0) { value, label in
+            ForEach(choices, id: \.value) { value, label in
                 Button {
                     model.claudeModel = value
                 } label: {
-                    if model.claudeModel == value { Label(label, systemImage: "checkmark") } else { Text(label) }
+                    if model.claudeModel == value {
+                        Label(label, systemImage: "checkmark")
+                    } else {
+                        Text(label)
+                    }
                 }
             }
         } label: {
-            Text(Self.choices.first { $0.0 == model.claudeModel }?.1 ?? model.claudeModel)
+            Text(choices.first { $0.value == model.claudeModel }?.label ?? model.claudeModel)
                 .font(K.F.micro).foregroundStyle(K.C.dim)
         }
         .menuStyle(.borderlessButton).fixedSize()
-        .hint("Which Claude answers — the same choice /model makes in the terminal. "
-              + "Applies from the next turn.")
+        .hint("Which model answers — the same choice `/model` makes in the terminal. Default "
+              + "leaves it to the CLI's own config. Applies from the next turn.")
     }
 }
