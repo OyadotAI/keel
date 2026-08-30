@@ -945,6 +945,20 @@ final class SessionModel: Identifiable {
                 fail("This folder is not a git repository, so Keel could not make an isolated "
                      + "checkout — and without one there is nothing to branch from or commit to.",
                      category: "not_a_repo", fix: repoFix)
+            } else if error.localizedDescription.contains("no commits yet") {
+                // A repository nobody has committed to yet has no HEAD to branch from. Keel can
+                // make that first commit — which is the thing the person would go and do anyway,
+                // and which nothing offered, so this failure repeated turn after turn.
+                fail("This repository has no commits yet, so there is nothing to branch from. "
+                     + "Keel needs one commit before it can work in an isolated checkout.",
+                     category: "no_commits",
+                     fix: Fix(label: "Make the first commit") { [weak self] in
+                         Task { @MainActor in
+                             guard let self else { return }
+                             await self.commit("Initial commit", all: true)
+                             if self.lastError == nil { self.lastFix = nil }
+                         }
+                     })
             } else {
                 fail("The isolated checkout could not be created: " + error.localizedDescription,
                      category: "worktree",

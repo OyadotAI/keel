@@ -362,12 +362,12 @@ pub async fn ask(
         id: id.clone(),
         lane: hook.lane.clone(),
         tool: hook.tool_name.clone(),
-        command: hook
-            .tool_input
-            .get("command")
-            .and_then(|c| c.as_str())
-            .unwrap_or_default()
-            .to_string(),
+        command: shown(
+            hook.tool_input
+                .get("command")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default(),
+        ),
         rules,
         input: hook.tool_input.clone(),
         session_id: hook.session_id.clone(),
@@ -453,6 +453,28 @@ pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
     });
     *queue = theirs;
     Json(mine)
+}
+
+/// The command, at a length a card can draw.
+///
+/// This is the one view that must appear instantly: the turn has stopped and is waiting on it. A
+/// command carrying a large argument — a heredoc writing a file, a long commit message — was put
+/// on the card whole, into a `Text` with `fixedSize` and no line limit, and CoreText measured
+/// every character on the main thread. Two seconds of that is an App Hang, and it happened on the
+/// one surface that must never stall.
+///
+/// The full command still runs; this is only what is shown. Approving a command you cannot read
+/// the end of is no worse than the alternative, which is an approval you cannot see at all.
+fn shown(command: &str) -> String {
+    const LIMIT: usize = 4000;
+    if command.chars().count() <= LIMIT {
+        return command.to_string();
+    }
+    let head: String = command.chars().take(LIMIT).collect();
+    format!(
+        "{head}\n\n[… {} more characters, not shown]",
+        command.chars().count() - LIMIT
+    )
 }
 
 /// Whether a tool is a question to the person rather than a request to do something.
@@ -609,6 +631,32 @@ pub(crate) mod tests {
                 "{stray} read as inside the project, so trust would cover it"
             );
         }
+    }
+
+    /// The approval card is the one view that must appear instantly — the turn has stopped and is
+    /// waiting on it — and a command carrying a heredoc was drawn whole, into a `Text` with
+    /// `fixedSize` and no line limit. CoreText measured every character on the main thread and the
+    /// app hung. Reported from a real machine, at 0.2.46.
+    #[test]
+    fn a_huge_command_is_cut_down_before_it_reaches_a_card() {
+        let ordinary = "git commit -m 'a normal message'";
+        assert_eq!(shown(ordinary), ordinary, "nothing normal is touched");
+
+        let huge = "cat <<'EOF'\n".to_string() + &"x".repeat(200_000) + "\nEOF";
+        let out = shown(&huge);
+        assert!(
+            out.chars().count() < 4_100,
+            "still {} chars",
+            out.chars().count()
+        );
+        assert!(
+            out.contains("more characters, not shown"),
+            "it says it was cut"
+        );
+        assert!(
+            out.starts_with("cat <<'EOF'"),
+            "the beginning is what identifies it"
+        );
     }
 
     /// A loop is one thing to approve, not one rule per keyword in it.
