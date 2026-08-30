@@ -756,11 +756,27 @@ pub async fn chat(
         // than deletes: the file goes to `.keel/quarantine/` where the person can read it.
         if let Err(e) = keel_harness::quarantine(&cwd) {
             tracing::warn!("could not quarantine repository agent config: {e}");
+            // Security-relevant and previously invisible: the repository's own hooks will run on
+            // this machine. The kind travels, never the path.
+            sentry::capture_message(
+                "quarantine failed: repository hooks will load",
+                sentry::Level::Error,
+            );
+            let _ = tx
+                .send(Ok(Event::default().event("err").data(format!(
+                    "Keel could not quarantine this repository's .claude/settings.json ({e}). \
+                     Its hooks will run on your machine."
+                ))))
+                .await;
         }
 
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
+                sentry::with_scope(
+                    |scope| scope.set_tag("provider", provider),
+                    || sentry::capture_message("could not start the agent", sentry::Level::Error),
+                );
                 let _ = tx
                     .send(Ok(Event::default().event("fatal").data(format!(
                         "could not start `{provider}`: {e}. Is the CLI installed and on PATH?"
@@ -853,6 +869,16 @@ pub async fn chat(
         // handed `done` with a code it ignored, and drew an empty turn card. An exit of 0 is
         // silent as before — plenty of tools warn on stderr and succeed.
         if code != 0 {
+            // Every non-zero exit is reported, with or without stderr — the silent ones are
+            // exactly the cases nobody could explain afterwards. The code and the provider go;
+            // stderr does not, because it quotes paths and branch names.
+            sentry::with_scope(
+                |scope| {
+                    scope.set_tag("provider", provider);
+                    scope.set_tag("exit", code.to_string());
+                },
+                || sentry::capture_message("the agent exited non-zero", sentry::Level::Error),
+            );
             let why = errors.lock().expect("stderr lock").trim().to_string();
             if !why.is_empty() {
                 let tail: String = why

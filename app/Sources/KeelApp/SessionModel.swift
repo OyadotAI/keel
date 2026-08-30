@@ -116,7 +116,21 @@ final class SessionModel: Identifiable {
         return order.compactMap { seen[$0] }
     }
     var pending: [Wire.Pending] = []
-    var lastError: String?
+    /// Every failure the person is shown passes through here, from ~25 call sites. The reporting
+    /// hangs off the property rather than off `fail(_:)` so a future `lastError = …` cannot
+    /// quietly skip it — which is exactly how none of this was reaching Sentry before.
+    var lastError: String? {
+        didSet {
+            guard let message = lastError, message != oldValue else { return }
+            Telemetry.failure(failureCategory, message,
+                              ["mode": mode, "provider": provider.queryValue,
+                               "fixable": lastFix == nil ? "no" : "yes"])
+        }
+    }
+
+    /// What kind of failure the next `lastError` is, set by whoever is about to report one.
+    /// Defaults to the generic bucket so an unlabelled failure still arrives.
+    var failureCategory = "app" 
     /// What to do about `lastError`. Always set through `fail(_:fix:)` so a failure without a next
     /// step is a visible omission rather than the default.
     var lastFix: Fix?
@@ -126,9 +140,10 @@ final class SessionModel: Identifiable {
     /// The repository already requires every scanner finding to carry a `Fix` — "a finding without
     /// one turns the report into a lint run nobody acts on". A runtime failure is the same: a wall
     /// with no next step is where people stop.
-    func fail(_ message: String, fix: Fix? = nil) {
-        lastError = message
+    func fail(_ message: String, category: String = "app", fix: Fix? = nil) {
         lastFix = fix
+        failureCategory = category
+        lastError = message
     }
 
     /// A failure Claude Code reported about itself, and what to do about it.
@@ -794,7 +809,7 @@ final class SessionModel: Identifiable {
                         // non-zero exit, so a run that hung reported nothing it had already said.
                         turn.note(raw: event.data, stream: .err)
                     case "fatal":
-                        self.fail(event.data, fix: self.repoFix)
+                        self.fail(event.data, category: "daemon", fix: self.repoFix)
                         turn.failure = event.data
                         if Self.sessionIsGone(event.data) { self.sessionId = nil }
                     case "starting":
@@ -809,7 +824,8 @@ final class SessionModel: Identifiable {
                         if code != 0, turn.failure == nil {
                             let why = "The agent exited with code \(code)."
                             turn.failure = why
-                            self.fail(why, fix: Fix(label: "Retry") { self.retryLast() })
+                            self.fail(why, category: "nonzero_exit",
+                                      fix: Fix(label: "Retry") { self.retryLast() })
                         }
                     default:
                         // Never discard an event the daemon added. Keel not knowing what something
@@ -924,9 +940,10 @@ final class SessionModel: Identifiable {
                 // to branch from because the folder was never a repository.
                 fail("This folder is not a git repository, so Keel could not make an isolated "
                      + "checkout — and without one there is nothing to branch from or commit to.",
-                     fix: repoFix)
+                     category: "not_a_repo", fix: repoFix)
             } else {
                 fail("The isolated checkout could not be created: " + error.localizedDescription,
+                     category: "worktree",
                      fix: Fix(label: "Run in the project") { [weak self] in
                          self?.isolated = false
                          self?.lastError = nil
@@ -1087,7 +1104,7 @@ final class SessionModel: Identifiable {
             // is how "Not logged in · Please run /login" arrived looking like a remark.
             if let failure = Self.classify(r) {
                 turn.failure = failure.message
-                fail(failure.message, fix: failure.fix(self))
+                fail(failure.message, category: failure.kind, fix: failure.fix(self))
                 // The reason these were not arriving in Sentry is that only the five-minute stall
                 // was ever reported. The taxonomy goes; the message never does — it can quote a
                 // repository or an organisation name.

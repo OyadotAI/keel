@@ -121,6 +121,43 @@ enum Telemetry {
         }
     }
 
+    /// A failure the person was shown, so the people who ship Keel see what testers actually hit.
+    ///
+    /// Reported at `error` rather than `warning`: these are the moments somebody could not do the
+    /// thing they opened the app to do. Only the *shape* travels — the message is redacted first,
+    /// because a git error quotes branch names and a filesystem error quotes paths, and the rule
+    /// here has always been that no call site passes a prompt, a path or a repository name.
+    static func failure(_ category: String, _ message: String, _ tags: [String: String] = [:]) {
+        guard crashReports, sentryOn else { return }
+        SentrySDK.capture(message: "\(category): \(redact(message))") { scope in
+            scope.setLevel(.error)
+            scope.setTag(value: category, key: "failure")
+            for (k, v) in tags { scope.setTag(value: v, key: k) }
+        }
+    }
+
+    /// Strip what identifies a person or their work, keep what identifies the bug.
+    ///
+    /// "fatal: a branch named 'keel/add-billing' already exists" is worth having; the branch name
+    /// is not. Paths, `~`, URLs and quoted fragments go; the sentence that says which failure it
+    /// was stays.
+    static func redact(_ message: String) -> String {
+        var out = message
+        // Order matters: a URL contains a path, so it has to be matched before the path rule
+        // claims it and reports the wrong shape.
+        for (pattern, replacement) in [
+            ("https?://[^\\s\"']+", "<url>"),
+            ("/Users/[^\\s\"']+", "<path>"),
+            ("(/[A-Za-z0-9._-]+){2,}/?", "<path>"),
+            ("'[^']{1,200}'", "'<name>'"),
+            ("\"[^\"]{1,200}\"", "\"<name>\""),
+        ] {
+            out = out.replacingOccurrences(of: pattern, with: replacement,
+                                           options: .regularExpression)
+        }
+        return String(out.prefix(300))
+    }
+
     /// Settings › Privacy › "Send a test report", so the pipeline can be seen working.
     static func sendTest() {
         guard sentryOn else { return }

@@ -551,3 +551,39 @@ final class NothingIsDroppedTests: XCTestCase {
         XCTAssertNil(m.repoFix)
     }
 }
+
+/// What leaves the machine when a failure is reported.
+@MainActor
+final class RedactionTests: XCTestCase {
+
+    /// Every failure the person sees is now reported, which is only acceptable because the message
+    /// is stripped first. The rule the repository has always had: no call site passes a prompt, a
+    /// path or a repository name.
+    func testAPathNeverLeaves() {
+        let out = Telemetry.redact(
+            "could not open /Users/someone/Projects/secret-client/app: no such file")
+        XCTAssertFalse(out.contains("someone"), out)
+        XCTAssertFalse(out.contains("secret-client"), out)
+        XCTAssertTrue(out.contains("<path>"), out)
+        // The part that identifies the bug survives.
+        XCTAssertTrue(out.contains("no such file"), out)
+    }
+
+    /// A git error quotes the branch, which is usually the feature someone is building.
+    func testAQuotedNameNeverLeaves() {
+        let out = Telemetry.redact("fatal: a branch named 'keel/acme-billing-migration' already exists")
+        XCTAssertFalse(out.contains("acme"), out)
+        XCTAssertTrue(out.contains("already exists"), out)
+    }
+
+    func testAURLNeverLeaves() {
+        let out = Telemetry.redact("failed to reach https://internal.acme.example/api/v2")
+        XCTAssertFalse(out.contains("acme"), out)
+        XCTAssertTrue(out.contains("<url>"), out)
+    }
+
+    /// Long enough to be useful, short enough not to smuggle a transcript out in an error string.
+    func testTheReportIsBounded() {
+        XCTAssertLessThanOrEqual(Telemetry.redact(String(repeating: "x", count: 5000)).count, 300)
+    }
+}
