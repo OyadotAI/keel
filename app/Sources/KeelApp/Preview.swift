@@ -440,14 +440,13 @@ struct PreviewSurface: View {
     }
 
     private var empty: some View {
-        VStack(alignment: .leading, spacing: K.S.half) {
-            Text("Nothing to preview yet.").font(K.F.body.weight(.medium))
-            Text(model.devDetected.map { "Start \($0) and Keel points the preview at whatever URL it announces." }
-                 ?? "This project has no dev command. Paste a URL above — a deploy URL works too.")
-                .font(K.F.small).foregroundStyle(.secondary)
-        }
+        EmptyState(
+            icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
+            model.devDetected.map {
+                "Start `\($0)` and Keel points the preview at whatever URL it announces."
+            } ?? "This project has no dev command. Paste a URL above — a deploy URL works too."
+        )
         .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
-        .padding(K.S.xl)
     }
 
     private func go() {

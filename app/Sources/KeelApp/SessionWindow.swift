@@ -1108,18 +1108,13 @@ struct BranchMenu: View {
                         } action: { create() }
                     }
                     if local.isEmpty, remote.isEmpty, !canCreate {
-                        Text("No branches yet.").font(K.F.small).foregroundStyle(K.C.faint)
+                        EmptyState("No branches yet.")
                             .padding(K.S.md)
                     }
                 }
                 .padding(.vertical, K.S.xs)
             }
             .frame(maxHeight: 320)
-            if let err = model.lastError {
-                Hairline()
-                Text(err).font(K.F.micro).foregroundStyle(K.C.del).padding(K.S.sm)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
         .frame(width: 340)
         .background(K.C.surface)

@@ -154,14 +154,13 @@ private struct EmptyStage: View {
     let model: SessionModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.md) {
-            Text("Nothing has run yet")
-                .font(K.F.title).foregroundStyle(K.C.text)
-            Text("Ask for a change. Every file it writes and every command it runs appears here, "
-                 + "and the project's own checks run when it says it is done.")
-                .font(K.F.body).foregroundStyle(K.C.dim)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            EmptyState(icon: "list.bullet.rectangle", title: "Nothing has run yet",
+                       "Ask for a change. Every file it writes and every command it runs appears "
+                       + "here, and the project's own checks run when it says it is done.")
 
+            // The one empty state with more to say than a sentence: whether this project has a
+            // gate at all changes what "done" is worth, and it is worth knowing before the turn.
             HStack(spacing: K.S.sm) {
                 if let gate = model.gateCommand {
                     Pill(text: "GATE", tone: .accent)

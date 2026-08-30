@@ -386,6 +386,130 @@ extension Color {
     var wash: Color { opacity(0.08) }
 }
 
+/// Nothing here yet, said once, the same way everywhere.
+///
+/// There were four of these — `Blank` in the extension panels, a private `Empty` in `SidePanel`,
+/// `EmptyStage` in the trace, and a one-line `empty(_:)` in the review packet — plus about ten
+/// bare `Text`s. They disagreed on the icon, the inset, the type and whether there was anything to
+/// do about it, so five panels looked like one product and five looked like five.
+///
+/// Every field but the message is optional, which is the whole range: a panel that can offer an
+/// action gets the full shape, and a line of explanation is the same component with the rest left
+/// out. The inset matches `RailHeader`'s, so the first thing in a panel lines up with its title
+/// whether that thing is a list or an apology.
+struct EmptyState: View {
+    var icon: String? = nil
+    var title: String? = nil
+    let message: String
+    var actionLabel: String? = nil
+    var action: (() -> Void)? = nil
+
+    init(icon: String? = nil, title: String? = nil, _ message: String,
+         actionLabel: String? = nil, action: (() -> Void)? = nil) {
+        self.icon = icon
+        self.title = title
+        self.message = message
+        self.actionLabel = actionLabel
+        self.action = action
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(K.F.ui(16, .medium)).foregroundStyle(K.C.accent)
+                    .frame(width: 24, height: 24, alignment: .leading)
+            }
+            if let title {
+                Text(title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+            }
+            // `.init` so a message can carry a `**bold**` or a `\`path\``, which several do.
+            Text(.init(message))
+                .font(K.F.small).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            if let actionLabel, let action {
+                Button(actionLabel, action: action)
+                    .buttonStyle(QuietButton(tone: K.C.accent))
+                    .padding(.top, K.S.xs)
+            }
+        }
+        .padding(.horizontal, K.S.md)
+        .padding(.vertical, K.S.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Waiting on the daemon, said out loud.
+///
+/// An empty list and a list that has not arrived look identical, and five surfaces had no way to
+/// tell them apart — `SkillCatalog`, the clone list, `PairingSettings`, `FileTree` and the session
+/// list all rendered "nothing" while a request was still in flight. The five idioms this replaces
+/// included three separate copies of the string `"Reading…"`.
+struct Loading: View {
+    let what: String
+
+    init(_ what: String = "Reading…") { self.what = what }
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            ProgressView().controlSize(.mini)
+            Text(what).font(K.F.small).foregroundStyle(K.C.faint)
+        }
+        .padding(.horizontal, K.S.md)
+        .padding(.vertical, K.S.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Something went wrong, in the place it went wrong.
+///
+/// `model.lastError` is one string on the model, and four surfaces rendered it at three different
+/// sizes — so a single git failure could appear three times on screen at once, in three type
+/// treatments. One shape, one place, and a way to put it away.
+struct ErrorRow: View {
+    let message: String
+    var dismiss: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: K.S.sm) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(K.F.tiny).foregroundStyle(K.C.del)
+                .padding(.top, K.S.xxs)
+            Text(message).font(K.F.small).foregroundStyle(K.C.del)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            if let dismiss { CloseButton(label: "Dismiss this error", action: dismiss) }
+        }
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.half)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(K.C.del.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
+    }
+}
+
+/// The filter at the top of a panel.
+///
+/// There were two, and they disagreed about everything a person can notice: one used a
+/// magnifying glass and one a filter glyph, one set 12pt and one 11pt mono, they had different
+/// insets, and only one of them could be cleared.
+struct SearchField: View {
+    let prompt: String
+    @Binding var text: String
+    var icon = "magnifyingglass"
+
+    var body: some View {
+        HStack(spacing: K.S.xs) {
+            Image(systemName: icon).font(K.F.tiny).foregroundStyle(K.C.faint)
+            TextField(prompt, text: $text).textFieldStyle(.plain).font(K.F.small)
+            if !text.isEmpty { CloseButton(label: "Clear the filter") { text = "" } }
+        }
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
+        .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+        .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
+    }
+}
+
 /// A hairline. `Divider()` renders heavier than a real 1px rule at 2x.
 struct Hairline: View {
     var body: some View {

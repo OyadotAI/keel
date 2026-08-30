@@ -123,7 +123,7 @@ struct StartProject: View {
                                 .accessibilityAddTraits(on ? .isSelected : [])
                             }
                             if templates.isEmpty {
-                                Text("Nothing matches.").font(K.F.small).foregroundStyle(K.C.faint).padding(K.S.md)
+                                EmptyState("Nothing matches.")
                             }
                         }
                     }
@@ -306,7 +306,7 @@ struct StartProject: View {
                             } action: { chosen = r }
                         }
                         if hits.isEmpty {
-                            Text("Nothing matches.").font(K.F.small).foregroundStyle(K.C.faint).padding(K.S.md)
+                            EmptyState("Nothing matches.")
                         }
                     }
                 }

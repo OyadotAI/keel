@@ -414,9 +414,7 @@ struct Composer: View {
             }
 
             if let err = model.lastError {
-                Text(err).font(K.F.small).foregroundStyle(K.C.del)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ErrorRow(message: err) { model.lastError = nil }
             }
 
             VStack(spacing: K.S.xs) {

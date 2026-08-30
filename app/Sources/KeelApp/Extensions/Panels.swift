@@ -25,9 +25,9 @@ struct SkillsPanel: View {
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
             }
             if model.workspace.skills.isEmpty {
-                Blank(icon: "sparkles", title: "No skills yet",
-                      body: "Add reusable instructions for reviews, deployments, and tools.",
-                      action: "Browse skills") { model.sheet = .skills }
+                EmptyState(icon: "sparkles", title: "No skills yet",
+                      "Add reusable instructions for reviews, deployments, and tools.",
+                      actionLabel: "Browse skills") { model.sheet = .skills }
             } else {
                 RailHeader("Available skills", trailing: "\(model.workspace.skills.count)")
                 ForEach(model.workspace.skills) { s in
@@ -48,9 +48,9 @@ struct AgentsPanel: View {
     var body: some View {
         Group {
             if model.workspace.agents.isEmpty {
-                Blank(icon: "person.2", title: "No subagents",
-                      body: "Create a focused delegate for work that benefits from its own context.",
-                      action: "Create one") { model.sheet = .subagent }
+                EmptyState(icon: "person.2", title: "No subagents",
+                      "Create a focused delegate for work that benefits from its own context.",
+                      actionLabel: "Create one") { model.sheet = .subagent }
             } else {
                 ForEach(model.workspace.agents) { a in
                     ItemRow(name: a.name, detail: a.description, fromRepo: a.fromRepo,
@@ -70,9 +70,9 @@ struct MCPPanel: View {
     var body: some View {
         Group {
             if model.workspace.mcpServers.isEmpty {
-                Blank(icon: "cable.connector", title: "No MCP servers",
-                      body: "Connect external tools such as issue trackers, databases, and browsers.",
-                      action: "Add a server…") { model.sheet = .mcp }
+                EmptyState(icon: "cable.connector", title: "No MCP servers",
+                      "Connect external tools such as issue trackers, databases, and browsers.",
+                      actionLabel: "Add a server…") { model.sheet = .mcp }
             } else {
                 ForEach(model.workspace.mcpServers) { s in
                     ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
@@ -96,9 +96,11 @@ struct HooksPanel: View {
 
     var body: some View {
             if model.workspace.hooks.isEmpty {
-            Blank(icon: "bolt.horizontal", title: "No hooks",
-                  body: "Hooks run local commands around agent actions. Repository hooks stay quarantined until trusted.",
-                  action: nil) { }
+            // The one empty state with nothing to offer: hooks are written into the repository or
+            // into `~/.claude`, and Keel deliberately does not write either.
+            EmptyState(icon: "bolt.horizontal", title: "No hooks",
+                       "Hooks run local commands around agent actions. Repository hooks stay "
+                       + "quarantined until you trust the project.")
         } else {
             if !fromRepo.isEmpty {
                 RailHeader("From this repository", trailing: "\(fromRepo.count)")
@@ -126,9 +128,9 @@ struct PluginsPanel: View {
         Group {
             Recommended(model: model)
             if model.workspace.plugins.isEmpty {
-                Blank(icon: "puzzlepiece.extension", title: "No plugins",
-                      body: "Install bundles of skills, subagents, and commands.",
-                      action: "Browse plugins") { model.sheet = .skills }
+                EmptyState(icon: "puzzlepiece.extension", title: "No plugins",
+                      "Install bundles of skills, subagents, and commands.",
+                      actionLabel: "Browse plugins") { model.sheet = .skills }
             } else {
                 RailHeader("Installed plugins", trailing: "\(model.workspace.plugins.count)")
                 ForEach(model.workspace.plugins) { p in
@@ -263,37 +265,3 @@ struct Recommended: View {
 }
 
 /// An empty panel that says what the thing is for, rather than a heading with nothing under it.
-struct Blank: View {
-    let icon: String
-    let title: String
-    let body_: String
-    let action: String?
-    let run: () -> Void
-
-    init(icon: String, title: String, body: String, action: String?, run: @escaping () -> Void) {
-        self.icon = icon
-        self.title = title
-        self.body_ = body
-        self.action = action
-        self.run = run
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            Image(systemName: icon)
-                .font(K.F.ui(16, .medium)).foregroundStyle(K.C.accent)
-                .frame(width: 24, height: 24, alignment: .leading)
-            Text(title).font(K.F.title).foregroundStyle(K.C.text)
-            Text(.init(body_))
-                .font(K.F.small).foregroundStyle(K.C.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            if let action {
-                Button(action, action: run)
-                    .buttonStyle(QuietButton(tone: K.C.accent))
-                    .padding(.top, K.S.xs)
-            }
-        }
-        .padding(K.S.xl)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
