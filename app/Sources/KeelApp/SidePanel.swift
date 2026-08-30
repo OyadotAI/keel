@@ -75,7 +75,7 @@ struct SidePanel: View {
         let n: Int
         switch panel {
         case .changes: n = model.changes.count
-        case .git: return model.branch
+        case .git: return nil
         case .sessions: n = model.sessions.count
         case .readiness: n = model.findings.count
         case .skills: n = model.workspace.skills.count
@@ -93,11 +93,10 @@ private struct Empty: View {
     let text: String
     var body: some View {
         HStack(alignment: .top, spacing: K.S.sm) {
-            Image(systemName: "info.circle").foregroundStyle(K.C.faint)
             Text(text).font(K.F.small).foregroundStyle(K.C.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(K.S.md)
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -178,7 +177,7 @@ struct ReadinessPanel: View {
     var body: some View {
         card
         if model.scan == nil {
-            Empty(text: "Repository readiness has not been scanned yet. Use refresh above to run the checks.")
+            EmptyView()
         } else if model.findings.isEmpty {
             Empty(text: "No readiness findings. Keel checks again whenever the repository changes.")
         } else if let plan = model.scan?.plan, !plan.isEmpty {
@@ -196,6 +195,30 @@ struct ReadinessPanel: View {
     // MARK: The card: the score, what it is, where it runs, and the one thing to do next.
 
     private var card: some View {
+        Group {
+            if model.scan == nil {
+                unscanned
+            } else {
+                scanned
+            }
+        }
+    }
+
+    private var unscanned: some View {
+        HStack(spacing: K.S.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Readiness not checked").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                Text("Scan the repository for release blockers.").font(K.F.micro).foregroundStyle(K.C.dim)
+            }
+            Spacer()
+            Button("Scan") { Task { await model.rescan() } }
+                .buttonStyle(QuietButton(tone: K.C.accent))
+                .disabled(model.scanning)
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
+    }
+
+    private var scanned: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             HStack(alignment: .firstTextBaseline, spacing: K.S.xs) {
                 Text("\(score)").font(K.F.mono(22, .semibold))
@@ -228,9 +251,8 @@ struct ReadinessPanel: View {
             primary
         }
         .padding(K.S.md)
-        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
-        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.sm)
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
+        .overlay(alignment: .bottom) { Hairline() }
     }
 
     /// One button. What it does depends on where the project is: review first; after a

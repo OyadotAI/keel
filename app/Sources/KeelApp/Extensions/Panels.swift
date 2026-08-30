@@ -26,9 +26,7 @@ struct SkillsPanel: View {
             }
             if model.workspace.skills.isEmpty {
                 Blank(icon: "sparkles", title: "No skills yet",
-                      body: "A skill teaches the agent a task — a review checklist, a deploy "
-                          + "runbook, a way to call an API. They live in `~/.claude`, so they work "
-                          + "here, in every other project, and in the terminal.",
+                      body: "Add reusable instructions for reviews, deployments, and tools.",
                       action: "Browse skills") { model.sheet = .skills }
             } else {
                 ForEach(model.workspace.skills) { s in
@@ -50,9 +48,7 @@ struct AgentsPanel: View {
         Group {
             if model.workspace.agents.isEmpty {
                 Blank(icon: "person.2", title: "No subagents",
-                      body: "A subagent is a delegate with its own instructions and its own "
-                          + "context. The main agent reads its description to decide whether to "
-                          + "hand work over, so that description is the whole interface.",
+                      body: "Create a focused delegate for work that benefits from its own context.",
                       action: "Create one") { model.sheet = .subagent }
             } else {
                 ForEach(model.workspace.agents) { a in
@@ -74,10 +70,7 @@ struct MCPPanel: View {
         Group {
             if model.workspace.mcpServers.isEmpty {
                 Blank(icon: "cable.connector", title: "No MCP servers",
-                      body: "An MCP server gives the agent tools from somewhere else — an issue "
-                          + "tracker, a database, a browser. Keel never writes one into the "
-                          + "repository, because that is configuring a command to run on someone "
-                          + "else's machine.",
+                      body: "Connect external tools such as issue trackers, databases, and browsers.",
                       action: "Add a server…") { model.sheet = .mcp }
             } else {
                 ForEach(model.workspace.mcpServers) { s in
@@ -103,9 +96,7 @@ struct HooksPanel: View {
     var body: some View {
         if model.workspace.hooks.isEmpty {
             Blank(icon: "bolt.horizontal", title: "No hooks",
-                  body: "A hook runs a shell command around the agent's tool calls. Keel "
-                      + "quarantines any that arrive with a repository before the agent starts, "
-                      + "because that command runs on the machine of whoever opened the repo.",
+                  body: "Hooks run local commands around agent actions. Repository hooks stay quarantined until trusted.",
                   action: nil) { }
         } else {
             if !fromRepo.isEmpty {
@@ -135,8 +126,7 @@ struct PluginsPanel: View {
             Recommended(model: model)
             if model.workspace.plugins.isEmpty {
                 Blank(icon: "puzzlepiece.extension", title: "No plugins",
-                      body: "Plugins are how skills, subagents and commands are distributed. They "
-                          + "come from marketplaces you have added to `claude`.",
+                      body: "Install bundles of skills, subagents, and commands.",
                       action: "Browse plugins") { model.sheet = .skills }
             } else {
                 ForEach(model.workspace.plugins) { p in
@@ -287,22 +277,21 @@ struct Blank: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.md) {
+        VStack(alignment: .leading, spacing: K.S.sm) {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: .medium)).foregroundStyle(K.C.accent)
-                .frame(width: 32, height: 32)
-                .background(K.C.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: K.R.md))
+                .font(.system(size: 16, weight: .medium)).foregroundStyle(K.C.accent)
+                .frame(width: 24, height: 24, alignment: .leading)
             Text(title).font(K.F.title).foregroundStyle(K.C.text)
             Text(.init(body_))
                 .font(K.F.small).foregroundStyle(K.C.dim)
                 .fixedSize(horizontal: false, vertical: true)
             if let action {
                 Button(action, action: run)
-                    .buttonStyle(FilledButton())
+                    .buttonStyle(QuietButton(tone: K.C.accent))
                     .padding(.top, K.S.xs)
             }
         }
-        .padding(K.S.lg)
+        .padding(K.S.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

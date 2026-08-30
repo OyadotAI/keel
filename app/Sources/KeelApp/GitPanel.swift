@@ -82,29 +82,33 @@ struct GitPanel: View {
                         }
                 }
             }
-            HStack(spacing: K.S.xs) {
-                verb("Fetch", "arrow.triangle.2.circlepath", "fetch", enabled: !(b?.remotes.isEmpty ?? true))
-                verb("Pull", "arrow.down", "pull", enabled: (current?.behind ?? 0) > 0)
-                verb("Push", "arrow.up", "push",
-                     enabled: (current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true))
-                // The pull request, beside push — where the branch work is, not on top of the
-                // file list.
-                Button { model.sheet = .pr } label: {
-                    Image(systemName: "arrow.triangle.pull").font(.system(size: 10, weight: .semibold))
-                        .frame(minWidth: 22, minHeight: 16)
+            HStack(spacing: K.S.sm) {
+                if let c = current, let up = c.upstream {
+                    Text(up).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                        .truncationMode(.head).help("Tracks \(up)")
                 }
-                .buttonStyle(QuietButton(tone: (b?.remotes.isEmpty ?? true) ? K.C.faint : K.C.accent))
-                .disabled(busy || (b?.remotes.isEmpty ?? true))
-                .hint("Open a pull request")
                 if let what = model.gitBusy {
                     Sweep().scaleEffect(0.7, anchor: .leading).frame(width: 32, height: 3)
                     Text(what + "…").font(K.F.micro).foregroundStyle(K.C.faint)
                 }
                 Spacer()
-                if let c = current, let up = c.upstream {
-                    Text(up).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
-                        .truncationMode(.head).help("Tracks \(up)")
+                Menu {
+                    Button("Fetch", systemImage: "arrow.triangle.2.circlepath") {
+                        Task { await model.remote("fetch") }
+                    }
+                    .disabled(b?.remotes.isEmpty ?? true)
+                    Button("Pull", systemImage: "arrow.down") { Task { await model.remote("pull") } }
+                        .disabled((current?.behind ?? 0) == 0)
+                    Button("Push", systemImage: "arrow.up") { Task { await model.remote("push") } }
+                        .disabled(!((current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true)))
+                    Divider()
+                    Button("Open pull request…", systemImage: "arrow.triangle.pull") { model.sheet = .pr }
+                        .disabled(b?.remotes.isEmpty ?? true)
+                } label: {
+                    Label("Remote", systemImage: "arrow.up.arrow.down")
                 }
+                .menuStyle(.borderlessButton).fixedSize()
+                .disabled(busy)
             }
             if let err = model.lastError {
                 Text(err).font(K.F.micro).foregroundStyle(K.C.del)
@@ -122,23 +126,6 @@ struct GitPanel: View {
         guard !url.isEmpty else { return }
         addingRemote = false
         Task { await model.remote("add", url: url) }
-    }
-
-    /// A labelled compact action. Tooltips alone made Git's four most important operations
-    /// impossible to discover and reduced the panel to an unexplained icon strip.
-    private func verb(_ title: String, _ icon: String, _ action: String, enabled: Bool) -> some View {
-        let n = action == "pull" ? (current?.behind ?? 0) : action == "push" ? (current?.ahead ?? 0) : 0
-        return Button { Task { await model.remote(action) } } label: {
-            HStack(spacing: 3) {
-                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
-                Text(title).font(K.F.micro)
-                if n > 0 { Text("\(n)").font(K.F.mono(10)) }
-            }
-            .frame(minHeight: 16)
-        }
-        .buttonStyle(QuietButton(tone: enabled ? K.C.accent : K.C.faint))
-        .disabled(busy || !enabled)
-        .hint(n > 0 ? "\(title) \(n)" : title)
     }
 
     // MARK: Working tree — git's view, as a tree, with the same rows as Changes.
@@ -162,7 +149,7 @@ struct GitPanel: View {
         let all = staged == 0
         let n = all ? model.changes.count : staged
         return VStack(alignment: .leading, spacing: K.S.xs) {
-            RailHeader("Commit", trailing: nil)
+            RailHeader("Commit changes", trailing: nil)
             HStack(spacing: K.S.xs) {
                 TextField("What changed, in one line", text: $message)
                     .field().font(K.F.small)

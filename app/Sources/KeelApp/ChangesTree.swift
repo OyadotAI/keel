@@ -134,8 +134,8 @@ struct CommitList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: K.S.xs) {
-                Text("COMMITTED").font(.system(size: 10, weight: .semibold)).tracking(0.7)
-                    .foregroundStyle(K.C.faint)
+                Text("Commit history").font(K.F.small.weight(.medium))
+                    .foregroundStyle(K.C.dim)
                 let local = model.commits.filter { !$0.pushed }.count
                 if local > 0 {
                     Button(model.pushing ? "Pushing…" : "Push \(local)") { Task { await model.push() } }
@@ -145,9 +145,9 @@ struct CommitList: View {
                 }
                 Spacer()
             }
-            .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
+            .padding(.horizontal, K.S.md).padding(.top, K.S.lg).padding(.bottom, K.S.sm)
 
-            Toggle("Auto-commit turns after checks pass",
+            Toggle("Commit passing turns automatically",
                    isOn: Binding(get: { model.autoCommit }, set: { model.autoCommit = $0 }))
                 .toggleStyle(.checkbox).controlSize(.mini)
                 .font(K.F.micro).foregroundStyle(K.C.dim)
