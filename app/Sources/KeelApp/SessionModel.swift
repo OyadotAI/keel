@@ -234,6 +234,8 @@ final class SessionModel: Identifiable {
     /// The dev server, when there is one.
     var previewURL: String?
     var devDetected: String?
+    /// Where it runs, when that is not the repository root — which for a monorepo it never is.
+    var devDir: String?
     var devRunning = false
     var picking = false
 
@@ -398,6 +400,7 @@ final class SessionModel: Identifiable {
         previewURL = other.previewURL
         previewWidth = other.previewWidth
         devDetected = other.devDetected
+        devDir = other.devDir
         devRunning = other.devRunning
         missingSuggestions = other.missingSuggestions
         tools = other.tools
@@ -1030,7 +1033,14 @@ final class SessionModel: Identifiable {
         var running: Bool
         var url: String?
         var detected: String?
+        /// The subdirectory it runs in, empty at the repository root.
+        var detectedDir: String?
         var log: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case running, url, detected, log
+            case detectedDir = "detected_dir"
+        }
     }
 
     /// The dev server's last lines, for when the page is blank and the reason is in them.
@@ -1044,6 +1054,7 @@ final class SessionModel: Identifiable {
         guard let d: DevStatus = try? await client.get("/api/dev", q()) else { return }
         devRunning = d.running
         devDetected = d.detected
+        devDir = d.detectedDir.flatMap { $0.isEmpty ? nil : $0 }
         devLog = d.log ?? []
         if let u = d.url { previewURL = u }
     }

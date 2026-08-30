@@ -454,7 +454,10 @@ final class SubagentTests: XCTestCase {
         let p = try JSONDecoder().decode(Wire.Pending.self, from: Data(json.utf8))
         XCTAssertTrue(p.isQuestion)
         XCTAssertEqual(p.questions.map(\.text), ["Which DB?"])
-        XCTAssertEqual(p.questions[0].options, ["Postgres", "D1"])
+        XCTAssertEqual(p.questions[0].options.map(\.label), ["Postgres", "D1"])
+        // The description says what choosing it means, and it used to be dropped at the parse —
+        // leaving a row of one-word options to guess between.
+        XCTAssertEqual(p.questions[0].options.map(\.detail), ["x", "y"])
         XCTAssertFalse(p.questions[0].multiSelect)
     }
 }

@@ -12,18 +12,19 @@ import SwiftUI
 struct ApprovalCard: View {
     let pending: Wire.Pending
     let model: SessionModel
-    @State private var appeared = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
+            // What to do, not what is happening. "WAITING FOR YOU" in tracked amber capitals was
+            // the state — and the bar below now says the state, in amber, so this said it twice.
             HStack(spacing: K.S.sm) {
                 Image(systemName: "hand.raised.fill")
-                    .font(K.F.tiny).foregroundStyle(K.C.warn)
-                Text("WAITING FOR YOU")
-                    .sectionLabel()
-                    .foregroundStyle(K.C.warn)
-                Spacer()
-                Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
+                    .font(K.F.micro).foregroundStyle(K.C.warn)
+                    .accessibilityHidden(true)
+                Text(pending.command.isEmpty ? "Let the agent use \(pending.tool)?"
+                                             : "Let the agent run this?")
+                    .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
+                Spacer(minLength: 0)
             }
 
             Text(pending.command.isEmpty ? pending.tool : pending.command)
@@ -34,6 +35,7 @@ struct ApprovalCard: View {
                 .padding(K.S.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
 
             // One filled button, the same one every primary action in the app uses: trust is
             // the answer that removes the whole class of questions, so it is the one that
@@ -55,17 +57,20 @@ struct ApprovalCard: View {
                     .buttonStyle(QuietButton(tone: K.C.del))
                     .help("The agent is told to stop rather than substitute another command")
             }
-            Text("Trusting stops the questions here; allowing remembers this command; once is just now.")
-                .font(K.F.micro).foregroundStyle(K.C.faint)
         }
+        // A card, not a warning block. The full amber wash was competing with the amber working
+        // bar directly below it for the same fact; the amber that is left is the icon and the
+        // edge, which is enough to say this one is different from the composer under it.
         .padding(K.S.md)
-        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
+        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
         .overlay(
-            RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1)
+            RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.warn.opacity(0.45), lineWidth: 1)
         )
-        .scaleEffect(appeared ? 1 : 0.99)
-        .opacity(appeared ? 1 : 0)
-        .onAppear { withAnimation(K.M.settle) { appeared = true } }
+        // The arrival is the parent's `.transition` with `K.M.enter`, not a `@State` flag flipped
+        // in `onAppear`. That version started at `opacity(0)` and depended on `onAppear` firing to
+        // become visible at all — which it does not in an offscreen render, and which made the one
+        // card in the app that must never be missed the one card that could fail to draw.
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
     }
 }
 
@@ -82,7 +87,6 @@ struct QuestionCard: View {
     let model: SessionModel
     @State private var chosen: [String: Set<String>] = [:]
     @State private var other: [String: String] = [:]
-    @State private var appeared = false
 
     private var questions: [Wire.Question] { pending.questions }
 
@@ -98,12 +102,11 @@ struct QuestionCard: View {
         VStack(alignment: .leading, spacing: K.S.md) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "questionmark.bubble.fill")
-                    .font(K.F.tiny).foregroundStyle(K.C.warn)
-                Text("THE AGENT IS ASKING")
-                    .sectionLabel()
-                    .foregroundStyle(K.C.warn)
-                Spacer()
-                Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
+                    .font(K.F.micro).foregroundStyle(K.C.warn)
+                    .accessibilityHidden(true)
+                Text(questions.count == 1 ? "The agent is asking" : "The agent is asking you \(questions.count) things")
+                    .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
+                Spacer(minLength: 0)
             }
 
             ForEach(questions) { q in
@@ -111,28 +114,41 @@ struct QuestionCard: View {
                     Text(q.text).font(K.F.body).foregroundStyle(K.C.text)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(Array(q.options.enumerated()), id: \.offset) { i, o in
-                        let on = chosen[q.id, default: []].contains(o)
+                        let on = chosen[q.id, default: []].contains(o.label)
                         Button {
                             if q.multiSelect {
-                                if on { chosen[q.id, default: []].remove(o) }
-                                else { chosen[q.id, default: []].insert(o) }
+                                if on { chosen[q.id, default: []].remove(o.label) }
+                                else { chosen[q.id, default: []].insert(o.label) }
                             } else {
-                                chosen[q.id] = [o]
+                                chosen[q.id] = [o.label]
                             }
                         } label: {
-                            HStack(spacing: K.S.sm) {
+                            HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
                                 Image(systemName: on
                                       ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
                                       : (q.multiSelect ? "square" : "circle"))
                                     .font(K.F.tiny)
                                     .foregroundStyle(on ? K.C.accent : K.C.faint)
-                                Text(o).font(K.F.small).foregroundStyle(K.C.text)
-                                Spacer()
+                                VStack(alignment: .leading, spacing: K.S.hair) {
+                                    Text(o.label).font(K.F.small.weight(on ? .semibold : .regular))
+                                        .foregroundStyle(K.C.text)
+                                    // What choosing it means. It was parsed off the tool input and
+                                    // thrown away, leaving three one-word options to guess between.
+                                    if !o.detail.isEmpty {
+                                        Text(o.detail).font(K.F.tiny).foregroundStyle(K.C.dim)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                Spacer(minLength: K.S.sm)
                                 // The first question's options answer to ⌘⌥1…9, and say so.
                                 if questions.first?.id == q.id, i < 9 {
                                     Text("⌘⌥\(i + 1)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
                                 }
                             }
+                            .padding(.vertical, K.S.tight)
+                            .padding(.horizontal, K.S.sm)
+                            .background(on ? K.C.accent.wash : .clear,
+                                        in: RoundedRectangle(cornerRadius: K.R.sm))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -155,14 +171,18 @@ struct QuestionCard: View {
                     .disabled(!complete)
             }
         }
+        // The same card as an approval, because they are the same event: the turn has stopped and
+        // it is waiting on you.
         .padding(K.S.md)
-        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
+        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
         .overlay(
-            RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1)
+            RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.warn.opacity(0.45), lineWidth: 1)
         )
-        .scaleEffect(appeared ? 1 : 0.99)
-        .opacity(appeared ? 1 : 0)
-        .onAppear { withAnimation(K.M.settle) { appeared = true } }
+        // The arrival is the parent's `.transition` with `K.M.enter`, not a `@State` flag flipped
+        // in `onAppear`. That version started at `opacity(0)` and depended on `onAppear` firing to
+        // become visible at all — which it does not in an offscreen render, and which made the one
+        // card in the app that must never be missed the one card that could fail to draw.
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
     }
 
     /// The answers as the text the agent reads: one line per question.

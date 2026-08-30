@@ -18,27 +18,13 @@ struct ChatRail: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript
-            // Proof it is alive, directly above the box you type into.
-            //
-            // It used to live at the top of the stage column, which is the wrong side of the
-            // window: reading the conversation, the only evidence of a running turn was in a
-            // pane you might not be looking at — and on a window too narrow for the stage there
-            // was no working bar at all. A turn that is thinking for ninety seconds with nothing
-            // on screen beside the composer reads as a turn that did not start.
-            //
-            // Above the questions rather than below them, because it says "answer below".
-            if model.running {
-                WorkingBar(model: model)
-                    .padding(.horizontal, K.S.xxl)
-                    .frame(maxWidth: 800, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, K.S.sm)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
             // A question holds the turn, so it sits where you are about to type — not in a
             // stage that may have switched to the preview while you were reading.
+            //
+            // Above the working bar, not below it: the question is the thing to do and the bar is
+            // the thing waiting for it. They also both used to say "waiting for you" in amber,
+            // stacked, which is one banner too many for one fact.
             if !model.pending.isEmpty {
-                Hairline()
                 VStack(spacing: K.S.sm) {
                     ForEach(model.pending) { p in
                         if p.isQuestion {
@@ -48,13 +34,33 @@ struct ChatRail: View {
                         }
                     }
                 }
-                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                .background(K.C.accent.wash)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, K.S.xxl)
+                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, K.S.md)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .opacity))
+            }
+            // Proof it is alive, directly above the box you type into.
+            //
+            // It used to live at the top of the stage column, which is the wrong side of the
+            // window: reading the conversation, the only evidence of a running turn was in a
+            // pane you might not be looking at — and on a window too narrow for the stage there
+            // was no working bar at all. A turn that is thinking for ninety seconds with nothing
+            // on screen beside the composer reads as a turn that did not start.
+            if model.running {
+                WorkingBar(model: model)
+                    .padding(.horizontal, K.S.xxl)
+                    .frame(maxWidth: 800, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, K.S.sm)
+                    .transition(.opacity)
             }
             Composer(model: model, focused: $composerFocused)
         }
-        .animation(K.M.quick, value: model.pending.count)
+        .animation(K.M.enter, value: model.pending.count)
+        .animation(K.M.settle, value: model.running)
         .background(K.C.bg)
         // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
         // Focus is the one thing only this view can do, so it watches a counter.

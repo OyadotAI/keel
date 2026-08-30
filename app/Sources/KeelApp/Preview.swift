@@ -442,12 +442,22 @@ struct PreviewSurface: View {
     }
 
     private var empty: some View {
-        EmptyState(
-            icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
-            model.devDetected.map {
-                "Start `\($0)` and Keel points the preview at whatever URL it announces."
-            } ?? "This project has no dev command. Paste a URL above — a deploy URL works too."
-        )
+        Group {
+            if let command = model.devDetected {
+                EmptyState(
+                    icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
+                    "Keel points the preview at whatever URL `\(command)` announces"
+                    + (model.devDir.map { ", run in `\($0)`" } ?? "") + ".",
+                    actionLabel: "Run \(command)"
+                ) { Task { await model.startDev() } }
+            } else {
+                EmptyState(
+                    icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
+                    "No `dev` script in this repository, its packages, or under `apps/` and "
+                    + "`packages/`. Paste a URL above — a deploy URL works too."
+                )
+            }
+        }
         .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
     }
 

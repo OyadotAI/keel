@@ -34,25 +34,116 @@ fn state() -> &'static Mutex<DevState> {
 /// The project's own `dev` script wins, because it is what the author intended `dev` to mean.
 /// Falling back to `wrangler dev` only when there is a Wrangler config keeps Keel from inventing a
 /// run command for a project that has none.
-pub fn detect(root: &Utf8Path) -> Option<String> {
-    if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
+/// A dev server Keel can start, and where to start it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Dev {
+    pub command: String,
+    /// Relative to the repository, empty when it is the repository itself. A monorepo runs its
+    /// web app from a subdirectory, and running `npm run dev` at the root does nothing there.
+    pub dir: String,
+}
+
+/// The dev server for this repository, looked for where people actually put one.
+///
+/// The root first, then one level down, then under `apps/` and `packages/` — the three shapes a
+/// JavaScript monorepo comes in. It used to look only at the root, so a repository whose web app
+/// lives in `dashboard/` reported "This project has no dev command" while sitting on a
+/// `package.json` with `"dev": "next dev"` one directory away.
+///
+/// When more than one candidate has a `dev` script, the one that renders pages wins: the preview
+/// is a browser, so a Next or Vite app is what somebody wants to see, not the API beside it.
+pub fn detect(root: &Utf8Path) -> Option<Dev> {
+    let mut candidates: Vec<Dev> = Vec::new();
+    if let Some(d) = detect_in(root, "") {
+        // The root is not a guess. If it declares one, that is the answer.
+        return Some(d);
+    }
+    for dir in searchable(root) {
+        if let Some(d) = detect_in(&root.join(&dir), &dir) {
+            candidates.push(d);
+        }
+    }
+    candidates
+        .iter()
+        .find(|d| renders_pages(&root.join(&d.dir)))
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+/// Directories worth looking in: the immediate children, and the children of `apps` / `packages`.
+fn searchable(root: &Utf8Path) -> Vec<String> {
+    fn children(dir: &Utf8Path, prefix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| !n.starts_with('.') && n != "node_modules" && n != "target")
+            .collect();
+        names.sort();
+        for n in names {
+            out.push(if prefix.is_empty() {
+                n
+            } else {
+                format!("{prefix}/{n}")
+            });
+        }
+    }
+
+    let mut out = Vec::new();
+    children(root, "", &mut out);
+    for nest in ["apps", "packages"] {
+        let dir = root.join(nest);
+        if dir.is_dir() {
+            children(&dir, nest, &mut out);
+        }
+    }
+    out.truncate(60);
+    out
+}
+
+fn detect_in(dir: &Utf8Path, rel: &str) -> Option<Dev> {
+    let here = |command: &str| {
+        Some(Dev {
+            command: command.into(),
+            dir: rel.to_string(),
+        })
+    };
+    if let Ok(text) = std::fs::read_to_string(dir.join("package.json"))
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
         && json.get("scripts").and_then(|s| s.get("dev")).is_some()
     {
-        let bun = root.join("bun.lock").exists() || root.join("bun.lockb").exists();
-        return Some(if bun {
-            "bun run dev".into()
-        } else {
-            "npm run dev".into()
-        });
+        // The lockfile is the repository's, not the package's: a workspace has one at the root.
+        let bun = dir.join("bun.lock").exists() || dir.join("bun.lockb").exists();
+        return here(if bun { "bun run dev" } else { "npm run dev" });
     }
-    if root.join("wrangler.jsonc").exists()
-        || root.join("wrangler.json").exists()
-        || root.join("wrangler.toml").exists()
+    if dir.join("wrangler.jsonc").exists()
+        || dir.join("wrangler.json").exists()
+        || dir.join("wrangler.toml").exists()
     {
-        return Some("wrangler dev".into());
+        return here("wrangler dev");
     }
     None
+}
+
+/// Whether this package is the one that draws pages, rather than the API beside it.
+fn renders_pages(dir: &Utf8Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    [
+        "next",
+        "vite",
+        "astro",
+        "react-scripts",
+        "@sveltejs/kit",
+        "nuxt",
+        "@remix-run",
+    ]
+    .iter()
+    .any(|framework| text.contains(&format!("\"{framework}\"")))
 }
 
 /// Pull a servable URL out of a line of tool output.
@@ -99,18 +190,23 @@ pub struct Status {
     pub running: bool,
     pub url: Option<String>,
     pub command: Option<String>,
-    /// What Keel would run, when nothing is running yet.
+    /// What Keel would run, when nothing is running yet, and where.
     pub detected: Option<String>,
+    /// The subdirectory the detected command runs in, empty at the repository root.
+    #[serde(default)]
+    pub detected_dir: String,
     pub log: Vec<String>,
 }
 
 pub async fn status(crate::serve::Checkout(repo): crate::serve::Checkout) -> Json<Status> {
+    let found = detect(&repo);
     let s = state().lock().expect("dev lock");
     Json(Status {
         running: s.child.is_some(),
         url: s.url.clone(),
         command: s.command.clone(),
-        detected: detect(&repo),
+        detected: found.as_ref().map(|d| d.command.clone()),
+        detected_dir: found.as_ref().map(|d| d.dir.clone()).unwrap_or_default(),
         log: s.log.clone(),
     })
 }
@@ -134,16 +230,27 @@ pub async fn start(
         }
     }
 
-    let command = body
-        .command
-        .filter(|c| !c.trim().is_empty())
-        .or_else(|| detect(&repo))
-        .ok_or_else(|| bad("No dev command found. Add a `dev` script to package.json.".into()))?;
+    // A typed command runs where the person is; a detected one runs where it was found, which
+    // for a monorepo is not the repository root.
+    let (command, dir) = match body.command.filter(|c| !c.trim().is_empty()) {
+        Some(typed) => (typed, repo.clone()),
+        None => {
+            let found = detect(&repo).ok_or_else(|| {
+                bad("No dev command found. Add a `dev` script to package.json.".into())
+            })?;
+            let dir = if found.dir.is_empty() {
+                repo.clone()
+            } else {
+                repo.join(&found.dir)
+            };
+            (found.command, dir)
+        }
+    };
 
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(&command)
-        .current_dir(&repo)
+        .current_dir(&dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -162,11 +269,13 @@ pub async fn start(
     tokio::spawn(watch(out));
     tokio::spawn(watch(err));
 
+    let found = detect(&repo);
     Ok(Json(Status {
         running: true,
         url: None,
         command: Some(command),
-        detected: detect(&repo),
+        detected: found.as_ref().map(|d| d.command.clone()),
+        detected_dir: found.map(|d| d.dir).unwrap_or_default(),
         log: Vec::new(),
     }))
 }
@@ -224,15 +333,102 @@ mod tests {
             ("wrangler.jsonc", "{}"),
             ("bun.lock", ""),
         ]);
-        assert_eq!(detect(&root).unwrap(), "bun run dev");
+        let found = detect(&root).unwrap();
+        assert_eq!(found.command, "bun run dev");
+        assert_eq!(found.dir, "", "the root is not a subdirectory");
     }
 
     #[test]
     fn wrangler_is_the_fallback_only_with_a_config() {
         let (_d, root) = repo(&[("wrangler.toml", "")]);
-        assert_eq!(detect(&root).unwrap(), "wrangler dev");
+        assert_eq!(detect(&root).unwrap().command, "wrangler dev");
         let (_d2, bare) = repo(&[("README.md", "")]);
         assert!(detect(&bare).is_none());
+    }
+
+    /// Build a repository with files in subdirectories.
+    fn nested(files: &[(&str, &str)]) -> (TempDir, Utf8PathBuf) {
+        let dir = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        for (p, b) in files {
+            let full = root.join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).expect("mkdir");
+            std::fs::write(full, b).expect("write");
+        }
+        (dir, root)
+    }
+
+    /// The shape that reported "This project has no dev command" while sitting on a `next dev`
+    /// one directory away: no root `package.json` at all, two packages, one of them a web app.
+    #[test]
+    fn a_monorepo_web_app_is_found_one_level_down() {
+        let (_d, root) = nested(&[
+            (
+                "dashboard/package.json",
+                r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15"}}"#,
+            ),
+            ("api/package.json", r#"{"scripts":{"start":"node ."}}"#),
+        ]);
+        let found = detect(&root).unwrap();
+        assert_eq!(found.command, "npm run dev");
+        assert_eq!(
+            found.dir, "dashboard",
+            "the command has to run where it was found"
+        );
+    }
+
+    /// The preview is a browser, so when two packages could both be started the one that draws
+    /// pages is the one somebody wants to see.
+    #[test]
+    fn the_package_that_renders_pages_wins() {
+        let (_d, root) = nested(&[
+            ("api/package.json", r#"{"scripts":{"dev":"tsx watch src"}}"#),
+            (
+                "web/package.json",
+                r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"5"}}"#,
+            ),
+        ]);
+        // `api` sorts first, so without the preference it would win on alphabetical order alone.
+        assert_eq!(detect(&root).unwrap().dir, "web");
+    }
+
+    /// The other two shapes a JavaScript monorepo comes in.
+    #[test]
+    fn apps_and_packages_are_searched_too() {
+        let (_d, apps) = nested(&[(
+            "apps/site/package.json",
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15"}}"#,
+        )]);
+        assert_eq!(detect(&apps).unwrap().dir, "apps/site");
+
+        let (_d2, packages) = nested(&[(
+            "packages/ui/package.json",
+            r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"5"}}"#,
+        )]);
+        assert_eq!(detect(&packages).unwrap().dir, "packages/ui");
+    }
+
+    /// A root that declares its own is not a guess, and is not overruled by a child.
+    #[test]
+    fn the_root_wins_when_it_has_one() {
+        let (_d, root) = nested(&[
+            ("package.json", r#"{"scripts":{"dev":"turbo dev"}}"#),
+            (
+                "web/package.json",
+                r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"5"}}"#,
+            ),
+        ]);
+        assert_eq!(detect(&root).unwrap().dir, "");
+    }
+
+    /// Dependencies are not packages of this repository.
+    #[test]
+    fn node_modules_is_not_searched() {
+        let (_d, root) = nested(&[(
+            "node_modules/some-pkg/package.json",
+            r#"{"scripts":{"dev":"vite"}}"#,
+        )]);
+        assert!(detect(&root).is_none());
     }
 
     #[test]

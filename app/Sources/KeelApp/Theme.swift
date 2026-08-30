@@ -178,6 +178,13 @@ enum K {
         /// A restrained spring for live evidence entering and sections changing size.
         // Panels should feel responsive and calm; spring overshoot makes dense rows jump.
         static let flow = Animation.easeInOut(duration: 0.22)
+        /// Something arriving that the person has to deal with — a question, an approval.
+        ///
+        /// The only spring in the app, and a heavily damped one: this is the single case where
+        /// the motion is the point. A card carrying four decisions that snaps into existence in
+        /// 0.12s reads as a glitch, and one that overshoots reads as a toy. `response` is the
+        /// travel time; the damping is just under critical, so it settles without a bounce.
+        static let enter = Animation.spring(response: 0.34, dampingFraction: 0.86)
     }
 }
 

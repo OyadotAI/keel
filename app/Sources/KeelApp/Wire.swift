@@ -256,9 +256,13 @@ enum Wire {
             guard case .array(let qs)? = input?["questions"] else { return [] }
             return qs.compactMap { q in
                 guard let text = q["question"]?.stringValue else { return nil }
-                let options: [String]
+                let options: [Option]
                 if case .array(let os)? = q["options"] {
-                    options = os.compactMap { $0["label"]?.stringValue }
+                    options = os.compactMap { o in
+                        o["label"]?.stringValue.map {
+                            Option(label: $0, detail: o["description"]?.stringValue ?? "")
+                        }
+                    }
                 } else { options = [] }
                 let multi: Bool
                 if case .bool(let b)? = q["multiSelect"] { multi = b } else { multi = false }
@@ -269,9 +273,16 @@ enum Wire {
 
     struct Question: Identifiable {
         var text: String
-        var options: [String]
+        var options: [Option]
         var multiSelect: Bool
         var id: String { text }
+    }
+
+    /// One answer, and what choosing it means. The answer sent back is the label alone.
+    struct Option: Identifiable, Hashable {
+        var label: String
+        var detail: String
+        var id: String { label }
     }
 
     /// A lane's own checkout.
