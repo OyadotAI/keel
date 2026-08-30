@@ -225,9 +225,19 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
 /// is saved in both, which is what people mean by "commit".
 pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     let found = crate::gitroots::find(checkout);
-    // The ordinary case — the folder is the repository, or has no git at all — commits here, as
-    // it always did. Anything else is a workspace and each repository commits for itself.
-    let workspace = !found.is_empty() && !found.iter().any(|r| r.dir.is_empty());
+    // Said in words, with the thing that fixes it, rather than passing git's own
+    // "fatal: not a git repository (or any of the parent directories): .git" to somebody who
+    // opened a folder and pressed Commit.
+    if found.is_empty() {
+        return Err(
+            "This folder is not a git repository, so there is nowhere to commit. \
+                    Initialise one from Changes, or open a folder that has one."
+                .into(),
+        );
+    }
+    // The ordinary case — the folder is the repository — commits here, as it always did.
+    // Anything else is a workspace and each repository commits for itself.
+    let workspace = !found.iter().any(|r| r.dir.is_empty());
     if workspace {
         let mut any = false;
         let mut failures = Vec::new();

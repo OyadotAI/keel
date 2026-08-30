@@ -313,6 +313,144 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Every folder shape a person can open, through the surface the app actually calls.
+    ///
+    /// The property under test is not "the answer is clever" — it is that **no shape blocks the
+    /// person**. Every one of these must produce a usable state: a status that returns, a gate
+    /// that either exists or honestly does not, and a commit that either saves the work or says
+    /// nothing needed saving. Nothing here may panic, hang, or refuse.
+    #[test]
+    fn every_folder_shape_is_usable() {
+        struct Shape {
+            name: &'static str,
+            build: fn(&Utf8Path),
+            /// Repository directories expected, in order.
+            repos: Vec<&'static str>,
+            /// Does the person get git features at all?
+            versioned: bool,
+        }
+
+        let shapes = vec![
+            Shape {
+                name: "an ordinary project",
+                build: |root| repo(root),
+                repos: vec![""],
+                versioned: true,
+            },
+            Shape {
+                name: "a repository with no commits yet",
+                build: |root| {
+                    std::fs::create_dir_all(root).unwrap();
+                    std::process::Command::new("git")
+                        .current_dir(root)
+                        .args(["init", "-q"])
+                        .output()
+                        .unwrap();
+                },
+                repos: vec![""],
+                versioned: true,
+            },
+            Shape {
+                name: "a plain folder with no git anywhere",
+                build: |root| {
+                    std::fs::create_dir_all(root.join("src")).unwrap();
+                    std::fs::write(root.join("src/a.txt"), "x").unwrap();
+                },
+                repos: vec![],
+                versioned: false,
+            },
+            Shape {
+                name: "a workspace of two repositories",
+                build: |root| {
+                    repo(&root.join("backend"));
+                    repo(&root.join("frontend"));
+                },
+                repos: vec!["backend", "frontend"],
+                versioned: true,
+            },
+            Shape {
+                name: "one repository beside a plain folder",
+                build: |root| {
+                    repo(&root.join("backend"));
+                    std::fs::create_dir_all(root.join("docs")).unwrap();
+                    std::fs::write(root.join("docs/plan.md"), "x").unwrap();
+                },
+                repos: vec!["backend"],
+                versioned: true,
+            },
+            Shape {
+                name: "a repository nested under apps/",
+                build: |root| {
+                    std::fs::create_dir_all(root.join("apps")).unwrap();
+                    repo(&root.join("apps/web"));
+                },
+                repos: vec!["apps/web"],
+                versioned: true,
+            },
+            Shape {
+                name: "a repository holding another repository",
+                build: |root| {
+                    repo(root);
+                    repo(&root.join("vendored"));
+                },
+                // The root wins: what is inside it is that repository's own business.
+                repos: vec![""],
+                versioned: true,
+            },
+            Shape {
+                name: "a repository inside node_modules, which is not a project",
+                build: |root| {
+                    std::fs::create_dir_all(root).unwrap();
+                    repo(&root.join("node_modules/some-package"));
+                },
+                repos: vec![],
+                versioned: false,
+            },
+            Shape {
+                name: "an empty folder",
+                build: |root| {
+                    std::fs::create_dir_all(root).unwrap();
+                },
+                repos: vec![],
+                versioned: false,
+            },
+        ];
+
+        for shape in shapes {
+            let root = tmp(&shape.name.replace(' ', "-"));
+            (shape.build)(&root);
+
+            // 1. Which repositories are here.
+            let found: Vec<String> = find(&root).into_iter().map(|r| r.dir).collect();
+            assert_eq!(found, shape.repos, "repositories for {}", shape.name);
+
+            // 2. Status always answers, and never claims to be a repository when it is not.
+            let status = crate::api::git_status(&root);
+            assert_eq!(
+                status.is_repo, shape.versioned,
+                "is_repo for {}",
+                shape.name
+            );
+
+            // 3. The gate either exists or honestly does not — it must never panic.
+            let _ = crate::verify::detect_all(&root);
+
+            // 4. Committing never blocks. Nothing to commit is `Ok(false)`, not an error, and a
+            //    folder with no git at all is allowed to have nothing to do.
+            match crate::worktree::commit_all(&root, "a turn") {
+                Ok(_) => {}
+                Err(_) if !shape.versioned => {}
+                Err(e) => panic!("committing blocked the person in {}: {e}", shape.name),
+            }
+
+            // 5. Resolving a path never invents a repository.
+            let (dir, _) = resolve(&root, "some/file.txt");
+            assert!(dir.starts_with(&root), "resolve escaped {}", shape.name);
+
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
     #[test]
     fn nothing_at_all_is_not_a_repository() {
         let root = tmp("empty");

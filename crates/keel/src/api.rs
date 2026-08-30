@@ -312,12 +312,20 @@ fn system_prompt(repo: &Utf8Path) -> String {
         "Notes from Keel, the IDE this session runs in. Facts, not instructions:\n\n         - Every file you write shows as a live diff beside this conversation; the person also          sees the terminal, the check output and the readiness report.\n",
     );
 
-    match crate::verify::detect(repo) {
-        Some(check) => out.push_str(&format!(
+    match crate::verify::detect_all(repo).as_slice() {
+        [] => out.push_str("- This project has no check command configured.\n"),
+        [check] if check.dir.is_empty() => out.push_str(&format!(
             "- `{}` is this project's check command (from {}). Keel runs it after each of your turns and shows the result.\n",
             check.command, check.source
         )),
-        None => out.push_str("- This project has no check command configured.\n"),
+        // A folder of repositories has a gate per repository, and the agent needs to know both —
+        // otherwise it runs the one it happens to find and reports the work as checked.
+        checks => {
+            out.push_str("- This folder holds several projects, each with its own check. Keel runs all of them after each of your turns:\n");
+            for check in checks {
+                out.push_str(&format!("  - `{}` in `{}`\n", check.command, check.dir));
+            }
+        }
     }
 
     // The answer to "run it", which the agent otherwise goes and rediscovers: read the package
