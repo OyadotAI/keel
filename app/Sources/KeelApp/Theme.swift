@@ -160,6 +160,13 @@ enum K {
         static let xxl: CGFloat = 40
     }
 
+    /// Every button is this tall.
+    ///
+    /// A label that wraps makes its own button taller and leaves the others centred against it —
+    /// which is what a row of answers looked like the moment one of them named four rules. One
+    /// height, one line, and the long ones truncate.
+    static let buttonHeight: CGFloat = 24
+
     /// The letter-spacing an uppercase label gets. One value: the app had 0.7, 0.6, 0.4 and 0.3
     /// for the same treatment, which is a difference nobody can name and everybody can see.
     static let tracking: CGFloat = 0.6
@@ -314,8 +321,10 @@ struct FilledButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(K.F.small.weight(.semibold))
+            .lineLimit(1)
             .foregroundStyle(enabled ? Color.white : K.C.faint)
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
+            .padding(.horizontal, K.S.md)
+            .frame(height: K.buttonHeight)
             .background(
                 RoundedRectangle(cornerRadius: K.R.sm).fill(
                     enabled
@@ -340,8 +349,11 @@ struct QuietButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(K.F.small)
+            .lineLimit(1)
+            .truncationMode(.middle)
             .foregroundStyle(configuration.isPressed ? K.C.text : tone)
-            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
+            .padding(.horizontal, K.S.sm)
+            .frame(height: K.buttonHeight)
             .background(
                 RoundedRectangle(cornerRadius: K.R.sm)
                     .fill(hovering ? K.C.hover : K.C.ghost)

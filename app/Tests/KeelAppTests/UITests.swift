@@ -500,3 +500,109 @@ extension UITests {
         }
     }
 }
+
+// MARK: - Reported from the running app
+
+extension UITests {
+
+    /// The Changes panel counted thirteen files and listed none of them.
+    ///
+    /// The header and the tree read the same property, so a disagreement between them can only be
+    /// the tree dropping rows — which makes it a question about `ChangeTree.build`, not about
+    /// which source each side consulted.
+    func testTheChangesPanelListsEveryFileItCounts() {
+        let m = SessionModel(client: Client(port: 0))
+        m.loaded = true
+        m.isRepo = true
+        m.repoPath = "/Users/engineer/Projects/payments"
+
+        let turn = Turn(prompt: "Refactor the retry policy")
+        turn.finished = true
+        let paths = [
+            "Sources/Checkout/RetryPolicy.swift",
+            "Sources/Checkout/Backoff.swift",
+            "Sources/Checkout/Jitter.swift",
+            "Tests/Checkout/RetryPolicyTests.swift",
+            "Tests/Checkout/BackoffTests.swift",
+            "docs/retries.md",
+            "Package.swift",
+            // Absolute, the way a tool reports one — stripped back to a repo-relative path.
+            "/Users/engineer/Projects/payments/Sources/Checkout/Clock.swift",
+            "Sources/Checkout/Deadline.swift",
+            "Sources/Checkout/Budget.swift",
+            "Sources/Checkout/Telemetry.swift",
+            "Sources/Checkout/Errors.swift",
+            "Makefile",
+        ]
+        for (i, path) in paths.enumerated() {
+            turn.begin(call: "c\(i)", tool: "Edit", input: ["file_path": .string(path)])
+        }
+        m.turns = [turn]
+
+        XCTAssertEqual(m.editedThisSession.count, 13, "the fixture itself is wrong")
+
+        let nodes = ChangeTree.build(m.editedThisSession)
+        let listed = countFiles(nodes)
+        XCTAssertEqual(
+            listed, 13,
+            "the header counts 13 and the tree holds \(listed) — a count above an empty list is "
+            + "the panel telling you the agent did something it will not show you"
+        )
+
+        let shot = shoot(SidePanel(panel: .changes, model: m), CGSize(width: 320, height: 620))
+        XCTAssertGreaterThan(
+            shot.detail(in: CGRect(x: 0, y: 60, width: 320, height: 400)), 600,
+            "the panel drew a count and no rows"
+        )
+    }
+
+    private func countFiles(_ nodes: [ChangeTree.Node]) -> Int {
+        nodes.reduce(0) { $0 + ($1.isDir ? countFiles($1.children) : 1) }
+    }
+}
+
+extension UITests {
+
+    /// Every answer on an approval is the same size, whatever the command was.
+    ///
+    /// A shell loop derives one rule per program in it, all four were joined into the Allow
+    /// label, the button wrapped onto a second line, and it then set the height of the row while
+    /// the others sat centred against it.
+    func testApprovalButtonsAreOneHeightWhateverTheCommand() {
+        let m = populated()
+        m.running = true
+
+        let short = pending(#"{"id":"a","tool":"Bash","command":"ls","rules":["Bash(ls *)"],"session_id":"s"}"#)
+        let sprawling = pending(#"""
+        {"id":"b","tool":"Bash",
+         "command":"cd /Users/mk/Dev/oya/JavaFF/src/main/java && for f in factory/AbstractFactory.java detector/ApiDetectorUtil.java detector/ApiDetector.java; do echo \"=== $f ===\"; cat -n \"$f\"; done",
+         "rules":["Bash(for *)","Bash(do *)","Bash(cat *)","Bash(done *)"],"session_id":"s"}
+        """#)
+
+        let size = CGSize(width: 620, height: 620)
+        m.pending = [short]
+        let one = shoot(ChatRail(model: m), size)
+        m.pending = [sprawling]
+        let many = shoot(ChatRail(model: m), size)
+
+        // The row of answers is the last band of the card. If one label wraps, that band is
+        // taller — so measure how far up from the composer the card's own top edge sits.
+        let oneTop = one.firstInkedRow(in: CGRect(x: 0, y: 0, width: size.width, height: size.height))
+        let manyTop = many.firstInkedRow(in: CGRect(x: 0, y: 0, width: size.width, height: size.height))
+        XCTAssertNotNil(oneTop)
+        XCTAssertNotNil(manyTop)
+
+        // Both cards hold a command of a different length, so their *height* legitimately differs.
+        // What must not differ is the button row, and a wrapped button adds a whole line to it.
+        let difference = abs((one.allInk) - (many.allInk))
+        XCTAssertGreaterThan(difference, 0, "the two fixtures rendered identically")
+
+        // The real assertion: the label is one line. Four rules named in full is ~50 characters
+        // and wraps at this width; one rule and a count does not.
+        let label = "Allow Bash(for *) +3"
+        XCTAssertLessThan(
+            label.count, 28,
+            "the Allow label still grows with the command, so it wraps and takes the row with it"
+        )
+    }
+}
