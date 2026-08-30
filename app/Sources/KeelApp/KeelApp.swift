@@ -17,10 +17,11 @@ struct KeelApp: App {
                     delegate.app = app
                     await app.start()
                 }
-                // Rail 60 + panel 200 + handle 9 + conversation 420 + handle 9 + stage 340.
-                // The columns clamp themselves to the window above this, so it is a real floor
-                // rather than a hope.
-                .frame(minWidth: 1040, minHeight: 620)
+                // Rail 60 + conversation 360 + handle 9 + stage 300. The side panel steps
+                // aside below 938 and the stage below 729, so this is the floor for a window
+                // that still shows the conversation *and* what the agent did — which is two
+                // Keel windows side by side on a 14" MacBook Pro, 756pt each.
+                .frame(minWidth: SessionWindow.stageFloor, minHeight: 560)
                 // The window draws its own chrome: a translucent background would put the desktop
                 // behind a diff, and a dense reading surface needs an opaque ground.
                 .containerBackground(K.C.bg, for: .window)
@@ -39,8 +40,9 @@ struct KeelApp: App {
         WindowGroup(id: "feature", for: Detached.self) { $request in
             if let request {
                 DetachedWindow(app: app, request: request)
-                    // A detached window draws the same panes, so it has the same floor.
-                    .frame(minWidth: 1040, minHeight: 560)
+                    // A detached window draws the same panes, so it has the same floor — and it
+                    // is the window most likely to be put beside another one.
+                    .frame(minWidth: SessionWindow.stageFloor, minHeight: 560)
                     .containerBackground(K.C.bg, for: .window)
             }
         }

@@ -135,7 +135,7 @@ struct SessionWindow: View {
                     withAnimation(K.M.quick) { showSettings = false }
                 })
 
-                if let panel {
+                if showsPanel, let panel {
                     SidePanel(panel: panel, model: model)
                         .frame(width: panelFit)
                     SplitHandle(width: $panelWidth, range: 200...520, reset: 256, leading: true)
@@ -244,9 +244,10 @@ struct SessionWindow: View {
             // The conversation is the middle, because it is what you are doing. The record of what
             // the agent changed is a reference you consult, so it sits beside it.
             ChatRail(model: model)
-                .frame(minWidth: 420)
+                .frame(minWidth: 360)
 
-            SplitHandle(width: $stageWidth, range: 340...720, reset: 460)
+            if showsStage {
+            SplitHandle(width: $stageWidth, range: 300...720, reset: 460)
 
             VStack(spacing: 0) {
                 stageBar
@@ -272,6 +273,7 @@ struct SessionWindow: View {
                 }
             }
             .frame(width: stageFit)
+            }
         }
     }
 
@@ -284,13 +286,36 @@ struct SessionWindow: View {
     @State private var available: Double = 0
 
     /// Everything in the row that is not one of the two resizable columns.
-    private static let fixedWidth: Double = 60 + 9 + 9   // activity rail, two split handles
-    private static let chatMinWidth: Double = 420
+    private static let railWidth: Double = 60
+    private static let handleWidth: Double = 9
+    private static let chatMinWidth: Double = 360
+    private static let stageMinWidth: Double = 300
+    private static let panelMinWidth: Double = 200
+
+    /// Below this there is no room for the side panel beside a conversation and a stage.
+    static let panelFloor = railWidth + panelMinWidth + handleWidth
+        + chatMinWidth + handleWidth + stageMinWidth
+    /// Below this there is no room for the stage either, and the window is a conversation.
+    static let stageFloor = railWidth + chatMinWidth + handleWidth + stageMinWidth
+
+    /// Whether each column has the room to be drawn at all.
+    ///
+    /// Two Keel windows side by side on a 14" MacBook Pro is 756pt each, which is less than the
+    /// three columns need however hard they are squeezed — so the panel steps aside rather than
+    /// the window refusing to be that narrow. `panel` itself is untouched, so it comes back the
+    /// moment there is room, and ⌘⇧E still works.
+    private var showsPanel: Bool {
+        panel != nil && (available == 0 || available >= Self.panelFloor)
+    }
+    private var showsStage: Bool { available == 0 || available >= Self.stageFloor }
 
     /// What is left for the panel and the stage once the rail, the handles and the conversation
     /// have taken theirs.
     private var roomForColumns: Double {
-        available - Self.fixedWidth + (panel == nil ? 9 : 0) - Self.chatMinWidth
+        var fixed = Self.railWidth + Self.chatMinWidth
+        if showsPanel { fixed += Self.handleWidth }
+        if showsStage { fixed += Self.handleWidth }
+        return available - fixed
     }
 
     /// The stored widths, clamped to what the window can actually show.
@@ -304,12 +329,14 @@ struct SessionWindow: View {
     /// drawn is clamped. Widen the window and the pane you asked for comes back.
     private var panelFit: Double {
         guard available > 0 else { return panelWidth }
-        return max(200, min(panelWidth, roomForColumns - 340))
+        let room = showsStage ? roomForColumns - Self.stageMinWidth : roomForColumns
+        return max(Self.panelMinWidth, min(panelWidth, room))
     }
 
     private var stageFit: Double {
         guard available > 0 else { return stageWidth }
-        return max(340, min(stageWidth, roomForColumns - (panel == nil ? 0 : panelFit)))
+        return max(Self.stageMinWidth,
+                   min(stageWidth, roomForColumns - (showsPanel ? panelFit : 0)))
     }
 
     private var subtitle: String {
