@@ -28,6 +28,11 @@ pub struct AppState {
     /// The port this Keel is serving on. The approval hook is spawned by `claude`, in a separate
     /// process, and this is how it finds its way back.
     port: std::sync::atomic::AtomicU16,
+    /// The agent process each conversation is currently running, so Stop can signal it.
+    ///
+    /// Keyed by conversation for the same reason the approval queue is: two lanes are two turns,
+    /// and stopping one must not touch the other.
+    running: std::sync::Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl AppState {
@@ -36,6 +41,7 @@ impl AppState {
             repo: std::sync::RwLock::new(repo),
             open: std::sync::atomic::AtomicBool::new(true),
             port: std::sync::atomic::AtomicU16::new(7777),
+            running: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -46,6 +52,7 @@ impl AppState {
             repo: std::sync::RwLock::new(crate::prefs::no_project()),
             open: std::sync::atomic::AtomicBool::new(false),
             port: std::sync::atomic::AtomicU16::new(7777),
+            running: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -99,6 +106,47 @@ impl AppState {
             .any(|(d, scope)| scope != "below" && d == cwd)
             || cwd.starts_with(&repo);
         if allowed { cwd } else { repo }
+    }
+
+    /// Remember the agent process a conversation is running, so Stop has something to signal.
+    pub fn mark_running(&self, lane: &str, pid: u32) {
+        self.running
+            .lock()
+            .expect("running lock poisoned")
+            .insert(lane.to_string(), pid);
+    }
+
+    /// Forget it, but only if it is still the one we recorded: a turn that ends after the next one
+    /// has already started must not erase the new turn's pid.
+    pub fn clear_running(&self, lane: &str, pid: u32) {
+        let mut map = self.running.lock().expect("running lock poisoned");
+        if map.get(lane) == Some(&pid) {
+            map.remove(lane);
+        }
+    }
+
+    /// Stop the turn in one conversation, the way ⌃C would.
+    ///
+    /// SIGINT, not SIGTERM and not SIGKILL: `claude` handles an interrupt by finishing the turn it
+    /// is in and writing its transcript. SIGTERM abandons the turn, and the transcript is the whole
+    /// record of what the agent did — losing it is losing the evidence Keel exists to show.
+    /// Returns whether there was anything to signal.
+    pub fn interrupt(&self, lane: &str) -> bool {
+        let Some(pid) = self
+            .running
+            .lock()
+            .expect("running lock poisoned")
+            .get(lane)
+            .copied()
+        else {
+            return false;
+        };
+        // Negative pid signals the process *group*: `claude` spawns the tools it runs, and a bare
+        // `kill(pid)` leaves a `cargo test` it started alive and holding the terminal.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGINT);
+        }
+        true
     }
 
     pub fn set_repo(&self, path: Utf8PathBuf) {
@@ -284,6 +332,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::api::chat))
+        .route("/api/chat/stop", axum::routing::post(crate::api::stop))
         .route(
             "/api/attach",
             axum::routing::post(crate::api::attach)
@@ -881,4 +930,94 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         workspace,
         policy: crate::policy::Policy::load(&repo),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+
+    /// A child in its own process group, so `interrupt` has something a signal can reach.
+    fn spawn_sleeper() -> std::process::Child {
+        let mut command = std::process::Command::new("sleep");
+        command.arg("30");
+        command.process_group(0);
+        command.spawn().expect("could not spawn `sleep`")
+    }
+
+    /// The one this file exists for. Non-negotiable #6 said "Stop sends SIGINT" and nothing sent
+    /// any signal at all — the daemon noticed a hung-up client only when the *next* output line
+    /// arrived, so a quiet turn kept running after Stop. A budget that cannot fail reads as proof,
+    /// so this signals a real process and waits for it to actually die.
+    #[test]
+    fn interrupt_stops_the_process_it_recorded() {
+        let state = AppState::empty();
+        let mut child = spawn_sleeper();
+        state.mark_running("lane-a", child.id());
+
+        assert!(state.interrupt("lane-a"), "nothing was signalled");
+
+        let status = child.wait().expect("could not wait for the child");
+        assert!(
+            !status.success(),
+            "`sleep` finished normally — it was not interrupted"
+        );
+    }
+
+    /// A question belongs to one conversation, and so does a Stop. Two lanes are two turns, and
+    /// stopping one while the other is mid-build would be the same class of bug as the approval
+    /// queue that drained every window's questions.
+    #[test]
+    fn interrupt_leaves_other_conversations_alone() {
+        let state = AppState::empty();
+        let mut mine = spawn_sleeper();
+        let mut theirs = spawn_sleeper();
+        state.mark_running("mine", mine.id());
+        state.mark_running("theirs", theirs.id());
+
+        state.interrupt("mine");
+        mine.wait()
+            .expect("could not wait for the interrupted child");
+
+        assert!(
+            theirs
+                .try_wait()
+                .expect("could not poll the other child")
+                .is_none(),
+            "the other conversation's turn was stopped too"
+        );
+        let _ = theirs.kill();
+        let _ = theirs.wait();
+    }
+
+    /// Pressing Stop on a turn that already finished is not an error, and must not signal whatever
+    /// process happens to hold that pid next.
+    #[test]
+    fn interrupt_with_nothing_running_signals_nothing() {
+        let state = AppState::empty();
+        assert!(!state.interrupt("lane-a"));
+
+        let mut child = spawn_sleeper();
+        let pid = child.id();
+        state.mark_running("lane-a", pid);
+        state.clear_running("lane-a", pid);
+        assert!(!state.interrupt("lane-a"));
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// A turn that ends after the next one has started must not erase the new turn's pid, or the
+    /// second Stop finds nothing and the agent runs on.
+    #[test]
+    fn a_late_ending_turn_does_not_forget_the_new_one() {
+        let state = AppState::empty();
+        state.mark_running("lane-a", 1234);
+        state.mark_running("lane-a", 5678);
+        state.clear_running("lane-a", 1234);
+
+        assert_eq!(
+            state.running.lock().unwrap().get("lane-a").copied(),
+            Some(5678)
+        );
+    }
 }

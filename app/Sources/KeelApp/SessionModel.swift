@@ -575,12 +575,31 @@ final class SessionModel: Identifiable {
         if !queued.isEmpty { start(queued.removeFirst()) }
     }
 
+    /// Interrupt the turn — SIGINT to the agent's process group, the way ⌃C does it.
+    ///
+    /// The interrupt goes first and the stream is dropped after. Cancelling the stream on its own
+    /// was the whole bug: the daemon only learned the client had gone when the *next* line arrived,
+    /// so a turn sitting quiet inside a three-minute test kept running while this said it had
+    /// stopped. `running` still flips immediately — the process is being signalled, and a button
+    /// that waits for a round trip reads as a button that did nothing.
     func stop() {
+        let lane = id.uuidString
+        Task { [client] in
+            do {
+                _ = try await client.post("/api/chat/stop", body: Nothing(), ["lane": lane],
+                                          as: Stopped.self)
+            } catch {
+                // Worth saying: the person pressed Stop and the agent may still be running.
+                self.lastError = "Could not stop the turn: \(error.localizedDescription)"
+            }
+        }
         streamTask?.cancel()
         streamTask = nil
         running = false
         watchApprovals(false)
     }
+
+    struct Stopped: Decodable { var stopped: Bool }
 
     // MARK: - The checkout
 
@@ -1024,7 +1043,11 @@ final class SessionModel: Identifiable {
                           session: sessionId, answer: text)
         Task { [client] in
             struct Ok: Decodable { var ok: Bool }
-            _ = try? await client.post("/api/approve/answer", body: body, as: Ok.self)
+            do {
+                _ = try await client.post("/api/approve/answer", body: body, as: Ok.self)
+            } catch {
+                self.answerFailed(p, error)
+            }
         }
     }
 
@@ -1034,10 +1057,25 @@ final class SessionModel: Identifiable {
                           rules: p.rules, scope: scope, session: sessionId)
         Task { [client] in
             struct Ok: Decodable { var ok: Bool }
-            _ = try? await client.post("/api/approve/answer", body: body, as: Ok.self)
+            do {
+                _ = try await client.post("/api/approve/answer", body: body, as: Ok.self)
+            } catch {
+                self.answerFailed(p, error)
+                return
+            }
             // Trusting from an approval changes the window's own claim about itself.
             if scope == "trust" { await self.refreshTrust() }
         }
+    }
+
+    /// The card was removed optimistically, which is right — a click should not wait on a round
+    /// trip. But if the answer never landed the agent is still blocked, and silently: it waits out
+    /// the hook's four-minute timeout while the screen shows an approval that looks answered. So
+    /// the question goes back on screen with the reason.
+    private func answerFailed(_ p: Wire.Pending, _ error: Error) {
+        if !pending.contains(where: { $0.id == p.id }) { pending.append(p) }
+        lastError = "That answer did not reach the agent: \(error.localizedDescription). "
+            + "It is still waiting — try again."
     }
 
     // MARK: - Repository
@@ -1247,6 +1285,23 @@ final class SessionModel: Identifiable {
     /// One project across every window, which is the daemon's own shape — `AppState` holds a
     /// single repo. Switching it moves every window, so this reloads the shared state rather than
     /// pretending the other windows are unaffected.
+    /// Open a project, and say so when it does not work.
+    ///
+    /// Five of the six callers wrote `try? await openProject(…)`, so ⌘O onto a folder that had
+    /// moved, a recent project from the palette, and the project menu each did nothing at all —
+    /// no error, no change, and the opening bar left up because `opening` is set before the
+    /// request and only cleared after it. One reporting wrapper rather than five call sites.
+    func open(project path: String) async {
+        do {
+            try await openProject(path)
+        } catch {
+            opening = nil
+            loaded = true
+            lastError = "Could not open \(URL(fileURLWithPath: path).lastPathComponent): "
+                + error.localizedDescription
+        }
+    }
+
     func openProject(_ path: String) async throws {
         // Said out loud from the first moment: the panels go back to "Reading…", and the bar
         // names each step until the setup check is done. Before this, the window sat still

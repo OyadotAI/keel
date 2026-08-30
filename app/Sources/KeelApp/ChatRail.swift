@@ -338,11 +338,55 @@ struct Composer: View {
     @Bindable var model: SessionModel
     @FocusState.Binding var focused: Bool
     @State private var dropping = false
+    /// The `@` mention being typed: the query after it, and where the `@` sits in the prompt.
+    @State private var mentioning: Mention?
+    @State private var mentionPick = 0
+
+    struct Mention: Equatable {
+        var query: String
+        var start: String.Index
+    }
+
+    /// The word being typed after a bare `@`, if the caret is still inside it.
+    ///
+    /// Read from the prompt rather than tracked as the person types: a paste, an undo and a
+    /// deletion all have to reach the same answer, and only the text knows.
+    private func mention(in prompt: String) -> Mention? {
+        guard let at = prompt.lastIndex(of: "@") else { return nil }
+        // Only at a word start, so an email address or a `@path` already inserted is left alone.
+        let before = at == prompt.startIndex ? " " : String(prompt[prompt.index(before: at)])
+        guard before == " " || before == "\n" else { return nil }
+        let query = String(prompt[prompt.index(after: at)...])
+        guard !query.contains(" "), !query.contains("\n") else { return nil }
+        return Mention(query: query, start: at)
+    }
+
+    /// At most eight, because a list that fills the window is a palette and there is one of those.
+    private var mentionHits: [String] {
+        guard let m = mentioning else { return [] }
+        guard !m.query.isEmpty else { return Array(model.files.prefix(8)) }
+        return model.files
+            .compactMap { f in Fuzzy.score(m.query, in: f).map { (f, $0) } }
+            .sorted { $0.1 > $1.1 }
+            .prefix(8)
+            .map(\.0)
+    }
+
+    /// Attach the file and take the `@query` back out of the prompt — it was the gesture, not text
+    /// the agent should read.
+    private func take(_ path: String) {
+        if let m = mentioning { model.prompt.removeSubrange(m.start...) }
+        model.mention(path)
+        mentioning = nil
+        mentionPick = 0
+        focused = true
+    }
 
     var body: some View {
         VStack(spacing: K.S.sm) {
             PinList(model: model)
             AttachmentStrip(model: model)
+            mentionList
 
             if !model.notes.isEmpty {
                 Button {
@@ -393,6 +437,34 @@ struct Composer: View {
         .background(K.C.bg)
     }
 
+    /// The `@` file picker the paperclip's tooltip and `docs/features.md` have both promised for
+    /// as long as they have existed, and which nothing implemented.
+    @ViewBuilder
+    private var mentionList: some View {
+        if !mentionHits.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(mentionHits.enumerated()), id: \.element) { i, path in
+                    HoverRow(selected: i == mentionPick) {
+                        HStack(spacing: K.S.sm) {
+                            Image(systemName: "doc").font(.system(size: 10))
+                                .foregroundStyle(K.C.faint)
+                            Text(Fuzzy.highlight(mentioning?.query ?? "", in: path))
+                                .font(K.F.small).foregroundStyle(K.C.text)
+                                .lineLimit(1).truncationMode(.head)
+                        }
+                        .padding(.vertical, 1)
+                    } action: {
+                        take(path)
+                    }
+                }
+            }
+            .padding(.vertical, K.S.xs)
+            .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+            .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private var field: some View {
         TextField("Ask Keel to change, explain, or review…", text: $model.prompt, axis: .vertical)
             .textFieldStyle(.plain)
@@ -407,6 +479,10 @@ struct Composer: View {
                             lineWidth: dropping ? 2 : 1)
             )
             .focused($focused)
+            // The button has always drawn a `return` glyph; until now Return only inserted a
+            // newline and ⌘Return was the real key, so the control lied about itself. ⇧Return
+            // still makes a new line, which is the convention every chat composer uses.
+            .onSubmit { if mentioning == nil { model.send() } }
             .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
                 if !model.takePaste(.general) {
                     model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
@@ -416,6 +492,31 @@ struct Composer: View {
             // the composer grows naturally until eight lines and then becomes scrollable.
             .onChange(of: model.prompt) {
                 if model.prompt.count > SessionModel.longPaste { model.fileLongText() }
+                let found = mention(in: model.prompt)
+                if found != mentioning { mentionPick = 0 }
+                mentioning = found
+            }
+            // Arrow keys and Return belong to the list while it is up, and to the composer
+            // otherwise — the same rule the palette follows.
+            .onKeyPress(.upArrow) {
+                guard !mentionHits.isEmpty else { return .ignored }
+                mentionPick = max(0, mentionPick - 1)
+                return .handled
+            }
+            .onKeyPress(.downArrow) {
+                guard !mentionHits.isEmpty else { return .ignored }
+                mentionPick = min(mentionHits.count - 1, mentionPick + 1)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                guard !mentionHits.isEmpty else { return .ignored }
+                take(mentionHits[mentionPick])
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                guard mentioning != nil else { return .ignored }
+                mentioning = nil
+                return .handled
             }
             .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
                 for p in providers {
@@ -467,6 +568,7 @@ struct Composer: View {
                 }
                 .buttonStyle(SendButton())
                 .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .hint("Send (Return, or ⌘Return). ⇧Return for a new line.")
             }
         }
         .padding(.horizontal, K.S.xs)

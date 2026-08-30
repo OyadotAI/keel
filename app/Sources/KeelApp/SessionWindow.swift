@@ -80,7 +80,11 @@ struct SessionWindow: View {
 
     var body: some View {
         Group {
-            if model.projectOpen { workbench } else { Welcome(model: model) { } }
+            if model.projectOpen {
+                workbench
+            } else {
+                Welcome(model: model, daemonFailure: app?.failure) { }
+            }
         }
         .animation(K.M.quick, value: model.opening)
         .animation(K.M.quick, value: model.justOpened)
@@ -180,7 +184,7 @@ struct SessionWindow: View {
             StartProject(client: model.client) { path, brief, file in
                 starting = false
                 Task {
-                    try? await model.openProject(path)
+                    await model.open(project: path)
                     Recents.remember(path)
                     await lanes.refreshShared()
                     // A template's brief goes into the box, its file onto the strip, and the
@@ -656,7 +660,7 @@ struct ProjectMenu: View {
                 ForEach(Recents.paths.filter { $0 != model.repoPath }, id: \.self) { path in
                     Button((path as NSString).lastPathComponent) {
                         Task {
-                            try? await model.openProject(path)
+                            await model.open(project: path)
                             Recents.remember(path)
                             await model.lanes?.refreshShared()
                         }
@@ -770,7 +774,7 @@ struct WindowEvents: ViewModifier {
         panel.prompt = "Open"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
-            try? await model.openProject(url.path)
+            await model.open(project: url.path)
             Recents.remember(url.path)
             await lanes.refreshShared()
         }
@@ -788,8 +792,16 @@ private struct TrustAlert: ViewModifier {
         content.alert("Trust this project?", isPresented: $shown) {
             Button("Trust") {
                 Task {
-                    _ = try? await model.client.post("/api/permissions/trust",
-                                                     body: TrustBody(trusted: true), as: Bool.self)
+                    do {
+                        _ = try await model.client.post("/api/permissions/trust",
+                                                        body: TrustBody(trusted: true),
+                                                        as: Bool.self)
+                    } catch {
+                        // The alert dismisses either way. Without this the status bar simply
+                        // stayed "not trusted" and there was nothing anywhere saying why.
+                        model.lastError = "Could not trust this project: "
+                            + error.localizedDescription
+                    }
                     await model.refreshTrust()
                 }
             }

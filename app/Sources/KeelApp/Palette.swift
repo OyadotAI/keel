@@ -80,7 +80,7 @@ struct Palette: View {
             out.append(Item(title: (path as NSString).lastPathComponent,
                             detail: "open project") {
                 Task {
-                    try? await model.openProject(path)
+                    await model.open(project: path)
                     Recents.remember(path)
                     await model.lanes?.refreshShared()
                 }
