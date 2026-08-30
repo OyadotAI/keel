@@ -439,7 +439,7 @@ struct GroupRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: K.S.sm) {
-                StatusDot(failed: group.failed, running: group.running)
+                CallGlyph(risk: group.risk, failed: group.failed, running: group.running)
                 Text(group.tool)
                     .font(K.F.codeSmall.weight(.medium))
                     .foregroundStyle(group.failed ? K.C.del : K.C.dim)
@@ -460,6 +460,9 @@ struct GroupRow: View {
                 }
 
                 Spacer(minLength: K.S.sm)
+                Elapsed(started: group.calls.last?.started ?? group.first.started,
+                        duration: group.duration,
+                        running: group.running)
                 Image(systemName: open ? "chevron.down" : "chevron.right")
                     .font(K.F.tiny.weight(.bold))
                     .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.45))
@@ -520,8 +523,9 @@ private struct CallDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: K.S.sm) {
-                StatusDot(failed: call.failed, running: call.running)
+                CallGlyph(risk: call.risk, failed: call.failed, running: call.running)
                 Subject(call.subject)
+                Elapsed(started: call.started, duration: call.duration, running: call.running)
             }
             .padding(.vertical, K.S.xxs).padding(.trailing, K.S.md)
             .contentShape(Rectangle())
@@ -560,6 +564,95 @@ private struct CallDetail: View {
             }
         }
         .animation(K.M.flow, value: open)
+    }
+}
+
+/// What a call could do, as one glyph: reads, changes something, or destroys something.
+///
+/// A column of identical grey dots said only "a tool ran", which is the one thing the row already
+/// said. Failure still wins over risk — a command that failed is a fact, where its risk was only
+/// ever a guess — and a running call keeps the pulse, because that is what says the turn is alive.
+struct CallGlyph: View {
+    let risk: Turn.Risk
+    let failed: Bool
+    let running: Bool
+    @Environment(\.accessibilityReduceMotion) private var still
+
+    private var symbol: String {
+        if failed { return "xmark.octagon.fill" }
+        switch risk {
+        case .safe: return "eye"
+        case .warn: return "exclamationmark.triangle.fill"
+        case .danger: return "exclamationmark.octagon.fill"
+        }
+    }
+
+    private var color: Color {
+        if failed { return K.C.del }
+        switch risk {
+        case .safe: return running ? K.C.accent : K.C.faint.opacity(0.7)
+        case .warn: return K.C.warn
+        case .danger: return K.C.del
+        }
+    }
+
+    private var label: String {
+        if failed { return "failed" }
+        switch risk {
+        case .safe: return "reads only"
+        case .warn: return "changes something"
+        case .danger: return "destructive"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            // The pulse is the same one the dot had, drawn around the glyph rather than instead
+            // of it: you should not have to give up knowing what it is to see that it is running.
+            if running && !still {
+                PhaseAnimator([false, true]) { expanded in
+                    Circle().stroke(color.opacity(expanded ? 0 : 0.45), lineWidth: 1)
+                        .frame(width: expanded ? 16 : 8, height: expanded ? 16 : 8)
+                } animation: { _ in .easeOut(duration: 0.9) }
+            }
+            Image(systemName: symbol)
+                .font(K.F.tiny.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .frame(width: 16, height: 16)
+        .hint(label)
+    }
+}
+
+/// How long a call took, ticking while it is still running.
+///
+/// The list could say what ran and whether it worked, and nothing at all about time — so a command
+/// that had been going for four minutes looked exactly like one that had just started, which is
+/// the moment you most want to know the difference.
+struct Elapsed: View {
+    let started: Date
+    var duration: TimeInterval?
+    var running: Bool
+
+    var body: some View {
+        if running {
+            // Ticks on its own. An `onAppear` timer would restart every time the list rebuilt,
+            // which in a streaming turn is most frames.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                text(context.date.timeIntervalSince(started), live: true)
+            }
+        } else if let duration, duration >= 1 {
+            // Under a second is noise: forty rows of "0s" is a column that says nothing.
+            text(duration, live: false)
+        }
+    }
+
+    private func text(_ seconds: TimeInterval, live: Bool) -> some View {
+        let s = max(0, Int(seconds))
+        let label = s < 60 ? "\(s)s" : "\(s / 60)m\(String(format: "%02d", s % 60))s"
+        return Text(label)
+            .font(K.F.codeTiny).monospacedDigit()
+            .foregroundStyle(live ? K.C.accent : K.C.faint.opacity(0.7))
     }
 }
 
