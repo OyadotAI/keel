@@ -210,6 +210,7 @@ final class AppModel {
 
     /// The windows that were pulled out of the strip, each with a daemon of its own.
     private var detached: [UUID: Workspace] = [:]
+    private var detachedStarts: [UUID: Task<Void, Never>] = [:]
 
     /// The workspace for a torn-out window, started on first ask and kept until it closes.
     func workspace(for request: Detached) -> Workspace {
@@ -217,8 +218,16 @@ final class AppModel {
         // Created synchronously so the window has something to draw; the daemon comes up under it.
         let placeholder = Workspace(port: 0)
         detached[request.lane] = placeholder
-        Task { @MainActor in
-            let port = await Workspace.freePort()
+        detachedStarts[request.lane] = Task { @MainActor in
+            defer { detachedStarts.removeValue(forKey: request.lane) }
+            guard let port = await Workspace.reservePort() else {
+                placeholder.reportFailure("No free local port is available for another Keel.")
+                return
+            }
+            guard !Task.isCancelled, detached[request.lane] === placeholder else {
+                await Workspace.releasePort(port)
+                return
+            }
             let real = Workspace(port: port)
             detached[request.lane] = real
             await real.start(project: request.project, resume: request.session)
@@ -227,6 +236,7 @@ final class AppModel {
     }
 
     func closeWorkspace(_ id: UUID) {
+        detachedStarts.removeValue(forKey: id)?.cancel()
         detached.removeValue(forKey: id)?.shutdown()
     }
 
@@ -235,6 +245,8 @@ final class AppModel {
 
     func shutdown() {
         bonjour.stop()
+        for (_, task) in detachedStarts { task.cancel() }
+        detachedStarts.removeAll()
         for (_, w) in detached { w.shutdown() }
         detached.removeAll()
         daemon.stop()

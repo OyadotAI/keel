@@ -102,4 +102,26 @@ final class LanesTests: XCTestCase {
         XCTAssertNotEqual(l.lanes[0].id, only.id)
         XCTAssertNotNil(l.activeID)
     }
+
+    func testConcurrentDetachedWindowsReserveDifferentPorts() async {
+        let ports = PortReservations(first: 7778, count: 2)
+
+        async let first = ports.reserve { _ in false }
+        async let second = ports.reserve { _ in false }
+
+        let claimed = await [first, second].compactMap { $0 }
+        XCTAssertEqual(Set(claimed).count, 2)
+    }
+
+    func testAClosedDetachedWindowReleasesItsPort() async {
+        let ports = PortReservations(first: 7778, count: 1)
+        let first = await ports.reserve { _ in false }
+        XCTAssertEqual(first, 7778)
+        let exhausted = await ports.reserve { _ in false }
+        XCTAssertNil(exhausted)
+
+        await ports.release(7778)
+        let reused = await ports.reserve { _ in false }
+        XCTAssertEqual(reused, 7778)
+    }
 }
