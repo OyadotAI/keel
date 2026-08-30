@@ -13,6 +13,11 @@ actor Client {
         let cfg = URLSessionConfiguration.ephemeral
         // The chat stream is open for as long as a turn runs, which is minutes. The default
         // request timeout would cut a long turn off mid-thought and look like a crash.
+        //
+        // It is the *session's* ceiling, and every ordinary call used to inherit it: a daemon
+        // that never answered `/api/open` left the window dimmed on "Opening …" for an hour with
+        // nothing to click and nothing to cancel. The stream keeps the hour; everything else gets
+        // `Self.ordinary` per request, so a call that will not come back fails and says so.
         cfg.timeoutIntervalForRequest = 3600
         cfg.timeoutIntervalForResource = 86_400
         session = URLSession(configuration: cfg)
@@ -22,6 +27,18 @@ actor Client {
         let status: Int
         let body: String
         var errorDescription: String? { body.isEmpty ? "HTTP \(status)" : body }
+    }
+
+    /// How long a request that is not the chat stream may take.
+    ///
+    /// Generous, because the daemon scans repositories and a cold `/api/open` on a large one is
+    /// genuinely slow — but finite, because the alternative is a window that never comes back.
+    static let ordinary: TimeInterval = 90
+
+    private func request(_ path: String, _ query: [String: String] = [:]) -> URLRequest {
+        var req = URLRequest(url: url(path, query))
+        req.timeoutInterval = Self.ordinary
+        return req
     }
 
     private func url(_ path: String, _ query: [String: String] = [:]) -> URL {
@@ -41,14 +58,14 @@ actor Client {
     }
 
     func get<T: Decodable>(_ path: String, _ query: [String: String] = [:], as: T.Type = T.self) async throws -> T {
-        let (data, response) = try await session.data(from: url(path, query))
+        let (data, response) = try await session.data(for: request(path, query))
         try check(data, response)
         return try JSONDecoder().decode(T.self, from: data)
     }
 
     /// Bytes, for a file the viewer shows.
     func raw(_ path: String, _ query: [String: String] = [:]) async throws -> Data {
-        let (data, response) = try await session.data(from: url(path, query))
+        let (data, response) = try await session.data(for: request(path, query))
         try check(data, response)
         return data
     }
@@ -56,7 +73,7 @@ actor Client {
     @discardableResult
     func post<T: Decodable>(_ path: String, body: some Encodable, _ query: [String: String] = [:],
                             as: T.Type = T.self) async throws -> T {
-        var req = URLRequest(url: url(path, query))
+        var req = request(path, query)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.httpBody = try JSONEncoder().encode(body)

@@ -70,6 +70,14 @@ final class SessionModel: Identifiable {
     var lastEventAt = Date()
     /// So the fresh-conversation retry happens once and cannot become a loop.
     private var retriedFresh = false
+
+    /// What the turn is doing *before* the agent starts, when there are no events yet.
+    ///
+    /// An isolated turn makes a checkout of the repository first, and `git worktree add` copies
+    /// the working tree — on a real repository that is minutes, during which the bar said
+    /// "thinking…" and then, at ninety seconds, told the person to stop and use the terminal.
+    /// It was neither thinking nor stuck; it was checking out, and saying so is the whole fix.
+    var preparing: String?
     /// One stall report per turn.
     var stallReported = false
     var prompt = ""
@@ -638,11 +646,24 @@ final class SessionModel: Identifiable {
         streamTask = Task { [client] in
             // An isolated task gets its checkout before the provider starts. Failure stops the
             // task; silently sharing the project tree would break the task's safety contract.
-            if isolated, worktree == nil, !(await makeWorktree()) {
-                turn.finished = true
-                running = false
-                watchApprovals(false)
-                return
+            if isolated, worktree == nil {
+                self.preparing = "making an isolated checkout of the repository…"
+                let made = await self.makeWorktree()
+                self.preparing = nil
+                if !made {
+                    turn.finished = true
+                    running = false
+                    watchApprovals(false)
+                    return
+                }
+                // Stop pressed while git was copying the tree used to be ignored: `running` went
+                // false and the task carried on and started the agent anyway, so the turn people
+                // had cancelled ran on invisibly.
+                if Task.isCancelled || !self.running {
+                    turn.finished = true
+                    watchApprovals(false)
+                    return
+                }
             }
             var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString,
                             "provider": provider.queryValue])
@@ -705,6 +726,7 @@ final class SessionModel: Identifiable {
     private func endTurn(_ turn: Turn) async {
         turn.finished = true
         running = false
+        preparing = nil
         editing = nil
         watchApprovals(false)
         await refreshGit()
@@ -743,6 +765,7 @@ final class SessionModel: Identifiable {
         streamTask?.cancel()
         streamTask = nil
         running = false
+        preparing = nil
         watchApprovals(false)
     }
 
@@ -767,8 +790,9 @@ final class SessionModel: Identifiable {
             await lanes?.refreshWorktrees()
             return true
         } catch {
-            lastError = "Keel stopped before making changes because the isolated checkout could not be created: "
-                + error.localizedDescription
+            lastError = "Keel stopped before making changes because the isolated checkout could "
+                + "not be created: " + error.localizedDescription
+                + "\n\nTurn off Isolate in the composer to run in the project itself."
             return false
         }
     }

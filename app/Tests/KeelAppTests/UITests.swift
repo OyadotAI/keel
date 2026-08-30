@@ -746,3 +746,18 @@ extension UITests {
                              "the key hints appear when Pick is armed")
     }
 }
+
+// MARK: - Before the agent starts
+
+extension UITests {
+
+    /// Stop during the checkout has to leave nothing behind claiming to be busy.
+    func testStopClearsThePreparingState() {
+        let m = populated()
+        m.running = true
+        m.preparing = "making an isolated checkout of the repository…"
+        m.stop()
+        XCTAssertFalse(m.running)
+        XCTAssertNil(m.preparing, "the bar would otherwise keep naming work that was cancelled")
+    }
+}
