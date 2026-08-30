@@ -16,9 +16,11 @@ struct Markdown: View {
     init(_ source: String) { self.source = source }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            ForEach(Array(Self.cachedBlocks(source).enumerated()), id: \.offset) { _, block in
+        let blocks = Self.cachedBlocks(source)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 view(for: block)
+                    .padding(.top, spacing(before: block, at: index))
             }
         }
         // Applied at the root so every block inherits it. Only the code blocks had it before, so
@@ -31,27 +33,29 @@ struct Markdown: View {
         switch block {
         case .heading(let level, let text):
             Text(inline(text))
-                .font(K.F.ui(level == 1 ? 15 : (level == 2 ? 13.5 : 12.5), .semibold))
+                .font(K.F.ui(level == 1 ? 20 : (level == 2 ? 17 : 14), .semibold))
                 .foregroundStyle(K.C.text)
-                .padding(.top, K.S.xs)
+                .lineSpacing(2)
 
         case .paragraph(let text):
             Text(inline(text))
-                .font(K.F.body)
+                .font(K.F.ui(14))
                 .foregroundStyle(K.C.text)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
 
         case .bullets(let items):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 7) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
                         Text(item.marker)
-                            .font(K.F.mono(11))
+                            .font(K.F.mono(12))
                             .foregroundStyle(K.C.faint)
-                            .frame(minWidth: 14, alignment: .trailing)
+                            .frame(minWidth: 18, alignment: .trailing)
                         Text(inline(item.text))
-                            .font(K.F.body)
+                            .font(K.F.ui(14))
                             .foregroundStyle(K.C.text)
+                            .lineSpacing(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -65,6 +69,19 @@ struct Markdown: View {
 
         case .rule:
             Rectangle().fill(K.C.line).frame(height: 1).padding(.vertical, K.S.xs)
+        }
+    }
+
+    /// Space follows meaning rather than treating every Markdown block as an identical row.
+    /// Headings open a new section; prose and lists within a section stay visibly connected.
+    private func spacing(before block: Block, at index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        return switch block {
+        case .heading: K.S.xl
+        case .rule: K.S.lg
+        case .code, .table: K.S.md
+        case .bullets: K.S.sm
+        case .paragraph: K.S.md
         }
     }
 
@@ -125,7 +142,13 @@ struct Markdown: View {
 
         func flushParagraph() {
             if !paragraph.isEmpty {
-                out.append(.paragraph(paragraph.joined(separator: " ")))
+                // Agents often use a short colon-ended line as a section lead-in before a list.
+                // It is semantic hierarchy even when the model omitted Markdown hashes.
+                if paragraph.count == 1, paragraph[0].hasSuffix(":") {
+                    out.append(.heading(3, paragraph[0]))
+                } else {
+                    out.append(.paragraph(paragraph.joined(separator: " ")))
+                }
                 paragraph = []
             }
         }
