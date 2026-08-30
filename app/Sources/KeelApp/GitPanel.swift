@@ -30,43 +30,20 @@ struct GitPanel: View {
             } else {
                 branchHeader
                 commitBox
-                disclosure("Changed files", count: model.changes.count, open: $showFiles) {
+                PanelSection(title: "Changed files", count: model.changes.count,
+                             open: $showFiles) {
                     workingTree
                 }
-                disclosure("Branches", count: b?.local.count ?? 0, open: $showBranches) {
+                PanelSection(title: "Branches", count: b?.local.count ?? 0, open: $showBranches) {
                     branches
                 }
-                disclosure("History", count: model.commits.count, open: $showHistory) {
+                PanelSection(title: "History", count: model.commits.count, open: $showHistory) {
                     CommitList(model: model)
                 }
             }
         }
         .task { await model.refreshBranches() }
         .onChange(of: model.commits.count) { Task { await model.refreshBranches() } }
-    }
-
-    private func disclosure<Content: View>(_ title: String, count: Int,
-                                           open: Binding<Bool>,
-                                           @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(K.M.flow) { open.wrappedValue.toggle() }
-            } label: {
-                HStack(spacing: K.S.sm) {
-                    Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
-                        .font(K.F.ui(9, .semibold)).frame(width: 10)
-                    Text(title).font(K.F.small.weight(.semibold))
-                    Spacer()
-                    Text("\(count)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
-                }
-                .foregroundStyle(K.C.text)
-                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if open.wrappedValue { content().transition(.opacity) }
-        }
-        .overlay(alignment: .top) { Hairline() }
     }
 
     // MARK: Where you are
@@ -267,7 +244,7 @@ struct GitPanel: View {
                 }
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             } else {
-                PanelAction("New branch from here…", icon: "plus.circle") { creating = true }
+                PanelFooter("New branch from here…") { creating = true }
             }
 
             // Branches only the remote has, without the remote's name repeated on every row

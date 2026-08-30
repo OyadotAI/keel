@@ -16,6 +16,14 @@ final class VisualCatalogTests: XCTestCase {
             Wire.Change(path: "Sources/Checkout/RetryPolicy.swift", status: " M", label: "modified"),
             Wire.Change(path: "Tests/Checkout/RetryPolicyTests.swift", status: "??", label: "untracked"),
         ]
+        // Populated, because the empty state is the easy half. Every panel has to look composed
+        // with real rows in it, and a catalog that only ever shows "nothing here" cannot tell you
+        // whether a list is designed. Decoded rather than constructed: the property wrappers on
+        // these types block a memberwise initialiser, and this is the route the daemon's own
+        // responses take anyway.
+        model.workspace = decode(Wire.Workspace.self, workspaceJSON)
+        model.sessions = model.workspace.sessions
+
         let turn = Turn(prompt: "Make checkout retries safe and observable")
         model.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"edit","name":"Edit","input":{"file_path":"Sources/Checkout/RetryPolicy.swift"}},{"type":"tool_use","id":"command","name":"Bash","input":{"command":"make check","description":"Verify the repository gate"}}]}}"#.utf8), into: turn)
         model.record(Data(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"command","content":"All checks passed"}]}}"#.utf8), into: turn)
@@ -25,6 +33,49 @@ final class VisualCatalogTests: XCTestCase {
         model.turns = [turn]
         return model
     }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
+        do {
+            return try JSONDecoder().decode(T.self, from: Data(json.utf8))
+        } catch {
+            fatalError("catalog fixture does not decode: \(error)")
+        }
+    }
+
+    private let workspaceJSON = """
+    {
+      "sessions": [
+        {"id":"harden-checkout-retries","title":"Harden checkout retries","messages":42,
+         "last_active":"2026-08-30T09:14:00Z","scope":"here"},
+        {"id":"duplicate-webhook","title":"Trace the duplicate webhook","messages":118,
+         "last_active":"2026-08-29T17:02:00Z","scope":"here"},
+        {"id":"bump-postgres","title":"Bump Postgres to 17","messages":9,
+         "last_active":"2026-08-27T11:40:00Z","scope":"above"}
+      ],
+      "skills": [
+        {"name":"code-review","description":"Review a diff for correctness and scope","scope":"user"},
+        {"name":"release-notes","description":"Write the changelog from merged PRs","scope":"user"},
+        {"name":"db-migrate","description":"Plan and apply a schema migration","scope":"project"}
+      ],
+      "agents": [
+        {"name":"contract","description":"Reads the code the way a staff engineer would","scope":"user"},
+        {"name":"perf","description":"Hot paths, allocations and query plans","scope":"project"}
+      ],
+      "plugins": [
+        {"name":"cloudflare","enabled":true,"marketplace":"anthropics","scope":"user"},
+        {"name":"postgres-tools","enabled":false,"marketplace":"community","scope":"project"}
+      ],
+      "hooks": [
+        {"event":"PreToolUse","command":"./scripts/audit.sh","scope":"project",
+         "source":".claude/settings.json"},
+        {"event":"Stop","command":"make check","scope":"user","source":""}
+      ],
+      "mcp_servers": [
+        {"name":"linear","description":"Issues and cycles","scope":"user"},
+        {"name":"sentry","description":"Errors for this service","scope":"project"}
+      ]
+    }
+    """
 
     func testCaptureVisualCatalogWhenRequested() throws {
         guard let raw = ProcessInfo.processInfo.environment["KEEL_VISUAL_CATALOG"] else {

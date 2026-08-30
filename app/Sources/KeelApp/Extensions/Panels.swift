@@ -29,14 +29,13 @@ struct SkillsPanel: View {
                       "Add reusable instructions for reviews, deployments, and tools.",
                       actionLabel: "Browse skills") { model.sheet = .skills }
             } else {
-                RailHeader("Available skills", trailing: "\(model.workspace.skills.count)")
                 ForEach(model.workspace.skills) { s in
-                    ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
-                            selected: model.inspecting == .skill(s)) {
+                    PanelRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
+                             selected: model.inspecting == .skill(s)) {
                         model.inspecting = .skill(s)
                     }
                 }
-                PanelAction("Add skills…", icon: "plus.circle") { model.sheet = .skills }
+                PanelFooter("Add skills…") { model.sheet = .skills }
             }
         }
     }
@@ -53,12 +52,12 @@ struct AgentsPanel: View {
                       actionLabel: "Create one") { model.sheet = .subagent }
             } else {
                 ForEach(model.workspace.agents) { a in
-                    ItemRow(name: a.name, detail: a.description, fromRepo: a.fromRepo,
-                            selected: model.inspecting == .agent(a)) {
+                    PanelRow(name: a.name, detail: a.description, fromRepo: a.fromRepo,
+                             selected: model.inspecting == .agent(a)) {
                         model.inspecting = .agent(a)
                     }
                 }
-                PanelAction("Create a subagent…", icon: "plus.circle") { model.sheet = .subagent }
+                PanelFooter("Create a subagent…") { model.sheet = .subagent }
             }
         }
     }
@@ -75,12 +74,12 @@ struct MCPPanel: View {
                       actionLabel: "Add a server…") { model.sheet = .mcp }
             } else {
                 ForEach(model.workspace.mcpServers) { s in
-                    ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
-                            selected: model.inspecting == .mcp(s)) {
+                    PanelRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
+                             selected: model.inspecting == .mcp(s)) {
                         model.inspecting = .mcp(s)
                     }
                 }
-                PanelAction("Add a server…", icon: "plus.circle") { model.sheet = .mcp }
+                PanelFooter("Add a server…") { model.sheet = .mcp }
             }
         }
     }
@@ -90,6 +89,9 @@ struct MCPPanel: View {
 /// whoever opens the repository — the one thing here that is dangerous by construction.
 struct HooksPanel: View {
     let model: SessionModel
+
+    @State private var showRepo = true
+    @State private var showMine = true
 
     private var fromRepo: [Wire.Hook] { model.workspace.hooks.filter(\.fromRepo) }
     private var mine: [Wire.Hook] { model.workspace.hooks.filter { !$0.fromRepo } }
@@ -103,19 +105,22 @@ struct HooksPanel: View {
                        + "quarantined until you trust the project.")
         } else {
             if !fromRepo.isEmpty {
-                RailHeader("From this repository", trailing: "\(fromRepo.count)")
-                ForEach(fromRepo) { h in row(h) }
+                PanelSection(title: "From this repository", count: fromRepo.count,
+                             open: $showRepo) {
+                    ForEach(fromRepo) { h in row(h) }
+                }
             }
             if !mine.isEmpty {
-                RailHeader("Your hooks", trailing: "\(mine.count)")
-                ForEach(mine) { h in row(h) }
+                PanelSection(title: "Yours", count: mine.count, open: $showMine) {
+                    ForEach(mine) { h in row(h) }
+                }
             }
         }
     }
 
     private func row(_ h: Wire.Hook) -> some View {
-        ItemRow(name: h.event, detail: h.command, fromRepo: h.fromRepo,
-                selected: model.inspecting == .hook(h)) {
+        PanelRow(name: h.event, detail: h.command, fromRepo: h.fromRepo,
+                 selected: model.inspecting == .hook(h), code: true) {
             model.inspecting = .hook(h)
         }
     }
@@ -132,17 +137,15 @@ struct PluginsPanel: View {
                       "Install bundles of skills, subagents, and commands.",
                       actionLabel: "Browse plugins") { model.sheet = .skills }
             } else {
-                RailHeader("Installed plugins", trailing: "\(model.workspace.plugins.count)")
                 ForEach(model.workspace.plugins) { p in
-                    ItemRow(name: p.name,
-                            detail: p.enabled ? p.marketplace : "disabled · \(p.marketplace)",
-                            fromRepo: false,
-                            dimmed: !p.enabled,
-                            selected: model.inspecting == .plugin(p)) {
+                    PanelRow(name: p.name,
+                             detail: p.enabled ? p.marketplace : "disabled · \(p.marketplace)",
+                             dimmed: !p.enabled,
+                             selected: model.inspecting == .plugin(p)) {
                         model.inspecting = .plugin(p)
                     }
                 }
-                PanelAction("Browse plugins…", icon: "plus.circle") { model.sheet = .skills }
+                PanelFooter("Browse plugins…") { model.sheet = .skills }
             }
         }
     }
@@ -150,75 +153,6 @@ struct PluginsPanel: View {
 
 // MARK: - Shared pieces
 
-struct ItemRow: View {
-    let name: String
-    let detail: String
-    var fromRepo = false
-    var dimmed = false
-    var selected = false
-    let action: () -> Void
-
-    var body: some View {
-        HoverRow(selected: selected) {
-            VStack(alignment: .leading, spacing: K.S.hair) {
-                HStack(spacing: K.S.xs) {
-                    Text(name)
-                        .font(K.F.small.weight(selected ? .semibold : .regular))
-                        .foregroundStyle(dimmed ? K.C.faint : K.C.text)
-                        .lineLimit(1)
-                    if fromRepo {
-                        Text("repo")
-                            .font(K.F.tiny.weight(.semibold))
-                            .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
-                            .background(K.C.warn.opacity(0.2),
-                                        in: RoundedRectangle(cornerRadius: 2))
-                            .foregroundStyle(K.C.warn)
-                    }
-                    Spacer(minLength: 0)
-                }
-                if !detail.isEmpty {
-                    Text(detail)
-                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-            }
-        } action: {
-            action()
-        }
-        .help(detail.isEmpty ? name : detail)
-    }
-}
-
-struct PanelAction: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
-
-    init(_ title: String, icon: String, action: @escaping () -> Void) {
-        self.title = title
-        self.icon = icon
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: K.S.snug) {
-                Image(systemName: icon).font(K.F.tiny)
-                Text(title)
-                Spacer()
-            }
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .font(K.F.small).foregroundStyle(K.C.accent)
-    }
-}
-
-/// What this repository is missing, at the top of the panel, with the button beside the reason.
-///
-/// It was a dialog behind a badge. A recommendation nobody opens does nothing, and a badge
-/// that stayed lit after the install did the opposite of what a badge is for.
 struct Recommended: View {
     let model: SessionModel
 

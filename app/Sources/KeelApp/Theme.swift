@@ -540,6 +540,129 @@ struct JumpToLatest: View {
     }
 }
 
+/// A group inside a panel: a chevron, a name, how many, and a rule above it.
+///
+/// Lifted out of `GitPanel`, which is the only panel that had it and the only panel that read as
+/// designed. Everything else was a flat list under a header, so Git looked like a product and its
+/// siblings looked like debug output.
+///
+/// Only for a panel with *several* groups. One always-open section is a chevron that does nothing,
+/// and a second header repeating the count already in the panel's own title.
+struct PanelSection<Content: View>: View {
+    let title: String
+    var count: Int?
+    @Binding var open: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(K.M.flow) { open.toggle() }
+            } label: {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: "chevron.right")
+                        .font(K.F.ui(9, .semibold)).frame(width: 10)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .foregroundStyle(K.C.faint)
+                    Text(title).font(K.F.small.weight(.semibold))
+                    Spacer()
+                    if let count {
+                        Text("\(count)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    }
+                }
+                .foregroundStyle(K.C.text)
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(open ? .isSelected : [])
+            if open { content.transition(.opacity) }
+        }
+        .overlay(alignment: .top) { Hairline() }
+    }
+}
+
+/// One thing in a panel: what it is called, what it is for, and that clicking opens it.
+///
+/// The detail was set in monospace at the faintest ink in the palette, which is the treatment for
+/// a path or a command — these are sentences. Two lines of prose also need more than the 3pt of
+/// vertical padding a one-line row wants, or the rows run together into a wall.
+struct PanelRow: View {
+    let name: String
+    var detail: String = ""
+    /// Anything that arrived with the repository was written by whoever wrote the repository.
+    var fromRepo = false
+    var dimmed = false
+    var selected = false
+    /// Shown when the row opens something, which is the only affordance saying that it does.
+    var opens = true
+    /// Set when the detail is a command or a path rather than a sentence. Mono for one, prose for
+    /// the other — a description in monospace reads as output, and a command in prose reads as a
+    /// claim about what it does rather than the thing that will run.
+    var code = false
+    let action: () -> Void
+
+    var body: some View {
+        HoverRow(selected: selected) {
+            HStack(spacing: K.S.sm) {
+                VStack(alignment: .leading, spacing: K.S.hair) {
+                    HStack(spacing: K.S.half) {
+                        Text(name)
+                            .font(K.F.small.weight(.medium))
+                            .foregroundStyle(dimmed ? K.C.faint : K.C.text)
+                            .lineLimit(1)
+                        if fromRepo { Pill(text: "REPO", tone: .warn) }
+                    }
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(code ? K.F.codeTiny : K.F.tiny)
+                            .foregroundStyle(K.C.dim)
+                            .lineLimit(1).truncationMode(code ? .head : .tail)
+                    }
+                }
+                Spacer(minLength: 0)
+                if opens {
+                    Image(systemName: "chevron.right")
+                        .font(K.F.ui(9, .semibold)).foregroundStyle(K.C.faint)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.vertical, K.S.tight)
+        } action: {
+            action()
+        }
+        .hint(detail.isEmpty ? name : "\(name) — \(detail)")
+    }
+}
+
+/// The one thing a panel offers when you have read its list: always last, always after a rule.
+struct PanelFooter: View {
+    let title: String
+    var icon = "plus"
+    let action: () -> Void
+
+    init(_ title: String, icon: String = "plus", action: @escaping () -> Void) {
+        self.title = title
+        self.icon = icon
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: K.S.half) {
+                Image(systemName: icon).font(K.F.ui(9, .semibold))
+                Text(title).font(K.F.small)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(K.C.accent)
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { Hairline() }
+    }
+}
+
 /// A hairline. `Divider()` renders heavier than a real 1px rule at 2x.
 struct Hairline: View {
     var body: some View {
