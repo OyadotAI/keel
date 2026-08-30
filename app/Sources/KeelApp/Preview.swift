@@ -394,7 +394,7 @@ struct PreviewSurface: View {
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { model.previewWidth = w }
-                        .help("\(w.title) — \(Int(w.points))pt wide")
+                        .hint("\(w.title) — \(Int(w.points))pt wide")
                 }
             }
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))

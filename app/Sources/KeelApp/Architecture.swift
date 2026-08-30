@@ -53,7 +53,7 @@ struct ArchitectureDiagram: View {
             // What hangs off the API: data on one side, workers on the other.
             if !data.isEmpty || !workers.isEmpty || !other.isEmpty {
                 HStack(alignment: .top, spacing: K.S.md) {
-                    Rectangle().fill(K.C.line).frame(width: 1, height: 14).padding(.leading, 60)
+                    Rectangle().fill(K.C.line).frame(width: 1, height: 14).padding(.leading, K.S.xxl + K.S.xl)
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .top, spacing: K.S.md) {

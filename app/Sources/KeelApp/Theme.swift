@@ -419,6 +419,9 @@ struct EmptyState: View {
                 Image(systemName: icon)
                     .font(K.F.ui(16, .medium)).foregroundStyle(K.C.accent)
                     .frame(width: 24, height: 24, alignment: .leading)
+                    // The title says what this says. Left visible, it is announced as its SF
+                    // Symbol name before the sentence anyone actually needs.
+                    .accessibilityHidden(true)
             }
             if let title {
                 Text(title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
@@ -475,6 +478,7 @@ struct ErrorRow: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(K.F.tiny).foregroundStyle(K.C.del)
                 .padding(.top, K.S.xxs)
+                .accessibilityHidden(true)
             Text(message).font(K.F.small).foregroundStyle(K.C.del)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -500,6 +504,7 @@ struct SearchField: View {
     var body: some View {
         HStack(spacing: K.S.xs) {
             Image(systemName: icon).font(K.F.tiny).foregroundStyle(K.C.faint)
+                .accessibilityHidden(true)
             TextField(prompt, text: $text).textFieldStyle(.plain).font(K.F.small)
             if !text.isEmpty { CloseButton(label: "Clear the filter") { text = "" } }
         }
@@ -507,6 +512,31 @@ struct SearchField: View {
         .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
         .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
+    }
+}
+
+/// Scrolling up releases autoscroll; this is the way back down.
+///
+/// The conversation and the trace each carried their own identical copy of this — twenty lines,
+/// down to the shadow radius — because there was nowhere shared to put it.
+struct JumpToLatest: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: K.S.snug) {
+                Image(systemName: "arrow.down").font(K.F.tiny.weight(.bold))
+                Text("Jump to latest").font(K.F.micro)
+            }
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
+            .background(K.C.raised, in: Capsule())
+            .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
+            .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(K.C.text)
+        .padding(.bottom, K.S.md)
     }
 }
 

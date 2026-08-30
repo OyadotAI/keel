@@ -181,7 +181,7 @@ struct AttachmentStrip: View {
                         Text(a.label)
                             .font(K.F.codeTiny).foregroundStyle(K.C.dim)
                             .lineLimit(1).truncationMode(.head)
-                        CloseButton(size: 10) {
+                        CloseButton(size: 10, label: "Remove \(a.label)") {
                             model.attachments.removeAll { $0.id == a.id }
                         }
                     }

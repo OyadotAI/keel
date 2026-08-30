@@ -140,6 +140,105 @@ final class TypeFloorTests: XCTestCase {
         }
     }
 
+    /// Nothing outside `Theme.swift` builds its own font.
+    ///
+    /// The floor test above has always existed and the drift happened anyway, because it only
+    /// checked that a literal was not *too small* — never that it went through the scale. 147
+    /// `.font(.system(size:))` calls passed it. Every size a view needs is a token or a call to
+    /// `K.F.ui`/`K.F.mono`, and this is what makes that true tomorrow rather than only today.
+    func testNoViewBuildsItsOwnFont() throws {
+        try eachSourceLine { file, n, line in
+            guard file != "Theme.swift" else { return }
+            XCTAssertFalse(line.contains(".system(size:"),
+                           "\(file):\(n): builds a font by hand — use a `K.F` token")
+            XCTAssertFalse(line.contains(".font(.caption") || line.contains(".font(.body)")
+                           || line.contains(".font(.title") || line.contains(".font(.headline"),
+                           "\(file):\(n): uses a stock text style — use a `K.F` token")
+        }
+    }
+
+    /// Nothing outside `Theme.swift` defines a button style.
+    ///
+    /// `QuietButton` lived in `TurnStage.swift` at 74 call sites, and two byte-identical copies of
+    /// the primary button lived in `ChatRail` and `Welcome`, each documented as the only one. A
+    /// component nobody can find is a component that gets written again.
+    func testEveryButtonStyleLivesInTheSystem() throws {
+        try eachSourceLine { file, n, line in
+            guard file != "Theme.swift" else { return }
+            XCTAssertFalse(line.contains(": ButtonStyle {"),
+                           "\(file):\(n): defines a button style outside the design system")
+        }
+    }
+
+    /// Padding and spacing come off the scale.
+    ///
+    /// `K.S` grew `hair`, `tight` and `snug` precisely so this could be true — the 4pt grid could
+    /// not express what a dense row wants, so 1, 3 and 5 were written out about 120 times.
+    func testSpacingComesOffTheScale() throws {
+        let pattern = try NSRegularExpression(
+            pattern: #"(?:\.padding\((?:\.\w+, )?|spacing: )(\d+(?:\.\d+)?)[,)]"#)
+        try eachSourceLine { file, n, line in
+            guard file != "Theme.swift" else { return }
+            for m in pattern.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
+                let v = Double(line[Range(m.range(at: 1), in: line)!])!
+                // Zero is a real answer — a list with no gap between its rows.
+                XCTAssertEqual(v, 0, accuracy: 0.001,
+                               "\(file):\(n): \(v) is off the `K.S` scale")
+            }
+        }
+    }
+
+    /// An icon-only control announces itself.
+    ///
+    /// `hint()` is `.help()` plus `.accessibilityLabel`, and it exists because thirty tooltips were
+    /// pointer-only: the strings were written, they just never reached VoiceOver. `.help()` alone
+    /// on a button whose label is a glyph leaves it as an unnamed button.
+    func testIconOnlyControlsAreNamed() throws {
+        let dir = try sourceDirectory()
+        for f in try FileManager.default.subpathsOfDirectory(atPath: dir.path)
+            .filter({ $0.hasSuffix(".swift") }) where f != "Theme.swift" {
+            let lines = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+                .components(separatedBy: .newlines)
+            for (i, line) in lines.enumerated() where line.contains(".help(") {
+                // The label is whatever the control renders. A glyph and no text is the case
+                // `hint()` was written for; anything with a `Text` already names itself.
+                let above = lines[max(0, i - 8)..<i].joined(separator: "\n")
+                let iconOnly = above.contains("Image(systemName:")
+                    && !above.contains("Text(") && !above.contains("Label(")
+                XCTAssertFalse(iconOnly,
+                               "\(f):\(i + 1): icon-only control uses `.help(` — use `.hint(`, "
+                               + "which is the tooltip *and* the VoiceOver label")
+            }
+        }
+    }
+
+    private func sourceDirectory() throws -> URL {
+        var dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        for _ in 0..<4 {
+            for candidate in ["app/Sources/KeelApp", "Sources/KeelApp"] {
+                let path = dir.appendingPathComponent(candidate)
+                if FileManager.default.fileExists(atPath: path.path) { return path }
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        throw XCTSkip("sources not found from \(FileManager.default.currentDirectoryPath)")
+    }
+
+    /// Every line of every source file, with its name and number, skipping comments — a rule about
+    /// what the code does should not fire on a doc comment describing the rule.
+    private func eachSourceLine(_ each: (String, Int, String) throws -> Void) throws {
+        let dir = try sourceDirectory()
+        for f in try FileManager.default.subpathsOfDirectory(atPath: dir.path)
+            .filter({ $0.hasSuffix(".swift") }) {
+            let text = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+            for (i, line) in text.components(separatedBy: .newlines).enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                guard !code.hasPrefix("//") else { continue }
+                try each(f, i + 1, line)
+            }
+        }
+    }
+
     /// Glyph-only sizes — a chevron, a dot, a close ✕ — are allowed under the floor; text is not.
     ///
     /// This used to be `if n >= 8`, a stand-in for "below 8 nothing is text". It was wrong in both

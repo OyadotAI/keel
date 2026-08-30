@@ -172,6 +172,34 @@ struct SessionWindow: View {
         .sheet(isPresented: $startingFeature) {
             NewFeature(model: model, lanes: lanes) { startingFeature = false }
         }
+        // Every sheet the panels open, anchored on the window rather than on `SidePanel`.
+        //
+        // `SidePanel` leaves the hierarchy when the panel is collapsed (⌘⇧E), and a sheet attached
+        // to a view that is not in the hierarchy simply never appears: ⌘K → "Project setup" with
+        // the panel closed set the state and drew nothing. The window is always there.
+        .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 })) { which in
+            switch which {
+            case .pr:
+                PullRequest(model: model) { model.sheet = nil }
+            case .skills:
+                SkillCatalog(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState(); await model.refreshSuggestions() }
+                }
+            case .subagent:
+                NewSubagent(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState() }
+                }
+            case .mcp:
+                AddMCP(client: model.client) {
+                    model.sheet = nil
+                    Task { await model.refreshState() }
+                }
+            case .setup:
+                SetupSheet(model: model) { model.sheet = nil }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .keelNewFeatureSheet)) { _ in
             // Only the window you are in: a sheet in every window at once is a modal maze.
             if pinned == nil { startingFeature = true }
@@ -204,7 +232,7 @@ struct SessionWindow: View {
     private var paletteOverlay: some View {
         if paletteOpen {
             Palette(model: model, open: $paletteOpen)
-                .padding(.top, 60)
+                .padding(.top, K.S.xxl + K.S.xl)
                 .transition(.scale(scale: 0.98).combined(with: .opacity))
         }
     }
@@ -222,6 +250,7 @@ struct SessionWindow: View {
             VStack(spacing: 0) {
                 stageBar
                 Hairline()
+                detourBar
                 if model.running { WorkingBar(model: model) }
                 Group {
                     if let target = model.inspecting {
@@ -254,8 +283,11 @@ struct SessionWindow: View {
     private var stageBar: some View {
         HStack(spacing: K.S.xxs) {
             ForEach(Stage.allCases, id: \.self) { s in
-                let on = stage == s && model.viewingDiff == nil && model.inspecting == nil
-                    && model.viewingCommit == nil && model.viewingFile == nil
+                // Selected even while a diff or a file is covering the stage. It used to go dark
+                // for all four of those, so opening a diff put you somewhere the navigation could
+                // not describe — no tab lit, no name for where you were, no way back but an ✕.
+                // The tab is where you came from; `detourBar` below says where you have gone.
+                let on = stage == s
                 let active = tabActivity(for: s) && !on
                 HStack(spacing: K.S.half) {
                     Image(systemName: stageIcon(s)).font(K.F.micro.weight(.medium))
@@ -279,8 +311,8 @@ struct SessionWindow: View {
                     }
                     .contentShape(Rectangle())
                     .asButton {
-                        stage = s; model.viewingDiff = nil; model.inspecting = nil
-                        model.viewingCommit = nil; model.viewingFile = nil
+                        stage = s
+                        closeDetour()
                         Telemetry.breadcrumb("stage: \(s.rawValue)")
                     }
                     .accessibilityAddTraits(on ? .isSelected : [])
@@ -290,6 +322,54 @@ struct SessionWindow: View {
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.half)
         .background(K.C.surface)
+    }
+
+    /// What is covering the stage, if anything: the four surfaces the segmented control has no
+    /// place for. Each is reached by clicking something in a panel, and each used to be a dead end.
+    private var detour: (icon: String, title: String)? {
+        if model.inspecting != nil { return ("scope", "Picked element") }
+        if let c = model.viewingCommit { return ("checkmark.seal", c.subject) }
+        if let f = model.viewingFile { return ("doc", (f as NSString).lastPathComponent) }
+        if let d = model.viewingDiff { return ("plusminus", (d as NSString).lastPathComponent) }
+        return nil
+    }
+
+    private func closeDetour() {
+        model.viewingDiff = nil
+        model.inspecting = nil
+        model.viewingCommit = nil
+        model.viewingFile = nil
+    }
+
+    /// Where you are, and the way back.
+    ///
+    /// ⌘[ rather than Esc: Esc is Stop while a turn is running, and that is the binding that must
+    /// not be ambiguous.
+    @ViewBuilder
+    private var detourBar: some View {
+        if let d = detour {
+            HStack(spacing: K.S.half) {
+                Button { closeDetour() } label: {
+                    HStack(spacing: K.S.xs) {
+                        Image(systemName: "chevron.left").font(K.F.tiny.weight(.semibold))
+                        Text(stage.rawValue).font(K.F.small)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(K.C.accent)
+                .keyboardShortcut("[", modifiers: .command)
+                .hint("Back to \(stage.rawValue) (⌘[)")
+
+                Image(systemName: "chevron.right").font(K.F.tiny).foregroundStyle(K.C.faint)
+                Image(systemName: d.icon).font(K.F.tiny).foregroundStyle(K.C.faint)
+                Text(d.title).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
+                    .lineLimit(1).truncationMode(.head)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.half)
+            .background(K.C.surface)
+            .overlay(alignment: .bottom) { Hairline() }
+        }
     }
 
     private func stageIcon(_ stage: Stage) -> String {
@@ -314,7 +394,9 @@ struct SessionWindow: View {
                 Image(systemName: "terminal").font(K.F.tiny).foregroundStyle(K.C.faint)
                 Text(terminalTitle).font(K.F.codeTiny).foregroundStyle(K.C.dim)
                 Spacer()
-                CloseButton(size: 10) { withAnimation(K.M.quick) { showTerminal = false } }
+                CloseButton(size: 10, label: "Close the terminal") {
+                    withAnimation(K.M.quick) { showTerminal = false }
+                }
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             .background(K.C.surface)
@@ -335,12 +417,9 @@ struct SessionWindow: View {
             }
             .hint("Command palette (⌘K)")
         }
-        ToolbarItem(placement: .primaryAction) {
-            Button { withAnimation(K.M.quick) { showTerminal.toggle() } } label: {
-                Image(systemName: "terminal")
-            }
-            .hint("Terminal (⌘⌥T)")
-        }
+        // No terminal button here. There was one in the toolbar *and* one in the status bar, same
+        // glyph, same shortcut, both on screen at once — and the status bar's sits beside the pane
+        // it opens, which is where a toggle belongs.
     }
 }
 
@@ -783,10 +862,15 @@ struct WindowEvents: ViewModifier {
 
 /// ⌘⇧T. Trust is the highest-consequence switch in the app, so the keyboard path confirms and
 /// names what it grants — the same words the approval card uses.
-private struct TrustAlert: ViewModifier {
+struct TrustAlert: ViewModifier {
     let model: SessionModel
     @Binding var shown: Bool
     struct TrustBody: Encodable { var trusted: Bool }
+
+    /// What trusting grants, said once. There are two of these alerts — the status bar's and
+    /// Settings' — and two copies of a promise is two promises.
+    static let blurb = "The agent runs commands in this repository without asking. Stored in "
+        + ".keel/permissions.json; withdrawable here or from the status bar."
 
     func body(content: Content) -> some View {
         content.alert("Trust this project?", isPresented: $shown) {
@@ -807,8 +891,7 @@ private struct TrustAlert: ViewModifier {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The agent runs commands in this repository without asking. Stored in "
-                 + ".keel/permissions.json; withdrawable from the status bar.")
+            Text(TrustAlert.blurb)
         }
     }
 }
@@ -829,6 +912,11 @@ private struct LaneEvents: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelTogglePanel)) { _ in
                 withAnimation(K.M.quick) { panel = panel == nil ? .changes : nil }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .keelShowPanel)) { note in
+                guard let raw = note.object as? String,
+                      let p = SessionWindow.Panel(rawValue: raw) else { return }
+                withAnimation(K.M.quick) { panel = p }
             }
     }
 
@@ -952,6 +1040,18 @@ private struct StageEvents: ViewModifier {
             .onChange(of: model.designTick) { followTheEdit() }
             .onChange(of: model.running) { followTheWork() }
             .onChange(of: model.focusedTurn) { showTrace() }
+            .onReceive(NotificationCenter.default.publisher(for: .keelShowStage)) { note in
+                guard let raw = note.object as? String,
+                      let s = SessionWindow.Stage(rawValue: raw) else { return }
+                withAnimation(K.M.quick) {
+                    stage = s
+                    showSettings = false
+                    model.viewingDiff = nil
+                    model.viewingFile = nil
+                    model.viewingCommit = nil
+                    model.inspecting = nil
+                }
+            }
     }
 
     /// Something to look at is worth looking at — unless you are deliberately reading something
@@ -977,12 +1077,17 @@ private struct StageEvents: ViewModifier {
 
     /// Starting a turn means the record is the thing to look at. Never off the Designer: picking
     /// an element and typing what to do about it is one gesture.
+    ///
+    /// And never off a diff, a file or a commit you opened on purpose. It used to clear all of
+    /// them — plus `focusedTurn` — the instant a turn began, so reading a change and then asking a
+    /// question about it threw the change away, and with no back stack there was no route to it.
+    /// The stage follows the work when you are not already reading something.
     private func followTheWork() {
-        guard model.running, model.id == lanes.activeID, stage != .preview else { return }
+        guard model.running, model.id == lanes.activeID, stage != .preview,
+              model.viewingDiff == nil, model.viewingFile == nil,
+              model.viewingCommit == nil, model.inspecting == nil else { return }
         stage = .turn
         showSettings = false
-        model.viewingDiff = nil
-        model.inspecting = nil
         model.focusedTurn = nil
     }
 

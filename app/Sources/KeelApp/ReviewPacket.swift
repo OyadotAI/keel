@@ -63,7 +63,7 @@ struct ReviewPacketView: View {
             Button("Commit and merge") { Task { await lanes.finish(model, message: message) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This human action merges the isolated task branch into the project.")
+            Text(Lanes.finishBlurb(branch: model.branch))
         }
     }
 
