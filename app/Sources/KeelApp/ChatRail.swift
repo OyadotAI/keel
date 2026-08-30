@@ -339,13 +339,6 @@ struct Composer: View {
     @FocusState.Binding var focused: Bool
     @State private var dropping = false
 
-    /// One comfortable line, growing to eight. A composer that starts a third of the pane tall is a composer
-    /// that has taken space from the conversation for nothing.
-    private var height: CGFloat {
-        let lines = model.prompt.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
-        return min(max(CGFloat(lines) * 16 + 18, 44), 150)
-    }
-
     var body: some View {
         VStack(spacing: K.S.sm) {
             PinList(model: model)
@@ -401,46 +394,38 @@ struct Composer: View {
     }
 
     private var field: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: K.R.md)
-                .fill(K.C.well)
-                .overlay(
-                    RoundedRectangle(cornerRadius: K.R.md)
-                        .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
-                                lineWidth: dropping ? 2 : 1)
-                )
-
-            if model.prompt.isEmpty {
-                Text("Ask Keel to change, explain, or review…")
-                    .font(K.F.body).foregroundStyle(K.C.faint)
-                    .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
-                    .allowsHitTesting(false)
+        TextField("Ask Keel to change, explain, or review…", text: $model.prompt, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(K.F.ui(14))
+            .lineSpacing(3)
+            .lineLimit(1...8)
+            .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: K.R.md)
+                    .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
+                            lineWidth: dropping ? 2 : 1)
+            )
+            .focused($focused)
+            .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
+                if !model.takePaste(.general) {
+                    model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
+                }
             }
-
-            TextEditor(text: $model.prompt)
-                .font(K.F.body)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 2)
-                .focused($focused)
-                .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
-                    if !model.takePaste(.general) {
-                        model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
+            // Native vertical-axis layout measures wrapped lines, not only explicit newlines, so
+            // the composer grows naturally until eight lines and then becomes scrollable.
+            .onChange(of: model.prompt) {
+                if model.prompt.count > SessionModel.longPaste { model.fileLongText() }
+            }
+            .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+                for p in providers {
+                    _ = p.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        Task { @MainActor in model.attach(fileURL: url) }
                     }
                 }
-                // Whatever route a long block took into the box — a paste the text view took
-                // before the handler above saw it, a drag, dictation — it leaves as a chip.
-                .onChange(of: model.prompt) { if model.prompt.count > SessionModel.longPaste { model.fileLongText() } }
-        }
-        .frame(height: height)
-        .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
-            for p in providers {
-                _ = p.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
-                    Task { @MainActor in model.attach(fileURL: url) }
-                }
+                return true
             }
-            return true
-        }
     }
 
     @ViewBuilder
