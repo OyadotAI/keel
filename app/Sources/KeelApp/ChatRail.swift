@@ -76,8 +76,12 @@ struct ChatRail: View {
                 lastFollow = now
                 proxy.scrollTo(Self.bottom, anchor: .bottom)
             }
-            .onChange(of: model.pinTick) {
+            // A task, not an onChange: opening a session bumps `pinTick` before this pane
+            // exists, so the change had no listener and the transcript opened at the top.
+            // A task with that id runs on appear as well, after the rows have laid out.
+            .task(id: model.pinTick) {
                 pinned = true
+                try? await Task.sleep(for: .milliseconds(60))
                 proxy.scrollTo(Self.bottom, anchor: .bottom)
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -369,6 +373,7 @@ struct Composer: View {
             }
 
             field
+            memoryNote
             controls
         }
         .padding(.horizontal, K.S.xl)
@@ -387,7 +392,7 @@ struct Composer: View {
                 )
 
             if model.prompt.isEmpty {
-                Text("Describe a change…   paste or drop files, ⌘↵ to send")
+                Text("Describe a change…   # to remember something, ⌘↵ to send")
                     .font(K.F.body).foregroundStyle(K.C.faint)
                     .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
                     .allowsHitTesting(false)
@@ -416,6 +421,18 @@ struct Composer: View {
                 }
             }
             return true
+        }
+    }
+
+    @ViewBuilder
+    private var memoryNote: some View {
+        if let note = model.remembered {
+            HStack(spacing: K.S.xs) {
+                Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(K.C.add)
+                Text("Remembered in CLAUDE.md: \(note)").font(K.F.micro).foregroundStyle(K.C.dim)
+                    .lineLimit(1)
+                Spacer()
+            }
         }
     }
 

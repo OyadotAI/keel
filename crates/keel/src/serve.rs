@@ -303,6 +303,10 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/mcp",
             axum::routing::post(crate::askmcp::post).get(crate::askmcp::get),
         )
+        .route(
+            "/api/memory",
+            axum::routing::post(crate::review::api_memory),
+        )
         .route("/api/review", get(crate::review::api_review))
         .route(
             "/api/review/save",

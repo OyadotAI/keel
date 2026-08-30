@@ -20,8 +20,19 @@ final class Updater {
         let info = Bundle.main.infoDictionary ?? [:]
         guard let key = info["SUPublicEDKey"] as? String, !key.isEmpty,
               let feed = info["SUFeedURL"] as? String, !feed.isEmpty else { return }
-        controller = SPUStandardUpdaterController(startingUpdater: true,
-                                                  updaterDelegate: nil, userDriverDelegate: nil)
+        // Not during launch. Starting the updater reads the keychain and schedules a check,
+        // and doing it while the first window is laying out put Sparkle in the app's own
+        // launch hang. Ten seconds later nobody is waiting for it.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(10))
+            let c = SPUStandardUpdaterController(startingUpdater: true,
+                                                 updaterDelegate: nil, userDriverDelegate: nil)
+            // Offered, never silent: an update that downloads and installs itself under
+            // somebody mid-turn is the App Hang in Sentry, and a surprise either way.
+            c.updater.automaticallyDownloadsUpdates = false
+            c.updater.automaticallyChecksForUpdates = true
+            controller = c
+        }
     }
 
     func check() {
