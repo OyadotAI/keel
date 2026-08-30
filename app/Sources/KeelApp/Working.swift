@@ -20,7 +20,7 @@ struct WorkingBar: View {
                     .font(K.F.codeSmall)
                     .foregroundStyle(K.C.text)
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    .truncationMode(.middle)
 
                 Spacer(minLength: K.S.sm)
 
@@ -31,12 +31,19 @@ struct WorkingBar: View {
 
                 Button("Stop") { model.stop() }
                     .buttonStyle(QuietButton(tone: K.C.del))
-                    .help("Sends SIGINT — the turn ends rather than being abandoned (⌘.)")
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .help("Interrupts the agent and whatever it started, the way ⌃C does — the "
+                          + "turn ends rather than being abandoned (⌘. or Esc)")
             }
             .padding(.horizontal, K.S.md)
             .padding(.vertical, K.S.half)
-            .background(waiting ? K.C.warn.wash : K.C.accent.wash)
-            .overlay(alignment: .bottom) { Hairline() }
+            .background(waiting ? K.C.warn.wash : K.C.accent.wash,
+                        in: RoundedRectangle(cornerRadius: K.R.lg))
+            .overlay(
+                RoundedRectangle(cornerRadius: K.R.lg)
+                    .stroke(waiting ? K.C.warn.opacity(0.35) : K.C.accent.opacity(0.25),
+                            lineWidth: 1)
+            )
         }
     }
 
