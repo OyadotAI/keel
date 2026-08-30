@@ -53,6 +53,22 @@ final class DesignTests: XCTestCase {
     }
 }
 
+/// The wire contracts that are two structs in two languages agreeing about the same bytes.
+final class WireContractTests: XCTestCase {
+
+    /// The daemon's `RenameBody` requires `name`. This was sent as `title`, axum answered 422,
+    /// and `try?` swallowed it — so renaming a tab renamed the tab and nothing else, and people
+    /// went looking in History for a name that was never written.
+    func testARenameSendsTheFieldTheDaemonRequires() throws {
+        let body = SessionModel.SessionRename(id: "abc", name: "Checkout retries")
+        let json = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(body)) as? [String: Any]
+        XCTAssertEqual(json?["name"] as? String, "Checkout retries")
+        XCTAssertEqual(json?["id"] as? String, "abc")
+        XCTAssertNil(json?["title"], "the daemon has no `title` field and rejects the whole body")
+    }
+}
+
 /// What the person sees about the element they picked.
 final class SelectionTests: XCTestCase {
     private func picked(_ json: String) -> Picked {

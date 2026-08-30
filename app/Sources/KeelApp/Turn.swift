@@ -67,6 +67,9 @@ final class Turn: Identifiable {
     /// when the snapshot could not be taken.
     var snapshot: String?
 
+    /// The provider reported the run itself as failed, whether or not it said why.
+    var failed = false
+
     /// True for a turn rebuilt from a transcript rather than watched live.
     ///
     /// A replayed turn has no gate result and never will — Keel was not there when it ran. Saying
