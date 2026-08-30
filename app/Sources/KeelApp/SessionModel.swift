@@ -117,6 +117,96 @@ final class SessionModel: Identifiable {
     }
     var pending: [Wire.Pending] = []
     var lastError: String?
+    /// What to do about `lastError`. Always set through `fail(_:fix:)` so a failure without a next
+    /// step is a visible omission rather than the default.
+    var lastFix: Fix?
+
+    /// Report a failure with the thing that fixes it.
+    ///
+    /// The repository already requires every scanner finding to carry a `Fix` — "a finding without
+    /// one turns the report into a lint run nobody acts on". A runtime failure is the same: a wall
+    /// with no next step is where people stop.
+    func fail(_ message: String, fix: Fix? = nil) {
+        lastError = message
+        lastFix = fix
+    }
+
+    /// A failure Claude Code reported about itself, and what to do about it.
+    ///
+    /// Keyed on `model == "<synthetic>"` — the marker on every client-generated error turn, in the
+    /// live stream and in a replayed transcript alike — with `error` naming which one. None of
+    /// these fields was decoded before, so all of them rendered as ordinary prose from the agent.
+    struct Trouble {
+        var message: String
+        var kind: String
+        var fix: (SessionModel) -> Fix?
+    }
+
+    static func classify(_ r: Record) -> Trouble? {
+        let synthetic = r.message?.model == "<synthetic>"
+        let flagged = (r.is_api_error_message ?? r.isApiErrorMessage) == true
+        guard synthetic || flagged || r.error != nil else { return nil }
+        let said = (r.message?.content ?? [])
+            .compactMap { $0.type == "text" ? $0.text : nil }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch r.error {
+        case "authentication_failed", "oauth_org_not_allowed":
+            return Trouble(message: said.isEmpty ? "Claude Code is not logged in." : said,
+                           kind: r.error ?? "auth") { _ in
+                Fix(label: "Log in") {
+                    NotificationCenter.default.post(name: .keelRunInTerminal,
+                                                    object: "claude /login")
+                }
+            }
+        case "rate_limit":
+            var message = said.isEmpty ? "You have hit your usage limit." : said
+            if let at = r.quotaLimits?.resetsAt {
+                let when = Date(timeIntervalSince1970: at)
+                message += " Work can resume "
+                    + when.formatted(date: .omitted, time: .shortened) + "."
+            }
+            return Trouble(message: message, kind: "rate_limit") { model in
+                Fix(label: "Retry") { model.retryLast() }
+            }
+        case "server_error":
+            return Trouble(message: said.isEmpty ? "The API had a server error." : said,
+                           kind: "server_error") { model in
+                Fix(label: "Retry") { model.retryLast() }
+            }
+        default:
+            guard !said.isEmpty else { return nil }
+            return Trouble(message: said, kind: r.error ?? "api_error") { _ in nil }
+        }
+    }
+
+    /// Send the last prompt again, on the same lane.
+    func retryLast() {
+        guard !running, let last = turns.last else { return }
+        lastError = nil; lastFix = nil
+        start(last.prompt)
+    }
+
+    /// The fix for a repository problem, when there is one.
+    ///
+    /// A folder that is not a repository is the common case behind "the isolated checkout could
+    /// not be created" — `git worktree add` cannot branch from a tree with no HEAD — and Keel can
+    /// simply make it one.
+    var repoFix: Fix? {
+        guard !isRepo else { return nil }
+        return Fix(label: "Initialise git") { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if let problem = await self.gitInit() {
+                    self.fail("Could not initialise a git repository here: " + problem)
+                } else {
+                    self.lastError = nil; self.lastFix = nil
+                    self.lastFix = nil
+                }
+            }
+        }
+    }
 
     /// Notes left on the page, Figma-style: each is an element and what to do about it. They
     /// stack, they stay pinned on the page across hot reloads, and they go with the next send.
@@ -404,6 +494,8 @@ final class SessionModel: Identifiable {
     var policySources: [String] = []
     var allowedProviders: Set<String> = ["claude", "codex"]
     var policyRequiresIsolation = true
+    /// A policy file demanded isolation. Keel's own default does not count — see `Policy`.
+    var isolationByPolicy = false
 
     /// What this lane is doing, for the rail.
     enum Activity: Equatable {
@@ -455,6 +547,7 @@ final class SessionModel: Identifiable {
         policySources = other.policySources
         allowedProviders = other.allowedProviders
         policyRequiresIsolation = other.policyRequiresIsolation
+        isolationByPolicy = other.isolationByPolicy
     }
 
     init(client: Client, port: UInt16 = 7777, sessionId: String? = nil, id: UUID = UUID()) {
@@ -640,7 +733,7 @@ final class SessionModel: Identifiable {
         let turn = Turn(prompt: full)
         turns.append(turn)
         stallReported = false; lastEventAt = Date(); running = true
-        lastError = nil
+        lastError = nil; lastFix = nil
         watchApprovals(true)
 
         streamTask = Task { [client] in
@@ -651,10 +744,20 @@ final class SessionModel: Identifiable {
                 let made = await self.makeWorktree()
                 self.preparing = nil
                 if !made {
-                    turn.finished = true
-                    running = false
-                    watchApprovals(false)
-                    return
+                    // A policy file that demands isolation is the one case where not having it is
+                    // a reason to refuse. Otherwise the work happens: isolation is Keel's default,
+                    // not something the person asked for, and a customer whose worktree could not
+                    // be created was blocked from doing anything at all.
+                    if self.isolationByPolicy {
+                        turn.finished = true
+                        running = false
+                        watchApprovals(false)
+                        return
+                    }
+                    turn.notIsolated = self.worktreeFailure ?? "the checkout could not be created"
+                    self.worktreeFailure = nil
+                    self.lastError = nil; self.lastFix = nil
+                    self.isolated = false
                 }
                 // Stop pressed while git was copying the tree used to be ignored: `running` went
                 // false and the task carried on and started the agent anyway, so the turn people
@@ -683,14 +786,35 @@ final class SessionModel: Identifiable {
                     lastEventAt = Date()
                     switch event.name {
                     case "msg":
+                        self.preparing = nil
+                        turn.note(raw: event.data)
                         if let data = event.data.data(using: .utf8) { self.record(data, into: turn) }
+                    case "err":
+                        // stderr, as it happens. This is the half that used to escape only on a
+                        // non-zero exit, so a run that hung reported nothing it had already said.
+                        turn.note(raw: event.data, stream: .err)
                     case "fatal":
-                        self.lastError = event.data
+                        self.fail(event.data, fix: self.repoFix)
+                        turn.failure = event.data
                         if Self.sessionIsGone(event.data) { self.sessionId = nil }
+                    case "starting":
+                        // The daemon is reading the project. Seconds on a large one, and before
+                        // this the screen simply stayed empty for all of it.
+                        self.preparing = event.data + "…"
                     case "done":
-                        break
+                        self.preparing = nil
+                        // The exit code was sent and thrown away, so a provider that died with
+                        // nothing on stderr drew a finished turn with nothing in it.
+                        let code = Int(event.data) ?? 0
+                        if code != 0, turn.failure == nil {
+                            let why = "The agent exited with code \(code)."
+                            turn.failure = why
+                            self.fail(why, fix: Fix(label: "Retry") { self.retryLast() })
+                        }
                     default:
-                        break
+                        // Never discard an event the daemon added. Keel not knowing what something
+                        // means is not a reason for the person not to see it.
+                        turn.note(raw: "\(event.name): \(event.data)")
                     }
                 }
             } catch {
@@ -776,6 +900,8 @@ final class SessionModel: Identifiable {
     struct WorktreeName: Encodable { var name: String; var from: String? }
     /// The branch this lane was told to start from, when the person chose one.
     var baseBranch: String?
+    /// Why the last checkout attempt failed, for the turn that then ran without one.
+    private var worktreeFailure: String?
 
     /// Create this lane's checkout, named from its title.
     @discardableResult
@@ -790,9 +916,23 @@ final class SessionModel: Identifiable {
             await lanes?.refreshWorktrees()
             return true
         } catch {
-            lastError = "Keel stopped before making changes because the isolated checkout could "
-                + "not be created: " + error.localizedDescription
-                + "\n\nTurn off Isolate in the composer to run in the project itself."
+            // Kept rather than shown directly: the caller decides whether this refuses the turn
+            // or becomes a note on a turn that ran in the project anyway.
+            worktreeFailure = error.localizedDescription
+            if !isRepo {
+                // The usual cause, and one Keel can fix in a click: `git worktree add` has no HEAD
+                // to branch from because the folder was never a repository.
+                fail("This folder is not a git repository, so Keel could not make an isolated "
+                     + "checkout — and without one there is nothing to branch from or commit to.",
+                     fix: repoFix)
+            } else {
+                fail("The isolated checkout could not be created: " + error.localizedDescription,
+                     fix: Fix(label: "Run in the project") { [weak self] in
+                         self?.isolated = false
+                         self?.lastError = nil
+                         self?.lastFix = nil
+                     })
+            }
             return false
         }
     }
@@ -821,17 +961,40 @@ final class SessionModel: Identifiable {
 
     struct Record: Decodable {
         var type: String
+        var level: String?
+        var content: String?
         var subtype: String?
         var session_id: String?
         var model: String?
         var total_cost_usd: Double?
         var duration_ms: Int?
+        /// The client-generated failure turns. `error` is a top-level string on an `assistant`
+        /// record — `rate_limit`, `server_error`, `authentication_failed`, `oauth_org_not_allowed`
+        /// — and the flag is spelled `is_api_error_message` on the live stream but
+        /// `isApiErrorMessage` in the transcripts Keel replays, so both are decoded. The reliable
+        /// discriminator across both is `message.model == "<synthetic>"`.
+        var error: String?
+        var is_api_error_message: Bool?
+        var isApiErrorMessage: Bool?
+        var apiErrorStatus: Int?
+        var quotaLimits: Quota?
+
+        struct Quota: Decodable {
+            /// Epoch seconds. The one thing a rate-limited person actually wants to know.
+            var resetsAt: Double?
+            var rateLimitType: String?
+        }
         /// On a `result`: whether the run failed outright, and what it said about it. Read from
         /// tool results all along and never from the turn's own result — so a run that failed
         /// drew a card indistinguishable from a quiet success.
         var is_error: Bool?
         var result: String?
         var message: Message?
+        var permission_denials: [Denial]?
+
+        struct Denial: Decodable {
+            var tool_name: String?
+        }
         var event: StreamEvent?
         /// On a `result`: the whole turn's tokens.
         var usage: Usage?
@@ -844,6 +1007,10 @@ final class SessionModel: Identifiable {
 
         struct Message: Decodable {
             var content: [Block]?
+            /// `<synthetic>` marks a turn Claude Code generated itself to report a failure —
+            /// the same in the live stream and in a transcript, which no other signal is.
+            var model: String?
+            var stop_reason: String?
             /// On an `assistant` message: what that one request cost, and therefore — input plus
             /// what was read from cache — how full the context window is right now.
             var usage: Usage?
@@ -882,7 +1049,14 @@ final class SessionModel: Identifiable {
 
     func record(_ data: Data, into turn: Turn) {
         if provider == .codex, recordCodex(data, into: turn) { return }
-        guard let r = try? JSONDecoder().decode(Record.self, from: data) else { return }
+        // A line Keel cannot read is still a line the agent produced. It used to return here —
+        // no log, no counter, nothing on screen — so a shape the CLI changed emptied the UI with
+        // no symptom. `note(raw:)` above has already kept it; this only records that it was not
+        // understood, so the raw view is the answer rather than a shrug.
+        guard let r = try? JSONDecoder().decode(Record.self, from: data) else {
+            turn.unreadable += 1
+            return
+        }
 
         switch r.type {
         case "system" where r.subtype == "init":
@@ -908,6 +1082,22 @@ final class SessionModel: Identifiable {
             if d.type == "thinking_delta", let t = d.thinking { turn.thinking += t }
 
         case "assistant":
+            // A failure Claude Code generated itself, not something the agent said. It used to be
+            // appended to `turn.text` and drawn in the agent's own voice, with no action — which
+            // is how "Not logged in · Please run /login" arrived looking like a remark.
+            if let failure = Self.classify(r) {
+                turn.failure = failure.message
+                fail(failure.message, fix: failure.fix(self))
+                // The reason these were not arriving in Sentry is that only the five-minute stall
+                // was ever reported. The taxonomy goes; the message never does — it can quote a
+                // repository or an organisation name.
+                Telemetry.track("turn_failed", ["kind": failure.kind,
+                                                "status": r.apiErrorStatus ?? 0,
+                                                "mode": mode])
+                Telemetry.warn("turn failed: \(failure.kind)", ["kind": failure.kind,
+                                                                "mode": mode])
+                return
+            }
             if let u = r.message?.usage, u.context > 0 { turn.contextTokens = u.context }
             // Without partial messages the prose arrives only here, whole. Take it when nothing
             // streamed it first.
@@ -967,8 +1157,19 @@ final class SessionModel: Identifiable {
             }
             sessionId = r.session_id ?? sessionId
 
+        case "system":
+            // Every other subtype. Compaction is the one that matters: the context halves and
+            // nothing said so. A `level` of `warning` is Claude Code warning the person directly.
+            if r.subtype == "compact_boundary" {
+                turn.note(raw: "the conversation was compacted")
+            } else if r.level == "warning", let said = r.content, !said.isEmpty {
+                fail(said)
+            }
+
         default:
-            break
+            // Kept, not discarded. The raw line is already recorded; this is the marker that Keel
+            // had no interpretation for it.
+            turn.unknown.insert(r.type)
         }
     }
 
@@ -1640,6 +1841,7 @@ final class SessionModel: Identifiable {
             policySources = policy.sources
             allowedProviders = Set(policy.allowedProviders)
             policyRequiresIsolation = policy.requireIsolation
+            isolationByPolicy = policy.isolationByPolicy ?? false
         }
         // The recommendations depend on what is installed, and every path that changes that —
         // install, uninstall, disable, the catalog closing — comes through here. One place,
@@ -1776,7 +1978,7 @@ final class SessionModel: Identifiable {
     var approvalsThisTurn = 0
 
     private func attempt(_ work: () async throws -> Void) async {
-        do { try await work(); lastError = nil } catch {
+        do { try await work(); lastError = nil; lastFix = nil } catch {
             lastError = error.localizedDescription
             // The kind of failure, never its text: the text can carry a path.
             let e = error as NSError
@@ -1979,7 +2181,7 @@ final class SessionModel: Identifiable {
         defer { pushing = false }
         do {
             _ = try await client.post("/api/git/push", body: Nothing(), q(), as: String.self)
-            lastError = nil
+            lastError = nil; lastFix = nil
             Telemetry.track("pushed")
         } catch { lastError = "Push failed: " + error.localizedDescription }
         await refreshGit()

@@ -467,7 +467,9 @@ struct Composer: View {
             }
 
             if let err = model.lastError {
-                ErrorRow(message: err) { model.lastError = nil }
+                ErrorRow(message: err, fix: model.lastFix) {
+                    model.lastError = nil; model.lastFix = nil
+                }
             }
 
             VStack(spacing: 0) {

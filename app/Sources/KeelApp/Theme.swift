@@ -496,8 +496,20 @@ struct Loading: View {
 /// `model.lastError` is one string on the model, and four surfaces rendered it at three different
 /// sizes — so a single git failure could appear three times on screen at once, in three type
 /// treatments. One shape, one place, and a way to put it away.
+/// What to do about a failure.
+///
+/// The repository already insists that every scanner finding carries a `Fix`, because "a finding
+/// without one turns the report into a lint run nobody acts on". A failure at runtime is the same
+/// thing: "the isolated checkout could not be created" is a wall, and "this folder is not a git
+/// repository — [Initialise git]" is a next step.
+struct Fix {
+    let label: String
+    let run: () -> Void
+}
+
 struct ErrorRow: View {
     let message: String
+    var fix: Fix? = nil
     var dismiss: (() -> Void)? = nil
 
     var body: some View {
@@ -510,6 +522,10 @@ struct ErrorRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: 0)
+            if let fix {
+                Button(fix.label, action: fix.run)
+                    .buttonStyle(FilledButton(tone: K.C.del))
+            }
             if let dismiss { CloseButton(label: "Dismiss this error", action: dismiss) }
         }
         .padding(.horizontal, K.S.sm).padding(.vertical, K.S.half)
