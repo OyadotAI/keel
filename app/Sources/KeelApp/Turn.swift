@@ -83,14 +83,22 @@ final class Turn: Identifiable {
     var design: Design?
 
     struct Design {
-        var selector: String
-        var before: NSImage?
-        var after: NSImage?
-        var verdict: DesignCheck.Verdict
-        var duplicated: Bool
+        /// One per pin the turn was sent with. It was one element for a long time and the check
+        /// silently only ever ran on the first: every other pin paid for a before-image nobody
+        /// ever compared it to.
+        var pins: [Pin] = []
+        var duplicated = false
         /// What the page said moved, and a photograph of all of it together.
         var regions: [Region] = []
         var pageAfter: NSImage?
+
+        struct Pin: Identifiable {
+            let id = UUID()
+            var selector: String
+            var before: NSImage?
+            var after: NSImage?
+            var verdict: DesignCheck.Verdict
+        }
     }
 
     /// The project's own checks, run after the turn — not the agent's opinion of its own work.

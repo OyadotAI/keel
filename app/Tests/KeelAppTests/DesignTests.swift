@@ -28,8 +28,10 @@ final class DesignTests: XCTestCase {
     /// A missing snapshot is reported as unstable, never as success. Failing the other way would
     /// turn "we could not photograph it" into "it worked".
     func testAMissingSnapshotIsNotAPass() {
-        XCTAssertEqual(DesignCheck.compare(before: image(.red), after: nil), .unstable)
-        XCTAssertEqual(DesignCheck.compare(before: nil, after: nil), .unstable)
+        XCTAssertEqual(DesignCheck.compare(before: image(.red), after: nil),
+                       .notCompared("there was nothing to compare"))
+        XCTAssertEqual(DesignCheck.compare(before: nil, after: nil),
+                       .notCompared("there was nothing to compare"))
     }
 
     /// The named failure mode elsewhere: asked to change a button, the agent writes a new one.
@@ -48,6 +50,135 @@ final class DesignTests: XCTestCase {
     /// With nothing to compare against, the heuristic must stay quiet rather than accuse.
     func testNoHintsMeansNoAccusation() {
         XCTAssertFalse(DesignCheck.looksDuplicated(files: ["src/Anything.tsx"], hints: []))
+    }
+}
+
+/// What the person sees about the element they picked.
+final class SelectionTests: XCTestCase {
+    private func picked(_ json: String) -> Picked {
+        try! JSONDecoder().decode(Picked.self, from: Data(json.utf8))
+    }
+
+    /// The 23 computed properties were collected for the agent and shown to nobody. The summary
+    /// is the one line that says what you are about to change.
+    func testTheSelectionSaysWhatItIs() {
+        let p = picked(#"""
+        {"selector":"button","tag":"button","text":"Sign up","html":"<button/>",
+         "style":{"font-size":"14px","font-weight":"600","color":"rgb(255, 255, 255)",
+                  "background-color":"rgb(59, 130, 246)"},
+         "hints":[],"rect":{"x":0,"y":0,"width":120,"height":32}}
+        """#)
+        XCTAssertEqual(p.summary, "button · 120×32 · 14px/600 · #ffffff · on #3b82f6")
+    }
+
+    /// A transparent background is not a colour anyone wants read out to them.
+    func testATransparentBackgroundIsNotMentioned() {
+        let p = picked(#"""
+        {"selector":"p","tag":"p","text":"","html":"<p/>",
+         "style":{"background-color":"rgba(0, 0, 0, 0)"},"hints":[],
+         "rect":{"x":0,"y":0,"width":10,"height":4}}
+        """#)
+        XCTAssertEqual(p.summary, "p · 10×4")
+    }
+
+    /// An ambiguous selector is said out loud rather than sent as if it were exact — the after
+    /// photo would be of whichever element happened to come first.
+    func testAnAmbiguousSelectorIsDeclaredToTheAgent() {
+        let ambiguous = picked(#"""
+        {"selector":"div > button","tag":"button","text":"","html":"<button/>","style":{},
+         "hints":[],"rect":{"x":0,"y":0,"width":1,"height":1},"unique":false}
+        """#)
+        XCTAssertTrue(ambiguous.describe().contains("matches more than one element"))
+
+        let exact = picked(#"""
+        {"selector":"#go","tag":"button","text":"","html":"<button/>","style":{},
+         "hints":[],"rect":{"x":0,"y":0,"width":1,"height":1},"unique":true}
+        """#)
+        XCTAssertFalse(exact.describe().contains("matches more than one element"))
+    }
+}
+
+/// The check itself, over the pins a turn was actually sent with.
+@MainActor
+final class DesignCheckTests: XCTestCase {
+
+    private func image(_ color: NSColor) -> NSImage {
+        let img = NSImage(size: NSSize(width: 8, height: 8))
+        img.lockFocus()
+        color.setFill()
+        NSRect(x: 0, y: 0, width: 8, height: 8).fill()
+        img.unlockFocus()
+        return img
+    }
+
+    private func picked(_ selector: String) -> Picked {
+        let json = """
+        {"selector":"\(selector)","tag":"button","text":"","html":"<button/>","style":{},
+         "hints":[],"rect":{"x":1,"y":2,"width":30,"height":10}}
+        """
+        return try! JSONDecoder().decode(Picked.self, from: Data(json.utf8))
+    }
+
+    private func model(rects: [String: Picked.Rect],
+                       shots: @escaping (Picked.Rect) -> NSImage?) -> SessionModel {
+        let m = SessionModel(client: Client(port: 0))
+        m.rectsNow = { sels in rects.filter { sels.contains($0.key) } }
+        m.resnapshot = { rect in shots(rect) }
+        return m
+    }
+
+    /// Every pin is compared. It used to take the first and silently drop the rest, so a second
+    /// pin paid for a before-image nobody ever looked at.
+    func testEveryPinGetsAVerdict() async {
+        let red = image(.red)
+        let m = model(rects: ["#a": .init(x: 0, y: 0, width: 30, height: 10),
+                              "#b": .init(x: 0, y: 40, width: 30, height: 10)],
+                      shots: { $0.y == 0 ? self.image(.red) : self.image(.blue) })
+        m.designInFlight = [.init(picked: picked("#a"), before: red),
+                            .init(picked: picked("#b"), before: red)]
+        let turn = Turn(prompt: "make them green")
+        await m.checkDesign(turn)
+        XCTAssertEqual(turn.design?.pins.count, 2)
+        XCTAssertEqual(turn.design?.pins[0].verdict, .nothingChanged)
+        XCTAssertEqual(turn.design?.pins[1].verdict, .changed)
+    }
+
+    /// The rect is re-read at check time. A pin photographed at its pick-time coordinates after
+    /// the page scrolled is a photograph of whatever moved into that square.
+    func testTheElementIsRephotographedWhereItIsNow() async {
+        var asked: [Picked.Rect] = []
+        let m = model(rects: ["#a": .init(x: 5, y: 900, width: 30, height: 10)],
+                      shots: { asked.append($0); return self.image(.blue) })
+        m.designInFlight = [.init(picked: picked("#a"), before: image(.red))]
+        await m.checkDesign(Turn(prompt: "x"))
+        // Not the pick-time y of 2.
+        XCTAssertEqual(asked.first?.y, 900)
+    }
+
+    /// Three different reasons that all used to read "the page was still moving".
+    func testNotComparedSaysWhy() async {
+        let m = model(rects: [:], shots: { _ in nil })
+        m.designInFlight = [.init(picked: picked("#gone"), before: image(.red))]
+        let gone = Turn(prompt: "x")
+        await m.checkDesign(gone)
+        XCTAssertEqual(gone.design?.pins.first?.verdict,
+                       .notCompared("the element is no longer on the page"))
+
+        let m2 = model(rects: ["#a": .init(x: 0, y: 0, width: 0, height: 0)], shots: { _ in nil })
+        m2.designInFlight = [.init(picked: picked("#a"), before: image(.red))]
+        let hidden = Turn(prompt: "x")
+        await m2.checkDesign(hidden)
+        XCTAssertEqual(hidden.design?.pins.first?.verdict,
+                       .notCompared("the element is no longer visible"))
+
+        let m3 = SessionModel(client: Client(port: 0))
+        m3.designInFlight = [.init(picked: picked("#a"), before: image(.red))]
+        let closed = Turn(prompt: "x")
+        await m3.checkDesign(closed)
+        guard case .notCompared(let why) = closed.design?.pins.first?.verdict else {
+            return XCTFail("a closed pane is not a verdict")
+        }
+        XCTAssertTrue(why.contains("Designer was closed"), why)
     }
 }
 
@@ -194,7 +325,7 @@ final class CanvasTests: XCTestCase {
     private func picked(_ selector: String, text: String = "") -> Picked {
         let json = """
         {"selector":"\(selector)","tag":"button","text":"\(text)","html":"<button/>","style":{},
-         "hints":[{"kind":"component","value":"Header"}],"rect":{"x":1,"y":2,"width":30,"height":10},"dpr":2}
+         "hints":[{"kind":"component","value":"Header"}],"rect":{"x":1,"y":2,"width":30,"height":10}}
         """
         return try! JSONDecoder().decode(Picked.self, from: Data(json.utf8))
     }
@@ -213,6 +344,27 @@ final class CanvasTests: XCTestCase {
         // Picking the same element twice focuses the pin rather than stacking a second.
         m.designPick(picked("#a"), before: nil)
         XCTAssertEqual(m.pins.count, 2)
+    }
+
+    /// A drag is a sentence, not an edit. Keel never writes the file — it says exactly what was
+    /// done by hand, in the units the source uses, and the pixel check afterwards proves the
+    /// source now matches.
+    func testADragBecomesAnInstruction() {
+        let m = SessionModel(client: Client(port: 0))
+        var reverted = false
+        m.canvas = { if $0["keel"] as? String == "revert" { reverted = true } }
+        m.designNudge(picked("#cta", text: "Sign up"), label: "width 240px → 320px")
+        m.designNudge(picked("#cta", text: "Sign up"), label: #"text "Sign up" → "Get started""#)
+        XCTAssertEqual(m.pins.count, 1, "both changes land on the one element")
+        XCTAssertEqual(m.pins[0].nudges.count, 2)
+
+        let p = m.designPrompt("")!
+        XCTAssertTrue(p.contains("width 240px → 320px"))
+        XCTAssertTrue(p.contains("do not add inline styles"))
+
+        // A dragged pin is a complete request; the box may stay empty.
+        m.send()
+        XCTAssertTrue(reverted, "the page is put back, so what lands is the agent's change")
     }
 
     /// The page's report decodes, and the union rect covers all of it.

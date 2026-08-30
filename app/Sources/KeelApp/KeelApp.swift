@@ -50,6 +50,19 @@ struct KeelApp: App {
         // was an empty window with nothing in it.
         .restorationBehavior(.disabled)
         .defaultSize(width: 1180, height: 820)
+
+        // The preview, in a window you can size to the app you are building rather than to the
+        // column left over beside a diff. It is the same web view and the same picker — the pane
+        // in the tab stands aside while this is open, because two of them would fight over which
+        // one the model photographs.
+        WindowGroup(id: "designer", for: UUID.self) { $lane in
+            if let lane, let model = app.session(lane) {
+                DesignerWindow(model: model)
+                    .containerBackground(K.C.bg, for: .window)
+            }
+        }
+        .restorationBehavior(.disabled)
+        .defaultSize(width: 1120, height: 860)
         .commands {
             // Replaced so ⌘N is a lane. Left alone, SwiftUI's New Window is a second copy of the
             // same window.
@@ -243,6 +256,19 @@ final class AppModel {
         return placeholder
     }
 
+    /// The session behind a lane id, wherever it lives.
+    ///
+    /// The Designer window is addressed by lane id — SwiftUI carries a `Codable` value, not an
+    /// object — so it has to be able to find the model again, including in a torn-out window that
+    /// has a Keel of its own.
+    func session(_ id: UUID) -> SessionModel? {
+        if let here = lanes.lanes.first(where: { $0.id == id }) { return here }
+        for (_, w) in detached {
+            if let there = w.lanes.lanes.first(where: { $0.id == id }) { return there }
+        }
+        return nil
+    }
+
     func closeWorkspace(_ id: UUID) {
         detachedStarts.removeValue(forKey: id)?.cancel()
         detached.removeValue(forKey: id)?.shutdown()
@@ -329,6 +355,24 @@ extension Notification.Name {
     static let keelRunInTerminal = Notification.Name("keel.runInTerminal")
 }
 
+
+/// The preview, in a window of its own.
+///
+/// Same model, same web view, same cookies — so a page you logged into stays logged in, and a pin
+/// placed here is the same pin the composer in the other window sends. ⌥⌘I opens the real Web
+/// Inspector on it: this is a WKWebView, which is Safari's engine, so there is nothing to gain by
+/// driving Safari itself and an iframe's worth to lose.
+private struct DesignerWindow: View {
+    let model: SessionModel
+
+    var body: some View {
+        PreviewSurface(model: model, detached: true)
+            .background(K.C.bg)
+            .navigationTitle("Preview — \(model.title)")
+            .onAppear { model.detachedPreview = true }
+            .onDisappear { model.detachedPreview = false }
+    }
+}
 
 /// A feature in a window of its own, with a daemon of its own.
 ///

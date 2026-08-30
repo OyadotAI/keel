@@ -152,8 +152,21 @@ writes a frontend file, the Designer comes forward, navigates to that page when 
 page, shows *Editing header.tsx…* over it, and when the hot reload lands the regions that changed
 ripple and get a numbered dot. Click a dot, or any element with Pick on, and it becomes a pin with
 a note; pins stack, stay on their element across reloads, and go with the next send as one prompt.
-The turn card then shows what changed on screen beside what changed in the code — and, for a
-pinned element, whether its pixels actually moved. **Follow** turns the auto-switch off.
+The turn card then shows what changed on screen beside what changed in the code — and, for every
+pinned element, whether its pixels actually moved, or the reason none was compared. **Follow**
+turns the auto-switch off.
+
+**Aiming, with a keyboard.** Hover names what you would select — tag, size, likely source — and
+↑↓ walk to the parent and the first child, because the thing you want is nearly always the parent
+of the thing under the cursor. ← → move between siblings, ⌥ measures to the nearest pin, Enter
+pins, Esc stops. The pop-out button gives the preview a window of its own, sized to the app rather
+than to the column beside a diff, with ⌥⌘I for the real Web Inspector.
+
+**Say it by doing it.** ⌘-drag moves, the handles resize, a double-click edits the text. None of
+it writes a file — Keel has no editor. What it writes is the sentence: `width 240px → 320px`,
+`text "Sign up" → "Get started"`, in the units the source uses. The page is put back when the turn
+starts, so what you are looking at afterwards is the agent's change rather than your ghost of it,
+and the pixel check says whether the source now matches.
 
 **No editor.** Keel shows what the agent changed as diffs you can comment on and rewind; editing a
 file is what the editor you already have is for.
