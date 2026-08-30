@@ -125,15 +125,29 @@ final class TypeFloorTests: XCTestCase {
             .filter { $0.hasSuffix(".swift") }
         let pattern = try NSRegularExpression(pattern: #"(?:size: |mono\()(\d+(?:\.\d+)?)"#)
         for f in files {
-            let text = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
-            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                let n = Double(text[Range(m.range(at: 1), in: text)!])!
-                // Glyph-only sizes (chevrons, dots) are allowed under the floor; text is not.
-                // Below 8 nothing is text, so the test lets those through.
-                if n >= 8 {
-                    XCTAssertGreaterThanOrEqual(n, Double(K.F.floor), "\(f): size \(n)")
+            let lines = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+                .components(separatedBy: .newlines)
+            for (i, line) in lines.enumerated() {
+                // The modifier is often on a continuation line under the `Image` it decorates, so
+                // the exemption reads the line above too.
+                let context = (i > 0 ? lines[i - 1] : "") + line
+                guard !isGlyph(context) else { continue }
+                for m in pattern.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    let n = Double(line[Range(m.range(at: 1), in: line)!])!
+                    XCTAssertGreaterThanOrEqual(n, Double(K.F.floor), "\(f):\(i + 1): size \(n)")
                 }
             }
         }
+    }
+
+    /// Glyph-only sizes — a chevron, a dot, a close ✕ — are allowed under the floor; text is not.
+    ///
+    /// This used to be `if n >= 8`, a stand-in for "below 8 nothing is text". It was wrong in both
+    /// directions: it let a 7pt *label* through, and it failed a 9pt chevron and a
+    /// `CloseButton(size: 9)` — which is not a font size at all, just a parameter that shares the
+    /// name. Naming the exemption is both more permissive and more strict than guessing at it.
+    private func isGlyph(_ context: String) -> Bool {
+        ["Image(systemName:", "CloseButton(", "Circle()", "circle.fill", "chevron."]
+            .contains { context.contains($0) }
     }
 }

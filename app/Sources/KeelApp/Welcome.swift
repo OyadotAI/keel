@@ -12,9 +12,15 @@ import SwiftUI
 /// saying those tools were not needed to start. Both could not be true.
 struct Welcome: View {
     let model: SessionModel
+    /// Why the daemon would not start, when it would not. Read from `AppModel`, which had it all
+    /// along and rendered it only in the torn-out window.
+    var daemonFailure: String? = nil
     let onOpened: () -> Void
 
     @State private var claude: ClaudeStatus?
+    /// Why the status probe failed, when it did. Not the same as "claude is missing": if Keel's
+    /// own service is not answering, installing the CLI fixes nothing.
+    @State private var unreachable: String?
     @State private var installing = false
     @State private var log = ""
     @State private var error: String?
@@ -88,7 +94,13 @@ struct Welcome: View {
                     ? [claude?.account, claude?.plan].compactMap { $0 }.joined(separator: " · ")
                     : "no account on this machine")
 
-            if claude?.installed == false {
+            if let why = daemonFailure ?? unreachable {
+                fix("Keel's local service is not answering, so it cannot see anything about your "
+                    + "machine yet. \(why)") {
+                    Button("Try again") { Task { await refresh() } }
+                        .buttonStyle(SendButtonWide())
+                }
+            } else if claude?.installed != true {
                 fix("Keel drives your own `claude` and has nothing to run without it. It needs no "
                     + "Node and no Homebrew.") {
                     Button(installing ? "Installing…" : "Install Claude Code") {
@@ -97,7 +109,7 @@ struct Welcome: View {
                     .buttonStyle(SendButtonWide())
                     .disabled(installing)
                 }
-            } else if claude?.authenticated == false {
+            } else if claude?.authenticated != true {
                 // The sign-in is a browser handshake the CLI drives itself. Keel cannot do it for
                 // you, and pretending otherwise would fail later inside a chat.
                 fix("Run `claude` once and sign in — it opens a browser, which Keel cannot drive "
@@ -192,7 +204,16 @@ struct Welcome: View {
     }
 
     private func refresh() async {
-        claude = try? await model.client.get("/api/claude")
+        do {
+            claude = try await model.client.get("/api/claude")
+            unreachable = nil
+        } catch {
+            // This used to be `try?`, so a daemon that never started left `claude` nil — and both
+            // remediations below tested `== false`, which nil is not. The first-run screen showed
+            // two grey dots, three disabled buttons and no explanation at all.
+            claude = nil
+            unreachable = error.localizedDescription
+        }
     }
 
     /// The vendor's own installer, streamed. It needs no npm and no Node and refuses to run under

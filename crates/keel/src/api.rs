@@ -252,6 +252,34 @@ pub struct ChatQuery {
     pub provider: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct StopQuery {
+    /// The conversation to stop. Absent means the project's own lane, which is what a window with
+    /// no worktree is — never "all of them".
+    pub lane: Option<String>,
+}
+
+/// Stop the turn running in one conversation.
+///
+/// This exists because closing the event stream is not stopping anything: the daemon only noticed
+/// a hung-up client when the *next* line arrived, so a turn sitting quiet inside a three-minute
+/// test kept running while the app said it had stopped. `AppState::interrupt` sends SIGINT to the
+/// agent's process group, which is what ⌃C does in a terminal.
+pub async fn stop(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<StopQuery>,
+) -> Json<Stopped> {
+    Json(Stopped {
+        stopped: state.interrupt(query.lane.as_deref().unwrap_or_default()),
+    })
+}
+
+#[derive(Serialize)]
+pub struct Stopped {
+    /// False when there was nothing running — the turn had already finished on its own.
+    pub stopped: bool,
+}
+
 /// Run `claude` in the repository and stream its events to the browser.
 ///
 /// # Permissions
@@ -532,6 +560,7 @@ pub async fn chat(
         }
     };
     let port = state.port();
+    let stopper = state.clone();
 
     tokio::spawn(async move {
         let provider = query.provider.as_deref().unwrap_or("claude");
@@ -641,6 +670,11 @@ pub async fn chat(
             command.arg("--model").arg(model);
         }
 
+        // Its own process group, so Stop can interrupt the agent *and* whatever it started. A
+        // `cargo test` the agent spawned is the case that matters: signalling only the parent
+        // leaves the build running and the turn is not actually stopped.
+        command.process_group(0);
+
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
@@ -653,6 +687,13 @@ pub async fn chat(
             }
         };
 
+        // Registered before the first line is read, so a Stop arriving immediately still finds it.
+        let lane = query.lane.clone().unwrap_or_default();
+        let pid = child.id().unwrap_or(0);
+        if pid != 0 {
+            stopper.mark_running(&lane, pid);
+        }
+
         if let Some(stdout) = child.stdout.take() {
             let mut lines = BufReader::new(stdout).lines();
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
@@ -663,14 +704,16 @@ pub async fn chat(
                     .await
                     .is_err()
                 {
-                    // The browser disconnected. Stop the run rather than leaving it orphaned.
+                    // The app disconnected. Stop the run rather than leaving it orphaned.
                     let _ = child.start_kill();
+                    stopper.clear_running(&lane, pid);
                     return;
                 }
             }
         }
 
         let status = child.wait().await;
+        stopper.clear_running(&lane, pid);
         let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))

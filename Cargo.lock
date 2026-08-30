@@ -1705,6 +1705,7 @@ dependencies = [
  "keel-scanner",
  "keel-workspace",
  "keyring",
+ "libc",
  "muda",
  "open",
  "portable-pty",

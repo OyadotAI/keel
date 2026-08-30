@@ -130,7 +130,7 @@ struct NewFeature: View {
         done()
         Task {
             if let move {
-                try? await model.openProject(move)
+                await model.open(project: move)
                 Recents.remember(move)
                 await lanes.refreshShared()
             }

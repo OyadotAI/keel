@@ -53,7 +53,7 @@ final class Workspace {
         ready = true
         let first = lanes.active
         if !project.isEmpty {
-            try? await first.openProject(project)
+            await first.open(project: project)
         }
         await lanes.refreshShared()
         if let session, !session.isEmpty {
