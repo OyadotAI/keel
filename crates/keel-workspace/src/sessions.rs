@@ -540,7 +540,11 @@ mod tests {
         assert_eq!(turns[0].text, "hello");
         assert_eq!(turns[1].text, "Working on it.");
         assert_eq!(turns[2].text, "Done.");
-        assert!(turns.iter().all(|turn| !turn.text.contains("task-notification")));
+        assert!(
+            turns
+                .iter()
+                .all(|turn| !turn.text.contains("task-notification"))
+        );
     }
 
     fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
