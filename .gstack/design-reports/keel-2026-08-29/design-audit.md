@@ -37,10 +37,26 @@ App UI: workspace-driven, dense, engineering-focused.
 
 ## Final
 
-- Design score: B
-- Visual hierarchy: B
-- Typography: B
-- Spacing and layout: B
-- Interaction states: B
-- Cross-screen consistency: B
+- Design score: A-
+- Visual hierarchy: A-
+- Typography: A-
+- Spacing and layout: A-
+- Interaction states: A-
+- Cross-screen consistency: A-
 - AI slop: A
+
+## Premium density pass
+
+The first resolution improved consistency but left too much simultaneous chrome. A second pass
+reviewed all 13 catalog screens and reduced the interface to a calmer workspace hierarchy:
+
+- Centered the conversation and integrated its controls into a floating composer.
+- Gave assistant responses a stable visual author without boxing long prose.
+- Consolidated Git's remote operations into one labelled menu and removed duplicate branch labels.
+- Replaced Readiness's false pre-scan `0/100` failure state with one clear Scan action.
+- Collapsed Review provenance while keeping the merge verdict and evidence immediately visible.
+- Changed rail headings from tracked uppercase telemetry labels to sentence-case navigation.
+- Reduced every extension empty state to one orientation sentence and one quiet action.
+- Simplified commit-history copy and removed the remaining loud uppercase section treatment.
+
+Evidence: `screenshots/catalog-premium/` contains the verified 13-screen catalog.

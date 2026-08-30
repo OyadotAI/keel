@@ -35,6 +35,7 @@ struct ReviewPacketView: View {
     @State private var finishing = false
     @State private var message = ""
     @State private var exported: String?
+    @State private var identityOpen = false
 
     private var packet: ReviewPacket { ReviewPacket(model: model) }
 
@@ -68,11 +69,8 @@ struct ReviewPacketView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
-            Text("TASK REVIEW").font(K.F.micro.weight(.semibold)).tracking(1.1)
-                .foregroundStyle(K.C.accent)
+            Text("Review").font(K.F.small.weight(.medium)).foregroundStyle(K.C.accent)
             Text(packet.title).font(K.F.display).foregroundStyle(K.C.text).lineLimit(2)
-            Text("Inspect the evidence, verify policy, then decide whether this branch can merge.")
-                .font(K.F.body).foregroundStyle(K.C.dim)
         }
         .padding(.top, K.S.xl).padding(.bottom, K.S.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -98,18 +96,26 @@ struct ReviewPacketView: View {
     }
 
     private var identity: some View {
-        section("Task identity", detail: "Stable provenance for this agent task.") {
-            fact("Task", packet.title)
-            fact("Provider", packet.provider.rawValue)
-            fact("Task ID", packet.taskID.uuidString.lowercased())
-            fact("Branch", packet.branch ?? "not created")
-            fact("Worktree", packet.worktree ?? "not isolated")
-            fact("Policy", model.policySources.joined(separator: " → "))
+        section("Task details") {
+            DisclosureGroup(isExpanded: $identityOpen) {
+                VStack(alignment: .leading, spacing: K.S.sm) {
+                    fact("Task", packet.title)
+                    fact("Provider", packet.provider.rawValue)
+                    fact("Task ID", packet.taskID.uuidString.lowercased())
+                    fact("Branch", packet.branch ?? "not created")
+                    fact("Worktree", packet.worktree ?? "not isolated")
+                    fact("Policy", model.policySources.joined(separator: " → "))
+                }
+                .padding(.top, K.S.sm)
+            } label: {
+                Text("Branch, provider, worktree, and policy")
+                    .font(K.F.small).foregroundStyle(K.C.dim)
+            }
         }
     }
 
     private var evidence: some View {
-        section("Evidence summary", detail: "The recorded footprint of this task.") {
+        section("Evidence") {
             HStack(spacing: K.S.lg) {
                 metric(packet.files.count, "files touched")
                 metric(packet.calls.count, "tool calls")
@@ -141,7 +147,7 @@ struct ReviewPacketView: View {
     }
 
     @ViewBuilder private var commands: some View {
-        section("Commands run", detail: "Commands are shown with the agent's stated intent when available.") {
+        section("Commands run") {
             if packet.commands.isEmpty {
                 empty("No shell commands recorded")
             } else {
@@ -194,7 +200,7 @@ struct ReviewPacketView: View {
     }
 
     private var export: some View {
-        section("Shareable packet", detail: "Cryptographically signed evidence for pull requests and audits.") {
+        section("Shareable packet") {
             Text("The signed packet contains review evidence, not source code, diffs, prompts or command output.")
                 .font(K.F.small).foregroundStyle(K.C.dim)
             HStack {

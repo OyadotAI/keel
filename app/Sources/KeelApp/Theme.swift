@@ -146,7 +146,7 @@ enum K {
 
 // MARK: - Shared chrome
 
-/// A section header in a rail. Uppercase, tracked, faint — present without competing.
+/// A quiet section header in a rail. Sentence case reads like navigation rather than telemetry.
 struct RailHeader: View {
     let title: String
     var trailing: String?
@@ -158,18 +158,17 @@ struct RailHeader: View {
 
     var body: some View {
         HStack(spacing: K.S.xs) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.7)
+            Text(title)
+                .font(K.F.small.weight(.medium))
             Spacer()
             if let trailing {
                 Text(trailing).font(K.F.mono(10)).monospacedDigit()
             }
         }
-        .foregroundStyle(K.C.faint)
+        .foregroundStyle(K.C.dim)
         .padding(.horizontal, K.S.md)
-        .padding(.top, K.S.md)
-        .padding(.bottom, K.S.xs)
+        .padding(.top, K.S.lg)
+        .padding(.bottom, K.S.sm)
     }
 }
 

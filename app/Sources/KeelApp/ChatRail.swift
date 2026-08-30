@@ -35,11 +35,10 @@ struct ChatRail: View {
                 .background(K.C.accent.opacity(0.06))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            Hairline()
             Composer(model: model, focused: $composerFocused)
         }
         .animation(K.M.quick, value: model.pending.count)
-        .background(K.C.surface)
+        .background(K.C.bg)
         // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
         // Focus is the one thing only this view can do, so it watches a counter.
         .onChange(of: model.focusComposerTick) { composerFocused = true }
@@ -59,10 +58,10 @@ struct ChatRail: View {
                     // reply is streaming.
                     Color.clear.frame(height: 1).id(Self.bottom)
                 }
-                .padding(.horizontal, K.S.xl)
-                .padding(.vertical, K.S.lg)
-                .frame(maxWidth: 760, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, K.S.xxl)
+                .padding(.vertical, K.S.xl)
+                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .scrollBounceBehavior(.basedOnSize)
             // Watches the reply text as well as the tool calls. It only watched calls before, and
@@ -245,8 +244,17 @@ private struct ChatTurn: View {
             // The reply, on the left, as prose: it is the long half, and a box around three
             // paragraphs and a table is a box around the page.
             if !turn.text.isEmpty {
-                Markdown(turn.text)
-                    .padding(.trailing, K.S.lg)
+                VStack(alignment: .leading, spacing: K.S.sm) {
+                    HStack(spacing: K.S.xs) {
+                        Image(systemName: "sailboat.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Keel").font(K.F.micro.weight(.semibold))
+                    }
+                    .foregroundStyle(K.C.dim)
+                    Markdown(turn.text)
+                        .padding(.trailing, K.S.lg)
+                }
+                .padding(.top, K.S.sm)
             }
 
             // The caption Messages puts under a bubble — here, the turn and the ways to copy
@@ -331,11 +339,11 @@ struct Composer: View {
     @FocusState.Binding var focused: Bool
     @State private var dropping = false
 
-    /// Two lines, growing to eight. A composer that starts a third of the pane tall is a composer
+    /// One comfortable line, growing to eight. A composer that starts a third of the pane tall is a composer
     /// that has taken space from the conversation for nothing.
     private var height: CGFloat {
         let lines = model.prompt.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
-        return min(max(CGFloat(lines) * 16 + 20, 52), 150)
+        return min(max(CGFloat(lines) * 16 + 18, 44), 150)
     }
 
     var body: some View {
@@ -374,13 +382,22 @@ struct Composer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            field
+            VStack(spacing: K.S.xs) {
+                field
+                controls
+            }
+            .padding(K.S.xs)
+            .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
+            .overlay(RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.line, lineWidth: 1))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
             memoryNote
-            controls
         }
-        .padding(.horizontal, K.S.xl)
-        .padding(.vertical, K.S.md)
-        .frame(maxWidth: 760, alignment: .leading)
+        .padding(.horizontal, K.S.xxl)
+        .padding(.top, K.S.sm)
+        .padding(.bottom, K.S.lg)
+        .frame(maxWidth: 800, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(K.C.bg)
     }
 
     private var field: some View {
@@ -394,7 +411,7 @@ struct Composer: View {
                 )
 
             if model.prompt.isEmpty {
-                Text("Describe a change…   # to remember something, ⌘↵ to send")
+                Text("Ask Keel to change, explain, or review…")
                     .font(K.F.body).foregroundStyle(K.C.faint)
                     .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
                     .allowsHitTesting(false)
@@ -467,6 +484,8 @@ struct Composer: View {
                 .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .padding(.horizontal, K.S.xs)
+        .padding(.bottom, K.S.xs)
     }
 }
 
