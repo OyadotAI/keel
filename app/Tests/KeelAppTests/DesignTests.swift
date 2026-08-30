@@ -438,3 +438,116 @@ final class ClientTimeoutTests: XCTestCase {
         }
     }
 }
+
+/// Failures Claude Code reports about itself — the ones that used to render as prose in the
+/// agent's own voice, with nothing to press.
+@MainActor
+final class TroubleTests: XCTestCase {
+
+    private func record(_ json: String) -> SessionModel.Record {
+        try! JSONDecoder().decode(SessionModel.Record.self, from: Data(json.utf8))
+    }
+
+    /// The real bytes, captured from a `claude -p` run with broken credentials. Not hand-written:
+    /// the shape is the CLI's, and a fixture invented from memory would pass while the app failed.
+    func testTheRealAuthFailureIsRecognisedAndFixable() throws {
+        let url = Bundle.module.url(forResource: "auth-failure", withExtension: "json",
+                                   subdirectory: "Fixtures")
+        let data = try Data(contentsOf: try XCTUnwrap(url))
+        let r = try JSONDecoder().decode(SessionModel.Record.self, from: data)
+
+        let trouble = try XCTUnwrap(SessionModel.classify(r), "an auth failure must be recognised")
+        XCTAssertEqual(trouble.kind, "authentication_failed")
+        XCTAssertEqual(trouble.message, "Not logged in · Please run /login")
+        let fix = try XCTUnwrap(trouble.fix(SessionModel(client: Client(port: 0))),
+                                "a failure the person can fix must carry the fix")
+        XCTAssertEqual(fix.label, "Log in")
+    }
+
+    /// The transcripts Keel replays spell the flag differently from the live stream. A classifier
+    /// that knows one works live and fails on every replayed session.
+    func testBothSpellingsOfTheFlagAreRead() {
+        let live = record(#"""
+        {"type":"assistant","error":"server_error","is_api_error_message":true,
+         "message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: 529"}]}}
+        """#)
+        let replayed = record(#"""
+        {"type":"assistant","error":"server_error","isApiErrorMessage":true,
+         "message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: 529"}]}}
+        """#)
+        XCTAssertEqual(SessionModel.classify(live)?.kind, "server_error")
+        XCTAssertEqual(SessionModel.classify(replayed)?.kind, "server_error")
+    }
+
+    /// The most common real failure in the corpus. It carries the reset time, and saying "resets
+    /// at 7pm" is the difference between waiting and giving up.
+    func testARateLimitSaysWhenItEnds() throws {
+        let r = record(#"""
+        {"type":"assistant","error":"rate_limit","is_api_error_message":true,
+         "quotaLimits":{"resetsAt":1788044400,"rateLimitType":"five_hour"},
+         "message":{"model":"<synthetic>","content":[{"type":"text","text":"You've hit your session limit"}]}}
+        """#)
+        let trouble = try XCTUnwrap(SessionModel.classify(r))
+        XCTAssertEqual(trouble.kind, "rate_limit")
+        XCTAssertTrue(trouble.message.contains("Work can resume"), trouble.message)
+    }
+
+    /// Ordinary prose from the agent must not be mistaken for a failure.
+    func testARealAssistantMessageIsNotAFailure() {
+        let r = record(#"""
+        {"type":"assistant","message":{"model":"claude-opus-5",
+         "content":[{"type":"text","text":"I have updated the file."}]}}
+        """#)
+        XCTAssertNil(SessionModel.classify(r))
+    }
+}
+
+/// The guarantee: nothing the agent emits is dropped.
+@MainActor
+final class NothingIsDroppedTests: XCTestCase {
+
+    /// A line Keel cannot decode used to return with no log, no counter and nothing on screen —
+    /// so a shape the CLI changed would empty the UI with no symptom at all.
+    func testAnUndecodableLineIsCountedNotDiscarded() {
+        let m = SessionModel(client: Client(port: 0))
+        let t = Turn(prompt: "x")
+        t.note(raw: "{ this is not json")
+        m.record(Data("{ this is not json".utf8), into: t)
+        XCTAssertEqual(t.unreadable, 1)
+        XCTAssertEqual(t.raw.count, 1, "the bytes are still there to look at")
+    }
+
+    /// An unfamiliar record type is kept and named rather than silently dropped.
+    func testAnUnknownTypeIsKept() {
+        let m = SessionModel(client: Client(port: 0))
+        let t = Turn(prompt: "x")
+        m.record(Data(#"{"type":"something_new_from_the_cli"}"#.utf8), into: t)
+        XCTAssertTrue(t.unknown.contains("something_new_from_the_cli"))
+    }
+
+    /// Compaction halves the context and used to say nothing at all.
+    func testCompactionIsVisible() {
+        let m = SessionModel(client: Client(port: 0))
+        let t = Turn(prompt: "x")
+        m.record(Data(#"{"type":"system","subtype":"compact_boundary"}"#.utf8), into: t)
+        XCTAssertTrue(t.raw.contains { $0.text.contains("compacted") })
+    }
+
+    /// `turns` is never trimmed, so a long session must not grow without bound.
+    func testTheRawBufferIsCapped() {
+        let t = Turn(prompt: "x")
+        for i in 0..<(Turn.rawCap + 50) { t.note(raw: "line \(i)") }
+        XCTAssertEqual(t.raw.count, Turn.rawCap)
+        XCTAssertEqual(t.rawDropped, 50, "and it says how many it did not keep")
+    }
+
+    /// A folder that is not a repository is the usual cause of "the isolated checkout could not be
+    /// created", and Keel can fix it in one click rather than leaving a wall.
+    func testANonRepoFailureCarriesTheInitFix() {
+        let m = SessionModel(client: Client(port: 0))
+        m.isRepo = false
+        XCTAssertEqual(m.repoFix?.label, "Initialise git")
+        m.isRepo = true
+        XCTAssertNil(m.repoFix)
+    }
+}

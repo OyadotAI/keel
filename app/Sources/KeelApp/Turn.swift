@@ -70,6 +70,44 @@ final class Turn: Identifiable {
     /// The provider reported the run itself as failed, whether or not it said why.
     var failed = false
 
+    /// Everything the provider actually emitted, in order: stdout, stderr, and the exit line.
+    ///
+    /// The guarantee this exists for is that there is no state in which Keel saw something and the
+    /// person cannot. Capped, because `turns` is never trimmed in memory and a long session would
+    /// otherwise grow without bound.
+    private(set) var raw: [RawLine] = []
+    private(set) var rawDropped = 0
+
+    struct RawLine: Identifiable {
+        let id = UUID()
+        var text: String
+        var stream: Stream = .out
+        enum Stream { case out, err }
+    }
+
+    static let rawCap = 2000
+
+    /// Lines that arrived and could not be decoded, and record types Keel had no case for. Both
+    /// used to be silent; both are now reasons the raw view exists.
+    var unreadable = 0
+    var unknown: Set<String> = []
+
+    func note(raw line: String, stream: RawLine.Stream = .out) {
+        guard raw.count < Self.rawCap else { rawDropped += 1; return }
+        raw.append(RawLine(text: line, stream: stream))
+    }
+
+    /// What Claude Code said went wrong, when it reported a failure about itself rather than
+    /// about the work. Kept per turn so the next send does not erase it.
+    var failure: String?
+
+    /// This turn was meant to run in an isolated checkout and could not, with the reason.
+    ///
+    /// It ran in the project instead. Refusing was worse: a customer whose `git worktree add`
+    /// failed could not make progress at all, and isolation is Keel's own default rather than
+    /// something they asked for. Where a policy file demands isolation, the turn still refuses.
+    var notIsolated: String?
+
     /// True for a turn rebuilt from a transcript rather than watched live.
     ///
     /// A replayed turn has no gate result and never will — Keel was not there when it ran. Saying

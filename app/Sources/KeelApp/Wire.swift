@@ -23,12 +23,16 @@ enum Wire {
     struct Policy: Decodable, Sendable {
         var maxFiles: Int
         var requireIsolation: Bool
+        /// A policy *file* demanded isolation, rather than it being Keel's own default. Only then
+        /// is a failed checkout a reason to refuse the turn rather than to run in the project.
+        var isolationByPolicy: Bool?
         var allowedProviders: [String]
         var sources: [String]
 
         enum CodingKeys: String, CodingKey {
             case maxFiles = "max_files"
             case requireIsolation = "require_isolation"
+            case isolationByPolicy = "isolation_by_policy"
             case allowedProviders = "allowed_providers"
             case sources
         }

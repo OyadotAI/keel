@@ -16,6 +16,7 @@ use axum::response::sse::{Event, Sse};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
@@ -514,6 +515,16 @@ async fn run_install(
 /// — both of which are worse than installing it, which it will not think to do if it does not know
 /// there is a package manager.
 pub fn toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+    // Cached for the life of the daemon. This runs ~17 `--version` processes — measured at 1.1s
+    // warm — and it ran on *every turn*, inside the system prompt, before the agent was spawned
+    // and so before a single SSE event. That is a blank screen the person reads as "stuck", and
+    // the answer cannot change while Keel is running: nobody installs Go mid-session.
+    static CACHED: OnceLock<(Option<&'static str>, Vec<&'static str>, Vec<&'static str>)> =
+        OnceLock::new();
+    CACHED.get_or_init(uncached_toolchain).clone()
+}
+
+fn uncached_toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'static str>) {
     let manager = ["brew", "apt-get", "dnf"].into_iter().find(|m| exists(m));
 
     // Runtimes and version-control the agent reaches for constantly, alongside the CLIs Keel

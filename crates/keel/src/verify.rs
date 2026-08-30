@@ -249,6 +249,10 @@ pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, I
         cmd.arg("-c")
             .arg(&check.command)
             .current_dir(&repo)
+            // Nothing to read from. The gate inherited the daemon's stdin, so a check that asks a
+            // question — a prompt, a confirmation, a login — blocked forever with the gate stuck
+            // on "running" and no way to end it. There is nobody to answer it here.
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

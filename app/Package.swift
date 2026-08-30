@@ -32,6 +32,9 @@ let package = Package(
             // source is how it stops being reviewable.
             resources: [.copy("Picker.js")]
         ),
-        .testTarget(name: "KeelAppTests", dependencies: ["KeelApp"], path: "Tests/KeelAppTests"),
+        // The fixtures are bytes captured from real `claude` runs — an auth failure as the CLI
+        // actually emits it. A fixture written from memory passes while the app fails.
+        .testTarget(name: "KeelAppTests", dependencies: ["KeelApp"], path: "Tests/KeelAppTests",
+                    resources: [.copy("Fixtures")]),
     ]
 )

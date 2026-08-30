@@ -618,6 +618,16 @@ pub async fn chat(
     let stopper = state.clone();
 
     tokio::spawn(async move {
+        // Said before anything else, because everything else takes time. Building the system
+        // prompt reads the repository, detects the gate and the dev server and scans it for
+        // findings; on a large project that is seconds, and until now not one byte reached the app
+        // in that window. A blank screen is what people read as "stuck".
+        let _ = tx
+            .send(Ok(Event::default()
+                .event("starting")
+                .data("reading the project")))
+            .await;
+
         let provider = query.provider.as_deref().unwrap_or("claude");
         let mut command = if provider == "codex" {
             let mut command = Command::new("codex");
@@ -781,12 +791,21 @@ pub async fn chat(
             let errors = errors.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let mut held = errors.lock().expect("stderr lock");
-                    // Capped: a runaway process must not become a runaway allocation.
-                    if held.len() < 16_384 {
-                        held.push_str(&line);
-                        held.push('\n');
+                // `Err` — a non-UTF-8 byte — must not end the drain the way EOF does. Stopping
+                // here leaves the pipe to fill, and a full pipe blocks the child mid-write, which
+                // is the wedge this whole drain exists to prevent.
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => {
+                            let mut held = errors.lock().expect("stderr lock");
+                            // Capped: a runaway process must not become a runaway allocation.
+                            if held.len() < 16_384 {
+                                held.push_str(&line);
+                                held.push('\n');
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => continue,
                     }
                 }
             });
@@ -795,8 +814,24 @@ pub async fn chat(
         if let Some(stdout) = child.stdout.take() {
             let mut lines = BufReader::new(stdout).lines();
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
-            // places to update when the CLI's stream changes; the browser does the interpreting.
-            while let Ok(Some(line)) = lines.next_line().await {
+            // places to update when the CLI's stream changes; the app does the interpreting.
+            //
+            // `Err` is not EOF. Treating them alike truncated the turn with no `fatal`, and then
+            // called `wait()` on a child still writing into a pipe nobody was draining — no
+            // `done`, no `fatal`, the stream open forever. One non-UTF-8 byte was enough.
+            loop {
+                let line = match lines.next_line().await {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
+                    Err(e) => {
+                        let _ = tx
+                            .send(Ok(Event::default()
+                                .event("err")
+                                .data(format!("could not read the agent's output: {e}"))))
+                            .await;
+                        continue;
+                    }
+                };
                 if tx
                     .send(Ok(Event::default().event("msg").data(line)))
                     .await

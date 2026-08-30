@@ -193,6 +193,26 @@ struct TurnCard: View {
                     .font(K.F.micro).foregroundStyle(K.C.faint)
             }
 
+            if let why = turn.notIsolated {
+                // The turn was meant to be isolated and could not be. Said plainly, because it
+                // changes where the agent wrote — but the work happened, which is the point.
+                HStack(alignment: .top, spacing: K.S.sm) {
+                    Image(systemName: "info.circle").font(K.F.tiny)
+                    Text("Ran in the project rather than an isolated checkout — \(why)")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(K.F.small).foregroundStyle(K.C.warn)
+            }
+
+            if let failure = turn.failure {
+                HStack(alignment: .top, spacing: K.S.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(K.F.tiny)
+                    Text(failure).fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .font(K.F.small).foregroundStyle(K.C.del)
+            }
+
             if let design = turn.design { DesignStrip(design: design) }
 
             if case .failed(_, let problems) = turn.gate, !problems.isEmpty {
@@ -202,6 +222,8 @@ struct TurnCard: View {
             // Questions and approvals live in the conversation pane, above the composer —
             // the one place on screen whatever the stage is showing. Rendering them here too
             // would register every shortcut twice.
+
+            RawOutput(turn: turn)
 
             TurnFooter(turn: turn)
         }
@@ -733,3 +755,55 @@ struct ProblemList: View {
 }
 
 
+
+
+/// Exactly what the provider printed — the worst-case answer to "what is it doing".
+///
+/// The guarantee: there is no state in which Keel saw something and the person cannot. Everything
+/// else in this app is an interpretation of these bytes, and every interpretation can be wrong or
+/// missing. This is always here, one click away, and costs nothing until it is opened.
+struct RawOutput: View {
+    let turn: Turn
+    @State private var open = false
+
+    var body: some View {
+        if !turn.raw.isEmpty {
+            DisclosureGroup(isExpanded: $open) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(turn.raw) { line in
+                            Text(line.text)
+                                .font(K.F.codeTiny)
+                                .foregroundStyle(line.stream == .err ? K.C.del : K.C.dim)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, K.S.hair)
+                        }
+                        if turn.rawDropped > 0 {
+                            Text("…and \(turn.rawDropped) more lines, not kept")
+                                .font(K.F.micro).foregroundStyle(K.C.faint)
+                        }
+                    }
+                    .padding(K.S.sm)
+                }
+                .frame(maxHeight: 260)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            } label: {
+                HStack(spacing: K.S.xs) {
+                    Text("Raw output").font(K.F.micro).foregroundStyle(K.C.faint)
+                    Text("\(turn.raw.count) lines").font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    // The two counts that say "Keel did not understand this" out loud.
+                    if turn.unreadable > 0 {
+                        Text("· \(turn.unreadable) unreadable")
+                            .font(K.F.codeTiny).foregroundStyle(K.C.warn)
+                    }
+                    if !turn.unknown.isEmpty {
+                        Text("· " + turn.unknown.sorted().joined(separator: ", "))
+                            .font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    }
+                }
+            }
+            .disclosureGroupStyle(.automatic)
+        }
+    }
+}

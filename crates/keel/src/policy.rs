@@ -5,6 +5,13 @@ use serde::Serialize;
 pub struct Policy {
     pub max_files: usize,
     pub require_isolation: bool,
+    /// Whether a *policy file* demanded isolation, as opposed to it being Keel's own default.
+    ///
+    /// The distinction decides whether a failed `git worktree add` may fall back to the project.
+    /// `require_isolation` defaults to true for everybody and `tighten_from` can only ever raise
+    /// it, so without this flag every user looks like an organisation that mandated isolation —
+    /// and a customer whose worktree could not be created was simply blocked from working.
+    pub isolation_by_policy: bool,
     pub allowed_providers: Vec<String>,
     pub sources: Vec<String>,
 }
@@ -14,6 +21,7 @@ impl Default for Policy {
         Self {
             max_files: 8,
             require_isolation: true,
+            isolation_by_policy: false,
             allowed_providers: vec!["claude".into(), "codex".into()],
             sources: vec!["Keel defaults".into()],
         }
@@ -42,6 +50,7 @@ impl Policy {
         }
         if parsed.require_isolation == Some(true) {
             self.require_isolation = true;
+            self.isolation_by_policy = true;
         }
         if let Some(allowed) = parsed.allowed_providers {
             self.allowed_providers
