@@ -24,6 +24,8 @@ enum Wire {
         var findings: [Finding]
         var profile: Profile?
         @DefaultEmpty var plan: [Phase]
+        /// Findings the team set aside; they are not in `findings`.
+        @DefaultEmpty var ignored: [String]
     }
 
     /// What the scanner thinks the repository is and where it runs.

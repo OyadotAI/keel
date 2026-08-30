@@ -307,6 +307,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             "/api/memory",
             axum::routing::post(crate::review::api_memory),
         )
+        .route("/api/readiness/ignore", axum::routing::post(api_ignore))
         .route("/api/review", get(crate::review::api_review))
         .route(
             "/api/review/save",
@@ -773,6 +774,23 @@ async fn api_git_act(
     .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
+#[derive(serde::Deserialize)]
+struct IgnoreBody {
+    id: String,
+    ignored: bool,
+    #[serde(default)]
+    why: String,
+}
+
+async fn api_ignore(
+    State(state): State<Arc<AppState>>,
+    Json(b): Json<IgnoreBody>,
+) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    crate::ignored::set(&state.repo(), &b.id, b.ignored, &b.why)
+        .map(|()| Json(true))
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     let repo = state.repo();
     let prefs = crate::prefs::Prefs::load();
@@ -797,9 +815,11 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     let scanning = repo.clone();
     let scan = blocking(
         move || {
-            keel_scanner::RepoContext::load(&scanning)
+            let report = keel_scanner::RepoContext::load(&scanning)
                 .map(|ctx| keel_scanner::scan(&ctx))
-                .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()))
+                .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()));
+            // What the team set aside leaves the panel; the score and `keel scan` are untouched.
+            crate::ignored::apply(&scanning, report)
         },
         keel_scanner::Report::new(Vec::new()),
     )
