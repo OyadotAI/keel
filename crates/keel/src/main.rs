@@ -152,6 +152,14 @@ enum Command {
         /// The port the Keel that spawned this agent is serving on.
         #[arg(long)]
         port: u16,
+        /// The window that started this turn.
+        ///
+        /// Claude Code does not send it, so Keel puts it on this command line — and it is the only
+        /// id that exists on a lane's *first* turn, when the Claude session id the queue would
+        /// otherwise partition by has not been assigned yet. Optional, because the flag was added
+        /// to the hook before it was accepted here and an older hook may still be on disk.
+        #[arg(long, default_value = "")]
+        lane: String,
     },
 
     /// Move repository-supplied agent configuration out of the way.
@@ -195,8 +203,28 @@ fn main() -> Result<()> {
 
     // macOS hands a bundled process a `-psn_0_…` serial number on some launches. It is not an
     // argument anyone typed, and clap would reject it and take the application down on start.
-    let args = std::env::args_os().filter(|a| !a.to_string_lossy().starts_with("-psn_"));
-    let cli = Cli::parse_from(args);
+    let args: Vec<_> = std::env::args_os()
+        .filter(|a| !a.to_string_lossy().starts_with("-psn_"))
+        .collect();
+
+    // The approval hook fails open, and that has to include failing to parse its own arguments.
+    //
+    // `--lane` was added to the hook's command line before it was accepted here, so every `Bash`
+    // call died on `error: unexpected argument '--lane' found` — clap exits(2) long before the
+    // code that knows to defer, so the guardrail that documents itself as never able to wedge the
+    // agent wedged it completely. An old hook on disk invoking a new binary is the same shape.
+    //
+    // Anything unparseable that was trying to be an approval prints nothing and exits 0, which
+    // defers to Claude Code's own permission check.
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(e) => {
+            if args.iter().any(|a| a == "approve") {
+                return Ok(());
+            }
+            e.exit();
+        }
+    };
 
     match cli.command.unwrap_or(Command::App {
         port: 7777,
@@ -259,16 +287,18 @@ fn main() -> Result<()> {
             }
         }
 
-        Command::Approve { port } => {
+        Command::Approve { port, lane } => {
             // Every failure here prints nothing and exits 0, which defers to Claude Code's own
             // permission check. A guardrail that can wedge the agent is one people disable.
             let mut raw = String::new();
             if std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).is_err() {
                 return Ok(());
             }
-            let Ok(hook) = serde_json::from_str::<approve::HookInput>(&raw) else {
+            let Ok(mut hook) = serde_json::from_str::<approve::HookInput>(&raw) else {
                 return Ok(());
             };
+            // Not in what Claude Code sends; it arrives on the command line instead.
+            hook.lane = lane;
 
             let decision = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
