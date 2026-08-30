@@ -240,6 +240,16 @@ impl Check for ProductionPractices {
                 || l.contains("kubectl")
                 || l.contains("wrangler")
                 || l.contains("vercel")
+                // A desktop app, a CLI or a library reaches production by publishing a signed
+                // artifact, not by rolling a deployment. Read only for the first list and every
+                // one of them reports "nothing deploys this" at a repository whose release is
+                // fully automated — the false positive this check exists to avoid.
+                || l.contains("gh release create")
+                || l.contains("gh release upload")
+                || l.contains("action-gh-release")
+                || l.contains("upload-release-asset")
+                || l.contains("cargo publish")
+                || l.contains("npm publish")
         });
         // Dev and prod apart: kustomize overlays, Helm values per env, Wrangler envs, Terraform
         // environments or per-env tfvars, or a deploy workflow per environment.
@@ -740,6 +750,21 @@ mod tests {
             ("backend/src/app.ts", "app.get('/api/health')"),
         ]);
         assert!(ids(&ctx).is_empty(), "{:?}", ids(&ctx));
+    }
+
+    // Keel itself is the case: it ships a signed, notarised DMG from a tag and rolls nothing.
+    #[test]
+    fn publishing_a_signed_artifact_on_a_tag_is_a_pipeline() {
+        let (_d, ctx) = fixture(&[
+            ("Dockerfile", "FROM node\nUSER api\nCMD node"),
+            (
+                ".github/workflows/release.yml",
+                "on:\n  push:\n    tags: ['v*']\njobs:\n  publish:\n    steps:\n \
+                 - run: gh release create \"$GITHUB_REF_NAME\" dist/Keel.dmg -R o/releases\n",
+            ),
+        ]);
+        let got = ids(&ctx);
+        assert!(!got.contains(&"deploy/no-pipeline"), "{got:?}");
     }
 
     #[test]

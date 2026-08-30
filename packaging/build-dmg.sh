@@ -67,12 +67,21 @@ else
 fi
 
 # The appcast Sparkle reads. `generate_appcast` signs the image with the EdDSA key in the
-# keychain and writes appcast.xml beside it; `make release` uploads both to the GitHub release
-# the feed URL points at.
+# keychain and writes appcast.xml beside it; the release workflow uploads both to the GitHub
+# release the feed URL points at.
+#
+# A CI runner has no keychain of ours, so `KEEL_SPARKLE_KEY_FILE` points at the key on disk
+# instead. Set via `set --` rather than an array: /bin/bash on macOS is 3.2, where an empty
+# array expands badly under `set -u`.
 if [ -x packaging/sparkle/bin/generate_appcast ]; then
   echo "==> writing the appcast"
   rm -f dist/appcast.xml
-  packaging/sparkle/bin/generate_appcast \
+  if [ -n "${KEEL_SPARKLE_KEY_FILE:-}" ]; then
+    set -- --ed-key-file "$KEEL_SPARKLE_KEY_FILE"
+  else
+    set --
+  fi
+  packaging/sparkle/bin/generate_appcast "$@" \
     --download-url-prefix "https://github.com/OyadotAI/keel-releases/releases/download/v$version/" \
     -o dist/appcast.xml dist/ >/dev/null
   echo "    dist/appcast.xml"

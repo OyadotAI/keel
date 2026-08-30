@@ -1,0 +1,105 @@
+name: release
+
+# How Keel reached production before this: `make release` on one laptop, with one keychain, by one
+# person — which is to say differently every time and not at all while that person is away. The tag
+# is the trigger now. `make release` bumps the version, commits it and pushes the tag; everything
+# after that happens here, the same way twice.
+on:
+  push:
+    tags: ["v*"]
+
+# The default token only reads this repository. Publishing goes to the *public* releases repo with
+# a separate token, because Sparkle on a tester's Mac cannot authenticate to a private one.
+permissions:
+  contents: read
+
+# Two releases at once would race for the same tag in the feed. Queue instead of cancelling: a
+# half-published release is worse than a slow one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      KEEL_NOTARY_PROFILE: keel
+      KEEL_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      KEEL_SENTRY_DSN: ${{ secrets.KEEL_SENTRY_DSN }}
+      KEEL_POSTHOG_KEY: ${{ secrets.KEEL_POSTHOG_KEY }}
+      KEEL_POSTHOG_HOST: ${{ secrets.KEEL_POSTHOG_HOST }}
+      KEEL_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+      # `make sparkle-tools` fetches Sparkle's CLI with `gh`; the publish step overrides this.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Sparkle never offers an update whose version is not higher than the installed one, so a tag
+      # that disagrees with the bundle publishes something nobody is ever shown. Fail before the
+      # ninety-minute build rather than after it.
+      - name: The tag is the version in Cargo.toml
+        run: |
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="${GITHUB_REF_NAME#v}"
+          [ "$tag" = "$version" ] || { echo "tag v$tag is not Cargo.toml $version" >&2; exit 1; }
+
+      # A runner has none of your keychain. The certificate arrives as a base64 .p12 and is
+      # imported into a keychain that exists for this job only, made the default so `notarytool`
+      # and `security find-identity` both land on it, and told that codesign may use it without
+      # asking — there is nobody here to answer a prompt.
+      - name: Import the Developer ID certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/keel-signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+          security list-keychain -d user -s "$keychain" login.keychain-db
+          security default-keychain -s "$keychain"
+
+      # `notarytool store-credentials` prompts when it is missing an argument and does not when it
+      # has all three. The profile name is the one build-dmg.sh looks for.
+      - name: Store the notary credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials "$KEEL_NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+
+      # generate_appcast signs the image with the EdDSA key, and reads it from the keychain unless
+      # pointed at a file. A file is the honest form here: it lives in RUNNER_TEMP for one job.
+      - name: Write the Sparkle signing key
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
+          chmod 600 "$RUNNER_TEMP/sparkle_ed_key"
+          echo "KEEL_SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle_ed_key" >> "$GITHUB_ENV"
+
+      # The same target a person would have run, so there is one build path and not two.
+      - name: Build, sign, notarise, package
+        run: make dmg
+
+      # Both artifacts, because the feed is the appcast and the appcast points at the image.
+      - name: Publish to the update feed
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
+            -R OyadotAI/keel-releases --title "Keel ${GITHUB_REF_NAME#v}" \
+            --notes "Signed and notarised. Installed copies are offered the update." --latest \
+          || gh release upload "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
+            -R OyadotAI/keel-releases --clobber
