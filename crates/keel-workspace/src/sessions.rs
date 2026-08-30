@@ -270,6 +270,13 @@ pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn
         if text.trim().is_empty() && tools.is_empty() {
             continue;
         }
+        // Claude Code writes background-task notifications back into the transcript as user
+        // messages so the model can consume them. They are transport envelopes, not something
+        // the person typed: rendering the XML and an embedded subagent report as a giant blue
+        // chat bubble makes a resumed conversation unreadable and misattributes the content.
+        if role == "user" && text.trim_start().starts_with("<task-notification>") {
+            continue;
+        }
         turns.push(Turn {
             role,
             text: text.trim().to_string(),
@@ -515,6 +522,25 @@ mod tests {
         // Thinking is not replayed, and subagent chatter is not the user's conversation.
         assert!(!turns.iter().any(|t| t.text.contains("hmm")));
         assert!(!turns.iter().any(|t| t.text.contains("subagent")));
+    }
+
+    #[test]
+    fn transcript_hides_internal_task_notifications() {
+        let transcript = concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Working on it.\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"<task-notification>\\n<result>internal report</result>\\n</task-notification>\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}]}}\n",
+        );
+        let (_d, home) = home_with("-repo", "abc-1.jsonl", transcript);
+
+        let turns = transcript_of(&home);
+
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].text, "hello");
+        assert_eq!(turns[1].text, "Working on it.");
+        assert_eq!(turns[2].text, "Done.");
+        assert!(turns.iter().all(|turn| !turn.text.contains("task-notification")));
     }
 
     fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
