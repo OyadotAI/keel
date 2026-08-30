@@ -111,15 +111,12 @@ struct ChatRail: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 proxy.scrollTo(Self.bottom, anchor: .bottom)
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                // Within a line or two of the end counts as "at the end": demanding exactness
-                // means one stray pixel silently turns following off.
-                geometry.contentOffset.y + geometry.containerSize.height
-                    >= geometry.contentSize.height - 24
-            } action: { was, atBottom in
-                // Only on a transition. Assigning on every scroll event republishes state for the
-                // whole pane mid-gesture, which is its own source of stutter.
-                if was != atBottom { pinned = atBottom }
+            .followsTail($pinned)
+            // The end of a turn is the one update the coalescing window can swallow whole: the
+            // last delta arrives and there is no next one to correct the short scroll.
+            .onChange(of: model.running) {
+                guard pinned else { return }
+                proxy.scrollTo(Self.bottom, anchor: .bottom)
             }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
