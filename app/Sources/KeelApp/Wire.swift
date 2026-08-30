@@ -175,10 +175,12 @@ enum Wire {
         var isRepo: Bool
         var branch: String?
         var changes: [Change]
+        /// One entry for an ordinary project; two or more when the folder is a workspace.
+        var repos: [Repo] = []
 
         enum CodingKeys: String, CodingKey {
             case isRepo = "is_repo"
-            case branch, changes
+            case branch, changes, repos
         }
     }
 
@@ -187,6 +189,21 @@ enum Wire {
         var status: String
         var label: String
         var id: String { path }
+    }
+
+    /// One git repository inside the opened folder.
+    ///
+    /// A folder people open is often a workspace rather than a project — `backend/` and
+    /// `frontend/`, each its own repository — and Keel used to report that as "not a git
+    /// repository" and offer to `git init` a third one around them.
+    struct Repo: Decodable, Identifiable, Sendable {
+        /// Relative to the opened folder; empty when the folder is itself the repository.
+        var dir: String
+        var branch: String?
+        var changes: [Change]
+        var id: String { dir }
+        /// What to call it on screen.
+        var name: String { dir.isEmpty ? "project" : dir }
     }
 
     struct Branch: Decodable, Identifiable, Sendable {

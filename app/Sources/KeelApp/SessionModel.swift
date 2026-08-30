@@ -209,7 +209,10 @@ final class SessionModel: Identifiable {
     /// not be created" — `git worktree add` cannot branch from a tree with no HEAD — and Keel can
     /// simply make it one.
     var repoFix: Fix? {
-        guard !isRepo else { return nil }
+        // Never in a workspace. `git init` at a folder holding `backend/` and `frontend/` makes a
+        // third repository *around* two existing ones, which then sees them as untracked
+        // directories — the fix would be the damage.
+        guard !isRepo, !isWorkspace else { return nil }
         return Fix(label: "Initialise git") { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -540,6 +543,7 @@ final class SessionModel: Identifiable {
         if worktree == nil {
             branch = other.branch
             isRepo = other.isRepo
+            repos = other.repos
             changes = other.changes
             tree = other.tree
             files = other.files
@@ -2108,12 +2112,18 @@ final class SessionModel: Identifiable {
 
     /// Whether the project is under git at all. A new one is not, and that is not an error.
     var isRepo = true
+    /// Every repository in the opened folder. One for an ordinary project; several when the
+    /// folder is a workspace holding `backend/` and `frontend/`.
+    var repos: [Wire.Repo] = []
+    /// The folder is a workspace of repositories rather than one project.
+    var isWorkspace: Bool { repos.count > 1 || (repos.count == 1 && !repos[0].dir.isEmpty) }
 
     func refreshGit() async {
         if let s: Wire.GitStatus = try? await client.get("/api/git/status", q()) {
             isRepo = s.isRepo
             branch = s.branch
             changes = s.changes
+            repos = s.repos
         }
         commits = (try? await client.get("/api/git/log", q(["n": "20"]))) ?? []
     }

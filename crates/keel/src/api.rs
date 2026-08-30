@@ -907,7 +907,7 @@ pub async fn chat(
 // ── git ──────────────────────────────────────────────────────────────────────
 
 /// One file with uncommitted changes.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Change {
     pub path: String,
     /// Two-character porcelain code, e.g. ` M`, `??`, `A `.
@@ -921,6 +921,23 @@ pub struct Change {
 pub struct GitStatus {
     pub is_repo: bool,
     pub branch: Option<String>,
+    pub changes: Vec<Change>,
+    /// Every repository in the opened folder.
+    ///
+    /// One entry with an empty `dir` for an ordinary project, so nothing about the single-repo
+    /// case changes. Two or more when the folder is a workspace — `backend/` and `frontend/`,
+    /// each its own repository — which is the shape that used to report nothing at all.
+    #[serde(default)]
+    pub repos: Vec<RepoStatus>,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct RepoStatus {
+    /// Relative to the opened folder; empty when the folder is itself the repository.
+    pub dir: String,
+    pub branch: Option<String>,
+    /// Paths relative to the *opened folder*, not to this repository — so the changes of a
+    /// workspace can be one list, and `ChangeTree` groups them under `backend/` for free.
     pub changes: Vec<Change>,
 }
 
@@ -989,6 +1006,9 @@ pub fn git_act(
     path: &str,
     hunk: Option<usize>,
 ) -> Result<(), String> {
+    // Same as the diff: stage or discard has to happen in the repository that owns the file.
+    let (owner, inner) = crate::gitroots::resolve(root, path);
+    let (root, path) = (owner.as_path(), inner.as_str());
     if path.is_empty() {
         return Err("no file".into());
     }
@@ -1399,18 +1419,60 @@ pub fn git_uncommit(root: &Utf8Path) -> Result<(), String> {
     git_run(root, &["reset", "--soft", "HEAD~1"]).map(|_| ())
 }
 
-/// Uncommitted changes, which after an agent run is the answer to "what did it just do".
+/// Uncommitted changes across every repository in the opened folder.
+///
+/// The single-repo answer is unchanged, and `is_repo`/`branch`/`changes` still describe it, so
+/// every existing caller keeps working. A workspace of two repositories fills `repos` and merges
+/// their changes into `changes` with each path prefixed by the repository's directory.
 pub fn git_status(root: &Utf8Path) -> GitStatus {
+    let found = crate::gitroots::find(root);
+    // The opened folder is the repository: the ordinary case, and the one that must not change.
+    if matches!(found.as_slice(), [one] if one.dir.is_empty()) {
+        let mut status = git_status_in(root);
+        status.repos = vec![RepoStatus {
+            dir: String::new(),
+            branch: status.branch.clone(),
+            changes: status.changes.clone(),
+        }];
+        return status;
+    }
+    if found.is_empty() {
+        return GitStatus::default();
+    }
+
+    // A workspace. Each repository answers for itself, and its paths are rewritten to be relative
+    // to the folder the person actually opened.
+    let mut repos = Vec::new();
+    let mut all = Vec::new();
+    for root_dir in &found {
+        let mut status = git_status_in(&root.join(&root_dir.dir));
+        for change in &mut status.changes {
+            change.path = format!("{}/{}", root_dir.dir, change.path);
+        }
+        all.extend(status.changes.clone());
+        repos.push(RepoStatus {
+            dir: root_dir.dir.clone(),
+            branch: status.branch,
+            changes: status.changes,
+        });
+    }
+    GitStatus {
+        // True: this folder *is* versioned, just not at its top. Reporting false here is what put
+        // "Initialise a repository" in front of people whose repositories already existed.
+        is_repo: true,
+        branch: None,
+        changes: all,
+        repos,
+    }
+}
+
+fn git_status_in(root: &Utf8Path) -> GitStatus {
     // `-uall` rather than the default. Without it git collapses an untracked directory to a single
     // entry ending in `/` — `.github/` instead of the three files under it — which is useless in a
     // list you click to open a file, and rendered as a row with no name at all, because the
     // basename of "a/b/" is the empty string.
     let Some(raw) = git(root, &["status", "--porcelain=v1", "-z", "-uall"]) else {
-        return GitStatus {
-            is_repo: false,
-            branch: None,
-            changes: Vec::new(),
-        };
+        return GitStatus::default();
     };
 
     let branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|b| b.trim().to_string());
@@ -1437,6 +1499,7 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
         is_repo: true,
         branch,
         changes,
+        repos: Vec::new(),
     }
 }
 
@@ -1837,6 +1900,10 @@ pub struct DiffLine {
 
 /// Parse `git diff` for one path into hunks the browser can render side by side with line numbers.
 pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
+    // In a workspace the path carries the repository it came from — `backend/src/api.ts` — and git
+    // has to be run inside that repository, under the name it knows the file by.
+    let (root, path) = crate::gitroots::resolve(root, path);
+    let (root, path) = (root.as_path(), path.as_str());
     // An untracked file has no baseline; show it as entirely added rather than an empty diff.
     let untracked = git(root, &["ls-files", "--error-unmatch", path]).is_none();
 

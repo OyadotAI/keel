@@ -714,7 +714,20 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: K.S.md) {
-            if model.isRepo {
+            if model.isWorkspace {
+                // Several repositories in one folder. Each keeps its own branch, and there is no
+                // single one to name — so they are all named, which is also how you tell at a
+                // glance that this folder is a workspace rather than a project.
+                ForEach(model.repos) { repo in
+                    HStack(spacing: K.S.tight) {
+                        Image(systemName: "arrow.triangle.branch").font(K.F.tiny)
+                        Text(repo.name).font(K.F.micro).foregroundStyle(K.C.dim)
+                        Text(repo.branch ?? "—").font(K.F.codeTiny)
+                    }
+                    .foregroundStyle(K.C.faint)
+                    .help("\(repo.name) is its own git repository, on \(repo.branch ?? "no branch")")
+                }
+            } else if model.isRepo {
                 // The branch is a menu, the way every IDE's status bar treats it: click to see
                 // the others and switch, or start a new one from here.
                 item("arrow.triangle.branch", model.branch ?? "—")
