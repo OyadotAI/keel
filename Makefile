@@ -83,4 +83,16 @@ release:
 	git push -q origin main || true; \
 	echo "    released v$$next"
 
-.PHONY: app dmg sparkle-tools sparkle-keys release
+# Ten evals: the product's promises against a real agent — the daemon, the hook, `claude`, the gate.
+#
+# Not part of `make check`, because it spends real tokens — a few cents — and takes a minute. It
+# is the test the 336 unit tests could not be: `keel approve` being passed an argument it did not
+# accept is a fact about two files agreeing, and no test of either file could see it, so a build
+# that refused every Bash call shipped to people.
+#
+# Run it before `make release`. `KEEL_RECORD=<path>` also keeps the first eval's stream, which is
+# where the replay fixtures come from. Four of the ten cost nothing and run with `make check`.
+evals:
+	@KEEL_EVALS=1 cargo test -p keel --test evals -- --nocapture --test-threads=1
+
+.PHONY: app dmg sparkle-tools sparkle-keys release evals
