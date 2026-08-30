@@ -29,13 +29,17 @@ struct KeelApp: App {
         // A feature torn out of the tab strip. One window per lane id, sharing the same lanes
         // and the same daemon — two agents working where you can watch both, which is what
         // dragging a tab out of a browser does and what people expect here.
-        WindowGroup(id: "lane", for: UUID.self) { $id in
-            LaneWindow(app: app, id: id)
-                .frame(minWidth: 900, minHeight: 560)
-                .containerBackground(K.C.bg, for: .window)
+        // A feature pulled out of the strip. Its own daemon, its own project, its own tabs —
+        // two windows used to be two views of one daemon, which is why they mirrored each other.
+        WindowGroup(id: "feature", for: Detached.self) { $request in
+            if let request {
+                DetachedWindow(app: app, request: request)
+                    .frame(minWidth: 900, minHeight: 560)
+                    .containerBackground(K.C.bg, for: .window)
+            }
         }
-        // Never restored across launches: the id is a lane that no longer exists by then, and
-        // what came back was an empty window with nothing in it.
+        // Never restored across launches: the lane it names is gone by then, and what came back
+        // was an empty window with nothing in it.
         .restorationBehavior(.disabled)
         .defaultSize(width: 1180, height: 820)
         .commands {
@@ -204,11 +208,35 @@ final class AppModel {
 
     private let bonjour = Bonjour()
 
+    /// The windows that were pulled out of the strip, each with a daemon of its own.
+    private var detached: [UUID: Workspace] = [:]
+
+    /// The workspace for a torn-out window, started on first ask and kept until it closes.
+    func workspace(for request: Detached) -> Workspace {
+        if let existing = detached[request.lane] { return existing }
+        // Created synchronously so the window has something to draw; the daemon comes up under it.
+        let placeholder = Workspace(port: 0)
+        detached[request.lane] = placeholder
+        Task { @MainActor in
+            let port = await Workspace.freePort()
+            let real = Workspace(port: port)
+            detached[request.lane] = real
+            await real.start(project: request.project, resume: request.session)
+        }
+        return placeholder
+    }
+
+    func closeWorkspace(_ id: UUID) {
+        detached.removeValue(forKey: id)?.shutdown()
+    }
+
     /// Flipped once the daemon is up, so the delegate can be handed a reference to shut down.
     var ready = false
 
     func shutdown() {
         bonjour.stop()
+        for (_, w) in detached { w.shutdown() }
+        detached.removeAll()
         daemon.stop()
     }
 
@@ -276,47 +304,50 @@ extension Notification.Name {
 }
 
 
-/// A feature in a window of its own.
+/// A feature in a window of its own, with a daemon of its own.
 ///
-/// The lane is resolved once and held: the window group re-evaluates its content whenever the
-/// lanes change, and a moment where the id matched nothing — a restore, a close, a relaunch
-/// with a stale saved value — left an empty white window behind.
-private struct LaneWindow: View {
+/// Nothing is shared with the window it came from except the transcript on disk, which is what
+/// lets the conversation continue here: the workspace opens the same repository and resumes the
+/// same session. From then on the two windows are independent — different projects, different
+/// features, different agents running at once.
+private struct DetachedWindow: View {
     let app: AppModel
-    let id: UUID?
-    @State private var lane: SessionModel?
+    let request: Detached
     @Environment(\.dismissWindow) private var dismiss
 
     var body: some View {
+        let workspace = app.workspace(for: request)
         Group {
-            if let lane {
-                SessionWindow(lanes: app.lanes, pairing: app.pairing, app: app, pinned: lane)
-                    .navigationTitle(lane.title)
+            if workspace.ready {
+                SessionWindow(lanes: workspace.lanes, pairing: workspace.pairing, app: app)
+            } else if let failure = workspace.failure {
+                message("This window could not start its own Keel.", detail: failure)
             } else {
                 VStack(spacing: K.S.sm) {
-                    Image(systemName: "rectangle.on.rectangle.slash")
-                        .font(.system(size: 20)).foregroundStyle(K.C.faint)
-                    Text("That feature is not open any more.")
-                        .font(K.F.body).foregroundStyle(K.C.dim)
-                    Button("Close this window") { dismiss() }.buttonStyle(QuietButton())
+                    ProgressView().controlSize(.small)
+                    Text("Opening \(request.title) in its own window…")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
+                    Text("It gets a Keel of its own, so this window can hold a different project.")
+                        .font(K.F.micro).foregroundStyle(K.C.faint)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(K.C.bg)
             }
         }
-        .task(id: id) {
-            guard lane == nil, let id else { return }
-            // The main window may still be restoring when this opens; wait for it rather than
-            // deciding the feature is gone.
-            for _ in 0..<40 {
-                if let found = app.lanes.lanes.first(where: { $0.id == id }) {
-                    found.detached = true
-                    lane = found
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(50))
-            }
+        .navigationTitle(request.title)
+        .onDisappear { app.closeWorkspace(request.lane) }
+    }
+
+    private func message(_ text: String, detail: String) -> some View {
+        VStack(spacing: K.S.sm) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 20))
+                .foregroundStyle(K.C.warn)
+            Text(text).font(K.F.body).foregroundStyle(K.C.text)
+            Text(detail).font(K.F.micro).foregroundStyle(K.C.faint)
+                .multilineTextAlignment(.center).frame(maxWidth: 420)
+            Button("Close this window") { dismiss() }.buttonStyle(QuietButton())
         }
-        .onDisappear { lane?.detached = false }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(K.C.bg)
     }
 }

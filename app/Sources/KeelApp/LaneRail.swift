@@ -19,38 +19,32 @@ struct LaneTabs: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(lanes.lanes.filter { !$0.hidden && !$0.detached }) { lane in
+                    ForEach(lanes.lanes.filter { !$0.hidden }) { lane in
                         LaneRow(lane: lane, lanes: lanes)
                     }
                 }
                 .padding(.horizontal, K.S.xs)
             }
 
-            // A labelled button, not a bare plus: testers did not find the plus. Click for a
-            // session with its own checkout; the chevron offers one that shares the tree, which
-            // is the right shape for reading or reviewing beside an agent that edits.
-            Menu {
-                Button("New feature…") { NotificationCenter.default.post(name: .keelNewLane, object: nil) }
-                Divider()
-                Button("Straight to a feature on its own branch") { lanes.newLane(isolated: true) }
-                Button("Straight to one sharing the working tree") { lanes.newLane() }
+            // A labelled button, not a bare plus: testers did not find the plus. One button,
+            // and it opens the same dialog the menu bar and ⌘N open — it used to be a split
+            // button whose halves skipped the questions, so the two disagreed about what "new
+            // feature" meant.
+            Button {
+                NotificationCenter.default.post(name: .keelNewLane, object: nil)
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus").font(.system(size: 10, weight: .bold))
                     Text("New feature").font(K.F.small)
-                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
                 }
                 .padding(.horizontal, K.S.sm).padding(.vertical, 4)
                 .background(K.C.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: K.R.sm))
                 .contentShape(Rectangle())
-            } primaryAction: {
-                lanes.newLane(isolated: true)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .buttonStyle(.plain)
             .foregroundStyle(K.C.accent)
             .padding(.leading, K.S.xs)
-            .hint("Start another agent in its own checkout (⌘N). The chevron offers one that "
-                  + "shares the working tree instead.")
+            .hint("Start another agent — asks which project and which branch to start from (⌘N)")
 
             // The empty run of the header asks the same question when clicked: an empty tab
             // strip in a browser makes a tab, and people click it expecting that.
@@ -87,10 +81,14 @@ private struct LaneRow: View {
     @Environment(\.openWindow) private var openWindow
 
     private func detach() {
-        // The window marks it detached once it has actually resolved the lane. Setting it here
-        // meant a window that failed to open took the tab with it.
-        openWindow(id: "lane", value: lane.id)
-        Telemetry.track("lane_detached")
+        // The conversation moves: the new window resumes this session in its own Keel, and the
+        // tab leaves this one, the way a browser tab does.
+        openWindow(id: "feature", value: Detached(lane: lane.id,
+                                                  project: lane.repoPath,
+                                                  session: lane.sessionId,
+                                                  title: lane.title))
+        Telemetry.track("lane_detached", ["resumed": lane.sessionId != nil])
+        if lanes.lanes.count > 1 { lanes.close(lane) }
     }
 
     private var selected: Bool { lanes.activeID == lane.id }
