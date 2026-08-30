@@ -95,23 +95,10 @@ struct ChatRail: View {
             }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
-                    Button {
+                    JumpToLatest {
                         pinned = true
                         withAnimation(K.M.settle) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
-                    } label: {
-                        HStack(spacing: K.S.snug) {
-                            Image(systemName: "arrow.down").font(K.F.tiny.weight(.bold))
-                            Text("Jump to latest").font(K.F.micro)
-                        }
-                        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
-                        .background(K.C.raised, in: Capsule())
-                        .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-                        .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(K.C.text)
-                    .padding(.bottom, K.S.md)
                     .transition(.opacity)
                 }
             }
@@ -271,15 +258,13 @@ private struct ChatTurn: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Show this turn in the trace")
+                .hint("Show this turn in the trace")
                 if !turn.text.isEmpty {
                     CopyChip(label: "reply", copied: copied == "reply") { put(turn.text, "reply") }
-                        .opacity(hovering || copied != nil ? 1 : 0)
-                        .allowsHitTesting(hovering || copied != nil)
+                        .opacity(hovering || copied != nil ? 1 : 0.4)
                 }
                 CopyChip(label: "both", copied: copied == "both") { put("> \(turn.prompt)\n\n\(turn.text)", "both") }
-                    .opacity(hovering || copied != nil ? 1 : 0)
-                    .allowsHitTesting(hovering || copied != nil)
+                    .opacity(hovering || copied != nil ? 1 : 0.4)
                 Spacer()
             }
             .padding(.leading, K.S.xs)

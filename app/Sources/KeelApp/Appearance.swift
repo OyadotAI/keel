@@ -57,6 +57,6 @@ struct AppearanceMenu: View {
         } label: {
             Image(systemName: mode.icon)
         }
-        .help("Appearance: \(mode.title)")
+        .hint("Appearance: \(mode.title)")
     }
 }

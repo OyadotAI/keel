@@ -65,7 +65,7 @@ struct SettingsPage: View {
                     .sectionLabel()
                     .foregroundStyle(K.C.faint)
                 Spacer()
-                CloseButton(size: 10) { onClose() }
+                CloseButton(size: 10, label: "Close settings") { onClose() }
             }
             .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.sm)
 

@@ -109,19 +109,18 @@ private struct LaneRow: View {
             if let wt = checkout {
                 Image(systemName: "arrow.triangle.branch").font(K.F.tiny)
                     .foregroundStyle(wt.dirty ? K.C.accent : K.C.faint)
-                    .help(branchText(wt))
+                    .hint(branchText(wt))
             }
-            if hovering {
-                Button { newTitle = lane.title; renaming = true } label: {
-                    Image(systemName: "pencil").font(K.F.tiny)
-                        .frame(width: 16, height: 16).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).foregroundStyle(K.C.faint)
-                .hint("Rename this feature (double-click also works)")
+            Button { newTitle = lane.title; renaming = true } label: {
+                Image(systemName: "pencil").font(K.F.tiny)
+                    .frame(width: 16, height: 16).contentShape(Rectangle())
             }
-            if hovering && lanes.lanes.count > 1 && lane.worktree == nil {
-                CloseButton(size: 10) { lanes.close(lane) }
-                    .help("Close this feature")
+            .buttonStyle(.plain).foregroundStyle(K.C.faint)
+            .opacity(hovering ? 1 : 0.4)
+            .hint("Rename this feature (double-click also works)")
+            if lanes.lanes.count > 1 && lane.worktree == nil {
+                CloseButton(size: 10, label: "Close this feature") { lanes.close(lane) }
+                    .opacity(hovering ? 1 : 0.4)
             }
         }
         .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
@@ -167,9 +166,7 @@ private struct LaneRow: View {
             Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Commits everything in the feature and merges \(checkout?.branch ?? "its branch") "
-                 + "into the project. The feature's checkout is removed; the branch is deleted only "
-                 + "once it is merged.")
+            Text(Lanes.finishBlurb(branch: checkout?.branch))
         }
         .alert("Discard this feature?", isPresented: Binding(get: { discarding != nil },
                                                           set: { if !$0 { discarding = nil } })) {

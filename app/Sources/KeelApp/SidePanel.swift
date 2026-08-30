@@ -51,30 +51,6 @@ struct SidePanel: View {
         } message: {
             Text("Modified files go back to the last commit. New files go to the Trash, where they can be recovered. Ignored files such as .env are left alone. The last commit is untouched.")
         }
-        // Every sheet the panels open, anchored here on a view that is never recycled.
-        .sheet(item: $model.sheet) { which in
-            switch which {
-            case .pr:
-                PullRequest(model: model) { model.sheet = nil }
-            case .skills:
-                SkillCatalog(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState(); await model.refreshSuggestions() }
-                }
-            case .subagent:
-                NewSubagent(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .mcp:
-                AddMCP(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .setup:
-                SetupSheet(model: model) { model.sheet = nil }
-            }
-        }
     }
 
     private var count: String? {
@@ -266,7 +242,8 @@ struct ReadinessPanel: View {
                     Button { Task { await model.rescan() } } label: {
                         Image(systemName: "arrow.clockwise").font(K.F.tiny)
                     }
-                    .buttonStyle(QuietButton()).help("Scan again — re-reads the repository and re-runs every check.")
+                    .buttonStyle(QuietButton())
+                    .hint("Scan again — re-reads the repository and re-runs every check.")
                 }
             }
             if let p = model.scan?.profile {
@@ -317,7 +294,8 @@ struct ReadinessPanel: View {
                         .frame(width: 22, height: 22)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help("Keep the review as .claude/agents/contract.md (yours to correct; every turn reads it), or rewrite the agent instructions from the code.")
+                .hint("Keep the review as .claude/agents/contract.md (yours to correct; every turn reads "
+                      + "it), or rewrite the agent instructions from the code.")
             }
             Spacer()
             if let last = model.lastReview {
@@ -457,7 +435,7 @@ struct ReadinessPanel: View {
                 } action: {
                     Task { await model.ignore(id, false) }
                 }
-                .help("Bring this finding back into the report.")
+                .hint("Bring this finding back into the report.")
             }
         }
     }

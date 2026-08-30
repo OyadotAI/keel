@@ -372,7 +372,7 @@ struct Table: View {
                     .padding(K.S.xs)
             }
             .buttonStyle(.plain)
-            .help("Copy the table as Markdown")
+            .hint("Copy the table as Markdown")
         }
     }
 }

@@ -103,25 +103,12 @@ struct TurnStage: View {
             }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
-                    Button {
+                    JumpToLatest {
                         pinned = true
                         if let id = rows.last?.id {
                             withAnimation(K.M.settle) { proxy.scrollTo(id, anchor: .bottom) }
                         }
-                    } label: {
-                        HStack(spacing: K.S.snug) {
-                            Image(systemName: "arrow.down").font(K.F.tiny.weight(.bold))
-                            Text("Jump to latest").font(K.F.micro)
-                        }
-                        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
-                        .background(K.C.raised, in: Capsule())
-                        .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-                        .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(K.C.text)
-                    .padding(.bottom, K.S.md)
                 }
             }
             .onChange(of: model.focusedTurn) {

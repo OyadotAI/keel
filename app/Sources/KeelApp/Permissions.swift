@@ -42,8 +42,7 @@ struct PermissionsSettings: View {
                     Button("Trust") { setTrust(true) }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("The agent runs commands in this repository without asking. Stored in "
-                         + ".keel/permissions.json; withdrawable here or from the status bar.")
+                    Text(TrustAlert.blurb)
                 }
             } footer: {
                 Text(view?.trusted == true

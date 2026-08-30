@@ -60,7 +60,64 @@ struct Palette: View {
             Item(title: "Run the project's checks", detail: "the gate, on demand") {
                 Task { await model.runGateNow() }
             },
+            Item(title: "Terminal", detail: "full width, under both panes", shortcut: "⌘⌥T") {
+                NotificationCenter.default.post(name: .keelToggleTerminal, object: nil)
+            },
         ]
+
+        // Every panel and every stage. Nine of the ten panels and all three stages were reachable
+        // only by clicking their icon — no shortcut, no menu item, and nothing here. In a
+        // nine-icon rail that was the largest block of mouse-only surface in the app.
+        for panel in SessionWindow.Panel.allCases {
+            out.append(Item(title: panel.title, detail: "panel") {
+                NotificationCenter.default.post(name: .keelShowPanel, object: panel.rawValue)
+            })
+        }
+        for stage in SessionWindow.Stage.allCases {
+            out.append(Item(title: stage.rawValue, detail: "stage") {
+                NotificationCenter.default.post(name: .keelShowStage, object: stage.rawValue)
+            })
+        }
+
+        // Git, which had no palette route at all — every verb was a click in one panel.
+        if !model.changes.isEmpty {
+            out.append(Item(title: "Commit everything uncommitted",
+                            detail: "\(model.changes.count) file\(model.changes.count == 1 ? "" : "s")") {
+                NotificationCenter.default.post(name: .keelShowPanel, object: "git")
+            })
+        }
+        let unpushed = model.commits.filter { !$0.pushed }.count
+        if unpushed > 0 {
+            out.append(Item(title: "Push \(unpushed) commit\(unpushed == 1 ? "" : "s")",
+                            detail: "only on this Mac until you do") {
+                Task { await model.push() }
+            })
+        }
+        if model.isRepo {
+            out.append(Item(title: "Open a pull request…", detail: "gh, with your commits") {
+                model.sheet = .pr
+            })
+        }
+
+        // The lane you are in, and the ways out of it.
+        out.append(Item(title: "Previous lane", detail: "the one above", shortcut: "⌘⇧[") {
+            NotificationCenter.default.post(name: .keelNextLane, object: -1)
+        })
+        out.append(Item(title: "Review this task", detail: "the evidence, and the merge decision") {
+            NotificationCenter.default.post(name: .keelReviewTask, object: nil)
+        })
+
+        // What the panels open, so "add an MCP server" is a thing you can type rather than a thing
+        // you have to know lives behind a panel you have not opened.
+        out.append(Item(title: "Add an MCP server…", detail: "an external tool for the agent") {
+            model.sheet = .mcp
+        })
+        out.append(Item(title: "Create a subagent…", detail: "a delegate with its own context") {
+            model.sheet = .subagent
+        })
+        out.append(Item(title: "Browse skills and plugins…", detail: "for this repository") {
+            model.sheet = .skills
+        })
         if !model.notes.isEmpty {
             out.append(Item(title: "Send \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")",
                             detail: "as the next prompt") {
@@ -69,9 +126,28 @@ struct Palette: View {
             })
         }
         for (i, p) in model.pending.enumerated() {
-            out.append(Item(title: "Approve: \(p.command.isEmpty ? p.tool : p.command)",
+            let what = p.command.isEmpty ? p.tool : p.command
+            out.append(Item(title: "Approve: \(what)",
                             detail: "once, this session", shortcut: i == 0 ? "⌘⇧A" : nil) {
                 model.answer(p, allow: true, scope: "session")
+            })
+            out.append(Item(title: "Approve for this project: \(what)",
+                            detail: "a rule in .keel/permissions.json") {
+                model.answer(p, allow: true, scope: "project")
+            })
+            // Approve had three routes here and Deny had none, which is the wrong way round: the
+            // refusal is the half with consequences.
+            out.append(Item(title: "Deny: \(what)",
+                            detail: "the turn stops rather than working around it",
+                            shortcut: i == 0 ? "⌘⇧D" : nil) {
+                model.answer(p, allow: false, scope: "session")
+            })
+        }
+
+        // Past sessions, which is the whole reason the History panel exists and had no way in.
+        for session in model.sessions.prefix(20) {
+            out.append(Item(title: session.title ?? session.id, detail: "past session") {
+                Task { await model.lanes?.open(session: session.id) }
             })
         }
         // Recent projects, before files: switching project is a verb, and there are only ever a
@@ -90,6 +166,14 @@ struct Palette: View {
         // Files last: there are thousands, and they should not push the verbs off the list.
         // Not capped here — the match does the narrowing, so the four-hundred-and-first file
         // is as reachable as the first.
+        for change in model.editedThisSession {
+            out.append(Item(title: change.path, detail: "show the diff") {
+                // Stage first: switching stage clears whatever is covering it, so setting the
+                // diff before the switch would have the switch throw it straight back away.
+                NotificationCenter.default.post(name: .keelShowStage, object: "Trace")
+                model.show(diff: change.path)
+            })
+        }
         for f in model.files {
             out.append(Item(title: f, detail: "attach as context") { model.mention(f) })
         }

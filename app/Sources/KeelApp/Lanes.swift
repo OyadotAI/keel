@@ -146,6 +146,12 @@ final class Lanes {
 
     /// Merge a lane's work into the project and close it. The daemon refuses rather than
     /// guesses — a dirty project, a conflict — and the refusal is shown on the lane.
+    /// What finishing actually does, said the same way wherever it is offered.
+    static func finishBlurb(branch: String?) -> String {
+        "Commits everything in the feature and merges \(branch ?? "its branch") into the project. "
+        + "The feature's checkout is removed; the branch is deleted only once it is merged."
+    }
+
     func finish(_ lane: SessionModel, message: String) async {
         guard let name = lane.worktree else { return }
         if let blocker = lane.mergeBlocker {
