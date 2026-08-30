@@ -25,6 +25,20 @@ struct KeelApp: App {
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: true))
         .defaultSize(width: 1440, height: 900)
+
+        // A feature torn out of the tab strip. One window per lane id, sharing the same lanes
+        // and the same daemon — two agents working where you can watch both, which is what
+        // dragging a tab out of a browser does and what people expect here.
+        WindowGroup(id: "lane", for: UUID.self) { $id in
+            if let id, let lane = app.lanes.lanes.first(where: { $0.id == id }) {
+                SessionWindow(lanes: app.lanes, pairing: app.pairing, app: app, pinned: lane)
+                    .frame(minWidth: 900, minHeight: 560)
+                    .containerBackground(K.C.bg, for: .window)
+                    .navigationTitle(lane.title)
+                    .onDisappear { lane.detached = false }
+            }
+        }
+        .defaultSize(width: 1180, height: 820)
         .commands {
             // Replaced so ⌘N is a lane. Left alone, SwiftUI's New Window is a second copy of the
             // same window.
@@ -91,7 +105,7 @@ struct KeelApp: App {
             // exist, by name. Nine fixed "Lane n" entries was a menu of things that did nothing.
             CommandMenu("Lanes") {
                 ForEach(Array(app.lanes.lanes.prefix(9).enumerated()), id: \.element.id) { i, lane in
-                    Button(lane.title == "Untitled" ? "Lane \(i + 1) (empty)" : lane.title) {
+                    Button(lane.title == "Untitled" ? "Feature \(i + 1) (empty)" : lane.title) {
                         NotificationCenter.default.post(name: .keelFocusLane, object: i)
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
@@ -162,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 /// A lane, not a window: the point is seeing them together.
 private struct NewSessionCommand: View {
     var body: some View {
-        Button("New Session") {
+        Button("New Feature…") {
             NotificationCenter.default.post(name: .keelNewLane, object: nil)
         }
         .keyboardShortcut("n", modifiers: .command)
@@ -244,6 +258,7 @@ extension Notification.Name {
     static let keelFocusComposer = Notification.Name("keel.focusComposer")
     static let keelToggleMode = Notification.Name("keel.toggleMode")
     static let keelApprove = Notification.Name("keel.approve")
+    static let keelNewFeatureSheet = Notification.Name("keel.newFeatureSheet")
     static let keelNewLane = Notification.Name("keel.newLane")
     static let keelPalette = Notification.Name("keel.palette")
     static let keelSettings = Notification.Name("keel.settings")

@@ -68,7 +68,29 @@ pub struct Worktree {
 }
 
 /// Make a lane's checkout: a new branch off the project's HEAD, in its own directory.
+/// A lane's checkout, branched from `from` — the branch the person picked when they started
+/// the session, or `HEAD` when they did not. A lane off `main` while the project sits on a
+/// half-finished branch is the common case, and it used to be impossible.
+pub fn create_from(root: &Utf8Path, name: &str, from: Option<&str>) -> Result<Worktree, String> {
+    let base = from
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .unwrap_or("HEAD");
+    if base != "HEAD"
+        && !base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c))
+    {
+        return Err(format!("{base} is not a branch name"));
+    }
+    create_at(root, name, base)
+}
+
 pub fn create(root: &Utf8Path, name: &str) -> Result<Worktree, String> {
+    create_at(root, name, "HEAD")
+}
+
+fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String> {
     let path = path_of(root, name)?;
     if path.exists() {
         return Err(format!("lane {name} already exists"));
@@ -92,7 +114,7 @@ pub fn create(root: &Utf8Path, name: &str) -> Result<Worktree, String> {
             "-b",
             &branch_of(name),
             path.as_str(),
-            "HEAD",
+            base,
         ],
     )?;
     copy_included(root, &path);
@@ -277,6 +299,9 @@ fn remove(root: &Utf8Path, name: &str) -> Result<(), String> {
 #[derive(Deserialize)]
 pub struct NameBody {
     pub name: String,
+    /// The branch to start from. Absent means where the project is now.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -316,7 +341,7 @@ pub async fn api_create(
     Json(body): Json<NameBody>,
 ) -> Result<Json<Worktree>, (StatusCode, String)> {
     let root = state.repo();
-    off_thread(move || create(&root, &body.name))
+    off_thread(move || create_from(&root, &body.name, body.from.as_deref()))
         .await
         .map(Json)
 }
@@ -388,6 +413,26 @@ mod tests {
     }
 
     /// A name is one directory under `.keel/worktrees`, or it is refused.
+    #[test]
+    fn a_lane_can_branch_from_a_branch_that_is_not_where_the_project_is() {
+        let (_d, root) = repo();
+        git(&root, &["commit", "-qam", "seed"]).ok();
+        git(&root, &["checkout", "-qb", "release"]).unwrap();
+        std::fs::write(root.join("only-on-release.txt"), "x").unwrap();
+        git(&root, &["add", "-A"]).unwrap();
+        git(&root, &["commit", "-qm", "release work"]).unwrap();
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+
+        let wt = create_from(&root, "from-release", Some("release")).unwrap();
+        assert!(
+            camino::Utf8Path::new(&wt.path)
+                .join("only-on-release.txt")
+                .exists(),
+            "the lane starts where it was told to, not where the project is"
+        );
+        assert!(create_from(&root, "bad", Some("release; rm -rf /")).is_err());
+    }
+
     #[test]
     fn a_lane_name_cannot_leave_the_worktrees_directory() {
         for bad in [

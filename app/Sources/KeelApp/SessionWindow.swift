@@ -10,6 +10,8 @@ struct SessionWindow: View {
     @State var lanes: Lanes
     let pairing: PairingModel
     var app: AppModel? = nil
+    /// A torn-out window shows one lane and only that one; the main window follows the tabs.
+    var pinned: SessionModel? = nil
     @State private var panel: Panel? = .changes
     @State private var stage: Stage = .turn
     @State private var showTerminal = false
@@ -17,6 +19,7 @@ struct SessionWindow: View {
     @State private var terminalCommand: String?
     @State private var paletteOpen = false
     @State private var starting = false
+    @State private var startingFeature = false
     @State private var showSettings = false
     /// How wide the record beside the conversation is. Yours to drag; remembered.
     @AppStorage("keel.stageWidth") private var stageWidth: Double = 460
@@ -154,6 +157,13 @@ struct SessionWindow: View {
         .navigationTitle((model.repoPath as NSString).lastPathComponent.isEmpty
                          ? "Keel" : (model.repoPath as NSString).lastPathComponent)
         .navigationSubtitle(subtitle)
+        .sheet(isPresented: $startingFeature) {
+            NewFeature(model: model, lanes: lanes) { startingFeature = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .keelNewFeatureSheet)) { _ in
+            // Only the window you are in: a sheet in every window at once is a modal maze.
+            if pinned == nil { startingFeature = true }
+        }
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
@@ -687,7 +697,9 @@ struct WindowEvents: ViewModifier {
                 withAnimation(K.M.quick) { showSettings.toggle() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelNewLane)) { _ in
-                lanes.newLane(isolated: true)
+                // The two questions a feature starts with — which project, from which branch —
+                // instead of assuming the open one and wherever it is standing.
+                NotificationCenter.default.post(name: .keelNewFeatureSheet, object: nil)
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
                 starting = true

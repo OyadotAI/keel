@@ -19,7 +19,7 @@ struct LaneTabs: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(lanes.lanes.filter { !$0.hidden }) { lane in
+                    ForEach(lanes.lanes.filter { !$0.hidden && !$0.detached }) { lane in
                         LaneRow(lane: lane, lanes: lanes)
                     }
                 }
@@ -30,12 +30,14 @@ struct LaneTabs: View {
             // session with its own checkout; the chevron offers one that shares the tree, which
             // is the right shape for reading or reviewing beside an agent that edits.
             Menu {
-                Button("New session on its own branch") { lanes.newLane(isolated: true) }
-                Button("New session sharing the working tree") { lanes.newLane() }
+                Button("New feature…") { NotificationCenter.default.post(name: .keelNewLane, object: nil) }
+                Divider()
+                Button("Straight to a feature on its own branch") { lanes.newLane(isolated: true) }
+                Button("Straight to one sharing the working tree") { lanes.newLane() }
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                    Text("New session").font(K.F.small)
+                    Text("New feature").font(K.F.small)
                     Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
                 }
                 .padding(.horizontal, K.S.sm).padding(.vertical, 4)
@@ -53,14 +55,14 @@ struct LaneTabs: View {
             // The empty run of the header asks the same question when clicked: an empty tab
             // strip in a browser makes a tab, and people click it expecting that.
             Menu {
-                Text("Start a new session?")
+                Text("Start a new feature?")
                 Button("On its own branch") { lanes.newLane(isolated: true) }
                 Button("Sharing the working tree") { lanes.newLane() }
             } label: {
                 Color.clear.frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .hint("Click for a new session")
+            .hint("Click for a new feature")
             if lanes.runningCount > 0 {
                 Text("\(lanes.runningCount) running")
                     .font(K.F.mono(10)).foregroundStyle(K.C.accent)
@@ -81,6 +83,14 @@ private struct LaneRow: View {
     @State private var discarding: String?
     @State private var renaming = false
     @State private var newTitle = ""
+
+    @Environment(\.openWindow) private var openWindow
+
+    private func detach() {
+        lane.detached = true
+        openWindow(id: "lane", value: lane.id)
+        Telemetry.track("lane_detached")
+    }
 
     private var selected: Bool { lanes.activeID == lane.id }
     private var checkout: Wire.Worktree? { lanes.worktree(of: lane) }
@@ -108,47 +118,56 @@ private struct LaneRow: View {
                         .frame(width: 16, height: 16).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(K.C.faint)
-                .hint("Rename this lane (double-click also works)")
+                .hint("Rename this feature (double-click also works)")
             }
             if hovering && lanes.lanes.count > 1 && lane.worktree == nil {
                 CloseButton(size: 10) { lanes.close(lane) }
-                    .help("Close this lane")
+                    .help("Close this feature")
             }
         }
         .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
-        .alert("Rename lane", isPresented: $renaming) {
+        .alert("Rename feature", isPresented: $renaming) {
             TextField("Name", text: $newTitle)
             Button("Rename") { lane.rename(to: newTitle) }
             Button("Cancel", role: .cancel) {}
         }
+        // Dragged out of the strip and released: a window of its own, the way a browser tab
+        // works. Two agents side by side is the reason lanes exist.
+        .gesture(
+            DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                .onEnded { g in
+                    if abs(g.translation.height) > 44 { detach() }
+                }
+        )
         .contextMenu {
             Button("Rename…") { newTitle = lane.title; renaming = true }
+            Button("Open in a new window") { detach() }
             Divider()
             if lane.worktree != nil {
-                Button("Finish lane — merge into \(lanes.active.branch ?? "the project")…") {
+                Button("Finish feature — merge into \(lanes.active.branch ?? "the project")…") {
                     message = lane.title
                     finishing = true
                 }
-                Button("Discard lane…", role: .destructive) {
+                Button("Discard feature…", role: .destructive) {
                     Task {
                         // Ask the daemon first: it knows how many commits are on the branch.
                         if let why = await lanes.discard(lane, force: false) { discarding = why }
                     }
                 }
             } else {
-                Button("Close lane") { lanes.close(lane) }
+                Button("Close feature") { lanes.close(lane) }
             }
         }
-        .alert("Finish this lane", isPresented: $finishing) {
+        .alert("Finish this feature", isPresented: $finishing) {
             TextField("Commit message", text: $message)
             Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Commits everything in the lane and merges \(checkout?.branch ?? "its branch") "
-                 + "into the project. The lane's checkout is removed; the branch is deleted only "
+            Text("Commits everything in the feature and merges \(checkout?.branch ?? "its branch") "
+                 + "into the project. The feature's checkout is removed; the branch is deleted only "
                  + "once it is merged.")
         }
-        .alert("Discard this lane?", isPresented: Binding(get: { discarding != nil },
+        .alert("Discard this feature?", isPresented: Binding(get: { discarding != nil },
                                                           set: { if !$0 { discarding = nil } })) {
             Button("Discard anyway", role: .destructive) {
                 Task { _ = await lanes.discard(lane, force: true) }
