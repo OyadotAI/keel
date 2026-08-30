@@ -78,6 +78,23 @@ private struct LaneRow: View {
     @State private var renaming = false
     @State private var newTitle = ""
 
+    /// How far the tab has been dragged, while it is being dragged.
+    ///
+    /// `@GestureState` rather than `@State`: it resets itself the moment the gesture ends *or is
+    /// cancelled*, so a tab can never be left stuck in the air by a drag that went to another
+    /// window or got interrupted. That is the whole reason this is not two `@State` flags.
+    @GestureState private var drag: DragState?
+
+    struct DragState: Equatable {
+        var translation: CGSize
+        /// Past the distance at which releasing tears the tab out into its own window.
+        var willDetach: Bool
+    }
+
+    /// Vertical distance at which a drag stops being a fidget and becomes "put this in its own
+    /// window". Named because two places need to agree on it.
+    private static let tearOff: CGFloat = 44
+
     @Environment(\.openWindow) private var openWindow
 
     private func detach() {
@@ -131,10 +148,18 @@ private struct LaneRow: View {
         }
         // Dragged out of the strip and released: a window of its own, the way a browser tab
         // works. Two agents side by side is the reason lanes exist.
+        //
+        // The gesture used to be `onEnded` alone, so holding a tab and moving it did nothing at
+        // all — no lift, no movement, no sign it had been picked up — and the window that appeared
+        // on release came from nowhere. A dragged tab now behaves like every other dragged tab.
         .gesture(
             DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                .updating($drag) { g, state, _ in
+                    state = DragState(translation: g.translation,
+                                      willDetach: abs(g.translation.height) > Self.tearOff)
+                }
                 .onEnded { g in
-                    if abs(g.translation.height) > 44 { detach() }
+                    if abs(g.translation.height) > Self.tearOff { detach() }
                 }
         )
         .contextMenu {
@@ -180,11 +205,30 @@ private struct LaneRow: View {
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
         .background(
             RoundedRectangle(cornerRadius: K.R.md)
-                .fill(selected ? K.C.raised : (hovering ? K.C.chrome : .clear))
+                .fill(drag != nil ? K.C.raised
+                                  : (selected ? K.C.raised : (hovering ? K.C.chrome : .clear)))
         )
         .overlay {
-            if selected { RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line) }
+            if let drag {
+                // Accent once releasing would tear it out, so the outcome is visible before the
+                // mouse comes up rather than as a window appearing from nowhere.
+                RoundedRectangle(cornerRadius: K.R.md)
+                    .stroke(drag.willDetach ? K.C.accent : K.C.lineStrong,
+                            lineWidth: drag.willDetach ? 2 : 1)
+            } else if selected {
+                RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line)
+            }
         }
+        // Picked up: it lifts off the strip and follows the pointer. The one shadow in a window
+        // that is otherwise flat by decision, because this is the one thing that genuinely *is*
+        // above the surface — and it exists only while the tab is in the air.
+        .shadow(color: .black.opacity(drag == nil ? 0 : 0.35),
+                radius: drag == nil ? 0 : 10, y: drag == nil ? 0 : 4)
+        .scaleEffect(drag == nil ? 1 : 1.03)
+        .offset(x: drag?.translation.width ?? 0, y: drag?.translation.height ?? 0)
+        // Above its neighbours while it is in the air, or it slides underneath them.
+        .zIndex(drag == nil ? 0 : 1)
+        .animation(K.M.quick, value: drag == nil)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .asButton { lanes.activeID = lane.id }
