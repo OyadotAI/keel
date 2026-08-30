@@ -729,6 +729,25 @@ pub async fn chat(
         // leaves the build running and the turn is not actually stopped.
         command.process_group(0);
 
+        // Before the agent starts, and every time.
+        //
+        // `--bare` is never passed, because bare mode never reads the OAuth credentials a
+        // subscription depends on — and the price of that is that the *repository's* own
+        // `.claude/settings.json` loads. A hook there is a shell command that runs on the machine
+        // of whoever opens the repo, which is why the scanner rates one Critical.
+        //
+        // `keel-harness::quarantine` existed for exactly this and was wired only to the `keel
+        // trust` subcommand, which the application never runs. Opening somebody else's repository
+        // and taking one turn executed their `SessionStart` hook, with no prompt: verified by
+        // running a turn against a repo whose hook touched a file, and finding the file.
+        //
+        // Here rather than only at project-open because a hook can arrive later — a `git pull`, a
+        // branch switch, a checkout the agent itself made. It is idempotent and it moves rather
+        // than deletes: the file goes to `.keel/quarantine/` where the person can read it.
+        if let Err(e) = keel_harness::quarantine(&cwd) {
+            tracing::warn!("could not quarantine repository agent config: {e}");
+        }
+
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
