@@ -86,6 +86,9 @@ pub fn create_from(root: &Utf8Path, name: &str, from: Option<&str>) -> Result<Wo
     create_at(root, name, base)
 }
 
+/// Where the project is standing. Only the tests want this now; every caller says what to
+/// branch from.
+#[cfg(test)]
 pub fn create(root: &Utf8Path, name: &str) -> Result<Worktree, String> {
     create_at(root, name, "HEAD")
 }
