@@ -13,6 +13,17 @@ struct ApprovalCard: View {
     let pending: Wire.Pending
     let model: SessionModel
 
+    /// One rule named, the rest counted.
+    ///
+    /// Every rule was joined into the label, so a shell loop — which derives one rule per program
+    /// in it — wrapped the button onto a second line, and that button then set the height of the
+    /// whole row while the others sat centred against it. The full list is in the tooltip.
+    private var allowLabel: String {
+        guard let first = pending.rules.first else { return "Allow" }
+        let more = pending.rules.count - 1
+        return more > 0 ? "Allow \(first) +\(more)" : "Allow \(first)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             // What to do, not what is happening. "WAITING FOR YOU" in tracked amber capitals was
@@ -44,11 +55,10 @@ struct ApprovalCard: View {
                 Button("Trust this project") { model.answer(pending, allow: true, scope: "trust") }
                     .buttonStyle(FilledButton())
                     .help("Stop asking in this project. Withdrawable any time from the status bar.")
-                Button("Allow \(pending.rules.joined(separator: " "))") {
-                    model.answer(pending, allow: true, scope: "project")
-                }
-                .buttonStyle(QuietButton())
-                .help("Remembered in .keel/permissions.json for this project")
+                Button(allowLabel) { model.answer(pending, allow: true, scope: "project") }
+                    .buttonStyle(QuietButton())
+                    .help("Remembered in .keel/permissions.json for this project: "
+                          + pending.rules.joined(separator: ", "))
                 Button("Once") { model.answer(pending, allow: true, scope: "session") }
                     .buttonStyle(QuietButton())
                     .help("This conversation only, until Keel restarts")

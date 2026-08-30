@@ -134,6 +134,23 @@ const BUILTINS: &[&str] = &[
     "cd", "pushd", "popd", "export", "source", ".", "set", "umask", "alias",
 ];
 
+/// Shell keywords that open a construct whose next word is *not* a program.
+///
+/// `for f in a b c` names a variable, not a command; `done` and `fi` close a block and name
+/// nothing. A segment starting with one of these contributes no rule at all.
+///
+/// This is the same bug as the heredoc one the comment on `rules_for` describes, arriving from a
+/// different direction. A loop over ten files produced `Bash(for *)`, `Bash(do *)`, `Bash(cat *)`
+/// and `Bash(done *)`, and approving it wrote all four into the project's allowlist — where
+/// `Bash(do *)` matches nothing ever and `Bash(for *)` matches every command that starts with the
+/// word "for". An allowlist full of rules that mean nothing is an allowlist nobody can read.
+const KEYWORDS_WITH_NO_PROGRAM: &[&str] = &[
+    "for", "done", "fi", "esac", "in", "case", "select", "function", "{", "}", "[[", "]]",
+];
+
+/// Shell keywords the *next* word follows as the program: `do cat x` is a request to run `cat`.
+const KEYWORDS_BEFORE_A_PROGRAM: &[&str] = &["do", "then", "else", "elif", "if", "while", "until"];
+
 fn is_assignment(token: &str) -> bool {
     token.contains('=')
         && token
@@ -177,10 +194,10 @@ fn program_of(segment: &str) -> Option<String> {
         if name.is_empty() {
             continue;
         }
-        if WRAPPERS.contains(&name.as_str()) {
+        if WRAPPERS.contains(&name.as_str()) || KEYWORDS_BEFORE_A_PROGRAM.contains(&name.as_str()) {
             continue;
         }
-        if BUILTINS.contains(&name.as_str()) {
+        if BUILTINS.contains(&name.as_str()) || KEYWORDS_WITH_NO_PROGRAM.contains(&name.as_str()) {
             return None;
         }
         return looks_like_a_program(&name).then_some(name);
@@ -594,6 +611,56 @@ pub(crate) mod tests {
         }
     }
 
+    /// A loop is one thing to approve, not one rule per keyword in it.
+    ///
+    /// Reported from the running app: a `for f in …; do echo; cat -n; done` over ten files put
+    /// "Allow Bash(for *) Bash(do *) Bash(cat *) Bash(done *)" on a button, and approving it would
+    /// have written all four. `Bash(do *)` matches nothing ever; `Bash(for *)` matches every
+    /// command beginning with the word "for".
+    #[test]
+    fn a_shell_loop_does_not_become_a_rule_per_keyword() {
+        let input = serde_json::json!({
+            "command": "cd /tmp/x && for f in a.java b.java; do echo \"=== $f ===\"; cat -n \"$f\"; done"
+        });
+        let rules = rules_for("Bash", &input);
+        for junk in [
+            "Bash(for *)",
+            "Bash(do *)",
+            "Bash(done *)",
+            "Bash(f *)",
+            "Bash(in *)",
+        ] {
+            assert!(
+                !rules.contains(&junk.to_string()),
+                "{junk} is not a program: {rules:?}"
+            );
+        }
+        assert!(
+            rules.contains(&"Bash(cat *)".to_string()),
+            "the real command is gone: {rules:?}"
+        );
+        assert!(
+            rules.contains(&"Bash(echo *)".to_string()),
+            "the real command is gone: {rules:?}"
+        );
+    }
+
+    /// The other shapes, so the keyword lists do not swallow a real command with them.
+    #[test]
+    fn a_keyword_before_a_program_still_names_the_program() {
+        let cases = [
+            ("if make check; then echo ok; fi", "Bash(make *)"),
+            ("while read line; do wc -l; done", "Bash(wc *)"),
+        ];
+        for (command, expected) in cases {
+            let rules = rules_for("Bash", &serde_json::json!({ "command": command }));
+            assert!(
+                rules.contains(&expected.to_string()),
+                "`{command}` lost its program: {rules:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_first_turn_question_reaches_the_lane_that_provoked_it() {
         use super::*;
@@ -700,6 +767,11 @@ pub(crate) mod tests {
     /// four-minute timeout failed it open — a refusal the person never saw and never agreed to.
     #[tokio::test]
     async fn a_question_goes_to_the_window_that_asked_it() {
+        // The queue is a process-wide static and these tests run in parallel. Without this the
+        // test drains a queue another test is filling and fails about once in three runs — which
+        // is worse than no test, because the failure is about the harness and reads as the
+        // product.
+        let _guard = lock().await;
         {
             let mut q = queue().lock().expect("queue lock");
             q.clear();
