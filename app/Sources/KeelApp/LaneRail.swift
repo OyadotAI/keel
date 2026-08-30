@@ -87,7 +87,8 @@ private struct LaneRow: View {
     @Environment(\.openWindow) private var openWindow
 
     private func detach() {
-        lane.detached = true
+        // The window marks it detached once it has actually resolved the lane. Setting it here
+        // meant a window that failed to open took the tab with it.
         openWindow(id: "lane", value: lane.id)
         Telemetry.track("lane_detached")
     }

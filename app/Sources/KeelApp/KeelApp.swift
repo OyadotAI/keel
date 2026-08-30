@@ -34,6 +34,9 @@ struct KeelApp: App {
                 .frame(minWidth: 900, minHeight: 560)
                 .containerBackground(K.C.bg, for: .window)
         }
+        // Never restored across launches: the id is a lane that no longer exists by then, and
+        // what came back was an empty window with nothing in it.
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1180, height: 820)
         .commands {
             // Replaced so ⌘N is a lane. Left alone, SwiftUI's New Window is a second copy of the
@@ -291,6 +294,8 @@ private struct LaneWindow: View {
                     .navigationTitle(lane.title)
             } else {
                 VStack(spacing: K.S.sm) {
+                    Image(systemName: "rectangle.on.rectangle.slash")
+                        .font(.system(size: 20)).foregroundStyle(K.C.faint)
                     Text("That feature is not open any more.")
                         .font(K.F.body).foregroundStyle(K.C.dim)
                     Button("Close this window") { dismiss() }.buttonStyle(QuietButton())
