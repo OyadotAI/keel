@@ -3,14 +3,15 @@
 ## Shape
 
 ```
-keel                       # single binary; serves the UI on http://127.0.0.1:7777
-├── keel-scanner           # readiness checks. No network, no agent, no credentials.
-├── keel-harness           # spawns and supervises `claude -p`; trust quarantine
-├── keel-mcp               # Keel's tool surface, served over loopback
-├── keel-providers         # github / cloudflare
-├── keel-generator         # golden-path templates and workload placement
-├── keel-workspace         # reads Claude Code's own state; read-only
-└── ui                     # React + Vite, embedded in the binary
+Keel.app                    # native SwiftUI task browser
+├── app/Sources/KeelApp     # task, evidence, review and terminal UI
+└── keel                    # local Rust daemon on 127.0.0.1
+    ├── keel-scanner        # readiness checks; no network or credentials
+    ├── keel-harness        # agent invocation and trust quarantine
+    ├── keel-mcp            # typed tool surface over loopback
+    ├── keel-providers      # GitHub and Cloudflare integrations
+    ├── keel-generator      # golden-path templates and workload placement
+    └── keel-workspace      # reads Claude Code state; read-only
 ```
 
 ## Why a local binary
@@ -24,8 +25,8 @@ Three reasons, in order of importance:
    zero, so Keel carries neither the inference COGS nor the idle infrastructure bill that have made
    this category financially brutal for hosted competitors.
 
-Rejected: forking VS Code (Cursor and Windsurf carry that cost because the editor *is* their
-product) and Electron.
+Rejected: forking VS Code and Electron. Keel is a native macOS application and deliberately leaves
+direct file editing to the engineer's existing editor.
 
 ## Why drive the CLI rather than embed an SDK
 

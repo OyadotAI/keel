@@ -22,6 +22,7 @@ mod pair;
 mod path;
 mod permissions;
 mod plugins;
+mod policy;
 mod pr;
 mod prefs;
 mod project;

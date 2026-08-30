@@ -15,6 +15,7 @@ struct NewFeature: View {
     @State private var folder: String = ""
     @State private var branch: String = ""
     @State private var isolated = true
+    @State private var provider: SessionModel.Provider = .claude
     @State private var busy = false
 
     private var branches: [String] { (model.branches?.local ?? []).map(\.name) }
@@ -50,7 +51,9 @@ struct NewFeature: View {
                 VStack(alignment: .leading, spacing: K.S.xs) {
                     Picker("", selection: $isolated) {
                         Text("Its own branch and checkout").tag(true)
-                        Text("Share the project's working tree").tag(false)
+                        if !model.policyRequiresIsolation {
+                            Text("Share the project's working tree").tag(false)
+                        }
                     }
                     .pickerStyle(.radioGroup).labelsHidden()
                     Text(isolated
@@ -59,6 +62,18 @@ struct NewFeature: View {
                         .font(K.F.micro).foregroundStyle(K.C.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            field("Agent") {
+                Picker("", selection: $provider) {
+                    ForEach(SessionModel.Provider.allCases.filter {
+                        model.allowedProviders.contains($0.queryValue)
+                    }, id: \.self) { provider in
+                        Text(provider.rawValue).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
 
             if isolated, !branches.isEmpty, folder.isEmpty {
@@ -79,7 +94,9 @@ struct NewFeature: View {
                 Button("Cancel") { done() }.buttonStyle(QuietButton())
                 Button(busy ? "Starting…" : "Start") { start() }
                     .buttonStyle(FilledButton())
-                    .disabled(busy)
+                    .disabled(busy || !SessionModel.Provider.allCases.contains {
+                        model.allowedProviders.contains($0.queryValue)
+                    })
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -107,7 +124,8 @@ struct NewFeature: View {
     private func start() {
         busy = true
         let base = branch
-        let wantsIsolation = isolated
+        let wantsIsolation = model.policyRequiresIsolation ? true : isolated
+        let selectedProvider = provider
         let move = folder.isEmpty || folder == model.repoPath ? nil : folder
         done()
         Task {
@@ -118,6 +136,7 @@ struct NewFeature: View {
             }
             let lane = lanes.newLane(isolated: wantsIsolation)
             lane.baseBranch = base.isEmpty ? nil : base
+            lane.provider = selectedProvider
         }
     }
 }

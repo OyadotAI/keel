@@ -7,16 +7,15 @@
 //! twenty seconds while it pushes is a button people press twice.
 
 use axum::{
-    extract::{Query, State},
+    extract::Query,
     response::sse::{Event, Sse},
 };
 use serde::Deserialize;
 use std::convert::Infallible;
-use std::sync::Arc;
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::serve::AppState;
+use crate::serve::Checkout;
 
 #[derive(Deserialize)]
 pub struct PrQuery {
@@ -43,11 +42,9 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
 }
 
 pub async fn create(
-    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
     Query(q): Query<PrQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    let repo = state.repo();
-
     if !repo.join(".git").exists() {
         return refuse("This is not a git repository. Initialise one from Changes first.");
     }

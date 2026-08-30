@@ -109,6 +109,7 @@ final class Turn: Identifiable {
         var tool: String
         /// The one-line subject: a command, a path, a pattern — whatever the tool was actually about.
         var subject: String
+        var reason: String?
         var output: String = ""
         var failed = false
         var running = true
@@ -143,7 +144,8 @@ final class Turn: Identifiable {
             .compactMap { input[$0]?.stringValue }
             .first ?? ""
         let oneLine = subject.split(separator: "\n").first.map(String.init) ?? ""
-        let call = Call(id: id, tool: tool, subject: String(oneLine.prefix(160)))
+        let reason = input["description"]?.stringValue
+        let call = Call(id: id, tool: tool, subject: String(oneLine.prefix(160)), reason: reason)
         if let parent, let pi = callIndex[parent] {
             parentOf[id] = parent
             calls[pi].children.append(call)

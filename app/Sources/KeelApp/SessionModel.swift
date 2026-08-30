@@ -264,7 +264,25 @@ final class SessionModel: Identifiable {
 
     /// Identity within the window. Distinct from `sessionId`, which is Claude Code's and does not
     /// exist until the first turn has started.
-    let id = UUID()
+    let id: UUID
+
+    enum Provider: String, Codable, CaseIterable {
+        case claude = "Claude Code"
+        case codex = "Codex"
+
+        var queryValue: String {
+            switch self {
+            case .claude: "claude"
+            case .codex: "codex"
+            }
+        }
+    }
+
+    var provider: Provider = .claude
+    var scopeFileLimit = 8
+    var policySources: [String] = []
+    var allowedProviders: Set<String> = ["claude", "codex"]
+    var policyRequiresIsolation = true
 
     /// What this lane is doing, for the rail.
     enum Activity: Equatable {
@@ -311,13 +329,41 @@ final class SessionModel: Identifiable {
         missingSuggestions = other.missingSuggestions
         tools = other.tools
         projectOpenKnown = other.projectOpenKnown
+        scopeFileLimit = other.scopeFileLimit
+        policySources = other.policySources
+        allowedProviders = other.allowedProviders
+        policyRequiresIsolation = other.policyRequiresIsolation
     }
 
-    init(client: Client, port: UInt16 = 7777, sessionId: String? = nil) {
+    init(client: Client, port: UInt16 = 7777, sessionId: String? = nil, id: UUID = UUID()) {
         self.client = client
         self.port = port
         self.sessionId = sessionId
+        self.id = id
     }
+
+    var mergeBlocker: String? {
+        if running { return "The agent is still working." }
+        if !pending.isEmpty { return "The agent is waiting for a decision." }
+        if isolated && worktree == nil { return "The isolated checkout is unavailable." }
+        let work = turns.filter { $0.didWork && !$0.replayed }
+        if work.isEmpty { return "This task has no recorded implementation work." }
+        if editedThisSession.count > scopeFileLimit {
+            return "Scope exceeded the approved \(scopeFileLimit)-file budget. Split or explicitly reduce the task before merging."
+        }
+        for turn in work {
+            switch turn.gate {
+            case .passed: continue
+            case .failed: return "A project quality gate failed."
+            case .none(let reason): return "Quality could not be verified: \(reason)"
+            case .running: return "The project quality gate is still running."
+            case .notRun: return "A project quality gate has not run."
+            }
+        }
+        return nil
+    }
+
+    var readyToMerge: Bool { mergeBlocker == nil }
 
     var current: Turn? { turns.last }
 
@@ -435,6 +481,11 @@ final class SessionModel: Identifiable {
     }
 
     private func start(_ text: String) {
+        guard allowedProviders.contains(provider.queryValue) else {
+            lastError = "\(provider.rawValue) is not allowed by the active team policy."
+            return
+        }
+        if mode != "plan", policyRequiresIsolation { isolated = true }
         // The first ask names the lane. Later ones do not: renaming a lane mid-conversation would
         // lose the thing you were using to tell it apart.
         if turns.isEmpty {
@@ -462,12 +513,16 @@ final class SessionModel: Identifiable {
         watchApprovals(true)
 
         streamTask = Task { [client] in
-            // An isolated lane gets its checkout now, named for what it is about to do. If the
-            // repository cannot branch — no commits yet — the lane says so and shares the tree.
-            if isolated, worktree == nil {
-                await makeWorktree()
+            // An isolated task gets its checkout before the provider starts. Failure stops the
+            // task; silently sharing the project tree would break the task's safety contract.
+            if isolated, worktree == nil, !(await makeWorktree()) {
+                turn.finished = true
+                running = false
+                watchApprovals(false)
+                return
             }
-            var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString])
+            var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString,
+                            "provider": provider.queryValue])
             if !claudeModel.isEmpty { query["model"] = claudeModel }
             if let sessionId { query["session"] = sessionId }
             if let system = nextSystem { query["system"] = system; nextSystem = nil }
@@ -534,7 +589,8 @@ final class SessionModel: Identifiable {
     var baseBranch: String?
 
     /// Create this lane's checkout, named from its title.
-    func makeWorktree() async {
+    @discardableResult
+    func makeWorktree() async -> Bool {
         let name = Self.slug(title) + "-" + String(UUID().uuidString.prefix(3)).lowercased()
         do {
             let made: Wire.Worktree = try await client.post("/api/worktree/create",
@@ -543,9 +599,11 @@ final class SessionModel: Identifiable {
             await refreshGit()
             await refreshTree()
             await lanes?.refreshWorktrees()
+            return true
         } catch {
-            isolated = false
-            lastError = "This feature shares the project's working tree: " + error.localizedDescription
+            lastError = "Keel stopped before making changes because the isolated checkout could not be created: "
+                + error.localizedDescription
+            return false
         }
     }
 
@@ -624,6 +682,7 @@ final class SessionModel: Identifiable {
     }
 
     func record(_ data: Data, into turn: Turn) {
+        if provider == .codex, recordCodex(data, into: turn) { return }
         guard let r = try? JSONDecoder().decode(Record.self, from: data) else { return }
 
         switch r.type {
@@ -701,6 +760,78 @@ final class SessionModel: Identifiable {
 
         default:
             break
+        }
+    }
+
+    private func recordCodex(_ data: Data, into turn: Turn) -> Bool {
+        guard let event = try? JSONDecoder().decode(CodexRecord.self, from: data) else { return false }
+        switch event.type {
+        case "thread.started":
+            sessionId = event.thread_id ?? sessionId
+        case "item.started", "item.updated", "item.completed":
+            guard let item = event.item else { return true }
+            switch item.type {
+            case "command_execution":
+                if event.type == "item.started" {
+                    turn.begin(call: item.id, tool: "Bash",
+                               input: ["command": .string(item.command ?? ""),
+                                       "description": .string("Command selected by Codex")])
+                } else if event.type == "item.completed" {
+                    turn.finish(call: item.id, output: item.aggregated_output ?? "",
+                                failed: item.status == "failed" || (item.exit_code ?? 0) != 0)
+                }
+            case "file_change":
+                for change in item.changes ?? [] { turn.noteEdit(change.path) }
+            case "agent_message":
+                if let text = item.text, !text.isEmpty {
+                    if !turn.text.isEmpty { turn.text += "\n\n" }
+                    turn.text += text
+                }
+            case "reasoning":
+                if let text = item.text { turn.thinking += text }
+            case "error":
+                lastError = item.message
+            default: break
+            }
+        case "turn.completed":
+            if let usage = event.usage {
+                turn.tokens = Turn.Tokens(input: usage.input_tokens ?? 0,
+                                          output: usage.output_tokens ?? 0,
+                                          cacheRead: usage.cached_input_tokens ?? 0,
+                                          cacheWrite: 0)
+            }
+        case "turn.failed", "error":
+            lastError = event.error?.message ?? event.message ?? "Codex turn failed"
+        default: break
+        }
+        return true
+    }
+
+    struct CodexRecord: Decodable {
+        var type: String
+        var thread_id: String?
+        var item: Item?
+        var usage: Usage?
+        var error: ErrorBody?
+        var message: String?
+
+        struct Usage: Decodable {
+            var input_tokens: Int?
+            var cached_input_tokens: Int?
+            var output_tokens: Int?
+        }
+        struct ErrorBody: Decodable { var message: String? }
+        struct Change: Decodable { var path: String? }
+        struct Item: Decodable {
+            var id: String
+            var type: String
+            var command: String?
+            var aggregated_output: String?
+            var exit_code: Int?
+            var status: String?
+            var text: String?
+            var message: String?
+            var changes: [Change]?
         }
     }
 
@@ -1165,6 +1296,12 @@ final class SessionModel: Identifiable {
         findings = s.scan.findings
         scan = s.scan
         workspace = s.workspace
+        if let policy = s.policy {
+            scopeFileLimit = policy.maxFiles
+            policySources = policy.sources
+            allowedProviders = Set(policy.allowedProviders)
+            policyRequiresIsolation = policy.requireIsolation
+        }
         // The recommendations depend on what is installed, and every path that changes that —
         // install, uninstall, disable, the catalog closing — comes through here. One place,
         // so the badge cannot go stale from a caller that forgot.

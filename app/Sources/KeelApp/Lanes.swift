@@ -44,6 +44,9 @@ final class Lanes {
         /// Optional at the top level too, so the file written before lanes had checkouts still
         /// decodes.
         var worktrees: [String?]?
+        var tasks: [UUID]?
+        var titles: [String]?
+        var providers: [SessionModel.Provider]?
     }
 
     /// Save the Claude Code session ids of every lane that has one.
@@ -57,7 +60,8 @@ final class Lanes {
         let activeIndex = lanes.firstIndex { $0.id == activeID }
             .map { i in lanes[..<i].count { $0.sessionId != nil } } ?? 0
         let saved = Saved(sessions: ids, active: min(activeIndex, max(ids.count - 1, 0)),
-                          worktrees: with.map(\.worktree))
+                          worktrees: with.map(\.worktree), tasks: with.map(\.id),
+                          titles: with.map(\.title), providers: with.map(\.provider))
         if let data = try? JSONEncoder().encode(saved) {
             UserDefaults.standard.set(data, forKey: Self.key(repo))
         }
@@ -81,18 +85,23 @@ final class Lanes {
         // checkout keeps its sessions there, so for those the checkout still existing is the test.
         let known = Set(lanes.first?.sessions.map(\.id) ?? [])
         let pairs = zip(saved.sessions, saved.worktrees ?? Array(repeating: nil, count: saved.sessions.count))
-        let live = pairs.filter { id, wt in
+        let live = pairs.enumerated().filter { _, pair in
+            let (id, wt) = pair
             if let wt { return checkouts.contains(wt) }
             return known.isEmpty || known.contains(id)
         }
         guard !live.isEmpty else { return }
 
         var restored: [SessionModel] = []
-        for (id, wt) in live {
-            let m = SessionModel(client: client, port: port, sessionId: id)
+        for (index, pair) in live {
+            let (id, wt) = pair
+            let taskID = saved.tasks.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? UUID()
+            let m = SessionModel(client: client, port: port, sessionId: id, id: taskID)
             m.lanes = self
             m.worktree = wt
             m.isolated = wt != nil
+            m.title = saved.titles.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? m.title
+            m.provider = saved.providers.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? .claude
             if let a = lanes.first { m.adopt(project: a) }
             restored.append(m)
             await m.open(session: id)
@@ -139,6 +148,10 @@ final class Lanes {
     /// guesses — a dirty project, a conflict — and the refusal is shown on the lane.
     func finish(_ lane: SessionModel, message: String) async {
         guard let name = lane.worktree else { return }
+        if let blocker = lane.mergeBlocker {
+            lane.lastError = blocker
+            return
+        }
         do {
             _ = try await client.post("/api/worktree/finish",
                                       body: FinishBody(name: name, message: message), as: Bool.self)

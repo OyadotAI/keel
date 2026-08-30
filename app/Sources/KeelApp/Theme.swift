@@ -26,7 +26,9 @@ enum K {
         /// The window's own ground.
         static let bg = pair(0xFBFBFA, 0x131417)
         /// A pane on the ground: rails, sidebars, the status bar.
-        static let surface = pair(0xF4F4F2, 0x181A1E)
+        static let surface = pair(0xF3F4F6, 0x191B20)
+        /// Navigation selection and persistent controls.
+        static let chrome = pair(0xE9EBEF, 0x22252B)
         /// A card on a pane: a diff, an approval, a picked element.
         static let raised = pair(0xFFFFFF, 0x1E2126)
         /// Inputs and wells — recessed rather than raised.
@@ -54,7 +56,7 @@ enum K {
 
         /// Every token, for the test that checks contrast and that both appearances differ.
         static let all: [(String, Color)] = [
-            ("bg", bg), ("surface", surface), ("raised", raised), ("well", well),
+            ("bg", bg), ("surface", surface), ("chrome", chrome), ("raised", raised), ("well", well),
             ("line", line), ("lineStrong", lineStrong),
             ("text", text), ("dim", dim), ("faint", faint),
             ("accent", accent), ("add", add), ("del", del), ("warn", warn),
@@ -96,19 +98,19 @@ enum K {
         static let floor: CGFloat = 10
         /// Every named size, for the test.
         static let sizes: [(String, CGFloat)] = [
-            ("micro", 11), ("small", 11.5), ("body", 12.5), ("title", 15), ("display", 22),
-            ("code", 11.5), ("codeSmall", 11),
+            ("micro", 11), ("small", 12), ("body", 13), ("title", 16), ("display", 24),
+            ("code", 12), ("codeSmall", 11),
         ]
         /// 11.5 · secondary rows
-        static let small = ui(11.5)
+        static let small = ui(12)
         /// 12.5 · body, the default
-        static let body = ui(12.5)
+        static let body = ui(13)
         /// 15 · a section that has to be found
-        static let title = ui(15, .semibold)
+        static let title = ui(16, .semibold)
         /// 22 · the one heading on a screen
-        static let display = ui(22, .semibold)
+        static let display = ui(24, .semibold)
 
-        static let code = mono(11.5)
+        static let code = mono(12)
         static let codeSmall = mono(11)
     }
 
@@ -168,6 +170,46 @@ struct RailHeader: View {
         .padding(.horizontal, K.S.md)
         .padding(.top, K.S.md)
         .padding(.bottom, K.S.xs)
+    }
+}
+
+/// The heading rhythm used by primary content surfaces.
+struct ContentHeading: View {
+    let title: String
+    var detail: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            Text(title).font(K.F.title).foregroundStyle(K.C.text)
+            if let detail {
+                Text(detail).font(K.F.small).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A content section with one consistent title, inset and separator treatment.
+struct ContentSection<Content: View>: View {
+    let title: String
+    var detail: String? = nil
+    @ViewBuilder let content: Content
+
+    init(_ title: String, detail: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.detail = detail
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            ContentHeading(title: title, detail: detail)
+            content
+        }
+        .padding(.vertical, K.S.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) { Hairline() }
     }
 }
 

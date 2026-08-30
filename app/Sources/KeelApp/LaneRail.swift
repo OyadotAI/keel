@@ -23,7 +23,7 @@ struct LaneTabs: View {
                         LaneRow(lane: lane, lanes: lanes)
                     }
                 }
-                .padding(.horizontal, K.S.xs)
+                .padding(.horizontal, K.S.sm)
             }
 
             // A labelled button, not a bare plus: testers did not find the plus. One button,
@@ -63,7 +63,7 @@ struct LaneTabs: View {
                     .padding(.trailing, K.S.md)
             }
         }
-        .frame(height: 36)
+        .frame(height: 42)
         .background(K.C.surface)
     }
 }
@@ -143,10 +143,15 @@ private struct LaneRow: View {
             Button("Open in a new window") { detach() }
             Divider()
             if lane.worktree != nil {
-                Button("Finish feature — merge into \(lanes.active.branch ?? "the project")…") {
+                Button("Review task before merge…") {
+                    lanes.activeID = lane.id
+                    NotificationCenter.default.post(name: .keelReviewTask, object: nil)
+                }
+                Button("Finish task — merge into \(lanes.active.branch ?? "the project")…") {
                     message = lane.title
                     finishing = true
                 }
+                .disabled(!lane.readyToMerge)
                 Button("Discard feature…", role: .destructive) {
                     Task {
                         // Ask the daemon first: it knows how many commits are on the branch.
@@ -157,7 +162,7 @@ private struct LaneRow: View {
                 Button("Close feature") { lanes.close(lane) }
             }
         }
-        .alert("Finish this feature", isPresented: $finishing) {
+        .alert("Finish this task", isPresented: $finishing) {
             TextField("Commit message", text: $message)
             Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
             Button("Cancel", role: .cancel) {}
@@ -175,13 +180,13 @@ private struct LaneRow: View {
         } message: {
             Text(discarding ?? "")
         }
-        .padding(.horizontal, K.S.md).padding(.vertical, 5)
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
         .background(
-            RoundedRectangle(cornerRadius: K.R.sm)
-                .fill(selected ? K.C.bg : (hovering ? K.C.text.opacity(0.05) : .clear))
+            RoundedRectangle(cornerRadius: K.R.md)
+                .fill(selected ? K.C.raised : (hovering ? K.C.chrome : .clear))
         )
-        .overlay(alignment: .bottom) {
-            if selected { Rectangle().fill(K.C.accent).frame(height: 2).padding(.horizontal, K.S.xs) }
+        .overlay {
+            if selected { RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line) }
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

@@ -146,6 +146,7 @@ struct StateResponse {
     onboarded: bool,
     scan: keel_scanner::Report,
     workspace: keel_workspace::Workspace,
+    policy: crate::policy::Policy,
 }
 
 pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()> {
@@ -837,6 +838,7 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
             onboarded: prefs.onboarded,
             scan: keel_scanner::Report::new(Vec::new()),
             workspace: keel_workspace::Workspace::default(),
+            policy: crate::policy::Policy::default(),
         });
     }
 
@@ -877,5 +879,6 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         onboarded: prefs.onboarded,
         scan,
         workspace,
+        policy: crate::policy::Policy::load(&repo),
     })
 }

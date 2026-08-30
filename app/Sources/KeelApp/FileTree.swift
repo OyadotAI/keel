@@ -25,8 +25,20 @@ struct FileTree: View {
             .padding(.bottom, K.S.xs)
 
             if filter.isEmpty {
-                ForEach(model.tree) { node in
-                    TreeRow(node: node, depth: 0, model: model)
+                if model.tree.isEmpty {
+                    VStack(alignment: .leading, spacing: K.S.xs) {
+                        Label("No repository files", systemImage: "folder")
+                            .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                        Text("Files appear after the project tree finishes loading. Generated and ignored directories stay hidden.")
+                            .font(K.F.micro).foregroundStyle(K.C.dim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(K.S.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(model.tree) { node in
+                        TreeRow(node: node, depth: 0, model: model)
+                    }
                 }
             } else {
                 // Filtering flattens: a match three folders down is not easier to find because
