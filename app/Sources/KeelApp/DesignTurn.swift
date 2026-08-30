@@ -15,8 +15,14 @@ enum DesignCheck {
         case changed
         /// The after image is identical to the before: whatever was edited, it was not this.
         case nothingChanged
-        /// The page was still moving, so a comparison would be meaningless either way.
-        case unstable
+        /// No comparison was made, and this is why.
+        ///
+        /// It used to be one case called `unstable`, rendered as "the page was still moving" —
+        /// which nothing measured and which was almost never the truth. Closing the Designer tab
+        /// produced it, so did an element scrolled out of view, so did an element the turn deleted,
+        /// and all three read as if the page were mid-animation. A verdict that cannot say why it
+        /// abstained is not a verdict.
+        case notCompared(String)
     }
 
     /// Compare two snapshots of the same rect.
@@ -26,7 +32,9 @@ enum DesignCheck {
     /// swallowing a one-pixel change someone did ask for.
     static func compare(before: NSImage?, after: NSImage?) -> Verdict {
         guard let before, let after,
-              let b = png(before), let a = png(after) else { return .unstable }
+              let b = png(before), let a = png(after) else {
+            return .notCompared("there was nothing to compare")
+        }
         return b == a ? .nothingChanged : .changed
     }
 

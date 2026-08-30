@@ -6,23 +6,26 @@ struct DesignStrip: View {
     let design: Turn.Design
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            if !design.selector.isEmpty {
-                HStack(spacing: K.S.sm) {
-                    verdictLabel
-                    Text(design.selector)
-                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
-                        .lineLimit(1).truncationMode(.head)
-                    Spacer()
-                }
-
-                HStack(alignment: .top, spacing: K.S.md) {
-                    shot("before", design.before)
-                    Image(systemName: "arrow.right")
-                        .font(K.F.tiny).foregroundStyle(K.C.faint)
-                        .padding(.top, K.S.xl)
-                    shot("after", design.after)
-                    Spacer()
+        VStack(alignment: .leading, spacing: K.S.md) {
+            // One row per pin. Several pins used to capture several before-images and compare
+            // exactly one of them, which read as a verdict about all of them.
+            ForEach(design.pins) { pin in
+                VStack(alignment: .leading, spacing: K.S.sm) {
+                    HStack(spacing: K.S.sm) {
+                        verdictLabel(pin.verdict)
+                        Text(pin.selector)
+                            .font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                            .lineLimit(1).truncationMode(.head)
+                        Spacer()
+                    }
+                    HStack(alignment: .top, spacing: K.S.md) {
+                        shot("before", pin.before)
+                        Image(systemName: "arrow.right")
+                            .font(K.F.tiny).foregroundStyle(K.C.faint)
+                            .padding(.top, K.S.xl)
+                        shot("after", pin.after)
+                        Spacer()
+                    }
                 }
             }
 
@@ -74,8 +77,8 @@ struct DesignStrip: View {
     }
 
     @ViewBuilder
-    private var verdictLabel: some View {
-        switch design.verdict {
+    private func verdictLabel(_ verdict: DesignCheck.Verdict) -> some View {
+        switch verdict {
         case .changed:
             Pill(text: "PIXELS CHANGED", tone: .good)
         case .nothingChanged:
@@ -85,10 +88,13 @@ struct DesignStrip: View {
                 Text("the edit probably went to the wrong file")
                     .font(K.F.micro).foregroundStyle(K.C.warn)
             }
-        case .unstable:
+        case .notCompared(let why):
+            // The reason, not a guess at one. "The page was still moving" was printed for a
+            // closed pane, a scrolled-away element and a deleted one alike.
             HStack(spacing: K.S.snug) {
                 Pill(text: "NOT COMPARED", tone: .neutral)
-                Text("the page was still moving").font(K.F.micro).foregroundStyle(K.C.faint)
+                Text(why).font(K.F.micro).foregroundStyle(K.C.faint)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -141,11 +147,17 @@ private struct PinRow: View {
     let index: Int
     let pin: SessionModel.Pin
     @State private var showHints = false
+    @State private var showProps = false
 
     private var note: Binding<String> {
         Binding(get: { model.pins.first { $0.id == pin.id }?.note ?? "" },
                 set: { v in if let i = model.pins.firstIndex(where: { $0.id == pin.id }) { model.pins[i].note = v } })
     }
+
+    /// The properties worth reading at a glance, in the order a designer asks about them.
+    private static let order = ["font-size", "font-weight", "line-height", "letter-spacing",
+        "color", "background-color", "padding", "margin", "gap", "border", "border-radius",
+        "display", "flex-direction", "justify-content", "align-items", "opacity", "box-shadow"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
@@ -157,14 +169,69 @@ private struct PinRow: View {
                     .font(K.F.codeTiny).foregroundStyle(K.C.dim)
                     .lineLimit(1).truncationMode(.tail)
                 Spacer()
+                if !pin.picked.style.isEmpty {
+                    Button(showProps ? "hide style" : "style") { showProps.toggle() }
+                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.faint)
+                }
                 if !pin.picked.hints.isEmpty {
                     Button(showHints ? "hide source" : "source") { showHints.toggle() }
                         .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.faint)
                 }
                 CloseButton(size: 10, label: "Remove pin \(index + 1)") { model.removePin(pin.id) }
             }
-            TextField("What should change here?", text: note)
+
+            // What the selection *is* — size, type, colour. It was collected for the agent and
+            // never shown to the person deciding what to ask for.
+            HStack(spacing: K.S.xs) {
+                Text(pin.picked.summary)
+                    .font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    .lineLimit(1).truncationMode(.tail)
+                if pin.picked.unique == false {
+                    Text("matches several")
+                        .font(K.F.micro).foregroundStyle(K.C.warn)
+                        .hint("This selector is not unique, so the after-photo may be of a "
+                              + "different element with the same shape.")
+                }
+            }
+
+            // What was dragged, in the words it will be asked for.
+            ForEach(Array(pin.nudges.enumerated()), id: \.offset) { i, n in
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "hand.draw").font(K.F.micro).foregroundStyle(K.C.accent)
+                    Text(n).font(K.F.codeTiny).foregroundStyle(K.C.text)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    CloseButton(size: 9, label: "Undo this change") {
+                        if let p = model.pins.firstIndex(where: { $0.id == pin.id }) {
+                            model.pins[p].nudges.remove(at: i)
+                        }
+                    }
+                }
+            }
+
+            TextField(pin.nudges.isEmpty ? "What should change here?" : "Anything else?", text: note)
                 .field().font(K.F.small)
+
+            if showProps {
+                let props = Self.order.compactMap { key in
+                    pin.picked.style[key].map { (key, $0) }
+                }
+                ForEach(props, id: \.0) { key, value in
+                    HStack(spacing: K.S.sm) {
+                        Text(key).font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                            .frame(width: 108, alignment: .leading)
+                        if key.hasSuffix("color") {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(css: value) ?? .clear)
+                                .frame(width: 10, height: 10)
+                                .overlay(RoundedRectangle(cornerRadius: 2).stroke(K.C.line, lineWidth: 1))
+                        }
+                        Text(value).font(K.F.codeTiny).foregroundStyle(K.C.dim)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                }
+            }
+
             if showHints {
                 // Ranked, and on screen before the agent runs. A silent guess at the wrong file
                 // is the failure this whole feature exists to catch.
@@ -184,5 +251,15 @@ private struct PinRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.accent.opacity(0.3), lineWidth: 1))
+    }
+}
+
+extension Color {
+    /// A CSS colour as the page computed it — always `rgb()` or `rgba()` from `getComputedStyle`.
+    init?(css: String) {
+        let n = css.split(whereSeparator: { !$0.isNumber && $0 != "." }).compactMap { Double($0) }
+        guard n.count >= 3 else { return nil }
+        self.init(.sRGB, red: n[0] / 255, green: n[1] / 255, blue: n[2] / 255,
+                  opacity: n.count > 3 ? n[3] : 1)
     }
 }

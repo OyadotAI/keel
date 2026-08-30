@@ -11,7 +11,12 @@ struct Picked: Decodable {
     var style: [String: String]
     var hints: [Hint]
     var rect: Rect
-    var dpr: Double
+    /// Whether the selector resolves to this element and nothing else. Optional because a page
+    /// running an older injected script does not say — and a missing answer is not a "no".
+    var unique: Bool?
+    /// The element is a custom element with a shadow root, or lives inside one. Said out loud
+    /// rather than quietly describing the host as if it were what was clicked.
+    var shadow: Bool?
 
     struct Hint: Decodable, Identifiable, Equatable {
         /// `attribute`, `fiber`, or `component` — in descending order of how much it is worth.
@@ -24,19 +29,43 @@ struct Picked: Decodable {
         var x: Double, y: Double, width: Double, height: Double
     }
 
-    /// The prompt this becomes.
+    /// The selection in one line: what it is, how big, and how it is painted.
     ///
-    /// The candidates are named in the prompt rather than resolved silently, for the same reason
-    /// they are shown on screen: the failure everyone else has here is a confident guess at the
-    /// wrong file, and the fix is to make the guess visible rather than to guess harder.
-    func prompt(instruction: String) -> String {
-        "Change this element in the running app:\n\n" + describe() + "\n\n" + instruction
+    /// The 23 computed properties were collected, sent to the agent, and never shown to the person
+    /// asking for the change — who could not see what they were asking to change.
+    var summary: String {
+        var bits = [tag, "\(Int(rect.width))×\(Int(rect.height))"]
+        if let size = style["font-size"] {
+            bits.append(size + (style["font-weight"].map { "/" + $0 } ?? ""))
+        }
+        if let fg = style["color"] { bits.append(Self.short(fg)) }
+        if let bg = style["background-color"], bg != "rgba(0, 0, 0, 0)" {
+            bits.append("on " + Self.short(bg))
+        }
+        return bits.joined(separator: " · ")
+    }
+
+    /// `rgb(59, 130, 246)` → `#3b82f6`. A hex is what anyone reads a colour as.
+    static func short(_ css: String) -> String {
+        let numbers = css.split(whereSeparator: { !$0.isNumber && $0 != "." })
+            .compactMap { Double($0) }
+        guard numbers.count >= 3 else { return css }
+        return String(format: "#%02x%02x%02x", Int(numbers[0]), Int(numbers[1]), Int(numbers[2]))
     }
 
     /// The element, described — without an instruction, so several can share one.
     func describe() -> String {
         var out = ""
         out += "selector: \(selector)\n"
+        if shadow == true {
+            out += "(this element is a shadow root or inside one — a document selector cannot "
+                + "reach into it, so the element described may be the custom element that hosts "
+                + "what was clicked)\n"
+        }
+        if unique == false {
+            out += "(this selector matches more than one element — the pin is on the one "
+                + "described below)\n"
+        }
         if !text.isEmpty { out += "text: \(text)\n" }
         if !hints.isEmpty {
             out += "\nLikely source, best first — check before editing, and say which you used:\n"
@@ -94,6 +123,9 @@ struct PreviewPane: NSViewRepresentable {
         config.userContentController.add(context.coordinator, name: "keel")
 
         let view = WKWebView(frame: .zero, configuration: config)
+        // ⌥⌘I opens the real Web Inspector on the preview. Unset, there were no devtools at all —
+        // and "why is this element like that" is a question the page can answer better than we can.
+        view.isInspectable = true
         view.navigationDelegate = context.coordinator
         view.load(URLRequest(url: url))
         context.coordinator.web = view
@@ -107,7 +139,9 @@ struct PreviewPane: NSViewRepresentable {
         // Off the update pass: writing observed state while SwiftUI is installing the view is
         // an invalidation loop, and one it does not always survive.
         Task { @MainActor in
+            model.canvasOwner = coordinator
             model.resnapshot = { [weak coordinator] rect in await coordinator?.snapshot(rect) }
+            model.rectsNow = { [weak coordinator] sels in await coordinator?.rects(for: sels) ?? [:] }
             model.canvas = { [weak coordinator] message in coordinator?.send(message) }
         }
         return view
@@ -116,7 +150,11 @@ struct PreviewPane: NSViewRepresentable {
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         let model = coordinator.model
         Task { @MainActor in
+            // Only if nothing has taken over since — see `canvasOwner`.
+            guard model.canvasOwner == nil || model.canvasOwner === coordinator else { return }
+            model.canvasOwner = nil
             model.resnapshot = nil
+            model.rectsNow = nil
             model.canvas = nil
         }
         view.navigationDelegate = nil
@@ -173,25 +211,55 @@ struct PreviewPane: NSViewRepresentable {
 
         /// A message to the canvas script, in every frame — the one the dev server owns is the
         /// one that matters, and it is not the main frame.
+        ///
+        /// Posted to the top frame only: the script in each frame passes what it received to its
+        /// own children. Fanning out from here walked `window.frames` one level and stopped, so a
+        /// frame nested inside a frame never armed its observer and never answered a pick.
         func send(_ message: [String: Any]) {
             guard let web,
                   let data = try? JSONSerialization.data(withJSONObject: message),
                   let json = String(data: data, encoding: .utf8) else { return }
-            web.evaluateJavaScript("""
-                (function(){
-                  var m = \(json);
-                  window.postMessage(m, '*');
-                  for (var i=0;i<window.frames.length;i++) {
-                    try { window.frames[i].postMessage(m, '*'); } catch(e){}
-                  }
-                })();
-                """)
+            web.evaluateJavaScript("window.postMessage(\(json), '*');")
         }
+
+        /// Where these elements are *now*, asked of every frame.
+        ///
+        /// The rect captured when you clicked is viewport-relative and goes stale the moment
+        /// anything scrolls — and the whole verdict rests on photographing the same element, not
+        /// the same square of screen. Frames answer independently and only for what they can
+        /// resolve, so a selector nobody answers for is an element that is gone.
+        func rects(for selectors: [String]) async -> [String: Picked.Rect] {
+            guard web != nil, !selectors.isEmpty else { return [:] }
+            rectSeq += 1
+            let id = rectSeq
+            rectAnswers[id] = [:]
+            send(["keel": "rects", "id": id, "selectors": selectors])
+            try? await Task.sleep(for: .milliseconds(250))
+            return rectAnswers.removeValue(forKey: id) ?? [:]
+        }
+
+        private var rectSeq = 0
+        private var rectAnswers: [Int: [String: Picked.Rect]] = [:]
 
         func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let dict = message.body as? [String: Any],
                   let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
             switch dict["type"] as? String {
+            case "picking":
+                // Esc in the page. The toggle in the bar has to agree with the page, or Pick
+                // reads as stuck on.
+                model.picking = (dict["on"] as? Bool) ?? false
+            case "rects":
+                struct Answer: Decodable { var id: Int; var found: [String: Picked.Rect] }
+                if let a = try? JSONDecoder().decode(Answer.self, from: data),
+                   rectAnswers[a.id] != nil {
+                    rectAnswers[a.id]?.merge(a.found) { old, _ in old }
+                }
+            case "nudge":
+                struct Nudged: Decodable { var label: String; var pick: Picked }
+                if let n = try? JSONDecoder().decode(Nudged.self, from: data) {
+                    model.designNudge(n.pick, label: n.label)
+                }
             case "changed":
                 struct Changed: Decodable { var regions: [Region] }
                 if let c = try? JSONDecoder().decode(Changed.self, from: data) {
@@ -263,6 +331,10 @@ struct PreviewSurface: View {
     @State private var starting = false
     @State private var typed = ""
     @State private var editing = false
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    /// True in the torn-out window itself, which has nothing to tear out.
+    var detached = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -298,11 +370,36 @@ struct PreviewSurface: View {
                 .background(K.C.accent.wash)
                 Hairline()
             }
+            if model.picking {
+                // The keys exist; nobody would guess them. A control that only exists on hover
+                // does not exist for the keyboard, and one nothing announces does not exist at all.
+                HStack(spacing: K.S.md) {
+                    key("click", "pin it")
+                    key("↑ ↓", "parent · child")
+                    key("← →", "siblings")
+                    key("⌥", "measure to a pin")
+                    key("esc", "stop")
+                    Spacer()
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                .background(K.C.accent.wash)
+                Hairline()
+            }
             if let problem = model.previewProblem {
                 PreviewProblem(model: model, problem: problem)
                 Hairline()
             }
-            if let s = model.previewURL, let url = URL(string: s) {
+            if model.detachedPreview, !detached {
+                // The web view moved to its own window. Rendering a second one here would give
+                // the model two panes to photograph through and no way to say which.
+                EmptyState(icon: "macwindow.on.rectangle", title: "Open in its own window",
+                           "The preview is in a window of its own. Close that window to bring it "
+                           + "back here.",
+                           actionLabel: "Bring it back") {
+                    dismissWindow(id: "designer", value: model.id)
+                }
+                .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
+            } else if let s = model.previewURL, let url = URL(string: s) {
                 // The page is rendered at a real width and scaled to fit, rather than squeezed
                 // into the pane. The pane is 340–720pt, so a responsive site was correctly
                 // rendering its phone layout — and there was no way to ask for anything else.
@@ -340,6 +437,16 @@ struct PreviewSurface: View {
             starting = true
             await model.startDev()
             starting = false
+        }
+    }
+
+    private func key(_ stroke: String, _ what: String) -> some View {
+        HStack(spacing: K.S.xs) {
+            Text(stroke)
+                .font(K.F.codeTiny).foregroundStyle(K.C.dim)
+                .padding(.horizontal, K.S.xs)
+                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm - 2))
+            Text(what).font(K.F.micro).foregroundStyle(K.C.faint)
         }
     }
 
@@ -407,7 +514,8 @@ struct PreviewSurface: View {
             }
             .toggleStyle(.button)
             .controlSize(.small)
-            .help("Click an element in the page to pin a note on it for the agent")
+            .help("Click an element to pin a note on it — ↑↓ walk to parent and child, "
+                  + "⌥ measures to the nearest pin, Esc stops")
 
             Toggle(isOn: $model.followEdits) {
                 Label("Follow", systemImage: "eye")
@@ -437,6 +545,18 @@ struct PreviewSurface: View {
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
             .hint("Reload the page (⌘R)")
             .keyboardShortcut("r", modifiers: .command)
+
+            if !detached {
+                Button {
+                    openWindow(id: "designer", value: model.id)
+                } label: {
+                    Image(systemName: "macwindow.on.rectangle").font(K.F.tiny)
+                        .frame(width: 20, height: 18).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(K.C.faint)
+                .hint("Open the preview in its own window — same page, same session, and ⌥⌘I "
+                      + "opens the Web Inspector on it")
+            }
         }
         .padding(K.S.sm)
     }

@@ -643,3 +643,106 @@ extension UITests {
         )
     }
 }
+
+// MARK: - The Designer
+
+extension UITests {
+
+    private func pick(_ selector: String, text: String = "Sign up") -> Picked {
+        let json = """
+        {"selector":"\(selector)","tag":"button","text":"\(text)","html":"<button/>",
+         "style":{"font-size":"14px","font-weight":"600","color":"rgb(255, 255, 255)",
+                  "background-color":"rgb(37, 99, 235)","padding":"8px 16px"},
+         "hints":[{"kind":"component","value":"PrimaryButton"}],
+         "rect":{"x":0,"y":0,"width":120,"height":32},"unique":true}
+        """
+        return try! JSONDecoder().decode(Picked.self, from: Data(json.utf8))
+    }
+
+    private func swatch(_ color: NSColor) -> NSImage {
+        let img = NSImage(size: NSSize(width: 12, height: 12))
+        img.lockFocus()
+        color.setFill()
+        NSRect(x: 0, y: 0, width: 12, height: 12).fill()
+        img.unlockFocus()
+        return img
+    }
+
+    /// Every pin gets its own verdict. It used to compare the first and draw one row, so a turn
+    /// sent with three pins showed a single confident answer about one of them.
+    func testEveryPinDrawsItsOwnVerdict() {
+        let before = swatch(.red), after = swatch(.blue)
+        func strip(_ n: Int) -> Turn.Design {
+            Turn.Design(pins: (0..<n).map {
+                .init(selector: "#pin\($0)", before: before, after: after, verdict: .changed)
+            })
+        }
+        let one = shoot(DesignStrip(design: strip(1)), CGSize(width: 640, height: 620))
+        let three = shoot(DesignStrip(design: strip(3)), CGSize(width: 640, height: 620))
+        XCTAssertGreaterThan(three.inkedRows().count, one.inkedRows().count + 100,
+                             "three pins draw three rows of before-and-after, not one")
+    }
+
+    /// A verdict that abstains says which of the several reasons it was. All of them used to read
+    /// "the page was still moving", which nothing measured.
+    func testAnAbstainingVerdictSaysWhyOnScreen() {
+        let vague = Turn.Design(pins: [.init(selector: "#a", before: swatch(.red), after: nil,
+                                             verdict: .notCompared(""))])
+        let stated = Turn.Design(pins: [.init(selector: "#a", before: swatch(.red), after: nil,
+                                              verdict: .notCompared("the element is no longer on the page"))])
+        let whole = CGRect(x: 0, y: 0, width: 640, height: 400)
+        let a = shoot(DesignStrip(design: vague), whole.size)
+        let b = shoot(DesignStrip(design: stated), whole.size)
+        // `detail`, not `ink`: the strip's own surface already differs from the window ground, so
+        // every pixel inside it counts as ink whether or not a word is written there.
+        // The verdict row, just inside the strip's top edge. Measured against the strip's own
+        // surface: `ink` over the whole card saturates, because every pixel of the card already
+        // differs from the window behind it whether or not a word is written there.
+        let top = Double(a.firstInkedRow(in: whole) ?? 0)
+        let row = CGRect(x: 0, y: top + 14, width: 640, height: 22)
+        XCTAssertGreaterThan(b.detail(in: row), a.detail(in: row) + 200,
+                             "the reason is drawn, not implied")
+    }
+
+    /// What you are about to change, on screen before you ask for it. The computed style was
+    /// collected for the agent and shown to nobody.
+    func testThePinShowsTheSelectionAndWhatYouDraggedOnIt() {
+        let plain = SessionModel(client: Client(port: 0))
+        plain.designPick(pick("#cta"), before: nil)
+        let dragged = SessionModel(client: Client(port: 0))
+        dragged.designPick(pick("#cta"), before: nil)
+        dragged.designNudge(pick("#cta"), label: "width 240px → 320px")
+
+        let whole = CGRect(x: 0, y: 0, width: 380, height: 300)
+        let a = shoot(PinList(model: plain), whole.size)
+        let b = shoot(PinList(model: dragged), whole.size)
+        XCTAssertGreaterThan(a.detail(in: whole), 200, "the pin says what it is")
+        XCTAssertGreaterThan(b.inkedRows().count, a.inkedRows().count,
+                             "the change made by hand is drawn as a line of its own")
+    }
+
+    /// The Designer is the pane most likely to be squeezed — it is beside a diff — and the one
+    /// that crashed on the way in. It has to draw something at every width the window allows.
+    func testTheDesignerDrawsAtEveryWidth() {
+        let m = populated()
+        m.previewURL = "http://127.0.0.1:1/"
+        for width in [340.0, 520.0, 720.0, 1100.0] {
+            let shot = shoot(PreviewSurface(model: m), CGSize(width: width, height: 560))
+            XCTAssertGreaterThan(shot.allInk, 300, "the Designer drew nothing at \(width)pt")
+        }
+    }
+
+    /// Picking is a keyboard mode, and the keys are not guessable. They are on screen while it
+    /// is armed, and not before.
+    func testTheKeysAreShownWhilePicking() {
+        let m = populated()
+        m.previewURL = "http://127.0.0.1:1/"
+        // The band immediately under the address bar, where the hints go.
+        let band = CGRect(x: 0, y: 34, width: 720, height: 26)
+        let off = shoot(PreviewSurface(model: m), CGSize(width: 720, height: 560))
+        m.picking = true
+        let on = shoot(PreviewSurface(model: m), CGSize(width: 720, height: 560))
+        XCTAssertGreaterThan(on.detail(in: band), off.detail(in: band) + 40,
+                             "the key hints appear when Pick is armed")
+    }
+}

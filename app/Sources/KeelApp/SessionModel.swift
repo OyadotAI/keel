@@ -115,6 +115,10 @@ final class SessionModel: Identifiable {
         var picked: Picked
         var before: NSImage?
         var note = ""
+        /// What you changed by hand on the page, in the units the source uses — `width 240px →
+        /// 320px`. Keel does not write the file; it says precisely what you meant and lets the
+        /// pixel check afterwards prove the source now matches.
+        var nudges: [String] = []
     }
     var pins: [Pin] = []
 
@@ -122,8 +126,16 @@ final class SessionModel: Identifiable {
     var designInFlight: [Pin] = []
     /// Asks the preview to photograph a rect of the page as it is now. Set by the pane while open.
     var resnapshot: ((Picked.Rect) async -> NSImage?)?
+    /// Asks the page where these selectors are *now*. Set by the pane while open.
+    var rectsNow: (([String]) async -> [String: Picked.Rect])?
     /// Sends a message to the canvas script in the page. Set by the pane while open.
     var canvas: (([String: Any]) -> Void)?
+    /// Which pane's coordinator installed the three closures above.
+    ///
+    /// Popping the preview out means two panes exist for a moment, and the old one's teardown runs
+    /// on a `Task` — so without this it could nil out the *new* window's closures and leave the
+    /// check with nothing to photograph through.
+    weak var canvasOwner: AnyObject?
 
     /// The frontend file the agent is writing right now, for the bar over the preview.
     var editing: String?
@@ -204,19 +216,19 @@ final class SessionModel: Identifiable {
         if let turn = current, let union = Picked.Rect.union(regions.map(\.rect)) {
             Task {
                 let shot = await resnapshot?(union) ?? nil
-                turn.design = Turn.Design(
-                    selector: turn.design?.selector ?? "",
-                    before: turn.design?.before,
-                    after: turn.design?.after,
-                    verdict: turn.design?.verdict ?? .unstable,
-                    duplicated: turn.design?.duplicated ?? false,
-                    regions: regions, pageAfter: shot)
+                var design = turn.design ?? Turn.Design()
+                design.regions = regions
+                design.pageAfter = shot
+                turn.design = design
             }
         }
     }
 
     func clearRegions() {
         changedRegions = []
+        // What you dragged was a way of saying it, not the change itself. Put the page back, so
+        // what you are looking at when the turn lands is the agent's work and not your ghost.
+        canvas?(["keel": "revert"])
         canvas?(["keel": "clear"])
         syncCanvas()
     }
@@ -238,6 +250,10 @@ final class SessionModel: Identifiable {
     var devDir: String?
     var devRunning = false
     var picking = false
+    /// The preview is open in a window of its own, so the tab stands aside. Two panes would each
+    /// install their own `resnapshot` and `canvas`, and the check would photograph whichever one
+    /// happened to win.
+    var detachedPreview = false
 
     /// How wide the previewed page is rendered. Desktop by default — the pane is narrow, and
     /// letting the pane decide meant every site opened in its phone layout.
@@ -259,7 +275,22 @@ final class SessionModel: Identifiable {
                        label: "pin \(pins.count) · \(p.tag)")
             }
         }
-        picking = false
+        // Pick stays armed. It disarmed after one click, so pinning three things meant reaching
+        // for the toggle twice for no reason — Esc in the page turns it off, and so does the
+        // toggle.
+        syncCanvas()
+    }
+
+    /// A change made by hand in the page: it lands on the pin for that element, making one if
+    /// there is none, so dragging a handle is a complete instruction on its own.
+    func designNudge(_ p: Picked, label: String) {
+        if let i = pins.firstIndex(where: { $0.picked.selector == p.selector }) {
+            pins[i].picked = p
+            if !pins[i].nudges.contains(label) { pins[i].nudges.append(label) }
+        } else {
+            pins.append(Pin(picked: p, before: nil, nudges: [label]))
+            Telemetry.track("nudge", [:])
+        }
         syncCanvas()
     }
 
@@ -273,6 +304,11 @@ final class SessionModel: Identifiable {
         for (i, pin) in pins.enumerated() {
             if pins.count > 1 { out += "## Pin \(i + 1)\n" }
             out += pin.picked.describe()
+            if !pin.nudges.isEmpty {
+                out += "\n\nI changed this by hand in the running page, as a way of showing you "
+                    + "what I want. Make the source produce this — do not add inline styles:\n"
+                for n in pin.nudges { out += "  - \(n)\n" }
+            }
             if !pin.note.isEmpty { out += "\n\nNote on this element: \(pin.note)" }
             out += "\n\n"
         }
@@ -538,9 +574,10 @@ final class SessionModel: Identifiable {
 
     func send() {
         var text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Pins with notes are a request on their own; the box may stay empty.
-        if text.isEmpty, pins.contains(where: { !$0.note.isEmpty }) {
-            text = "Apply the notes on the pinned elements."
+        // Pins with notes are a request on their own; the box may stay empty. So is a pin you
+        // dragged: the delta says what you want more precisely than a sentence would.
+        if text.isEmpty, pins.contains(where: { !$0.note.isEmpty || !$0.nudges.isEmpty }) {
+            text = "Make the source match the pinned elements above."
         }
         guard !text.isEmpty else { return }
         // `# something` is a note for the project, not a turn — the same thing `#` does in the
@@ -578,12 +615,17 @@ final class SessionModel: Identifiable {
         designInFlight = pins
         pins = []
         changedRegions = []
+        // What you dragged was a way of saying it, not the change itself. Put the page back, so
+        // what you are looking at when the turn lands is the agent's work and not your ghost.
+        canvas?(["keel": "revert"])
         canvas?(["keel": "clear"])
 
         let full = promptWithAttachments(instruction)
+        // Counted before they are cleared. Read after `removeAll()`, this had always logged 0.
+        let attached = attachments.count
         attachments.removeAll()
         Telemetry.track("turn_started", ["mode": mode, "pins": designInFlight.count,
-                                         "attachments": attachments.count])
+                                         "attachments": attached])
         Telemetry.breadcrumb("turn started")
         let turn = Turn(prompt: full)
         turns.append(turn)
@@ -643,12 +685,12 @@ final class SessionModel: Identifiable {
         await lanes?.refreshWorktrees()
         // The agent does not grade its own work.
         if mode != "plan" { await runGate(turn) }
+        // Before the commit, not after. "The edit went to the wrong file" is a reason not to
+        // commit, and it used to arrive after the commit it should have questioned.
+        await checkDesign(turn)
         // Accepted work becomes a commit, so the tree stays small and every step is a place
         // to go back to.
         if mode != "plan" { await commitTurn(turn) }
-        // After the gate, not before: the notification carries the verdict, and a verdict that
-        // arrives before the checks have run is the "done!" that started this whole argument.
-        await checkDesign(turn)
         Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
         reportTurn(turn)
         if !queued.isEmpty { start(queued.removeFirst()) }
@@ -1012,10 +1054,10 @@ final class SessionModel: Identifiable {
     /// report first — but it runs even then, since "the tests broke and it edited the wrong file"
     /// is two facts, not one. Waits for the page to report a change rather than for a timer: the
     /// observer is the "HMR has landed" signal, and a fixed delay was wrong in both directions.
-    private func checkDesign(_ turn: Turn) async {
+    func checkDesign(_ turn: Turn) async {
         let flight = designInFlight
         designInFlight = []
-        guard let first = flight.first else { return }
+        guard !flight.isEmpty else { return }
 
         let seen = changeTick
         for _ in 0..<60 where changeTick == seen && !turn.files.isEmpty {
@@ -1023,16 +1065,50 @@ final class SessionModel: Identifiable {
         }
         if changeTick == seen { try? await Task.sleep(for: .milliseconds(400)) }
 
-        let after = await resnapshot?(first.picked.rect) ?? nil
-        turn.design = Turn.Design(
-            selector: first.picked.selector,
-            before: first.before,
-            after: after,
-            verdict: DesignCheck.compare(before: first.before, after: after),
-            duplicated: DesignCheck.looksDuplicated(
-                files: turn.files, hints: flight.flatMap(\.picked.hints)),
-            regions: turn.design?.regions ?? changedRegions,
-            pageAfter: turn.design?.pageAfter)
+        var design = turn.design ?? Turn.Design()
+        design.duplicated = DesignCheck.looksDuplicated(
+            files: turn.files, hints: flight.flatMap(\.picked.hints))
+        design.regions = design.regions.isEmpty ? changedRegions : design.regions
+
+        guard let resnapshot else {
+            design.pins = flight.map {
+                .init(selector: $0.picked.selector, before: $0.before, after: nil,
+                      verdict: .notCompared("the Designer was closed, so there was nothing to "
+                                            + "photograph"))
+            }
+            turn.design = design
+            return
+        }
+
+        // Where the elements are *now*. A rect captured at pick time is a square of the viewport,
+        // and anything that scrolled between the click and here would have had the after-shot
+        // taken of whatever moved into that square.
+        let fresh = await rectsNow?(flight.map(\.picked.selector)) ?? [:]
+
+        var checked: [Turn.Design.Pin] = []
+        for pin in flight {
+            let selector = pin.picked.selector
+            // `rectsNow` is nil only when the pane went away between the guard above and here;
+            // an empty answer from a page that did reply means nobody could resolve it.
+            guard let rect = fresh[selector] ?? (rectsNow == nil ? pin.picked.rect : nil) else {
+                checked.append(.init(selector: selector, before: pin.before, after: nil,
+                                     verdict: .notCompared("the element is no longer on the page")))
+                continue
+            }
+            guard rect.width > 1, rect.height > 1 else {
+                checked.append(.init(selector: selector, before: pin.before, after: nil,
+                                     verdict: .notCompared("the element is no longer visible")))
+                continue
+            }
+            let after = await resnapshot(rect)
+            checked.append(.init(
+                selector: selector, before: pin.before, after: after,
+                verdict: after == nil
+                    ? .notCompared("the element is off-screen — scroll it into view to check it")
+                    : DesignCheck.compare(before: pin.before, after: after)))
+        }
+        design.pins = checked
+        turn.design = design
     }
 
     // MARK: - Dev server
@@ -1856,6 +1932,9 @@ final class SessionModel: Identifiable {
         case .passed, .none, .notRun: break
         case .failed, .running: return
         }
+        // A pin whose pixels did not move is the failure the Designer exists to catch. Committing
+        // it anyway would bury the one turn worth looking at under a commit that says it passed.
+        if turn.design?.pins.contains(where: { $0.verdict == .nothingChanged }) == true { return }
         let first = turn.prompt.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty && !$0.hasPrefix("@") } ?? "agent turn"

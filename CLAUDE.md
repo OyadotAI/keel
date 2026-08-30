@@ -139,9 +139,20 @@ the next one of these fails a test instead of a tester.
 
 ## Design turns and the live canvas
 
-Click an element in the preview and the turn that follows carries a **pixel column**: the same rect
+Click an element in the preview and the turn that follows carries a **pixel column**: the element
 photographed before and after, with a verdict. Several clicks are several **pins**, each with its
-own note, sent as one prompt and drawn on the page until the turn ends.
+own note and its own verdict, sent as one prompt and drawn on the page until the turn ends.
+
+Aiming is the half you feel. Hover names what you would select — tag, size, best source hint — and
+↑↓ walk to the parent and the first child, which is the affordance a design tool has and a picker
+does not: the thing you want is nearly always the parent of the thing under the cursor. ⌥ measures
+to the nearest pin. Esc disarms, and Pick stays armed until it does. ⌘-drag moves, the handles
+resize, a double-click edits text — and none of that writes a file. **A nudge is a sentence**:
+`width 240px → 320px` goes into the prompt in the units the source uses, the page is put back when
+the turn starts so what you see afterwards is the agent's change and not your ghost of it, and the
+pixel check proves the source now matches. The pop-out button gives the preview a window of its own
+with `isInspectable`, so ⌥⌘I is the real Web Inspector — which is why Keel does not drive Safari:
+this *is* Safari's engine, and Safari's `do JavaScript` reaches only the top frame.
 
 The other direction is the one every vibe-coding tool is criticised for missing: **when the agent
 writes a frontend file, the preview comes forward, goes to that page, says what is being edited,
@@ -165,7 +176,24 @@ So two things are different here, and both are the same idea Keel applies to the
   the common path rather than the exception, and a ranked guess is honest where a silent one is not.
 - **The pixels are re-photographed afterwards.** Identical before and after means the edit went to
   the wrong file, and Keel says so instead of letting the diff imply success. A new component file
-  when the hinted source was never touched is flagged as a likely fork.
+  when the hinted source was never touched is flagged as a likely fork. The check runs *before* the
+  auto-commit and holds it, because "it edited the wrong file" is a reason not to commit.
+
+A verifier is worth exactly what its aim is worth, and three things were quietly making it report a
+confident verdict about the wrong thing. **The element is located again immediately before the
+after-shot** — the pick-time rect is a square of the viewport, so anything that scrolled in between
+had the after photographed of whatever moved into that square. **Rects compose the frame's offset**:
+each frame is told where it sits by its parent, so a pick inside the dev server's iframe is
+photographed where it actually is, which is the whole case `forMainFrameOnly: false` exists for.
+And **every pin is compared**, not the first of them. When no comparison is possible the verdict
+says which reason — the pane was closed, the element is gone, it is off-screen — where one sentence
+about the page "still moving" used to stand in for all three and was measured by nothing.
+
+Selectors are widened until `querySelectorAll` returns exactly one node, and a selector that never
+gets there is sent to the agent saying so. Tailwind's classes are kept and escaped rather than
+dropped for containing a `:`; framework hash classes are the ones dropped. Svelte's
+`__svelte_meta.loc` and Vue's `__vueParentComponent` are read alongside React's, so a non-React app
+gets a ranking instead of nothing, and `data-testid` is offered as what it is rather than as a file.
 
 The mechanism is a `WKUserScript` with `forMainFrameOnly: false`, which crosses into the dev
 server's frame regardless of origin. A page script cannot do that; a host-installed one does not
