@@ -275,7 +275,9 @@ struct PreviewSurface: View {
                     Sweep()
                     Text("Editing \((file as NSString).lastPathComponent)…")
                         .font(K.F.codeSmall).foregroundStyle(K.C.text).lineLimit(1)
-                    if let route = Frontend.route(for: file) {
+                    if let route = model.pageShowing(file) {
+                        Image(systemName: "arrow.right").font(K.F.ui(8, .bold))
+                            .foregroundStyle(K.C.faint)
                         Text(route).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                     }
                     Spacer()

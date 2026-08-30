@@ -327,6 +327,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
     let app = Router::new()
         .route("/api/state", get(api_state))
         .route("/api/tree", get(api_tree))
+        .route("/api/frontend/importers", get(api_importers))
         .route("/api/session", get(api_session))
         .route("/api/session/work", get(api_session_work))
         .route(
@@ -563,6 +564,24 @@ fn bind_address() -> (Ipv4Addr, String) {
 /// large tree or running the scanner.
 async fn api_tree(Checkout(repo): Checkout) -> Json<Vec<crate::api::Node>> {
     Json(blocking(move || crate::api::tree(&repo), Vec::new()).await)
+}
+
+#[derive(serde::Deserialize)]
+struct ImportersQuery {
+    file: String,
+}
+
+async fn api_importers(
+    Checkout(repo): Checkout,
+    Query(query): Query<ImportersQuery>,
+) -> Json<Vec<String>> {
+    Json(
+        blocking(
+            move || crate::api::importers_of(&repo, &query.file),
+            Vec::new(),
+        )
+        .await,
+    )
 }
 
 /// Run blocking work off the executor, so one slow call cannot stall the whole server.

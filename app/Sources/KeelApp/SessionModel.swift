@@ -144,10 +144,7 @@ final class SessionModel: Identifiable {
     /// A frontend file is being written. Show the page it is, and arm the observer.
     private func frontendEdit(_ path: String) {
         editing = path
-        if let route = Frontend.route(for: path), let url = previewURL,
-           let origin = Frontend.origin(of: url), url != origin + route {
-            previewURL = origin + route
-        }
+        show(page: path)
         // If a pin's likely source is this file, that pin's element is what is about to move.
         if let pin = pins.first(where: { $0.picked.hints.contains { path.hasSuffix(
             $0.value.split(separator: ":").first.map(String.init) ?? $0.value) } }) {
@@ -155,6 +152,47 @@ final class SessionModel: Identifiable {
         }
         canvas?(["keel": "expect"])
         if followEdits { designTick += 1 }
+    }
+
+    /// Point the preview at the page this file is on.
+    ///
+    /// A page file answers immediately. Anything else is a walk up the import graph, which needs
+    /// the daemon and so cannot be synchronous — the navigation lands a moment after the bar says
+    /// what is being edited, which is the right way round: the name of the file is known at once
+    /// and the page it is on is not.
+    private func show(page path: String) {
+        if let route = Frontend.route(for: path) {
+            navigatePreview(to: route)
+            return
+        }
+        if let cached = pageOfFile[path] {
+            navigatePreview(to: cached)
+            return
+        }
+        guard previewURL != nil else { return }
+        Task { [client] in
+            guard let route = await Frontend.page(containing: path, client: client, query: q())
+            else { return }
+            self.pageOfFile[path] = route
+            // Only if this file is still the one being written: a slow walk must not yank the
+            // preview to a page two edits ago.
+            if self.editing == path { self.navigatePreview(to: route) }
+        }
+    }
+
+    private func navigatePreview(to route: String) {
+        guard let url = previewURL, let origin = Frontend.origin(of: url),
+              url != origin + route else { return }
+        previewURL = origin + route
+    }
+
+    /// Which page each file turned out to be on. The walk reads files, and an agent editing the
+    /// same component six times in a turn should pay for that once.
+    private var pageOfFile: [String: String] = [:]
+
+    /// The page a file being written shows on, for the bar that says what is happening.
+    func pageShowing(_ path: String) -> String? {
+        Frontend.route(for: path) ?? pageOfFile[path]
     }
 
     /// The page reported what moved.
