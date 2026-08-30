@@ -142,8 +142,10 @@ struct SessionWindow: View {
                 })
 
                 if showsPanel, let panel {
-                    SidePanel(panel: panel, model: model)
-                        .frame(width: panelFit)
+                    SidePanel(panel: panel, model: model) {
+                        withAnimation(K.M.quick) { self.panel = nil }
+                    }
+                    .frame(width: panelFit)
                     SplitHandle(width: $panelWidth, range: 200...520, reset: 256, leading: true)
                 }
 
@@ -616,8 +618,13 @@ struct ActivityRail: View {
 
     private func badge(_ p: SessionWindow.Panel) -> Int? {
         switch p {
-        case .changes: model.changes.count.nonZero
-        // The same number on Git: it is the count of what a commit there would take.
+        // What the panel behind it actually lists. It counted every uncommitted file in the
+        // repository, so a fresh conversation in a dirty checkout wore a 13 over an empty panel
+        // saying "the agent has not written a file in this conversation" — both true, about
+        // different things.
+        case .changes: model.editedThisSession.count.nonZero
+        // Git keeps the other number, because Git's own list *is* the uncommitted files: it is
+        // the count of what a commit there would take.
         case .git: model.changes.count.nonZero
         // Every finding, not only the blocking ones: a warning in the panel with no number on
         // the icon read as a panel that had nothing to say.

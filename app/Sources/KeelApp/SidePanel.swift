@@ -4,10 +4,12 @@ import SwiftUI
 struct SidePanel: View {
     let panel: SessionWindow.Panel
     @Bindable var model: SessionModel
+    /// Closing the panel. The rail icon toggles it and ⌘⇧E toggles it, and neither is visible.
+    var onClose: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
-            RailHeader(panel.title, trailing: count)
+            RailHeader(panel.title, trailing: count, onClose: onClose)
             Hairline()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

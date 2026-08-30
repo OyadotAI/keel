@@ -556,6 +556,43 @@ extension UITests {
         )
     }
 
+    /// A number on a rail icon is a promise about what is behind it.
+    ///
+    /// Reported with a screenshot: a 13 on the Changes icon over a panel saying "the agent has not
+    /// written a file in this conversation". The badge counted every uncommitted file in the
+    /// repository; the panel lists what the agent wrote *here*. Both true, about different things,
+    /// and the icon is the one you read first.
+    func testTheChangesBadgeCountsWhatItsPanelLists() {
+        let m = SessionModel(client: Client(port: 0))
+        m.loaded = true
+        m.isRepo = true
+        m.repoPath = "/Users/engineer/Projects/payments"
+        // A dirty checkout: thirteen files uncommitted, none of them written in this conversation.
+        m.changes = (0..<13).map {
+            Wire.Change(path: "Sources/Existing\($0).swift", status: " M", label: "modified")
+        }
+
+        XCTAssertTrue(m.editedThisSession.isEmpty, "the fixture is wrong")
+        let shot = shoot(SidePanel(panel: .changes, model: m), CGSize(width: 320, height: 500))
+        XCTAssertGreaterThan(
+            shot.detail(in: CGRect(x: 0, y: 40, width: 320, height: 200)), 200,
+            "the panel drew no empty state"
+        )
+
+        // The badge and the list come from one property now, so they cannot disagree.
+        let m2 = SessionModel(client: Client(port: 0))
+        m2.loaded = true
+        m2.isRepo = true
+        let turn = Turn(prompt: "edit")
+        turn.begin(call: "c0", tool: "Edit", input: ["file_path": .string("Sources/A.swift")])
+        m2.turns = [turn]
+        XCTAssertEqual(m2.editedThisSession.count, 1)
+        XCTAssertEqual(
+            m.editedThisSession.count, 0,
+            "a dirty checkout with no agent edits has to read as nothing written here"
+        )
+    }
+
     private func countFiles(_ nodes: [ChangeTree.Node]) -> Int {
         nodes.reduce(0) { $0 + ($1.isDir ? countFiles($1.children) : 1) }
     }
