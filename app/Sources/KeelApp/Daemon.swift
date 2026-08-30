@@ -41,7 +41,10 @@ final class Daemon {
     ///
     /// `keel serve` already refuses to double-bind and prints "Keel is already running", so a
     /// stale daemon from a crashed run is joined rather than fought with.
-    func start() async throws {
+    /// True when something already answers on this port.
+    func answering() async -> Bool { await isUp() }
+
+    func start(resumeLast: Bool = true) async throws {
         if await isUp() { return }
         guard let bin = Self.binary() else {
             throw Failure("Could not find the `keel` binary next to this app or on PATH.")
@@ -53,8 +56,10 @@ final class Daemon {
         // has no `PR_SET_PDEATHSIG` for the child to notice with. So the daemon watches instead.
         // `--resume-last` because a Finder launch has no working directory worth inferring a
         // project from: it is `/`, and the default would open the whole filesystem as a repo.
-        p.arguments = ["serve", "--port", String(port), "--no-open",
-                       "--exit-with-parent", "--resume-last"]
+        p.arguments = ["serve", "--port", String(port), "--no-open", "--exit-with-parent"]
+        // Only the first window infers a project from the last one; a second window is told
+        // which repository it is for.
+        if resumeLast { p.arguments! += ["--resume-last"] }
         // The daemon reports crashes under the app's key, tagged as the daemon.
         if let dsn = Bundle.main.infoDictionary?["KeelSentryDSN"] as? String, !dsn.isEmpty {
             p.arguments! += ["--sentry-dsn", dsn]
