@@ -96,11 +96,8 @@ struct TurnStage: View {
                 pinned = true
                 if let id = rows.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
-            } action: { was, atBottom in
-                if was != atBottom { pinned = atBottom }
-            }
+            .followsTail($pinned)
+            .onChange(of: model.running) { follow(proxy) }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
                     JumpToLatest {

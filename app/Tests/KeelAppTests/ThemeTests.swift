@@ -11,6 +11,23 @@ import XCTest
 /// a palette edit that quietly makes body text unreadable produces no error either.
 final class ThemeTests: XCTestCase {
 
+    /// Only a person stops a pane following its own tail.
+    ///
+    /// It used to unfollow whenever the pane read as short of the end, which a streaming reply
+    /// makes true several times a second — so a turn scrolled itself out of sight and stayed
+    /// there, and every message after that needed a manual scroll to read.
+    func testContentGrowingUnderAPaneDoesNotStopItFollowing() {
+        // Streaming: content grew, nobody touched the wheel. Still following.
+        XCTAssertTrue(FollowsTail.following(true, atBottom: false, byHand: false))
+        // Scrolled up by hand: stop.
+        XCTAssertFalse(FollowsTail.following(true, atBottom: false, byHand: true))
+        // Back at the end, however you got there: follow again.
+        XCTAssertTrue(FollowsTail.following(false, atBottom: true, byHand: true))
+        XCTAssertTrue(FollowsTail.following(false, atBottom: true, byHand: false))
+        // Away from the end and already unfollowed: stay unfollowed.
+        XCTAssertFalse(FollowsTail.following(false, atBottom: false, byHand: false))
+    }
+
     private func resolve(_ color: Color, _ appearance: NSAppearance) -> NSColor {
         var out = NSColor.black
         appearance.performAsCurrentDrawingAppearance {
