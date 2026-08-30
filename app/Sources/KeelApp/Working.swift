@@ -61,7 +61,8 @@ struct WorkingBar: View {
     private func elapsed(at now: Date) -> String {
         guard let started = model.current?.started else { return "0s" }
         let s = Int(now.timeIntervalSince(started))
-        return s < 60 ? "\(s)s" : String(format: "%dm %02ds", s / 60, s % 60)
+        guard s >= 60 else { return "\(s)s" }
+        return "\(s / 60)m \((s % 60).formatted(.number.precision(.integerLength(2))))s"
     }
 }
 

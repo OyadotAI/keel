@@ -612,16 +612,16 @@ struct TurnFooter: View {
                 let value = "\(compact(t.input + t.cacheRead + t.cacheWrite)) in · \(compact(t.output)) out"
                 cell("TOKENS", value, icon: "arrow.up.arrow.down",
                      help: "Tokens this turn, as the CLI reported them: \(t.input + t.cacheRead + t.cacheWrite) in, \(t.output) out"
-                           + (t.cacheRead > 0 ? String(format: ", %.0f%% served from cache", t.cached * 100) : ""))
+                           + (t.cacheRead > 0 ? ", " + t.cached.formatted(.percent.precision(.fractionLength(0))) + " served from cache" : ""))
                 if t.cacheRead > 0 {
-                    Text(String(format: "%.0f%% cached", t.cached * 100))
+                    Text(t.cached.formatted(.percent.precision(.fractionLength(0))) + " cached")
                         .font(K.F.micro).foregroundStyle(K.C.faint).padding(.leading, K.S.xs)
                         .padding(.trailing, K.S.sm)
                 }
                 if turn.cost != nil { divider }
             }
             if let c = turn.cost {
-                cell("COST", String(format: "$%.3f", c), icon: "dollarsign.circle", help: "What this turn cost, from the CLI's own figure")
+                cell("COST", money(c), icon: "dollarsign.circle", help: "What this turn cost, from the CLI's own figure")
             }
         }
         .padding(.top, K.S.sm)
@@ -653,8 +653,9 @@ struct TurnFooter: View {
         case .running(let cmd):
             cell("GATE", "checking · \(short(cmd))", icon: "circle.dotted", tone: K.C.accent, help: "Running \(cmd)")
         case .passed(let cmd, let t):
-            cell("GATE", String(format: "passed · %@ · %.1fs", short(cmd), t), icon: "checkmark.seal.fill", tone: K.C.add,
-                 help: "\(cmd) passed in \(String(format: "%.1f", t))s")
+            let took = t.formatted(.number.precision(.fractionLength(1)))
+            cell("GATE", "passed · \(short(cmd)) · \(took)s", icon: "checkmark.seal.fill", tone: K.C.add,
+                 help: "\(cmd) passed in \(took)s")
         case .failed(let cmd, let problems):
             cell("GATE", "failed · \(short(cmd))" + (problems.isEmpty ? "" : " · \(problems.count) problem\(problems.count == 1 ? "" : "s")"),
                  icon: "xmark.seal.fill", tone: K.C.del, help: "\(cmd) failed" + (problems.isEmpty ? "" : " with \(problems.count) problems, listed above"))
@@ -673,8 +674,9 @@ struct TurnFooter: View {
 
     private func duration(_ ms: Int) -> String {
         let s = Double(ms) / 1000
-        return s < 60 ? String(format: "%.1fs", s)
-                      : String(format: "%dm%02ds", Int(s) / 60, Int(s) % 60)
+        return s < 60
+            ? s.formatted(.number.precision(.fractionLength(1))) + "s"
+            : "\(Int(s) / 60)m\((Int(s) % 60).formatted(.number.precision(.integerLength(2))))s"
     }
 }
 

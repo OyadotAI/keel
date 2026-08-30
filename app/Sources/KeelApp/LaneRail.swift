@@ -197,7 +197,7 @@ private struct LaneRow: View {
     private var tooltip: String {
         var parts = [activityText]
         if let wt = checkout { parts.append(branchText(wt)) }
-        if let cost = lane.sessionCost { parts.append(String(format: "$%.2f", cost)) }
+        if let cost = lane.sessionCost { parts.append(money(cost, places: 2)) }
         return parts.joined(separator: " · ")
     }
 
