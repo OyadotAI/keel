@@ -101,6 +101,16 @@ extension SessionModel {
         bytes.formatted(.byteCount(style: .file))
     }
 
+    /// A picture with nothing on disk behind it: a screenshot on the pasteboard, or an image
+    /// dragged straight out of a browser. PNG because the daemon stores the bytes it is given and
+    /// the agent reads them back by extension.
+    func attach(image: NSImage, name: String) {
+        guard let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return }
+        attach(data: png, name: name, thumbnail: image)
+    }
+
     /// Handle a paste. Returns true when the paste was taken as an attachment and should not also
     /// land in the text box.
     @discardableResult
@@ -108,12 +118,7 @@ extension SessionModel {
         // Images first: a screenshot on the pasteboard is also available as text on some apps, and
         // the picture is always the thing that was meant.
         if let images = board.readObjects(forClasses: [NSImage.self]) as? [NSImage], !images.isEmpty {
-            for image in images {
-                guard let tiff = image.tiffRepresentation,
-                      let png = NSBitmapImageRep(data: tiff)?
-                        .representation(using: .png, properties: [:]) else { continue }
-                attach(data: png, name: "pasted.png", thumbnail: image)
-            }
+            for image in images { attach(image: image, name: "pasted.png") }
             return true
         }
         if let urls = board.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
@@ -140,6 +145,26 @@ extension SessionModel {
                 self.attach(data: data, name: url.lastPathComponent, thumbnail: image)
             }
         }
+    }
+
+    /// A drag onto the conversation. A file if there is one, and the picture itself when there is
+    /// not — an image dragged out of a browser has no path, and dropping it used to do nothing at
+    /// all because only `.fileURL` was accepted.
+    func take(drop providers: [NSItemProvider]) -> Bool {
+        for p in providers {
+            if p.canLoadObject(ofClass: URL.self) {
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.isFileURL else { return }
+                    Task { @MainActor in self.attach(fileURL: url) }
+                }
+            } else if p.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                p.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    guard let data, let image = NSImage(data: data) else { return }
+                    Task { @MainActor in self.attach(image: image, name: "dropped.png") }
+                }
+            }
+        }
+        return true
     }
 
     /// The paperclip. Anything, several at once.

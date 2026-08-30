@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The conversation, and the box you type in.
 ///
@@ -9,6 +10,9 @@ import SwiftUI
 struct ChatRail: View {
     @Bindable var model: SessionModel
     @FocusState private var composerFocused: Bool
+    /// A drag is over the conversation. The whole column takes the drop — a target you have to aim
+    /// at is a target you miss, and the composer is the smallest thing on screen.
+    @State private var dropping = false
 
     /// Whether the view is following the stream. Scrolling up to read releases it — a pane that
     /// drags you back to the bottom mid-sentence is worse than one that never followed.
@@ -57,11 +61,12 @@ struct ChatRail: View {
                     .padding(.top, K.S.sm)
                     .transition(.opacity)
             }
-            Composer(model: model, focused: $composerFocused)
+            Composer(model: model, focused: $composerFocused, dropping: $dropping)
         }
         .animation(K.M.enter, value: model.pending.count)
         .animation(K.M.settle, value: model.running)
         .background(K.C.bg)
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropping) { model.take(drop: $0) }
         // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
         // Focus is the one thing only this view can do, so it watches a counter.
         .onChange(of: model.focusComposerTick) { composerFocused = true }
@@ -345,7 +350,8 @@ private struct CopyChip: View {
 struct Composer: View {
     @Bindable var model: SessionModel
     @FocusState.Binding var focused: Bool
-    @State private var dropping = false
+    /// Owned by the rail, which is the thing you drop on.
+    @Binding var dropping: Bool
     /// The completion being typed: which sigil started it, the query after it, and where it sits.
     ///
     /// One mechanism for `@` and `/` rather than two copies of it. They differ in three things —
@@ -483,6 +489,7 @@ struct Composer: View {
                             lineWidth: dropping ? 2 : 1)
             )
             .animation(K.M.quick, value: focused)
+            .animation(K.M.quick, value: dropping)
             memoryNote
         }
         .padding(.horizontal, K.S.xxl)
@@ -587,14 +594,15 @@ struct Composer: View {
                 dismissed = model.prompt
                 return .handled
             }
-            .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
-                for p in providers {
-                    _ = p.loadObject(ofClass: URL.self) { url, _ in
-                        guard let url else { return }
-                        Task { @MainActor in model.attach(fileURL: url) }
-                    }
-                }
-                return true
+            // ⌃W deletes the word behind the cursor, the way every shell does. AppKit binds that
+            // to ⌥⌫ and leaves ⌃W unbound, and this is a box people reach for straight out of a
+            // terminal. Sent to the field editor rather than done to `model.prompt` here: the
+            // caret is the text view's to know, and deleting the last word of the whole prompt is
+            // the wrong edit whenever the caret is not at the end.
+            .onKeyPress(.init("w"), phases: .down) { press in
+                guard press.modifiers.contains(.control) else { return .ignored }
+                let deleteWord = #selector(NSStandardKeyBindingResponding.deleteWordBackward(_:))
+                return NSApp.sendAction(deleteWord, to: nil, from: nil) ? .handled : .ignored
             }
     }
 
