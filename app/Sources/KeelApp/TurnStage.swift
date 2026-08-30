@@ -294,6 +294,7 @@ struct ChangedFiles: View {
                 }
                 .padding(.horizontal, K.S.sm)
                 .padding(.bottom, K.S.sm)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.md))
@@ -324,7 +325,7 @@ struct SectionBar: View {
         .background(hovering ? K.C.text.opacity(0.03) : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .asButton { withAnimation(K.M.quick) { open.toggle() } }
+        .asButton { withAnimation(K.M.flow) { open.toggle() } }
         .accessibilityLabel("\(title), \(open ? "expanded" : "collapsed")")
     }
 }
@@ -391,6 +392,7 @@ private struct CommandList: View {
                 ForEach(shown) { group in
                     GroupRow(group: group,
                              live: !turn.finished && group.id == groups.last?.id)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
                 if groups.count > Self.visible {
@@ -411,6 +413,7 @@ private struct CommandList: View {
         .padding(.bottom, open ? K.S.xs : 0)
         .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.md))
         .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+        .animation(K.M.flow, value: groups.count)
     }
 }
 
@@ -460,10 +463,11 @@ struct GroupRow: View {
                     .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.45))
             }
             .padding(.horizontal, K.S.md).padding(.vertical, 3)
-            .background(hovering ? K.C.text.opacity(0.04) : .clear)
+            .background(live ? K.C.accent.opacity(0.055)
+                              : (hovering ? K.C.text.opacity(0.04) : .clear))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .asButton { withAnimation(K.M.quick) { userSet = !open } }
+            .asButton { withAnimation(K.M.flow) { userSet = !open } }
 
             if open {
                 VStack(alignment: .leading, spacing: 0) {
@@ -474,8 +478,10 @@ struct GroupRow: View {
                 }
                 .padding(.leading, K.S.xl)
                 .padding(.bottom, K.S.xs)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .animation(K.M.flow, value: open)
     }
 }
 
@@ -519,7 +525,7 @@ private struct CallDetail: View {
             .contentShape(Rectangle())
             .asButton {
                 if !call.output.isEmpty || !call.children.isEmpty {
-                    withAnimation(K.M.quick) { userSet = !open }
+                    withAnimation(K.M.flow) { userSet = !open }
                 }
             }
 
@@ -534,6 +540,7 @@ private struct CallDetail: View {
                     }
                 }
                 .padding(.leading, K.S.lg)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             if open, !call.output.isEmpty {
@@ -547,8 +554,10 @@ private struct CallDetail: View {
                 .frame(maxHeight: 240)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .padding(.trailing, K.S.md).padding(.bottom, K.S.xs)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .animation(K.M.flow, value: open)
     }
 }
 
@@ -564,13 +573,19 @@ struct StatusDot: View {
         // every time the row was rebuilt — which, in a list that rebuilds on every streamed tool
         // call, was most frames — so a column of dots flickered out of step with each other.
         if running && !still {
-            PhaseAnimator([1.0, 0.3]) { phase in
-                Circle().fill(color).frame(width: 5, height: 5).opacity(phase)
+            PhaseAnimator([false, true]) { expanded in
+                ZStack {
+                    Circle().stroke(color.opacity(expanded ? 0 : 0.45), lineWidth: 1)
+                        .frame(width: expanded ? 13 : 6, height: expanded ? 13 : 6)
+                    Circle().fill(color).frame(width: 6, height: 6)
+                }
+                .frame(width: 13, height: 13)
             } animation: { _ in
-                .easeInOut(duration: 0.7)
+                .easeOut(duration: 0.9)
             }
         } else {
-            Circle().fill(color).frame(width: 5, height: 5)
+            Circle().fill(color).frame(width: 6, height: 6)
+                .frame(width: 13, height: 13)
         }
     }
 }
