@@ -17,14 +17,19 @@ struct KeelApp: App {
                     delegate.app = app
                     await app.start()
                 }
-                // The panes inside add up to 1062 before any of them gets its ideal width.
-                .frame(minWidth: 1080, minHeight: 620)
+                // Rail 60 + panel 200 + handle 9 + conversation 420 + handle 9 + stage 340.
+                // The columns clamp themselves to the window above this, so it is a real floor
+                // rather than a hope.
+                .frame(minWidth: 1040, minHeight: 620)
                 // The window draws its own chrome: a translucent background would put the desktop
                 // behind a diff, and a dense reading surface needs an opaque ground.
                 .containerBackground(K.C.bg, for: .window)
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: true))
-        .defaultSize(width: 1440, height: 900)
+        // Sized for the smallest Mac anyone runs this on. A 14" MacBook Pro is 1512×982 points
+        // with 874 of usable height once the menu bar and Dock have theirs — so the old
+        // 1440×900 default was *taller* than the screen it opened on.
+        .defaultSize(width: 1400, height: 860)
 
         // A feature torn out of the tab strip. One window per lane id, sharing the same lanes
         // and the same daemon — two agents working where you can watch both, which is what
@@ -34,7 +39,8 @@ struct KeelApp: App {
         WindowGroup(id: "feature", for: Detached.self) { $request in
             if let request {
                 DetachedWindow(app: app, request: request)
-                    .frame(minWidth: 900, minHeight: 560)
+                    // A detached window draws the same panes, so it has the same floor.
+                    .frame(minWidth: 1040, minHeight: 560)
                     .containerBackground(K.C.bg, for: .window)
             }
         }
