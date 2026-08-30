@@ -646,8 +646,7 @@ pub async fn chat(
                 // `wc -l < a.txt; echo "exit: $?"` both times. The agent self-corrects from the
                 // refusal text either way, so it bought nothing and cost tokens every turn. The fix
                 // that works is in the UI, which says what an expansion refusal is.
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                ;
 
             if let Some(session) = &query.session {
                 command.arg("--resume").arg(session);
@@ -662,11 +661,11 @@ pub async fn chat(
             return;
         };
 
-        if let Some(model) = query.model.as_deref().filter(|m| {
-            !m.is_empty()
-                && m.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
-        }) {
+        // Every provider's output is read the same way, so the pipe belongs here rather than in
+        // one of the branches — which is exactly how Codex ended up without one.
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        if let Some(model) = model_arg(query.model.as_deref()) {
             command.arg("--model").arg(model);
         }
 
@@ -1747,4 +1746,85 @@ fn parse_hunks(raw: &str) -> Vec<Hunk> {
         });
     }
     hunks
+}
+
+/// The `--model` argument, if there is one to pass.
+///
+/// Both CLIs take `--model`; what differs is which names they answer to, and the picker offers
+/// each lane its own provider's list. Empty means "whatever the CLI's own config says", which is
+/// how somebody with `model = "gpt-5.6-sol"` in `~/.codex/config.toml` keeps it.
+///
+/// The character filter is the older half and stays: a model name is a word, and anything else
+/// arriving on that argument is somebody putting a shell fragment where a model goes. `.` is
+/// allowed because real names have it (`claude-sonnet-4.5`, `gpt-5.6-sol`).
+fn model_arg(model: Option<&str>) -> Option<&str> {
+    model.filter(|m| {
+        !m.is_empty()
+            && m.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug that made Codex do nothing at all.
+    ///
+    /// `child.stdout` is `Some` only when the command was configured with `Stdio::piped()`, and
+    /// that call lived inside the `claude` branch — so Codex's JSONL went to the daemon's own
+    /// stdout, `if let Some(stdout)` never ran, no `msg` event was ever sent, and the app watched
+    /// a turn start and then end with nothing in between. Nothing failed; nothing appeared.
+    ///
+    /// This is the shape of the mistake rather than the call site: a provider branch that forgets
+    /// the pipe produces a child whose output nobody can read.
+    #[tokio::test]
+    async fn a_child_without_a_piped_stdout_cannot_be_read() {
+        let mut unpiped = Command::new("echo");
+        unpiped.arg("hello");
+        let mut child = unpiped.spawn().expect("could not spawn `echo`");
+        assert!(
+            child.stdout.take().is_none(),
+            "a command with no `Stdio::piped()` still handed back a readable stdout — \
+             if this ever passes, the guard below is testing nothing"
+        );
+        let _ = child.wait().await;
+
+        let mut piped = Command::new("echo");
+        piped.arg("hello").stdout(Stdio::piped());
+        let mut child = piped.spawn().expect("could not spawn `echo`");
+        assert!(
+            child.stdout.take().is_some(),
+            "the pipe every provider's output is read through is missing"
+        );
+        let _ = child.wait().await;
+    }
+    /// Real model names from both CLIs survive, including the dots and dashes they contain.
+    #[test]
+    fn a_real_model_name_is_passed_through() {
+        assert_eq!(model_arg(Some("opus")), Some("opus"));
+        assert_eq!(model_arg(Some("gpt-5-codex")), Some("gpt-5-codex"));
+        assert_eq!(
+            model_arg(Some("claude-sonnet-4.5")),
+            Some("claude-sonnet-4.5")
+        );
+        assert_eq!(model_arg(Some("gpt-5.6-sol")), Some("gpt-5.6-sol"));
+    }
+
+    /// Empty means "leave it to the CLI's own config", which is the default and the only correct
+    /// answer for somebody running a model this list has never heard of.
+    #[test]
+    fn no_model_means_the_cli_decides() {
+        assert_eq!(model_arg(None), None);
+        assert_eq!(model_arg(Some("")), None);
+    }
+
+    /// A model name is a word. Anything else on that argument is somebody putting a shell
+    /// fragment where a model goes.
+    #[test]
+    fn a_model_name_that_is_not_a_name_is_dropped() {
+        assert_eq!(model_arg(Some("opus; rm -rf /")), None);
+        assert_eq!(model_arg(Some("../../etc/passwd")), None);
+        assert_eq!(model_arg(Some("$(whoami)")), None);
+    }
 }

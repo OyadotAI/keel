@@ -114,6 +114,14 @@ private struct LaneRow: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             marker
+            // Which agent is behind this tab. Two lanes running different providers looked
+            // identical, and the model picker below them offers a different list for each.
+            Text(lane.provider.short)
+                .font(K.F.ui(9, .semibold))
+                .tracking(K.tracking)
+                .foregroundStyle(K.C.faint)
+                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
+                .background(K.C.ghost, in: RoundedRectangle(cornerRadius: K.R.sm - 1))
             Text(lane.title)
                 .font(K.F.small.weight(selected ? .semibold : .regular))
                 .foregroundStyle(lane.turns.isEmpty ? K.C.faint : K.C.text)
@@ -233,13 +241,13 @@ private struct LaneRow: View {
         .onHover { hovering = $0 }
         .asButton { lanes.activeID = lane.id }
         .help(tooltip)
-        .accessibilityLabel("\(lane.title), \(activityText)")
+        .accessibilityLabel("\(lane.title), \(lane.provider.rawValue), \(activityText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// What the row used to show on its second and third lines, now the tooltip.
     private var tooltip: String {
-        var parts = [activityText]
+        var parts = [lane.provider.rawValue, activityText]
         if let wt = checkout { parts.append(branchText(wt)) }
         if let cost = lane.sessionCost { parts.append(money(cost, places: 2)) }
         return parts.joined(separator: " · ")
