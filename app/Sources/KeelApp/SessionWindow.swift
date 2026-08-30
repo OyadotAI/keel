@@ -291,11 +291,11 @@ struct SessionWindow: View {
     @State private var available: Double = 0
 
     /// Everything in the row that is not one of the two resizable columns.
-    private static let railWidth: Double = 60
-    private static let handleWidth: Double = 9
-    private static let chatMinWidth: Double = 360
-    private static let stageMinWidth: Double = 300
-    private static let panelMinWidth: Double = 200
+    static let railWidth: Double = 60
+    static let handleWidth: Double = 9
+    static let chatMinWidth: Double = 360
+    static let stageMinWidth: Double = 300
+    static let panelMinWidth: Double = 200
 
     /// Below this there is no room for the side panel beside a conversation and a stage.
     static let panelFloor = railWidth + panelMinWidth + handleWidth
@@ -334,14 +334,40 @@ struct SessionWindow: View {
     /// drawn is clamped. Widen the window and the pane you asked for comes back.
     private var panelFit: Double {
         guard available > 0 else { return panelWidth }
-        let room = showsStage ? roomForColumns - Self.stageMinWidth : roomForColumns
-        return max(Self.panelMinWidth, min(panelWidth, room))
+        return Self.columns(in: available, panel: panelWidth, stage: stageWidth,
+                            wantsPanel: panel != nil).panel
     }
 
     private var stageFit: Double {
         guard available > 0 else { return stageWidth }
-        return max(Self.stageMinWidth,
-                   min(stageWidth, roomForColumns - (showsPanel ? panelFit : 0)))
+        return Self.columns(in: available, panel: panelWidth, stage: stageWidth,
+                            wantsPanel: panel != nil).stage
+    }
+
+    /// What the two columns actually get, given the room and what was asked for.
+    ///
+    /// Pure and static so the invariant can be checked without a window: for every width and every
+    /// pair of stored widths, what is drawn has to *fit*. It did not, and the overflow came off the
+    /// left and took the activity rail with it — a 299pt panel and a 720pt stage need 1517pt of
+    /// row on a screen 1512pt wide.
+    ///
+    /// A column of zero means it steps aside: below `panelFloor` there is no room for the panel
+    /// beside a conversation and a stage, and below `stageFloor` there is no room for the stage.
+    static func columns(in available: Double, panel: Double, stage: Double, wantsPanel: Bool)
+        -> (panel: Double, stage: Double)
+    {
+        let showsPanel = wantsPanel && available >= panelFloor
+        let showsStage = available >= stageFloor
+        var fixed = railWidth + chatMinWidth
+        if showsPanel { fixed += handleWidth }
+        if showsStage { fixed += handleWidth }
+        let room = available - fixed
+
+        let p = showsPanel
+            ? max(panelMinWidth, min(panel, room - (showsStage ? stageMinWidth : 0)))
+            : 0
+        let s = showsStage ? max(stageMinWidth, min(stage, room - p)) : 0
+        return (p, s)
     }
 
     private var subtitle: String {
