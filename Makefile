@@ -74,8 +74,7 @@ release:
 	if [ "$$next" = "$$current" ]; then echo "    version unchanged ($$current)"; else \
 	  sed -i '' "s/^version = \"$$current\"/version = \"$$next\"/" Cargo.toml; \
 	  cargo build -p keel --quiet; \
-	  git add Cargo.toml Cargo.lock; \
-	  git commit -qm "chore: $$next"; \
+	  git commit -qm "chore: $$next" -- Cargo.toml Cargo.lock; \
 	fi; \
 	$(MAKE) dmg; \
 	gh release create "v$$next" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) \
