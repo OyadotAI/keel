@@ -689,12 +689,12 @@ struct StatusBar: View {
                     .help("Tokens this session, cache included")
             }
             if model.running, let rate = model.burnRate {
-                Text(String(format: "$%.2f/min", rate))
+                Text(money(rate, places: 2) + "/min")
                     .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
                     .help("Spend rate, from this session's finished turns")
             }
             if let cost = model.sessionCost {
-                Text(String(format: "$%.3f", cost))
+                Text(money(cost))
                     .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
                     .help("This session, as reported by the CLI")
             }

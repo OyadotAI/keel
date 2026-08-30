@@ -623,11 +623,27 @@ struct Flow: Layout {
 
 /// `12.4k`, `1.2M` — tokens are read at a glance or not at all.
 func compact(_ n: Int) -> String {
+    func fixed(_ v: Double, _ places: Int) -> String {
+        v.formatted(.number.precision(.fractionLength(places)))
+    }
     switch n {
     case ..<1000: return "\(n)"
-    case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
-    default: return String(format: "%.2fM", Double(n) / 1_000_000)
+    case ..<1_000_000: return fixed(Double(n) / 1000, 1) + "k"
+    default: return fixed(Double(n) / 1_000_000, 2) + "M"
     }
+}
+
+/// What a turn or a session cost, in the currency the provider actually bills in.
+///
+/// `.currency(code:)` rather than a `$` and a number: it is locale-aware in both directions, so a
+/// Mac set to French renders `0,004 $US` — the right separator *and* unambiguous about which
+/// dollar. `String(format: "$%.3f")`, which this replaces, formatted in the C locale regardless,
+/// so every cost on screen used a decimal point in a UI where nothing else did.
+///
+/// Three fraction digits because a turn frequently costs less than a cent, and a cost that always
+/// reads `$0.00` is not a cost.
+func money(_ amount: Double, places: Int = 3) -> String {
+    amount.formatted(.currency(code: "USD").precision(.fractionLength(places)))
 }
 
 

@@ -147,7 +147,9 @@ struct SessionsPanel: View {
     private func short(_ iso: String) -> String {
         guard iso.count >= 16 else { return iso }
         let day = String(iso.prefix(10))
-        let today = ISO8601DateFormatter().string(from: .now).prefix(10)
+        // An `ISO8601DateFormatter` allocated per row, in a list that redraws on every state
+        // refresh. `.iso8601` is a value type and free to make.
+        let today = Date.now.formatted(.iso8601.year().month().day()).prefix(10)
         return day == today ? String(iso.dropFirst(11).prefix(5)) : day
     }
 }

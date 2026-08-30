@@ -96,9 +96,9 @@ extension SessionModel {
     }
 
     static func humanSize(_ bytes: Int) -> String {
-        bytes < 1024 ? "\(bytes) B"
-            : bytes < 1024 * 1024 ? "\(bytes / 1024) KB"
-            : String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
+        // `.byteCount` picks the unit, rounds it and translates it. The hand-rolled ladder this
+        // replaces stopped at MB, so a 2 GB drop read as "2048.0 MB".
+        bytes.formatted(.byteCount(style: .file))
     }
 
     /// Handle a paste. Returns true when the paste was taken as an attachment and should not also
