@@ -18,6 +18,23 @@ struct ChatRail: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript
+            // Proof it is alive, directly above the box you type into.
+            //
+            // It used to live at the top of the stage column, which is the wrong side of the
+            // window: reading the conversation, the only evidence of a running turn was in a
+            // pane you might not be looking at — and on a window too narrow for the stage there
+            // was no working bar at all. A turn that is thinking for ninety seconds with nothing
+            // on screen beside the composer reads as a turn that did not start.
+            //
+            // Above the questions rather than below them, because it says "answer below".
+            if model.running {
+                WorkingBar(model: model)
+                    .padding(.horizontal, K.S.xxl)
+                    .frame(maxWidth: 800, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, K.S.sm)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             // A question holds the turn, so it sits where you are about to type — not in a
             // stage that may have switched to the preview while you were reading.
             if !model.pending.isEmpty {
@@ -533,24 +550,24 @@ struct Composer: View {
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
             .hint("Attach files (or paste, drop, or type @)")
             Spacer()
-            if model.running {
-                Button("Stop") { model.stop() }
-                    .buttonStyle(QuietButton(tone: K.C.del))
-                    .keyboardShortcut(.escape, modifiers: [])
-                    .help("Sends SIGINT — the turn ends rather than being abandoned (⌘. or Esc)")
-            } else {
-                Button {
-                    model.send()
-                } label: {
-                    HStack(spacing: K.S.snug) {
-                        Text("Send")
-                        Image(systemName: "return").font(K.F.tiny.weight(.bold))
-                    }
+            // Stop belongs to the working bar directly above, and having it here too put two of
+            // them forty pixels apart. What it cost was worse than the duplication: it *replaced*
+            // Send while a turn ran, and `send()` while running queues — so the queue the composer
+            // advertises ("N queued — they run in order when this turn ends") could not be added
+            // to by mouse at all.
+            Button {
+                model.send()
+            } label: {
+                HStack(spacing: K.S.snug) {
+                    Text(model.running ? "Queue" : "Send")
+                    Image(systemName: "return").font(K.F.tiny.weight(.bold))
                 }
-                .buttonStyle(FilledButton())
-                .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .hint("Send (Return, or ⌘Return). ⇧Return for a new line.")
             }
+            .buttonStyle(FilledButton())
+            .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .hint(model.running
+                  ? "Queue this — it runs when the turn above finishes (Return, or ⌘Return)."
+                  : "Send (Return, or ⌘Return). ⇧Return for a new line.")
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.half)

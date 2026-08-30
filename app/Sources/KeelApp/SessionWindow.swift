@@ -259,7 +259,6 @@ struct SessionWindow: View {
                 stageBar
                 Hairline()
                 detourBar
-                if model.running { WorkingBar(model: model) }
                 Group {
                     if let target = model.inspecting {
                         Inspector(model: model, target: target)

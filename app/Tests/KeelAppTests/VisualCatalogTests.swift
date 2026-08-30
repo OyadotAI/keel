@@ -87,6 +87,15 @@ final class VisualCatalogTests: XCTestCase {
         let model = model()
         let lanes = Lanes(client: Client(port: 0), port: 0)
 
+        // A turn in flight, because "is it working" is the question the composer has to answer
+        // and the still screens never showed it.
+        let live = self.model()
+        live.running = true
+        live.lastEventAt = Date()
+        live.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"grep -oE \"/[a-zA-Z0-9/_:{}-]+\" src/**/*.ts | sort -u | head","description":"Find every route"}}]}}"#.utf8),
+                    into: live.turns[0])
+        try capture(ChatRail(model: live), named: "conversation-working", in: directory)
+
         try capture(ReviewPacketView(model: model, lanes: lanes), named: "review", in: directory)
         try capture(ChatRail(model: model), named: "conversation", in: directory)
         try capture(TurnStage(model: model), named: "trace", in: directory)

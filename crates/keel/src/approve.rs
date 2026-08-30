@@ -297,15 +297,25 @@ pub async fn ask(
     // short-circuited, on any project.
     let is_question = is_question(&hook.tool_name);
 
-    // One decision, already made. Nothing is queued and nobody is asked.
-    if !is_question && crate::permissions::trusted(&repo) {
+    // An edit that leaves the repository is asked about whatever else is true, because every
+    // other reason to stay quiet is scoped to *this* project and this is not in it.
+    //
+    // These two checks used to be the other way round, so trust — "stop asking about commands in
+    // this repository" — silently covered writing to `/tmp`, to the home directory, and to
+    // somebody else's checkout. `edit_is_inside`'s own comment has always said those are a
+    // question; the trust check above it meant they never were.
+    let leaves_the_project = is_edit(&hook.tool_name) && !edit_is_inside(&repo, &hook.tool_input);
+
+    if is_edit(&hook.tool_name) && !leaves_the_project {
+        // Inside the repository is what `acceptEdits` already covers; nothing to ask.
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
         }));
     }
 
-    if is_edit(&hook.tool_name) && edit_is_inside(&repo, &hook.tool_input) {
+    // One decision, already made. Nothing is queued and nobody is asked.
+    if !is_question && !leaves_the_project && crate::permissions::trusted(&repo) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -315,7 +325,10 @@ pub async fn ask(
     let rules = rules_for(&hook.tool_name, &hook.tool_input);
     let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
 
-    if !is_question && already_allowed(&rules, &crate::permissions::effective(&repo, session)) {
+    if !is_question
+        && !leaves_the_project
+        && already_allowed(&rules, &crate::permissions::effective(&repo, session))
+    {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -552,6 +565,33 @@ pub(crate) mod tests {
             rules_for("Write", &outside),
             vec!["Write(/tmp/keel-test/*)"]
         );
+    }
+
+    /// Trust stops at the edge of the project it was granted for.
+    ///
+    /// "Trust this project" is scoped to one repository and stored in its own
+    /// `.keel/permissions.json` — that scoping is the reason it is safe to offer at all. But the
+    /// trust check ran *before* the "does this edit leave the repository" check, so on a trusted
+    /// project an edit to `/tmp`, to the home directory, or to somebody else's checkout was
+    /// deferred without a question. `edit_is_inside`'s own comment had always said those are a
+    /// question; the ordering above it meant they never were.
+    #[test]
+    fn an_edit_outside_the_project_is_not_covered_by_trusting_it() {
+        let repo = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        let inside = serde_json::json!({ "file_path": repo.join("src/approve.rs").to_string() });
+        assert!(
+            edit_is_inside(&repo, &inside),
+            "an edit to the project's own source read as leaving it"
+        );
+
+        for stray in ["/tmp/keel-test/x.rs", "/etc/hosts"] {
+            let outside = serde_json::json!({ "file_path": stray });
+            assert!(
+                !edit_is_inside(&repo, &outside),
+                "{stray} read as inside the project, so trust would cover it"
+            );
+        }
     }
 
     #[tokio::test]
