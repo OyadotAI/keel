@@ -30,13 +30,9 @@ struct KeelApp: App {
         // and the same daemon — two agents working where you can watch both, which is what
         // dragging a tab out of a browser does and what people expect here.
         WindowGroup(id: "lane", for: UUID.self) { $id in
-            if let id, let lane = app.lanes.lanes.first(where: { $0.id == id }) {
-                SessionWindow(lanes: app.lanes, pairing: app.pairing, app: app, pinned: lane)
-                    .frame(minWidth: 900, minHeight: 560)
-                    .containerBackground(K.C.bg, for: .window)
-                    .navigationTitle(lane.title)
-                    .onDisappear { lane.detached = false }
-            }
+            LaneWindow(app: app, id: id)
+                .frame(minWidth: 900, minHeight: 560)
+                .containerBackground(K.C.bg, for: .window)
         }
         .defaultSize(width: 1180, height: 820)
         .commands {
@@ -274,4 +270,48 @@ extension Notification.Name {
     static let keelTogglePanel = Notification.Name("keel.togglePanel")
     /// Object: the command to type into the terminal, opening it first.
     static let keelRunInTerminal = Notification.Name("keel.runInTerminal")
+}
+
+
+/// A feature in a window of its own.
+///
+/// The lane is resolved once and held: the window group re-evaluates its content whenever the
+/// lanes change, and a moment where the id matched nothing — a restore, a close, a relaunch
+/// with a stale saved value — left an empty white window behind.
+private struct LaneWindow: View {
+    let app: AppModel
+    let id: UUID?
+    @State private var lane: SessionModel?
+    @Environment(\.dismissWindow) private var dismiss
+
+    var body: some View {
+        Group {
+            if let lane {
+                SessionWindow(lanes: app.lanes, pairing: app.pairing, app: app, pinned: lane)
+                    .navigationTitle(lane.title)
+            } else {
+                VStack(spacing: K.S.sm) {
+                    Text("That feature is not open any more.")
+                        .font(K.F.body).foregroundStyle(K.C.dim)
+                    Button("Close this window") { dismiss() }.buttonStyle(QuietButton())
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(K.C.bg)
+            }
+        }
+        .task(id: id) {
+            guard lane == nil, let id else { return }
+            // The main window may still be restoring when this opens; wait for it rather than
+            // deciding the feature is gone.
+            for _ in 0..<40 {
+                if let found = app.lanes.lanes.first(where: { $0.id == id }) {
+                    found.detached = true
+                    lane = found
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        .onDisappear { lane?.detached = false }
+    }
 }
