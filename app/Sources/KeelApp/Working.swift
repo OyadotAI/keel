@@ -17,7 +17,7 @@ struct WorkingBar: View {
                 Sweep()
 
                 Text(activity)
-                    .font(K.F.mono(11))
+                    .font(K.F.codeSmall)
                     .foregroundStyle(K.C.text)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -25,7 +25,7 @@ struct WorkingBar: View {
                 Spacer(minLength: K.S.sm)
 
                 Text(elapsed(at: context.date))
-                    .font(K.F.mono(11, .medium))
+                    .font(K.F.codeSmall.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(K.C.accent)
 
@@ -34,8 +34,8 @@ struct WorkingBar: View {
                     .help("Sends SIGINT — the turn ends rather than being abandoned (⌘.)")
             }
             .padding(.horizontal, K.S.md)
-            .padding(.vertical, 6)
-            .background(waiting ? K.C.warn.opacity(0.14) : K.C.accent.opacity(0.10))
+            .padding(.vertical, K.S.half)
+            .background(waiting ? K.C.warn.wash : K.C.accent.wash)
             .overlay(alignment: .bottom) { Hairline() }
         }
     }

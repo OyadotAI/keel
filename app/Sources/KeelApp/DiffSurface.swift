@@ -35,7 +35,7 @@ struct DiffSurface: View {
                 Text(directory).foregroundStyle(K.C.faint)
                 Text(filename).foregroundStyle(K.C.text)
             }
-            .font(K.F.mono(11.5, .medium))
+            .font(K.F.codeSmall.weight(.medium))
             .lineLimit(1).truncationMode(.head)
             .textSelection(.enabled)
 
@@ -45,8 +45,8 @@ struct DiffSurface: View {
 
             if diff != nil {
                 DiffBar(adds: adds, dels: dels)
-                Text("+\(adds)").font(K.F.mono(10)).foregroundStyle(K.C.add).monospacedDigit()
-                Text("−\(dels)").font(K.F.mono(10)).foregroundStyle(K.C.del).monospacedDigit()
+                Text("+\(adds)").font(K.F.codeTiny).foregroundStyle(K.C.add).monospacedDigit()
+                Text("−\(dels)").font(K.F.codeTiny).foregroundStyle(K.C.del).monospacedDigit()
             }
 
             Menu {
@@ -62,7 +62,7 @@ struct DiffSurface: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis").font(.system(size: 10))
+                Image(systemName: "ellipsis").font(K.F.tiny)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .foregroundStyle(K.C.faint)
@@ -186,7 +186,7 @@ struct DiffLineRow: View {
                 .help(line.text.count > 80 ? line.text : "")
             if model.notes[key] != nil {
                 Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.accent)
+                    .font(K.F.tiny).foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.sm)
             }
         }
@@ -203,7 +203,7 @@ struct DiffLineRow: View {
 
         if editing {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "text.bubble").font(.system(size: 10))
+                Image(systemName: "text.bubble").font(K.F.tiny)
                     .foregroundStyle(K.C.accent)
                 TextField("A note for the agent…", text: $draft)
                     .textFieldStyle(.plain).font(K.F.small)
@@ -212,7 +212,7 @@ struct DiffLineRow: View {
                 Button("Cancel") { editing = false }.buttonStyle(QuietButton())
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-            .background(K.C.accent.opacity(0.07))
+            .background(K.C.accent.wash)
         }
     }
 

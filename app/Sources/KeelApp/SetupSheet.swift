@@ -79,10 +79,10 @@ struct SetupSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: K.S.xxs) {
                     Text("Project setup").font(K.F.title).foregroundStyle(K.C.text)
                     Text((model.repoPath as NSString).lastPathComponent)
-                        .font(K.F.mono(11)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeSmall).foregroundStyle(K.C.faint)
                 }
                 Spacer()
                 CloseButton(size: 10, label: "Close") { done() }
@@ -102,9 +102,9 @@ struct SetupSheet: View {
                 VStack(spacing: 0) {
                     ForEach(items) { it in
                         HStack(alignment: .top, spacing: K.S.sm) {
-                            Image(systemName: it.icon).font(.system(size: 12))
-                                .foregroundStyle(K.C.dim).frame(width: 18).padding(.top, 2)
-                            VStack(alignment: .leading, spacing: 2) {
+                            Image(systemName: it.icon).font(K.F.small)
+                                .foregroundStyle(K.C.dim).frame(width: 18).padding(.top, K.S.xxs)
+                            VStack(alignment: .leading, spacing: K.S.xxs) {
                                 Text(it.title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                                 Text(it.detail).font(K.F.micro).foregroundStyle(K.C.dim)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -131,7 +131,7 @@ struct SetupSheet: View {
             HStack {
                 Text("⌘K › Project setup brings this back.").font(K.F.micro).foregroundStyle(K.C.faint)
                 Spacer()
-                Button("Done") { done() }.buttonStyle(SendButton())
+                Button("Done") { done() }.buttonStyle(FilledButton())
             }
         }
         .padding(K.S.xl)

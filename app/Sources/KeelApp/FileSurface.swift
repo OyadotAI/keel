@@ -22,10 +22,10 @@ struct FileSurface: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "doc.text").font(.system(size: 10)).foregroundStyle(K.C.faint)
-                Text(path).font(K.F.mono(11.5, .medium)).foregroundStyle(K.C.text)
+                Image(systemName: "doc.text").font(K.F.tiny).foregroundStyle(K.C.faint)
+                Text(path).font(K.F.codeSmall.weight(.medium)).foregroundStyle(K.C.text)
                     .lineLimit(1).truncationMode(.head).textSelection(.enabled)
-                if let data { Text(SessionModel.humanSize(data.count)).font(K.F.mono(10)).foregroundStyle(K.C.faint) }
+                if let data { Text(SessionModel.humanSize(data.count)).font(K.F.codeTiny).foregroundStyle(K.C.faint) }
                 Spacer()
                 Button("Attach as context") { model.mention(path) }
                     .buttonStyle(QuietButton(tone: K.C.accent))

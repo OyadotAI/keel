@@ -11,7 +11,7 @@ struct DesignStrip: View {
                 HStack(spacing: K.S.sm) {
                     verdictLabel
                     Text(design.selector)
-                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                         .lineLimit(1).truncationMode(.head)
                     Spacer()
                 }
@@ -19,8 +19,8 @@ struct DesignStrip: View {
                 HStack(alignment: .top, spacing: K.S.md) {
                     shot("before", design.before)
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 10)).foregroundStyle(K.C.faint)
-                        .padding(.top, 26)
+                        .font(K.F.tiny).foregroundStyle(K.C.faint)
+                        .padding(.top, K.S.xl)
                     shot("after", design.after)
                     Spacer()
                 }
@@ -32,13 +32,13 @@ struct DesignStrip: View {
                 HStack(alignment: .top, spacing: K.S.md) {
                     VStack(alignment: .leading, spacing: K.S.xs) {
                         Text("CHANGED ON SCREEN")
-                            .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                            .sectionLabel()
                             .foregroundStyle(K.C.accent)
                         ForEach(Array(design.regions.prefix(6).enumerated()), id: \.offset) { i, r in
                             HStack(spacing: K.S.xs) {
-                                Text("\(i + 1)").font(K.F.mono(10, .semibold)).foregroundStyle(K.C.accent)
+                                Text("\(i + 1)").font(K.F.codeTiny.weight(.semibold)).foregroundStyle(K.C.accent)
                                     .frame(width: 14)
-                                Text(r.tag).font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                                Text(r.tag).font(K.F.codeTiny).foregroundStyle(K.C.dim)
                                 Text(r.text.isEmpty ? r.selector : r.text)
                                     .font(K.F.micro).foregroundStyle(K.C.faint)
                                     .lineLimit(1).truncationMode(.tail)
@@ -59,7 +59,7 @@ struct DesignStrip: View {
 
             if design.duplicated {
                 HStack(alignment: .top, spacing: K.S.sm) {
-                    Image(systemName: "doc.on.doc").font(.system(size: 10))
+                    Image(systemName: "doc.on.doc").font(K.F.tiny)
                     Text("A new component appeared and the likely source was never touched. Check "
                          + "it was edited rather than copied — that is how design drift starts.")
                         .fixedSize(horizontal: false, vertical: true)
@@ -80,13 +80,13 @@ struct DesignStrip: View {
             Pill(text: "PIXELS CHANGED", tone: .good)
         case .nothingChanged:
             // The failure the whole feature exists to catch: a green diff that changed nothing.
-            HStack(spacing: 5) {
+            HStack(spacing: K.S.snug) {
                 Pill(text: "NOTHING CHANGED", tone: .warn)
                 Text("the edit probably went to the wrong file")
                     .font(K.F.micro).foregroundStyle(K.C.warn)
             }
         case .unstable:
-            HStack(spacing: 5) {
+            HStack(spacing: K.S.snug) {
                 Pill(text: "NOT COMPARED", tone: .neutral)
                 Text("the page was still moving").font(K.F.micro).foregroundStyle(K.C.faint)
             }
@@ -97,7 +97,7 @@ struct DesignStrip: View {
     private func shot(_ label: String, _ image: NSImage?) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                .sectionLabel()
                 .foregroundStyle(K.C.faint)
             if let image {
                 Image(nsImage: image)
@@ -151,10 +151,10 @@ private struct PinRow: View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             HStack(spacing: K.S.sm) {
                 Text("\(index + 1)")
-                    .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                    .font(K.F.tiny.weight(.bold)).foregroundStyle(.white)
                     .frame(width: 18, height: 18).background(K.C.accent, in: Circle())
                 Text(pin.picked.text.isEmpty ? pin.picked.selector : "\(pin.picked.tag) · \(pin.picked.text)")
-                    .font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                    .font(K.F.codeTiny).foregroundStyle(K.C.dim)
                     .lineLimit(1).truncationMode(.tail)
                 Spacer()
                 if !pin.picked.hints.isEmpty {
@@ -171,10 +171,10 @@ private struct PinRow: View {
                 ForEach(Array(pin.picked.hints.enumerated()), id: \.element.id) { i, h in
                     HStack(spacing: K.S.sm) {
                         Text(i == 0 ? "best" : h.kind)
-                            .font(.system(size: 10, weight: i == 0 ? .semibold : .regular))
+                            .font(K.F.tiny.weight(i == 0 ? .semibold : .regular))
                             .foregroundStyle(i == 0 ? K.C.accent : K.C.faint)
                             .frame(width: 46, alignment: .leading)
-                        Text(h.value).font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                        Text(h.value).font(K.F.codeTiny).foregroundStyle(K.C.dim)
                             .lineLimit(1).truncationMode(.head)
                     }
                 }
@@ -182,7 +182,7 @@ private struct PinRow: View {
         }
         .padding(K.S.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(K.C.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.sm))
+        .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.accent.opacity(0.3), lineWidth: 1))
     }
 }

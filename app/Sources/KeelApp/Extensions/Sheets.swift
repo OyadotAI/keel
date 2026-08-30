@@ -34,7 +34,7 @@ struct SkillCatalog: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11))
+                Image(systemName: "magnifyingglass").font(K.F.micro)
                     .foregroundStyle(K.C.faint)
                 TextField("Search \(all.count) skills and plugins…", text: $query)
                     .textFieldStyle(.plain).font(K.F.body)
@@ -45,7 +45,7 @@ struct SkillCatalog: View {
 
             if query.isEmpty && !suggested.isEmpty {
                 Text("SUGGESTED FOR THIS REPOSITORY")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .sectionLabel()
                     .foregroundStyle(K.C.faint)
                     .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
             }
@@ -83,7 +83,7 @@ struct SkillCatalog: View {
             VStack(alignment: .leading, spacing: K.S.xxs) {
                 HStack(spacing: K.S.xs) {
                     Text(e.name).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
-                    Text(e.marketplace).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                    Text(e.marketplace).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 }
                 // A recommendation is a row that has to argue for itself.
                 if let why = e.reason, !why.isEmpty {
@@ -170,7 +170,7 @@ struct AddMCP: View {
                 Spacer()
                 Button("Cancel") { done() }.buttonStyle(QuietButton())
                 Button("Add") { add() }
-                    .buttonStyle(SendButtonWide())
+                    .buttonStyle(FilledButton())
                     .disabled(name.isEmpty || target.isEmpty)
             }
         }
@@ -178,11 +178,11 @@ struct AddMCP: View {
     }
 
     private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: K.S.tight) {
             Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
             TextField(hint, text: value)
                 .textFieldStyle(.plain).font(K.F.code)
-                .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
         }
@@ -223,11 +223,11 @@ struct NewSubagent: View {
         VStack(alignment: .leading, spacing: K.S.md) {
             Text("Create a subagent").font(K.F.title).foregroundStyle(K.C.text)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: K.S.tight) {
                 Text("Name").font(K.F.micro).foregroundStyle(K.C.faint)
                 TextField("test-runner", text: $name)
                     .textFieldStyle(.plain).font(K.F.code)
-                    .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                    .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
                     .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                     .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
             }
@@ -245,7 +245,7 @@ struct NewSubagent: View {
                 Spacer()
                 Button("Cancel") { done() }.buttonStyle(QuietButton())
                 Button("Create") { create() }
-                    .buttonStyle(SendButtonWide())
+                    .buttonStyle(FilledButton())
                     .disabled(name.isEmpty || about.isEmpty)
             }
         }
@@ -255,12 +255,12 @@ struct NewSubagent: View {
     private func editor(
         _ label: String, _ note: String?, _ value: Binding<String>, height: CGFloat
     ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: K.S.tight) {
             Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
             TextEditor(text: value)
                 .font(K.F.body).scrollContentBackground(.hidden)
                 .frame(height: height)
-                .padding(.horizontal, K.S.xs).padding(.vertical, 3)
+                .padding(.horizontal, K.S.xs).padding(.vertical, K.S.tight)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
             if let note {

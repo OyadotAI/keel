@@ -36,7 +36,7 @@ struct Inspector: View {
 
     private var header: some View {
         HStack(spacing: K.S.sm) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(K.C.faint)
+            Image(systemName: icon).font(K.F.micro).foregroundStyle(K.C.faint)
             Text(name).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                 .textSelection(.enabled)
             if fromRepo { Pill(text: "FROM THIS REPO", tone: .warn) }
@@ -92,7 +92,7 @@ struct Inspector: View {
             field("Event", h.event)
             // The command is the whole story for a hook, so it gets room and a monospace face.
             VStack(alignment: .leading, spacing: K.S.xs) {
-                Text("COMMAND").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                Text("COMMAND").sectionLabel()
                     .foregroundStyle(K.C.faint)
                 Text(h.command)
                     .font(K.F.code).foregroundStyle(K.C.text)
@@ -144,7 +144,7 @@ struct Inspector: View {
     private func field(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                .sectionLabel()
                 .foregroundStyle(K.C.faint)
             Text(value)
                 .font(K.F.body).foregroundStyle(K.C.text)
@@ -155,7 +155,7 @@ struct Inspector: View {
 
     private func pathField(_ path: String) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Text("FILE").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+            Text("FILE").sectionLabel()
                 .foregroundStyle(K.C.faint)
             Text(path)
                 .font(K.F.code).foregroundStyle(K.C.dim)
@@ -175,12 +175,12 @@ struct Inspector: View {
 
     private func warning(_ text: String) -> some View {
         HStack(alignment: .top, spacing: K.S.sm) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+            Image(systemName: "exclamationmark.triangle.fill").font(K.F.tiny)
             Text(text).fixedSize(horizontal: false, vertical: true)
         }
         .font(K.F.small).foregroundStyle(K.C.warn)
         .padding(K.S.sm)
-        .background(K.C.warn.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.sm))
+        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
     }
 
     private func actions(@ViewBuilder _ content: () -> some View) -> some View {

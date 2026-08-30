@@ -15,7 +15,7 @@ struct SkillsPanel: View {
             // Skills arrive inside plugins, so a gap shows up there; this is the pointer.
             if !model.missingSuggestions.isEmpty {
                 HStack(spacing: K.S.xs) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                    Image(systemName: "exclamationmark.triangle.fill").font(K.F.tiny)
                         .foregroundStyle(K.C.warn)
                     Text("\(model.missingSuggestions.count) recommended plugin\(model.missingSuggestions.count == 1 ? "" : "s") "
                          + "would add skills for this repository — see Plugins.")
@@ -158,7 +158,7 @@ struct ItemRow: View {
 
     var body: some View {
         HoverRow(selected: selected) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: K.S.hair) {
                 HStack(spacing: K.S.xs) {
                     Text(name)
                         .font(K.F.small.weight(selected ? .semibold : .regular))
@@ -166,8 +166,8 @@ struct ItemRow: View {
                         .lineLimit(1)
                     if fromRepo {
                         Text("repo")
-                            .font(.system(size: 10, weight: .semibold))
-                            .padding(.horizontal, 3).padding(.vertical, 0.5)
+                            .font(K.F.tiny.weight(.semibold))
+                            .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
                             .background(K.C.warn.opacity(0.2),
                                         in: RoundedRectangle(cornerRadius: 2))
                             .foregroundStyle(K.C.warn)
@@ -176,7 +176,7 @@ struct ItemRow: View {
                 }
                 if !detail.isEmpty {
                     Text(detail)
-                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -200,8 +200,8 @@ struct PanelAction: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 10))
+            HStack(spacing: K.S.snug) {
+                Image(systemName: icon).font(K.F.tiny)
                 Text(title)
                 Spacer()
             }
@@ -224,10 +224,10 @@ struct Recommended: View {
         if !model.missingSuggestions.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: K.S.xs) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                    Image(systemName: "exclamationmark.triangle.fill").font(K.F.tiny)
                         .foregroundStyle(K.C.warn)
                     Text("Recommended for this repository")
-                        .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                        .sectionLabel()
                         .foregroundStyle(K.C.warn)
                 }
                 .padding(.horizontal, K.S.md).padding(.top, K.S.md).padding(.bottom, K.S.xs)
@@ -257,7 +257,7 @@ struct Recommended: View {
                 }
                 Hairline().padding(.top, K.S.xs)
             }
-            .background(K.C.warn.opacity(0.06))
+            .background(K.C.warn.wash)
         }
     }
 }
@@ -281,7 +281,7 @@ struct Blank: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium)).foregroundStyle(K.C.accent)
+                .font(K.F.ui(16, .medium)).foregroundStyle(K.C.accent)
                 .frame(width: 24, height: 24, alignment: .leading)
             Text(title).font(K.F.title).foregroundStyle(K.C.text)
             Text(.init(body_))

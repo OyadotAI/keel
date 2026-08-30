@@ -118,10 +118,10 @@ struct Palette: View {
         VStack(spacing: 0) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11)).foregroundStyle(K.C.faint)
+                    .font(K.F.micro).foregroundStyle(K.C.faint)
                 TextField("Do something…", text: $query)
                     .textFieldStyle(.plain)
-                    .font(K.F.ui(14))
+                    .font(K.F.reading)
                     .focused($focused)
                     .onSubmit { runSelected() }
                     .onChange(of: query) { selection = 0 }
@@ -143,18 +143,18 @@ struct Palette: View {
                                     .font(K.F.micro).foregroundStyle(K.C.faint)
                                     .lineLimit(1)
                                 if let key = item.shortcut {
-                                    Text(key).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                    Text(key).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                                         .frame(width: 44, alignment: .trailing)
                                 } else if i == selection {
                                     Image(systemName: "return")
-                                        .font(.system(size: 10, weight: .bold))
+                                        .font(K.F.tiny.weight(.bold))
                                         .foregroundStyle(K.C.faint)
                                         .frame(width: 44, alignment: .trailing)
                                 } else {
                                     Color.clear.frame(width: 44, height: 1)
                                 }
                             }
-                            .padding(.horizontal, K.S.md).padding(.vertical, 5)
+                            .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
                             .background(i == selection ? K.C.accent.opacity(0.18) : .clear)
                             .contentShape(Rectangle())
                             .onTapGesture { selection = i; runSelected() }

@@ -55,7 +55,7 @@ struct CrashBar: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                .font(K.F.tiny).foregroundStyle(K.C.warn)
             Text(reports.count == 1
                  ? "Keel crashed last time (\(reports[0].name))."
                  : "Keel crashed \(reports.count) times since you last looked.")
@@ -80,6 +80,6 @@ struct CrashBar: View {
             CloseButton(size: 10, label: "Dismiss") { dismiss() }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .background(K.C.warn.opacity(0.10))
+        .background(K.C.warn.wash)
     }
 }

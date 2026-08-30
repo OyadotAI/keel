@@ -161,19 +161,19 @@ struct CommitList: View {
             ForEach(Array(model.commits.enumerated()), id: \.element.id) { i, c in
                 HoverRow(selected: model.viewingCommit?.sha == c.sha) {
                     HStack(alignment: .top, spacing: K.S.sm) {
-                        Image(systemName: "circle.fill").font(.system(size: 5))
-                            .foregroundStyle(i == 0 ? K.C.accent : K.C.faint).padding(.top, 5)
-                        VStack(alignment: .leading, spacing: 1) {
+                        Image(systemName: "circle.fill").font(K.F.ui(5))
+                            .foregroundStyle(i == 0 ? K.C.accent : K.C.faint).padding(.top, K.S.snug)
+                        VStack(alignment: .leading, spacing: K.S.hair) {
                             Text(c.subject).font(K.F.small).foregroundStyle(K.C.text)
                                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                             HStack(spacing: K.S.xs) {
                                 // Where it is: on this Mac only, or on the remote too.
                                 Pill(text: c.pushed ? "PUSHED" : "LOCAL", tone: c.pushed ? .good : .warn)
-                                Text(c.sha).font(K.F.mono(10))
-                                Text(c.date, style: .relative).font(K.F.mono(10))
-                                Text("ago").font(K.F.mono(10))
+                                Text(c.sha).font(K.F.codeTiny)
+                                Text(c.date, style: .relative).font(K.F.codeTiny)
+                                Text("ago").font(K.F.codeTiny)
                                 if c.files > 0 {
-                                    Text("· \(c.files) file\(c.files == 1 ? "" : "s")").font(K.F.mono(10))
+                                    Text("· \(c.files) file\(c.files == 1 ? "" : "s")").font(K.F.codeTiny)
                                 }
                             }
                             .foregroundStyle(K.C.faint)
@@ -235,11 +235,11 @@ struct NotARepo: View {
                     running = false
                 }
             }
-            .buttonStyle(SendButtonWide())
+            .buttonStyle(FilledButton())
             .disabled(running)
 
             Text("Runs `git init` here. No first commit and no `.gitignore` — those are yours.")
-                .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                .font(K.F.tiny).foregroundStyle(K.C.faint)
 
             if let error {
                 Text(error).font(K.F.micro).foregroundStyle(K.C.del)
@@ -273,7 +273,7 @@ struct PullRequest: View {
 
             HStack(spacing: K.S.sm) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                    .font(K.F.tiny).foregroundStyle(K.C.faint)
                 Text(model.branch ?? "—").font(K.F.code).foregroundStyle(K.C.dim)
                 if !model.changes.isEmpty {
                     Pill(text: "\(model.changes.count) UNCOMMITTED", tone: .warn)
@@ -315,7 +315,7 @@ struct PullRequest: View {
                     .buttonStyle(QuietButton())
                 if url == nil {
                     Button(running ? "Opening…" : "Create") { create() }
-                        .buttonStyle(SendButtonWide())
+                        .buttonStyle(FilledButton())
                         .disabled(running || model.mergeBlocker != nil)
                 }
             }
@@ -334,23 +334,23 @@ struct PullRequest: View {
     }
 
     private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: K.S.tight) {
             Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
             TextField(hint, text: value)
                 .textFieldStyle(.plain).font(K.F.body)
-                .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
         }
     }
 
     private func editor(_ label: String, _ value: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: K.S.tight) {
             Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
             TextEditor(text: value)
                 .font(K.F.body).scrollContentBackground(.hidden)
                 .frame(height: 90)
-                .padding(.horizontal, K.S.xs).padding(.vertical, 3)
+                .padding(.horizontal, K.S.xs).padding(.vertical, K.S.tight)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
         }
@@ -411,16 +411,16 @@ struct ChangeRow: View {
             HoverRow {
                 HStack(spacing: K.S.xs) {
                     Image(systemName: open ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(K.F.ui(7, .bold))
                         .foregroundStyle(K.C.faint).frame(width: 8)
                     Image(systemName: "folder")
-                        .font(.system(size: 10)).foregroundStyle(K.C.faint).frame(width: 11)
+                        .font(K.F.tiny).foregroundStyle(K.C.faint).frame(width: 11)
                     Text(node.name)
-                        .font(K.F.mono(11)).foregroundStyle(K.C.dim)
+                        .font(K.F.codeSmall).foregroundStyle(K.C.dim)
                         .lineLimit(1).truncationMode(.head)
                     Spacer(minLength: K.S.xs)
                     Text("\(node.fileCount)")
-                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 }
                 .padding(.leading, CGFloat(depth) * 10)
             } action: {
@@ -437,11 +437,11 @@ struct ChangeRow: View {
                 HStack(spacing: K.S.xs) {
                     Spacer().frame(width: 8)
                     Text(String((node.change?.label ?? "?").prefix(1)).uppercased())
-                        .font(K.F.mono(10, .bold))
+                        .font(K.F.codeTiny.weight(.bold))
                         .foregroundStyle(tint)
                         .frame(width: 11)
                     Text(node.name)
-                        .font(K.F.mono(11)).foregroundStyle(K.C.text)
+                        .font(K.F.codeSmall).foregroundStyle(K.C.text)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
                 }
@@ -492,10 +492,10 @@ struct CommitSurface: View {
                 Pill(text: commit.pushed ? "PUSHED" : "LOCAL", tone: commit.pushed ? .good : .warn)
                 Text(commit.subject).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                     .lineLimit(1)
-                Text(commit.sha).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                Text(commit.sha).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 Spacer()
                 Text("\(diffs.count) file\(diffs.count == 1 ? "" : "s")")
-                    .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                    .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 CloseButton(label: "Close commit") { model.viewingCommit = nil }
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
@@ -533,15 +533,15 @@ private struct CommitFile: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .bold)).foregroundStyle(K.C.faint).frame(width: 10)
-                Text(diff.path).font(K.F.mono(11.5, .medium)).foregroundStyle(K.C.text)
+                    .font(K.F.tiny.weight(.bold)).foregroundStyle(K.C.faint).frame(width: 10)
+                Text(diff.path).font(K.F.codeSmall.weight(.medium)).foregroundStyle(K.C.text)
                     .lineLimit(1).truncationMode(.head)
                 Spacer()
                 let adds = diff.hunks.flatMap(\.lines).count { $0.kind == "add" }
                 let dels = diff.hunks.flatMap(\.lines).count { $0.kind == "del" }
                 DiffBar(adds: adds, dels: dels)
-                Text("+\(adds)").font(K.F.mono(10)).foregroundStyle(K.C.add)
-                Text("−\(dels)").font(K.F.mono(10)).foregroundStyle(K.C.del)
+                Text("+\(adds)").font(K.F.codeTiny).foregroundStyle(K.C.add)
+                Text("−\(dels)").font(K.F.codeTiny).foregroundStyle(K.C.del)
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
             .contentShape(Rectangle())
@@ -549,8 +549,8 @@ private struct CommitFile: View {
             if open {
                 Hairline()
                 ForEach(Array(diff.hunks.enumerated()), id: \.offset) { _, hunk in
-                    Text(hunk.header).font(K.F.mono(10)).foregroundStyle(K.C.faint)
-                        .padding(.horizontal, K.S.md).padding(.vertical, 3)
+                    Text(hunk.header).font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.tight)
                         .frame(maxWidth: .infinity, alignment: .leading).background(K.C.well)
                     let marks = Intraline.marks(hunk.lines)
                     ForEach(Array(hunk.lines.enumerated()), id: \.offset) { li, line in

@@ -353,7 +353,7 @@ private struct DetachedWindow: View {
 
     private func message(_ text: String, detail: String) -> some View {
         VStack(spacing: K.S.sm) {
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 20))
+            Image(systemName: "exclamationmark.triangle").font(K.F.ui(20))
                 .foregroundStyle(K.C.warn)
             Text(text).font(K.F.body).foregroundStyle(K.C.text)
             Text(detail).font(K.F.micro).foregroundStyle(K.C.faint)

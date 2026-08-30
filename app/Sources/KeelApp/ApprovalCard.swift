@@ -18,9 +18,9 @@ struct ApprovalCard: View {
         VStack(alignment: .leading, spacing: K.S.md) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                    .font(K.F.tiny).foregroundStyle(K.C.warn)
                 Text("WAITING FOR YOU")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .sectionLabel()
                     .foregroundStyle(K.C.warn)
                 Spacer()
                 Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
@@ -59,7 +59,7 @@ struct ApprovalCard: View {
                 .font(K.F.micro).foregroundStyle(K.C.faint)
         }
         .padding(K.S.md)
-        .background(K.C.warn.opacity(0.07), in: RoundedRectangle(cornerRadius: K.R.md))
+        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
         .overlay(
             RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1)
         )
@@ -98,9 +98,9 @@ struct QuestionCard: View {
         VStack(alignment: .leading, spacing: K.S.md) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "questionmark.bubble.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                    .font(K.F.tiny).foregroundStyle(K.C.warn)
                 Text("THE AGENT IS ASKING")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .sectionLabel()
                     .foregroundStyle(K.C.warn)
                 Spacer()
                 Text("the turn is paused").font(K.F.micro).foregroundStyle(K.C.faint)
@@ -124,13 +124,13 @@ struct QuestionCard: View {
                                 Image(systemName: on
                                       ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
                                       : (q.multiSelect ? "square" : "circle"))
-                                    .font(.system(size: 10))
+                                    .font(K.F.tiny)
                                     .foregroundStyle(on ? K.C.accent : K.C.faint)
                                 Text(o).font(K.F.small).foregroundStyle(K.C.text)
                                 Spacer()
                                 // The first question's options answer to ⌘⌥1…9, and say so.
                                 if questions.first?.id == q.id, i < 9 {
-                                    Text("⌘⌥\(i + 1)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                    Text("⌘⌥\(i + 1)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
                                 }
                             }
                             .contentShape(Rectangle())
@@ -150,13 +150,13 @@ struct QuestionCard: View {
             HStack {
                 Spacer()
                 Button("Answer  ⌘⌥↩") { model.answer(pending, text: rendered) }
-                    .buttonStyle(SendButton())
+                    .buttonStyle(FilledButton())
                     .keyboardShortcut(.return, modifiers: [.command, .option])
                     .disabled(!complete)
             }
         }
         .padding(K.S.md)
-        .background(K.C.warn.opacity(0.07), in: RoundedRectangle(cornerRadius: K.R.md))
+        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
         .overlay(
             RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1)
         )

@@ -169,24 +169,24 @@ struct AttachmentStrip: View {
         if !model.attachments.isEmpty {
             Flow(spacing: K.S.half) {
                 ForEach(model.attachments) { a in
-                    HStack(spacing: 5) {
+                    HStack(spacing: K.S.snug) {
                         if let t = a.thumbnail {
                             Image(nsImage: t).resizable().scaledToFill()
                                 .frame(width: 16, height: 16).clipped()
                                 .clipShape(RoundedRectangle(cornerRadius: 2))
                         } else {
                             Image(systemName: "paperclip")
-                                .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                                .font(K.F.tiny).foregroundStyle(K.C.faint)
                         }
                         Text(a.label)
-                            .font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                            .font(K.F.codeTiny).foregroundStyle(K.C.dim)
                             .lineLimit(1).truncationMode(.head)
                         CloseButton(size: 10) {
                             model.attachments.removeAll { $0.id == a.id }
                         }
                     }
-                    .padding(.leading, 6).padding(.trailing, 2)
-                    .padding(.vertical, 1)
+                    .padding(.leading, K.S.half).padding(.trailing, K.S.xxs)
+                    .padding(.vertical, K.S.hair)
                     .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
                     .overlay(
                         RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1)

@@ -109,11 +109,11 @@ struct TurnStage: View {
                             withAnimation(K.M.settle) { proxy.scrollTo(id, anchor: .bottom) }
                         }
                     } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "arrow.down").font(.system(size: 10, weight: .bold))
+                        HStack(spacing: K.S.snug) {
+                            Image(systemName: "arrow.down").font(K.F.tiny.weight(.bold))
                             Text("Jump to latest").font(K.F.micro)
                         }
-                        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
                         .background(K.C.raised, in: Capsule())
                         .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
                         .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
@@ -140,7 +140,7 @@ private struct QuietRun: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             Text(first == last ? "Turn \(first)" : "Turns \(first)–\(last)")
-                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                .sectionLabel()
             Text("answered in the conversation, changed nothing")
                 .font(K.F.micro)
             Spacer()
@@ -222,7 +222,7 @@ struct TurnCard: View {
         .padding(.horizontal, K.S.xl)
         .padding(.vertical, K.S.lg)
         .background(
-            model.focusedTurn == turn.id ? K.C.accent.opacity(0.05) : .clear
+            model.focusedTurn == turn.id ? K.C.accent.wash : .clear
         )
     }
 
@@ -231,19 +231,19 @@ struct TurnCard: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
             Text("TURN \(number)")
-                .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                .sectionLabel()
                 .foregroundStyle(K.C.faint)
             if !turn.finished { Pill(text: "RUNNING", tone: .accent) }
             Spacer(minLength: K.S.sm)
             Text(turn.started, style: .time)
-                .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                .font(K.F.codeTiny).foregroundStyle(K.C.faint)
             if turn.snapshot != nil, turn.finished {
                 Menu {
                     Button("Restore files to before this turn") {
                         Task { await model.restore(to: turn) }
                     }
                 } label: {
-                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 10))
+                    Image(systemName: "clock.arrow.circlepath").font(K.F.tiny)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .foregroundStyle(K.C.faint)
@@ -260,7 +260,7 @@ private struct UndoBar: View {
 
     var body: some View {
         HStack(spacing: K.S.sm) {
-            Image(systemName: "clock.arrow.circlepath").font(.system(size: 10))
+            Image(systemName: "clock.arrow.circlepath").font(K.F.tiny)
                 .foregroundStyle(K.C.accent)
             Text("Files were rewound.").font(K.F.small).foregroundStyle(K.C.text)
             Button("Undo") { Task { await model.restore(tree: undo); model.undoSnapshot = nil } }
@@ -269,7 +269,7 @@ private struct UndoBar: View {
             CloseButton(size: 10, label: "Dismiss") { model.undoSnapshot = nil }
         }
         .padding(.horizontal, K.S.xl).padding(.vertical, K.S.sm)
-        .background(K.C.accent.opacity(0.07))
+        .background(K.C.accent.wash)
     }
 }
 
@@ -312,17 +312,17 @@ struct SectionBar: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
-                .font(.system(size: 10, weight: .bold))
+                .font(K.F.tiny.weight(.bold))
                 .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.6))
                 .frame(width: 10)
             Text(title)
-                .font(.system(size: 10, weight: .semibold)).tracking(0.4)
+                .sectionLabel()
                 .foregroundStyle(K.C.dim)
             if let accessory { accessory }
             Spacer()
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .background(hovering ? K.C.text.opacity(0.03) : .clear)
+        .background(hovering ? K.C.hover : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .asButton { withAnimation(K.M.flow) { open.toggle() } }
@@ -330,13 +330,7 @@ struct SectionBar: View {
     }
 }
 
-extension View {
-    /// Make a hand-drawn row a real control. A tap gesture on a view is invisible to the keyboard
-    /// and to VoiceOver; wrapping the same view in a plain `Button` changes nothing on screen.
-    func asButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) { self }.buttonStyle(.plain)
-    }
-}
+
 
 // MARK: - Commands
 
@@ -439,7 +433,7 @@ struct GroupRow: View {
             HStack(spacing: K.S.sm) {
                 StatusDot(failed: group.failed, running: group.running)
                 Text(group.tool)
-                    .font(K.F.mono(11, .medium))
+                    .font(K.F.codeSmall.weight(.medium))
                     .foregroundStyle(group.failed ? K.C.del : K.C.dim)
                     .frame(width: 56, alignment: .leading)
 
@@ -447,24 +441,24 @@ struct GroupRow: View {
                     Subject(group.first.subject)
                 } else {
                     Text("\(group.calls.count)×")
-                        .font(K.F.mono(10, .medium)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny.weight(.medium)).foregroundStyle(K.C.faint)
                     Subject(group.first.subject)
                 }
                 // A subagent's work, as a count on its row rather than forty rows of its own.
                 let nested = group.calls.reduce(0) { $0 + $1.children.count }
                 if nested > 0 {
                     Text("\(nested) call\(nested == 1 ? "" : "s")")
-                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 }
 
                 Spacer(minLength: K.S.sm)
                 Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(K.F.tiny.weight(.bold))
                     .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.45))
             }
-            .padding(.horizontal, K.S.md).padding(.vertical, 3)
-            .background(live ? K.C.accent.opacity(0.055)
-                              : (hovering ? K.C.text.opacity(0.04) : .clear))
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.tight)
+            .background(live ? K.C.accent.wash
+                              : (hovering ? K.C.hover : .clear))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
             .asButton { withAnimation(K.M.flow) { userSet = !open } }
@@ -521,7 +515,7 @@ private struct CallDetail: View {
                 StatusDot(failed: call.failed, running: call.running)
                 Subject(call.subject)
             }
-            .padding(.vertical, 2).padding(.trailing, K.S.md)
+            .padding(.vertical, K.S.xxs).padding(.trailing, K.S.md)
             .contentShape(Rectangle())
             .asButton {
                 if !call.output.isEmpty || !call.children.isEmpty {
@@ -653,11 +647,11 @@ struct TurnFooter: View {
 
     /// Caption over value. The caption is what made the old line unreadable by its absence.
     private func cell(_ label: String, _ value: String, icon: String, tone: Color = K.C.text, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(K.C.faint)
-            HStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(tone == K.C.text ? K.C.faint : tone)
-                Text(value).font(K.F.mono(11)).monospacedDigit().foregroundStyle(tone).lineLimit(1)
+        VStack(alignment: .leading, spacing: K.S.hair) {
+            Text(label).sectionLabel().foregroundStyle(K.C.faint)
+            HStack(spacing: K.S.xs) {
+                Image(systemName: icon).font(K.F.tiny).foregroundStyle(tone == K.C.text ? K.C.faint : tone)
+                Text(value).font(K.F.codeSmall).monospacedDigit().foregroundStyle(tone).lineLimit(1)
             }
         }
         .help(help)
@@ -708,18 +702,18 @@ struct ProblemList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             HStack {
-                Text("PROBLEMS").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                Text("PROBLEMS").sectionLabel()
                     .foregroundStyle(K.C.del)
                 Spacer()
                 Button("Hand these to the agent") { model.prompt = prompt }
                     .buttonStyle(QuietButton())
             }
-            .padding(.bottom, 2)
+            .padding(.bottom, K.S.xxs)
 
             ForEach(problems.prefix(20)) { p in
                 HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
                     Text(p.severity == "error" ? "✗" : "!")
-                        .font(K.F.mono(10, .bold))
+                        .font(K.F.codeTiny.weight(.bold))
                         .foregroundStyle(p.severity == "error" ? K.C.del : K.C.warn)
                         .frame(width: 10)
                     Text(p.message).font(K.F.small).foregroundStyle(K.C.text)
@@ -727,7 +721,7 @@ struct ProblemList: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: K.S.sm)
                     Text("\(p.file):\(p.line)")
-                        .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                         .lineLimit(1).truncationMode(.head)
                 }
             }
@@ -750,22 +744,4 @@ struct ProblemList: View {
     }
 }
 
-/// A button that reads as a control without shouting. Stock `.bordered` is too heavy for a dense
-/// surface, and `.plain` gives no affordance at all.
-struct QuietButton: ButtonStyle {
-    var tone: Color = K.C.dim
-    @State private var hovering = false
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(K.F.small)
-            .foregroundStyle(configuration.isPressed ? K.C.text : tone)
-            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(hovering ? K.C.text.opacity(0.07) : K.C.text.opacity(0.03))
-            )
-            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-            .onHover { hovering = $0 }
-    }
-}

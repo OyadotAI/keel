@@ -54,6 +54,15 @@ enum K {
         static let addBG = pair(0xE7F6EC, 0x12291B)
         static let delBG = pair(0xFCEBEA, 0x2B1517)
 
+        /// The three neutral fills every hand-drawn control reaches for: a surface that is barely
+        /// there, the same one under the pointer, and a selected one. Written as 24 distinct
+        /// `.opacity()` literals before they had names — `0.03`, `0.04`, `0.05`, `0.055`, `0.06`,
+        /// `0.07`, `0.08` were all one intent, and two controls side by side disagreed by a
+        /// hundredth, which is a difference you can see and cannot name.
+        static let ghost = text.opacity(0.04)
+        static let hover = text.opacity(0.08)
+        static let tint = accent.opacity(0.16)
+
         /// Every token, for the test that checks contrast and that both appearances differ.
         static let all: [(String, Color)] = [
             ("bg", bg), ("surface", surface), ("chrome", chrome), ("raised", raised), ("well", well),
@@ -92,26 +101,40 @@ enum K {
             .system(size: size, weight: weight, design: .monospaced)
         }
 
+        /// 10 · the floor, and the size of an eyebrow or a badge. Named because it was already
+        /// the most-used size in the app by a distance — 115 of the 147 inline `.system(size:)`
+        /// calls were this one, written out because the scale had no word for it.
+        static let tiny = ui(10)
         /// 11 · a label, a count, a timestamp. The platform's small-system size and the floor:
         /// nothing meant to be read is set below `floor`, and a test says so.
         static let micro = ui(11)
         static let floor: CGFloat = 10
         /// Every named size, for the test.
         static let sizes: [(String, CGFloat)] = [
-            ("micro", 11), ("small", 12), ("body", 13), ("title", 16), ("display", 24),
-            ("code", 12), ("codeSmall", 11),
+            ("tiny", 10), ("micro", 11), ("small", 12), ("body", 13), ("reading", 14),
+            ("title", 16), ("display", 24),
+            ("codeTiny", 10), ("codeSmall", 11), ("code", 12),
         ]
-        /// 11.5 · secondary rows
+        /// 12 · secondary rows
         static let small = ui(12)
-        /// 12.5 · body, the default
+        /// 13 · body, the default
         static let body = ui(13)
-        /// 15 · a section that has to be found
+        /// 16 · a section that has to be found
         static let title = ui(16, .semibold)
-        /// 22 · the one heading on a screen
+        /// 24 · the one heading on a screen
         static let display = ui(24, .semibold)
+
+        /// 14 · text you type into or read at length: the composer, the palette's query, and the
+        /// assistant's prose. A step above `body` because a paragraph and a table row are not read
+        /// the same way.
+        static let reading = ui(14)
 
         static let code = mono(12)
         static let codeSmall = mono(11)
+        /// 10 · a figure in a row — a count, a token total, a duration. Mono so a number that
+        /// ticks up does not reflow the line around it. This was the single most-written size in
+        /// the app, at 56 call sites, and the scale had no word for it.
+        static let codeTiny = mono(10)
     }
 
     // MARK: - Space
@@ -120,6 +143,13 @@ enum K {
     // they did not meant forty literal `spacing: 6`s that the tokens could not see.
 
     enum S {
+        /// The tight end, named rather than pretended away. A 4pt grid cannot express the inset a
+        /// dense row actually wants, so `1`, `3` and `5` were written as literals ~120 times —
+        /// including inside `HoverRow`, `FilledButton`, `QuietButton` and `Pill`, the components
+        /// that define the grid. A scale the system itself does not follow is not a scale.
+        static let hair: CGFloat = 1
+        static let tight: CGFloat = 3
+        static let snug: CGFloat = 5
         static let xxs: CGFloat = 2
         static let xs: CGFloat = 4
         static let half: CGFloat = 6
@@ -129,6 +159,10 @@ enum K {
         static let xl: CGFloat = 24
         static let xxl: CGFloat = 40
     }
+
+    /// The letter-spacing an uppercase label gets. One value: the app had 0.7, 0.6, 0.4 and 0.3
+    /// for the same treatment, which is a difference nobody can name and everybody can see.
+    static let tracking: CGFloat = 0.6
 
     enum R {
         static let sm: CGFloat = 4
@@ -230,12 +264,9 @@ struct HoverRow<Content: View>: View {
         Button { action?() } label: {
             content
                 .padding(.horizontal, K.S.md)
-                .padding(.vertical, 3)
+                .padding(.vertical, K.S.tight)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    selected ? K.C.accent.opacity(0.16)
-                             : (hovering ? K.C.text.opacity(0.06) : .clear)
-                )
+                .background(selected ? K.C.tint : (hovering ? K.C.hover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -244,6 +275,16 @@ struct HoverRow<Content: View>: View {
 }
 
 extension View {
+    /// The eyebrow above a section: 10pt, semibold, tracked.
+    ///
+    /// A modifier rather than a wrapping view, because the 22 places that wrote this out by hand
+    /// each already set their own colour on the same `Text`, and a wrapper would have meant
+    /// restructuring 22 call sites to change none of their pixels. Three tracking values —
+    /// 0.7, 0.6 and 0.4 — collapse to `K.tracking`.
+    func sectionLabel() -> some View {
+        font(K.F.tiny.weight(.semibold)).tracking(K.tracking)
+    }
+
     /// A tooltip that is also the VoiceOver label. Icon-only controls had thirty tooltips and no
     /// labels; the strings were there, they were just pointer-only.
     func hint(_ text: String) -> some View {
@@ -251,25 +292,67 @@ extension View {
     }
 }
 
-/// A small status pill. One shape for every state so they read as a set.
-/// The one filled button. Every primary call to action in the app is this, so a filled
-/// accent block means "the thing to do here" everywhere it appears.
+/// The one filled button. Every primary call to action in the app is this, so a filled accent
+/// block means "the thing to do here" everywhere it appears.
+///
+/// It says "the one" because there were three. `SendButton` in `ChatRail` and `SendButtonWide` in
+/// `Welcome` were byte-identical to each other but for a point of vertical padding, and each
+/// carried a comment claiming to be the only primary style. What they had that this did not was a
+/// disabled appearance, which is why they existed at all; it is here now.
 struct FilledButton: ButtonStyle {
     var tone: Color = K.C.accent
+    @Environment(\.isEnabled) private var enabled
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(K.F.small.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, K.S.md).padding(.vertical, 5)
+            .foregroundStyle(enabled ? Color.white : K.C.faint)
+            .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
             .background(
-                RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(tone.opacity(configuration.isPressed ? 0.8 : (hovering ? 0.92 : 1)))
+                RoundedRectangle(cornerRadius: K.R.sm).fill(
+                    enabled
+                        ? tone.opacity(configuration.isPressed ? 0.8 : (hovering ? 0.92 : 1))
+                        : K.C.line
+                )
             )
             .onHover { hovering = $0 }
     }
 }
+
+/// A button that reads as a control without shouting. Stock `.bordered` is too heavy for a dense
+/// surface, and `.plain` gives no affordance at all.
+///
+/// The most-used control in the app — and it lived in `TurnStage.swift`, a feature file, where
+/// nobody looking for the design system would find it. That is most of why the system has been
+/// re-implemented as often as it has been used.
+struct QuietButton: ButtonStyle {
+    var tone: Color = K.C.dim
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(K.F.small)
+            .foregroundStyle(configuration.isPressed ? K.C.text : tone)
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
+            .background(
+                RoundedRectangle(cornerRadius: K.R.sm)
+                    .fill(hovering ? K.C.hover : K.C.ghost)
+            )
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    /// Make a hand-drawn row a real control. A tap gesture on a view is invisible to the keyboard
+    /// and to VoiceOver; wrapping the same view in a plain `Button` changes nothing on screen.
+    func asButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { self }.buttonStyle(.plain)
+    }
+}
+
+/// A small status pill. One shape for every state so they read as a set.
 
 struct Pill: View {
     let text: String
@@ -278,10 +361,10 @@ struct Pill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.3)
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 3))
+            .font(K.F.tiny.weight(.semibold))
+            .tracking(K.tracking)
+            .padding(.horizontal, K.S.snug).padding(.vertical, K.S.xxs)
+            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: K.R.sm - 1))
             .foregroundStyle(color)
     }
 
@@ -294,6 +377,13 @@ struct Pill: View {
         case .neutral: K.C.faint
         }
     }
+}
+
+extension Color {
+    /// A faint wash of this colour behind a row or a bar — a turn that is live, a hunk that is
+    /// picked, the working bar. The tone carries the meaning; the strength is not a per-site
+    /// decision, and it was made as one eight different ways.
+    var wash: Color { opacity(0.08) }
 }
 
 /// A hairline. `Divider()` renders heavier than a real 1px rule at 2x.
@@ -341,7 +431,7 @@ struct CloseButton: View {
 /// scroll view took a click to settle before its buttons responded — the "click a few times"
 /// problem. Two or three chips should simply be visible.
 struct Flow: Layout {
-    var spacing: CGFloat = 6
+    var spacing: CGFloat = K.S.half
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity

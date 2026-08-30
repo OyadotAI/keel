@@ -54,10 +54,10 @@ struct GitPanel: View {
             } label: {
                 HStack(spacing: K.S.sm) {
                     Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+                        .font(K.F.ui(9, .semibold)).frame(width: 10)
                     Text(title).font(K.F.small.weight(.semibold))
                     Spacer()
-                    Text("\(count)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                    Text("\(count)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 }
                 .foregroundStyle(K.C.text)
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
@@ -76,7 +76,7 @@ struct GitPanel: View {
     private var branchHeader: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "arrow.triangle.branch").font(.system(size: 11))
+                Image(systemName: "arrow.triangle.branch").font(K.F.micro)
                     .foregroundStyle(K.C.accent)
                 Text(b?.current ?? model.branch ?? "—")
                     .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text).lineLimit(1)
@@ -101,7 +101,7 @@ struct GitPanel: View {
                                     .font(K.F.micro).foregroundStyle(K.C.dim)
                                     .fixedSize(horizontal: false, vertical: true)
                                 TextField("git@github.com:owner/repo.git", text: $remoteURL)
-                                    .textFieldStyle(.roundedBorder).font(K.F.mono(11))
+                                    .textFieldStyle(.roundedBorder).font(K.F.codeSmall)
                                     .onSubmit { addRemote() }
                                 HStack {
                                     Spacer()
@@ -117,7 +117,7 @@ struct GitPanel: View {
             }
             HStack(spacing: K.S.sm) {
                 if let c = current, let up = c.upstream {
-                    Text(up).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                    Text(up).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
                         .truncationMode(.head).help("Tracks \(up)")
                 }
                 if let what = model.gitBusy {
@@ -230,14 +230,14 @@ struct GitPanel: View {
                 HoverRow(selected: br.current) {
                     HStack(spacing: K.S.sm) {
                         Image(systemName: br.current ? "checkmark" : "arrow.triangle.branch")
-                            .font(.system(size: 10, weight: br.current ? .bold : .regular))
+                            .font(K.F.tiny.weight(br.current ? .bold : .regular))
                             .foregroundStyle(br.current ? K.C.accent : K.C.faint)
                             .frame(width: 12)
                         Text(br.name).font(K.F.small.weight(br.current ? .semibold : .regular))
                             .foregroundStyle(K.C.text).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        if br.ahead > 0 { Text("\(br.ahead)↑").font(K.F.mono(10)).foregroundStyle(K.C.warn) }
-                        if br.behind > 0 { Text("\(br.behind)↓").font(K.F.mono(10)).foregroundStyle(K.C.accent) }
+                        if br.ahead > 0 { Text("\(br.ahead)↑").font(K.F.codeTiny).foregroundStyle(K.C.warn) }
+                        if br.behind > 0 { Text("\(br.behind)↓").font(K.F.codeTiny).foregroundStyle(K.C.accent) }
                     }
                     .help(br.subject + (br.upstream.map { " — tracks \($0)" } ?? " — not pushed"))
                 } action: {
@@ -282,7 +282,7 @@ struct GitPanel: View {
                 ForEach(allRemote ? remote : Array(remote.prefix(5)), id: \.self) { name in
                     HoverRow {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "icloud").font(.system(size: 10)).foregroundStyle(K.C.faint)
+                            Image(systemName: "icloud").font(K.F.tiny).foregroundStyle(K.C.faint)
                                 .frame(width: 12)
                             Text(name.split(separator: "/", maxSplits: 1).last.map(String.init) ?? name)
                                 .font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1).truncationMode(.middle)

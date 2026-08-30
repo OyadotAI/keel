@@ -47,9 +47,9 @@ struct StartProject: View {
                     Text(m.rawValue)
                         .font(K.F.small.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? K.C.text : K.C.faint)
-                        .padding(.horizontal, K.S.md).padding(.vertical, 5)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
                         .background(RoundedRectangle(cornerRadius: K.R.sm - 1)
-                            .fill(on ? K.C.raised : .clear).padding(1))
+                            .fill(on ? K.C.raised : .clear).padding(K.S.hair))
                         .contentShape(Rectangle())
                         .asButton { mode = m; query = "" }
                 }
@@ -97,13 +97,13 @@ struct StartProject: View {
                 VStack(spacing: K.S.sm) {
                     search("Search \(Template.all.count) templates…")
                     ScrollView {
-                        LazyVStack(spacing: 2) {
+                        LazyVStack(spacing: K.S.xxs) {
                             ForEach(templates) { t in
                                 let on = template.id == t.id
                                 HStack(spacing: K.S.sm) {
-                                    Image(systemName: t.icon).font(.system(size: 12))
+                                    Image(systemName: t.icon).font(K.F.small)
                                         .foregroundStyle(on ? K.C.accent : K.C.dim).frame(width: 18)
-                                    VStack(alignment: .leading, spacing: 1) {
+                                    VStack(alignment: .leading, spacing: K.S.hair) {
                                         Text(t.title).font(K.F.small.weight(on ? .semibold : .regular))
                                             .foregroundStyle(K.C.text)
                                         if !t.like.isEmpty {
@@ -116,7 +116,7 @@ struct StartProject: View {
                                     Spacer(minLength: 0)
                                 }
                                 .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)
-                                .background(on ? K.C.accent.opacity(0.10) : .clear,
+                                .background(on ? K.C.accent.wash : .clear,
                                             in: RoundedRectangle(cornerRadius: K.R.sm))
                                 .contentShape(Rectangle())
                                 .asButton { template = t; if t.wants == nil { attachment = nil } }
@@ -139,7 +139,7 @@ struct StartProject: View {
     }
 
     private var categories: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: K.S.xxs) {
             categoryRow(nil, "All", "square.grid.2x2", Template.all.count)
             ForEach(Template.Category.allCases) { c in
                 categoryRow(c, c.rawValue, c.icon, Template.all.count { $0.category == c })
@@ -150,12 +150,12 @@ struct StartProject: View {
     private func categoryRow(_ c: Template.Category?, _ title: String, _ icon: String, _ n: Int) -> some View {
         let on = category == c
         return HStack(spacing: K.S.sm) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(on ? K.C.accent : K.C.faint).frame(width: 16)
+            Image(systemName: icon).font(K.F.micro).foregroundStyle(on ? K.C.accent : K.C.faint).frame(width: 16)
             Text(title).font(K.F.small.weight(on ? .semibold : .regular)).foregroundStyle(K.C.text).lineLimit(1)
             Spacer()
-            Text("\(n)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+            Text("\(n)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
         }
-        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
         .background(on ? K.C.text.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: K.R.sm))
         .contentShape(Rectangle())
         .asButton {
@@ -169,8 +169,8 @@ struct StartProject: View {
         ScrollView {
             VStack(alignment: .leading, spacing: K.S.md) {
                 HStack(spacing: K.S.sm) {
-                    Image(systemName: template.icon).font(.system(size: 16)).foregroundStyle(K.C.accent)
-                    VStack(alignment: .leading, spacing: 1) {
+                    Image(systemName: template.icon).font(K.F.ui(16)).foregroundStyle(K.C.accent)
+                    VStack(alignment: .leading, spacing: K.S.hair) {
                         Text(template.title).font(K.F.title).foregroundStyle(K.C.text)
                         if !template.like.isEmpty {
                             Text("like \(template.like)").font(K.F.small).foregroundStyle(K.C.accent)
@@ -215,7 +215,7 @@ struct StartProject: View {
                                 : ["Next.js on Workers", "Hono on Workers", "service binding", "infra/deploy dev/prod", "CLAUDE.md + architecture", "3 reviewer agents"],
                             id: \.self) { item in
                         Text(item).font(K.F.small).foregroundStyle(K.C.dim)
-                            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
+                            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
                             .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
                             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
                     }
@@ -223,7 +223,7 @@ struct StartProject: View {
 
                 if let wants = template.wants {
                     HStack(spacing: K.S.sm) {
-                        Image(systemName: "paperclip").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                        Image(systemName: "paperclip").font(K.F.tiny).foregroundStyle(K.C.accent)
                         Text(attachment.map { $0.lastPathComponent } ?? "Attach \(wants)")
                             .font(K.F.small).foregroundStyle(attachment == nil ? K.C.dim : K.C.text).lineLimit(1)
                         Spacer()
@@ -231,7 +231,7 @@ struct StartProject: View {
                             .buttonStyle(QuietButton(tone: K.C.accent))
                     }
                     .padding(K.S.sm)
-                    .background(K.C.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: K.R.sm))
+                    .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
                 }
             }
             .padding(.trailing, K.S.xs)
@@ -241,8 +241,8 @@ struct StartProject: View {
 
     private func section(_ title: String, _ icon: String) -> some View {
         HStack(spacing: K.S.xs) {
-            Image(systemName: icon).font(.system(size: 10)).foregroundStyle(K.C.faint)
-            Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.7).foregroundStyle(K.C.faint)
+            Image(systemName: icon).font(K.F.tiny).foregroundStyle(K.C.faint)
+            Text(title.uppercased()).sectionLabel().foregroundStyle(K.C.faint)
         }
         .padding(.top, K.S.xs)
     }
@@ -258,8 +258,8 @@ struct StartProject: View {
                     Text(label)
                         .font(K.F.micro.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? K.C.text : K.C.faint)
-                        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
-                        .background(RoundedRectangle(cornerRadius: K.R.sm - 1).fill(on ? K.C.raised : .clear).padding(1))
+                        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
+                        .background(RoundedRectangle(cornerRadius: K.R.sm - 1).fill(on ? K.C.raised : .clear).padding(K.S.hair))
                         .contentShape(Rectangle())
                         .asButton { stack = s }
                         .help(s == "stack"
@@ -271,7 +271,7 @@ struct StartProject: View {
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
             Spacer()
             Button(busy ? "Creating…" : (template.brief.isEmpty ? "Create" : "Create and start")) { create() }
-                .buttonStyle(SendButton())
+                .buttonStyle(FilledButton())
                 .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty
                           || (template.wants != nil && attachment == nil))
         }
@@ -300,7 +300,7 @@ struct StartProject: View {
                                     Text(r.full_name ?? r.name).font(K.F.code).foregroundStyle(K.C.text)
                                         .lineLimit(1)
                                     Spacer()
-                                    Text((r.updated_at ?? "").prefix(10)).font(K.F.mono(10))
+                                    Text((r.updated_at ?? "").prefix(10)).font(K.F.codeTiny)
                                         .foregroundStyle(K.C.faint)
                                 }
                             } action: { chosen = r }
@@ -318,7 +318,7 @@ struct StartProject: View {
                     TextField("~/Dev", text: $parent).field().font(K.F.code)
                     Button("Choose…") { chooseParent() }.buttonStyle(QuietButton())
                     Button(busy ? "Cloning…" : "Clone") { clone() }
-                        .buttonStyle(SendButton())
+                        .buttonStyle(FilledButton())
                         .disabled(busy || chosen == nil)
                 }
                 Text("Cloned with your `gh` credentials over HTTPS, so no SSH key is needed.")
@@ -329,7 +329,7 @@ struct StartProject: View {
 
     private func search(_ placeholder: String) -> some View {
         HStack(spacing: K.S.sm) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(K.C.faint)
+            Image(systemName: "magnifyingglass").font(K.F.micro).foregroundStyle(K.C.faint)
             TextField(placeholder, text: $query).textFieldStyle(.plain).font(K.F.body)
         }
         .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs + 1)

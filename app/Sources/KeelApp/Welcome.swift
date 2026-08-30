@@ -38,9 +38,9 @@ struct Welcome: View {
     private var ready: Bool { claude?.installed == true && claude?.authenticated == true }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: K.S.xl) {
             VStack(alignment: .leading, spacing: K.S.sm) {
-                Text("KEEL").font(.system(size: 11, weight: .bold)).tracking(2.5)
+                Text("KEEL").font(K.F.micro.weight(.bold)).tracking(2.5)
                     .foregroundStyle(K.C.faint)
                 Text("Make a repository shippable.")
                     .font(K.F.display).foregroundStyle(K.C.text)
@@ -83,8 +83,8 @@ struct Welcome: View {
     }
 
     private var claudeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("CLAUDE CODE").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            Text("CLAUDE CODE").sectionLabel()
                 .foregroundStyle(K.C.faint)
 
             row(ok: claude?.installed == true, "Installed",
@@ -98,7 +98,7 @@ struct Welcome: View {
                 fix("Keel's local service is not answering, so it cannot see anything about your "
                     + "machine yet. \(why)") {
                     Button("Try again") { Task { await refresh() } }
-                        .buttonStyle(SendButtonWide())
+                        .buttonStyle(FilledButton())
                 }
             } else if claude?.installed != true {
                 fix("Keel drives your own `claude` and has nothing to run without it. It needs no "
@@ -106,7 +106,7 @@ struct Welcome: View {
                     Button(installing ? "Installing…" : "Install Claude Code") {
                         Task { await install() }
                     }
-                    .buttonStyle(SendButtonWide())
+                    .buttonStyle(FilledButton())
                     .disabled(installing)
                 }
             } else if claude?.authenticated != true {
@@ -130,9 +130,9 @@ struct Welcome: View {
     }
 
     private var openSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: K.S.sm) {
             HStack(spacing: K.S.sm) {
-                Text("OPEN SOMETHING").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                Text("OPEN SOMETHING").sectionLabel()
                     .foregroundStyle(K.C.faint)
                 if !ready {
                     Text("after the two above — the only things Keel cannot install for you")
@@ -141,7 +141,7 @@ struct Welcome: View {
             }
 
             HStack(spacing: K.S.sm) {
-                Button("Open a folder…") { openFolder() }.buttonStyle(SendButtonWide())
+                Button("Open a folder…") { openFolder() }.buttonStyle(FilledButton())
                 Button("New project…") { starting = true }.buttonStyle(QuietButton())
                 Button("Clone from GitHub…") { starting = true }.buttonStyle(QuietButton())
             }
@@ -158,17 +158,17 @@ struct Welcome: View {
             }
 
             if !Recents.paths.isEmpty {
-                Text("RECENT").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                Text("RECENT").sectionLabel()
                     .foregroundStyle(K.C.faint).padding(.top, K.S.sm)
                 ForEach(Recents.paths, id: \.self) { path in
                     HoverRow {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "folder").font(.system(size: 10))
+                            Image(systemName: "folder").font(K.F.tiny)
                                 .foregroundStyle(K.C.faint)
                             Text((path as NSString).lastPathComponent)
                                 .font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
                             Text((path as NSString).deletingLastPathComponent)
-                                .font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                                .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                                 .lineLimit(1).truncationMode(.head)
                         }
                     } action: {
@@ -287,18 +287,4 @@ enum Recents {
 
 
 /// The one prominent action on a screen. Same shape as Send, wider padding.
-struct SendButtonWide: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(K.F.small.weight(.medium))
-            .foregroundStyle(enabled ? Color.white : K.C.faint)
-            .padding(.horizontal, K.S.md).padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
-                                  : K.C.line)
-            )
-    }
-}
