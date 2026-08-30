@@ -274,26 +274,26 @@ struct PreviewSurface: View {
                 HStack(spacing: K.S.sm) {
                     Sweep()
                     Text("Editing \((file as NSString).lastPathComponent)…")
-                        .font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                        .font(K.F.codeSmall).foregroundStyle(K.C.text).lineLimit(1)
                     if let route = Frontend.route(for: file) {
-                        Text(route).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        Text(route).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                     }
                     Spacer()
                 }
-                .padding(.horizontal, K.S.md).padding(.vertical, 5)
-                .background(K.C.accent.opacity(0.10))
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
+                .background(K.C.accent.wash)
                 Hairline()
             } else if !model.changedRegions.isEmpty {
                 HStack(spacing: K.S.sm) {
-                    Image(systemName: "sparkles").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                    Image(systemName: "sparkles").font(K.F.tiny).foregroundStyle(K.C.accent)
                     Text("\(model.changedRegions.count) region\(model.changedRegions.count == 1 ? "" : "s") changed — "
                          + "click a dot to pin a note there")
                         .font(K.F.small).foregroundStyle(K.C.dim)
                     Spacer()
                     Button("Clear") { model.clearRegions() }.buttonStyle(QuietButton())
                 }
-                .padding(.horizontal, K.S.md).padding(.vertical, 4)
-                .background(K.C.accent.opacity(0.06))
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                .background(K.C.accent.wash)
                 Hairline()
             }
             if let problem = model.previewProblem {
@@ -355,11 +355,11 @@ struct PreviewSurface: View {
     }
 
     private var bar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: K.S.sm) {
             TextField("localhost:3000", text: $typed)
                 .textFieldStyle(.plain)
                 .font(K.F.code)
-                .padding(.horizontal, K.S.sm).padding(.vertical, 4)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
                 // Committed on Enter, not on every keystroke. Normalising as you typed rewrote
@@ -384,13 +384,13 @@ struct PreviewSurface: View {
                 ForEach(PreviewWidth.allCases) { w in
                     let on = model.previewWidth == w
                     Image(systemName: w.icon)
-                        .font(.system(size: 10))
+                        .font(K.F.tiny)
                         .foregroundStyle(on ? K.C.text : K.C.faint)
                         .frame(width: 24, height: 20)
                         .background(
                             RoundedRectangle(cornerRadius: K.R.sm - 1)
                                 .fill(on ? K.C.raised : .clear)
-                                .padding(1)
+                                .padding(K.S.hair)
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { model.previewWidth = w }
@@ -416,7 +416,7 @@ struct PreviewSurface: View {
                   + "frontend")
 
             if model.devRunning {
-                HStack(spacing: 4) {
+                HStack(spacing: K.S.xs) {
                     Circle().fill(K.C.add).frame(width: 5, height: 5)
                     Text("running").font(K.F.micro).foregroundStyle(K.C.add)
                 }
@@ -429,25 +429,25 @@ struct PreviewSurface: View {
                 model.reloadTick += 1
                 Task { await model.refreshDev() }
             } label: {
-                Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                Image(systemName: "arrow.clockwise").font(K.F.tiny)
                     .frame(width: 20, height: 18).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
             .hint("Reload the page (⌘R)")
             .keyboardShortcut("r", modifiers: .command)
         }
-        .padding(8)
+        .padding(K.S.sm)
     }
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: K.S.half) {
-            Text("Nothing to preview yet.").font(.system(size: 13, weight: .medium))
+            Text("Nothing to preview yet.").font(K.F.body.weight(.medium))
             Text(model.devDetected.map { "Start \($0) and Keel points the preview at whatever URL it announces." }
                  ?? "This project has no dev command. Paste a URL above — a deploy URL works too.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(K.F.small).foregroundStyle(.secondary)
         }
         .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
-        .padding(20)
+        .padding(K.S.xl)
     }
 
     private func go() {
@@ -524,7 +524,7 @@ private struct PreviewProblem: View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             HStack(spacing: K.S.sm) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                    .font(K.F.tiny).foregroundStyle(K.C.warn)
                 Text(problem).font(K.F.small).foregroundStyle(K.C.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
@@ -558,6 +558,6 @@ private struct PreviewProblem: View {
             }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .background(K.C.warn.opacity(0.08))
+        .background(K.C.warn.wash)
     }
 }

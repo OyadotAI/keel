@@ -62,7 +62,7 @@ struct SettingsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("SETTINGS")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.7)
+                    .sectionLabel()
                     .foregroundStyle(K.C.faint)
                 Spacer()
                 CloseButton(size: 10) { onClose() }
@@ -73,7 +73,7 @@ struct SettingsPage: View {
             // already know about.
             HoverRow {
                 HStack(spacing: K.S.sm) {
-                    Image(systemName: "house").font(.system(size: 11))
+                    Image(systemName: "house").font(K.F.micro)
                         .foregroundStyle(K.C.accent).frame(width: 16)
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Back to the project").font(K.F.small.weight(.semibold))
@@ -82,7 +82,7 @@ struct SettingsPage: View {
                     }
                     Spacer()
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, K.S.tight)
             } action: {
                 onClose()
             }
@@ -93,7 +93,7 @@ struct SettingsPage: View {
                 HoverRow(selected: section == s) {
                     HStack(spacing: K.S.sm) {
                         Image(systemName: s.icon)
-                            .font(.system(size: 11))
+                            .font(K.F.micro)
                             .foregroundStyle(section == s ? K.C.text : K.C.faint)
                             .frame(width: 16)
                         VStack(alignment: .leading, spacing: 0) {
@@ -105,13 +105,13 @@ struct SettingsPage: View {
                         Spacer()
                         if s == .connections, needsAttention > 0 {
                             Text("\(needsAttention)")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(K.F.tiny.weight(.bold))
                                 .foregroundStyle(K.C.bg)
-                                .padding(.horizontal, 3).padding(.vertical, 1)
+                                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
                                 .background(K.C.warn, in: Capsule())
                         }
                     }
-                    .padding(.vertical, 3)
+                    .padding(.vertical, K.S.tight)
                 } action: {
                     section = s
                 }
@@ -164,10 +164,10 @@ struct AppearanceSettings: View {
                     Label(a.title, systemImage: a.icon)
                         .font(K.F.small.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? K.C.text : K.C.faint)
-                        .padding(.horizontal, K.S.md).padding(.vertical, 5)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
                         .background(
                             RoundedRectangle(cornerRadius: K.R.sm - 1)
-                                .fill(on ? K.C.raised : .clear).padding(1)
+                                .fill(on ? K.C.raised : .clear).padding(K.S.hair)
                         )
                         .contentShape(Rectangle())
                         .asButton { mode = a; Appearance.current = a }

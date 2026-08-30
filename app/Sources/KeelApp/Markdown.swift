@@ -39,21 +39,21 @@ struct Markdown: View {
 
         case .paragraph(let text):
             Text(inline(text))
-                .font(K.F.ui(14))
+                .font(K.F.reading)
                 .foregroundStyle(K.C.text)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
 
         case .bullets(let items):
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: K.S.sm) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
                         Text(item.marker)
-                            .font(K.F.mono(12))
+                            .font(K.F.code)
                             .foregroundStyle(K.C.faint)
                             .frame(minWidth: 18, alignment: .trailing)
                         Text(inline(item.text))
-                            .font(K.F.ui(14))
+                            .font(K.F.reading)
                             .foregroundStyle(K.C.text)
                             .lineSpacing(3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -267,7 +267,7 @@ struct CodeBlock: View {
             if language != nil || true {
                 HStack {
                     if let language {
-                        Text(language).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        Text(language).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                     }
                     Spacer()
                     Button(copied ? "copied" : "copy") {
@@ -277,13 +277,13 @@ struct CodeBlock: View {
                         Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                     }
                     .buttonStyle(.plain)
-                    .font(K.F.mono(10))
+                    .font(K.F.codeTiny)
                     .foregroundStyle(copied ? K.C.add : K.C.faint)
-                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .padding(.horizontal, K.S.xs).padding(.vertical, K.S.xxs)
                     .contentShape(Rectangle())
                 }
                 .padding(.horizontal, K.S.sm)
-                .padding(.vertical, 3)
+                .padding(.vertical, K.S.tight)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -348,8 +348,8 @@ struct Table: View {
                             .frame(maxWidth: .infinity, alignment: numeric(c) ? .trailing : .leading)
                             .gridColumnAlignment(numeric(c) ? .trailing : .leading)
                             .padding(.horizontal, K.S.sm)
-                            .padding(.vertical, 4)
-                            .background(i > 0 && i.isMultiple(of: 2) ? K.C.text.opacity(0.03) : .clear)
+                            .padding(.vertical, K.S.xs)
+                            .background(i > 0 && i.isMultiple(of: 2) ? K.C.ghost : .clear)
                     }
                 }
                 if i == 0 {
@@ -357,7 +357,7 @@ struct Table: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, K.S.xxs)
         .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
         .overlay(alignment: .topTrailing) {
@@ -367,9 +367,9 @@ struct Table: View {
                 copied = true
                 Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
             } label: {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 10, weight: .bold))
+                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(K.F.tiny.weight(.bold))
                     .foregroundStyle(copied ? K.C.add : K.C.faint)
-                    .padding(4)
+                    .padding(K.S.xs)
             }
             .buttonStyle(.plain)
             .help("Copy the table as Markdown")

@@ -60,19 +60,19 @@ struct PairingSettings: View {
         Form {
             Section {
                 if let code = model.code {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: K.S.xs) {
                         Text(code)
-                            .font(.system(size: 34, weight: .medium, design: .monospaced))
+                            .font(K.F.mono(34, .medium))
                             .tracking(6)
                             .monospacedDigit()
                         Text("Type this on the other device within two minutes.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .font(K.F.micro).foregroundStyle(.secondary)
                     }
                 } else {
                     Button("Pair a device") { Task { await model.begin() } }
                 }
                 if let e = model.error {
-                    Text(e).font(.system(size: 11)).foregroundStyle(.red)
+                    Text(e).font(K.F.micro).foregroundStyle(.red)
                 }
             } header: {
                 Text("Pairing")
@@ -85,13 +85,13 @@ struct PairingSettings: View {
                      + "same network, or anywhere over Tailscale. There are no push notifications "
                      + "to a backgrounded phone: that needs a relay server, and Keel does not have "
                      + "one so that your code never leaves your machine.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(K.F.micro).foregroundStyle(.secondary)
             }
 
             Section("Paired devices") {
                 if model.devices.isEmpty {
                     Text("None. Keel listens only on this machine until a device is paired.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(K.F.micro).foregroundStyle(.secondary)
                 }
                 ForEach(model.devices) { d in
                     HStack {

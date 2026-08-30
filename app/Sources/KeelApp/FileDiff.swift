@@ -50,7 +50,7 @@ struct FileDiff: View {
     private var header: some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
-                .font(.system(size: 10, weight: .bold))
+                .font(K.F.tiny.weight(.bold))
                 .foregroundStyle(hoveringHeader ? K.C.dim : K.C.faint.opacity(0.6))
                 .frame(width: 10)
 
@@ -59,7 +59,7 @@ struct FileDiff: View {
                 Text(directory).foregroundStyle(K.C.faint)
                 Text(filename).foregroundStyle(K.C.text)
             }
-            .font(K.F.mono(11.5, .medium))
+            .font(K.F.codeSmall.weight(.medium))
             .lineLimit(1).truncationMode(.head)
 
             if diff?.untracked == true { Pill(text: "NEW", tone: .accent) }
@@ -68,13 +68,13 @@ struct FileDiff: View {
 
             if diff != nil {
                 DiffBar(adds: adds, dels: dels)
-                Text("+\(adds)").font(K.F.mono(10)).foregroundStyle(K.C.add).monospacedDigit()
-                Text("−\(dels)").font(K.F.mono(10)).foregroundStyle(K.C.del).monospacedDigit()
+                Text("+\(adds)").font(K.F.codeTiny).foregroundStyle(K.C.add).monospacedDigit()
+                Text("−\(dels)").font(K.F.codeTiny).foregroundStyle(K.C.del).monospacedDigit()
             }
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.sm)
-        .background(hoveringHeader ? K.C.text.opacity(0.03) : .clear)
+        .background(hoveringHeader ? K.C.hover : .clear)
         .contentShape(Rectangle())
         .onHover { hoveringHeader = $0 }
         .onTapGesture { withAnimation(K.M.quick) { open.toggle() } }
@@ -124,7 +124,7 @@ struct FileDiff: View {
 
             if noted {
                 Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 10))
+                    .font(K.F.tiny)
                     .foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.sm)
             }
@@ -148,7 +148,7 @@ struct FileDiff: View {
     private func noteEditor(key: String, line: Int) -> some View {
         HStack(spacing: K.S.sm) {
             Image(systemName: "text.bubble")
-                .font(.system(size: 10)).foregroundStyle(K.C.accent)
+                .font(K.F.tiny).foregroundStyle(K.C.accent)
             TextField("A note for the agent…", text: $draft)
                 .textFieldStyle(.plain)
                 .font(K.F.small)
@@ -158,7 +158,7 @@ struct FileDiff: View {
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.sm)
-        .background(K.C.accent.opacity(0.07))
+        .background(K.C.accent.wash)
     }
 
     private func save(key: String) {
@@ -207,7 +207,7 @@ struct HunkHeader: View {
 
     var body: some View {
         HStack(spacing: K.S.sm) {
-            Text(header).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+            Text(header).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
             Spacer()
             // Always present, faint until pointed at. A control that only exists on hover does
             // not exist for the keyboard, and does not exist for anyone who has not found it.
@@ -222,7 +222,7 @@ struct HunkHeader: View {
         }
         .id("hunk-\(path)-\(index)")
         .padding(.horizontal, K.S.md)
-        .padding(.vertical, 3)
+        .padding(.vertical, K.S.tight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(K.C.well)
         .onHover { hovering = $0 }
@@ -241,7 +241,7 @@ struct DiffBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 1.5) {
+        HStack(spacing: K.S.hair) {
             ForEach(0..<5, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 0.5)
                     .fill(adds + dels == 0 ? K.C.line
@@ -305,7 +305,7 @@ enum Intraline {
         let lo = s.index(s.startIndex, offsetByCharacters: min(mark.lowerBound, chars.count))
         let hi = s.index(s.startIndex, offsetByCharacters: min(mark.upperBound, chars.count))
         s[lo..<hi].backgroundColor = (kind == "add" ? K.C.add : K.C.del).opacity(0.28)
-        s[lo..<hi].font = K.F.mono(11.5, .semibold)
+        s[lo..<hi].font = K.F.codeSmall.weight(.semibold)
         return s
     }
 }

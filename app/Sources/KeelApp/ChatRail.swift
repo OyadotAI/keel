@@ -32,7 +32,7 @@ struct ChatRail: View {
                     }
                 }
                 .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                .background(K.C.accent.opacity(0.06))
+                .background(K.C.accent.wash)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             Composer(model: model, focused: $composerFocused)
@@ -99,11 +99,11 @@ struct ChatRail: View {
                         pinned = true
                         withAnimation(K.M.settle) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
                     } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "arrow.down").font(.system(size: 10, weight: .bold))
+                        HStack(spacing: K.S.snug) {
+                            Image(systemName: "arrow.down").font(K.F.tiny.weight(.bold))
                             Text("Jump to latest").font(K.F.micro)
                         }
-                        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+                        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
                         .background(K.C.raised, in: Capsule())
                         .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
                         .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
@@ -156,7 +156,7 @@ struct ChatRail: View {
                 .padding(K.S.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    (lanes.wouldOverlap ? K.C.warn.opacity(0.08) : K.C.surface),
+                    (lanes.wouldOverlap ? K.C.warn.wash : K.C.surface),
                     in: RoundedRectangle(cornerRadius: K.R.sm)
                 )
             }
@@ -168,7 +168,7 @@ struct ChatRail: View {
                     Button { model.prompt = s } label: {
                         HStack(spacing: K.S.xs) {
                             Image(systemName: "arrow.turn.down.right")
-                                .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                                .font(K.F.tiny).foregroundStyle(K.C.faint)
                             Text(s).font(K.F.small).foregroundStyle(K.C.faint)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -208,7 +208,7 @@ private struct ChatTurn: View {
     @State private var copied: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: K.S.half) {
             // Yours, on the right, in blue. Nothing above it: a message does not need a title.
             HStack(alignment: .bottom) {
                 Spacer(minLength: 64)
@@ -218,7 +218,7 @@ private struct ChatTurn: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .background(K.C.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: K.R.md))
+                    .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
                     .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
                     .frame(maxWidth: 560, alignment: .trailing)
             }
@@ -226,7 +226,7 @@ private struct ChatTurn: View {
             if !turn.thinking.isEmpty {
                 DisclosureGroup {
                     Text(turn.thinking)
-                        .font(K.F.mono(11)).italic()
+                        .font(K.F.codeSmall).italic()
                         .foregroundStyle(K.C.faint)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -247,7 +247,7 @@ private struct ChatTurn: View {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     HStack(spacing: K.S.xs) {
                         Image(systemName: "sailboat.fill")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(K.F.tiny.weight(.semibold))
                         Text("Keel").font(K.F.micro.weight(.semibold))
                     }
                     .foregroundStyle(K.C.dim)
@@ -263,9 +263,9 @@ private struct ChatTurn: View {
                 Button {
                     model.focusedTurn = turn.id
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: K.S.tight) {
                         Text("Turn \(number)").font(K.F.micro)
-                        Image(systemName: "arrow.right").font(.system(size: 7, weight: .bold))
+                        Image(systemName: "arrow.right").font(K.F.ui(7, .bold))
                     }
                     .foregroundStyle(K.C.faint)
                     .contentShape(Rectangle())
@@ -319,13 +319,13 @@ private struct CopyChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3) {
+            HStack(spacing: K.S.tight) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(K.F.tiny.weight(.bold))
                 Text(copied ? "copied" : label).font(K.F.micro)
             }
             .foregroundStyle(copied ? K.C.add : K.C.faint)
-            .padding(.horizontal, 5).padding(.vertical, 2)
+            .padding(.horizontal, K.S.snug).padding(.vertical, K.S.xxs)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -394,8 +394,8 @@ struct Composer: View {
                     model.notes.removeAll()
                     focused = true
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "text.bubble.fill").font(.system(size: 10))
+                    HStack(spacing: K.S.snug) {
+                        Image(systemName: "text.bubble.fill").font(K.F.tiny)
                         Text("Send \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")")
                     }
                 }
@@ -404,8 +404,8 @@ struct Composer: View {
             }
 
             if !model.queued.isEmpty {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.down.circle").font(.system(size: 10))
+                HStack(spacing: K.S.snug) {
+                    Image(systemName: "arrow.down.circle").font(K.F.tiny)
                     Text("\(model.queued.count) queued — they run in order when this turn ends")
                         .font(K.F.micro)
                 }
@@ -446,13 +446,13 @@ struct Composer: View {
                 ForEach(Array(mentionHits.enumerated()), id: \.element) { i, path in
                     HoverRow(selected: i == mentionPick) {
                         HStack(spacing: K.S.sm) {
-                            Image(systemName: "doc").font(.system(size: 10))
+                            Image(systemName: "doc").font(K.F.tiny)
                                 .foregroundStyle(K.C.faint)
                             Text(Fuzzy.highlight(mentioning?.query ?? "", in: path))
                                 .font(K.F.small).foregroundStyle(K.C.text)
                                 .lineLimit(1).truncationMode(.head)
                         }
-                        .padding(.vertical, 1)
+                        .padding(.vertical, K.S.hair)
                     } action: {
                         take(path)
                     }
@@ -468,7 +468,7 @@ struct Composer: View {
     private var field: some View {
         TextField("Ask Keel to change, explain, or review…", text: $model.prompt, axis: .vertical)
             .textFieldStyle(.plain)
-            .font(K.F.ui(14))
+            .font(K.F.reading)
             .lineSpacing(3)
             .lineLimit(1...8)
             .padding(.horizontal, K.S.sm + 2).padding(.vertical, K.S.sm)
@@ -533,7 +533,7 @@ struct Composer: View {
     private var memoryNote: some View {
         if let note = model.remembered {
             HStack(spacing: K.S.xs) {
-                Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(K.C.add)
+                Image(systemName: "brain").font(K.F.tiny).foregroundStyle(K.C.add)
                 Text("Remembered in CLAUDE.md: \(note)").font(K.F.micro).foregroundStyle(K.C.dim)
                     .lineLimit(1)
                 Spacer()
@@ -546,7 +546,7 @@ struct Composer: View {
             ModeToggle(mode: $model.mode)
             ModelPicker(model: model)
             Button { model.chooseAttachments() } label: {
-                Image(systemName: "paperclip").font(.system(size: 11))
+                Image(systemName: "paperclip").font(K.F.micro)
                     .frame(width: 22, height: 20).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(K.C.faint)
@@ -561,12 +561,12 @@ struct Composer: View {
                 Button {
                     model.send()
                 } label: {
-                    HStack(spacing: 5) {
+                    HStack(spacing: K.S.snug) {
                         Text("Send")
-                        Image(systemName: "return").font(.system(size: 10, weight: .bold))
+                        Image(systemName: "return").font(K.F.tiny.weight(.bold))
                     }
                 }
-                .buttonStyle(SendButton())
+                .buttonStyle(FilledButton())
                 .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .hint("Send (Return, or ⌘Return). ⇧Return for a new line.")
             }
@@ -594,11 +594,11 @@ struct ModeToggle: View {
         return Text(label)
             .font(K.F.micro.weight(on ? .semibold : .regular))
             .foregroundStyle(on ? K.C.text : K.C.faint)
-            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
             .background(
                 RoundedRectangle(cornerRadius: K.R.sm - 1)
                     .fill(on ? K.C.raised : .clear)
-                    .padding(1)
+                    .padding(K.S.hair)
             )
             .contentShape(Rectangle())
             .asButton { mode = value }
@@ -607,21 +607,7 @@ struct ModeToggle: View {
     }
 }
 
-struct SendButton: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(K.F.small.weight(.medium))
-            .foregroundStyle(enabled ? Color.white : K.C.faint)
-            .padding(.horizontal, K.S.md).padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(enabled ? K.C.accent.opacity(configuration.isPressed ? 0.75 : 1)
-                                  : K.C.line)
-            )
-    }
-}
 
 
 /// The model, the way `/model` picks it in the terminal. Default means the CLI's own choice.

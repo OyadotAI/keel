@@ -258,7 +258,7 @@ struct SessionWindow: View {
                     && model.viewingCommit == nil && model.viewingFile == nil
                 let active = tabActivity(for: s) && !on
                 HStack(spacing: K.S.half) {
-                    Image(systemName: stageIcon(s)).font(.system(size: 11, weight: .medium))
+                    Image(systemName: stageIcon(s)).font(K.F.micro.weight(.medium))
                     Text(s.rawValue).font(K.F.small.weight(on ? .semibold : .regular))
                     if active {
                         Circle()
@@ -311,8 +311,8 @@ struct SessionWindow: View {
     private var terminalPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: K.S.sm) {
-                Image(systemName: "terminal").font(.system(size: 10)).foregroundStyle(K.C.faint)
-                Text(terminalTitle).font(K.F.mono(10)).foregroundStyle(K.C.dim)
+                Image(systemName: "terminal").font(K.F.tiny).foregroundStyle(K.C.faint)
+                Text(terminalTitle).font(K.F.codeTiny).foregroundStyle(K.C.dim)
                 Spacer()
                 CloseButton(size: 10) { withAnimation(K.M.quick) { showTerminal = false } }
             }
@@ -379,18 +379,18 @@ struct ActivityRail: View {
             // fails silently when the selector does not match the OS version, which is exactly
             // what it was doing — the button was wired to nothing.
             Button { onSettings() } label: {
-                VStack(spacing: 3) {
-                    Image(systemName: "gearshape").font(.system(size: 17))
-                    Text("Settings").font(.system(size: 10))
+                VStack(spacing: K.S.tight) {
+                    Image(systemName: "gearshape").font(K.F.ui(17))
+                    Text("Settings").font(K.F.tiny)
                 }
                     .foregroundStyle(toolsNeedAttention > 0 ? K.C.warn : K.C.faint)
                     .frame(width: 60, height: 46)
                     .overlay(alignment: .topTrailing) {
                         if toolsNeedAttention > 0 {
                             Text("\(toolsNeedAttention)")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(K.F.tiny.weight(.bold))
                                 .foregroundStyle(K.C.bg)
-                                .padding(.horizontal, 3).padding(.vertical, 1)
+                                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
                                 .background(K.C.warn, in: Capsule())
                                 .offset(x: -4, y: 2)
                         }
@@ -482,16 +482,16 @@ struct RailButton: View {
             // a `.plain` button's target is otherwise the glyph itself. Full rail width, so the
             // selection bar can sit on the rail's own edge rather than 4pt inside it.
             Rectangle()
-                .fill(hovering ? K.C.text.opacity(0.06) : .clear)
+                .fill(hovering ? K.C.hover : .clear)
                 .frame(width: 60, height: 46)
                 // Centred, which is the whole point of the fixed frame. This was a
                 // `ZStack(alignment: .topTrailing)` so the badge would sit in the corner — and
                 // that alignment applied to the icon too, pushing every one of them right.
                 .overlay(
-                    VStack(spacing: 3) {
-                        Image(systemName: icon).font(.system(size: 17, weight: .regular))
+                    VStack(spacing: K.S.tight) {
+                        Image(systemName: icon).font(K.F.ui(17, .regular))
                         if let label {
-                            Text(label).font(.system(size: 10)).lineLimit(1)
+                            Text(label).font(K.F.tiny).lineLimit(1)
                                 .minimumScaleFactor(0.8)
                         }
                     }
@@ -501,9 +501,9 @@ struct RailButton: View {
                 .overlay(alignment: .topTrailing) {
                     if let badge {
                         Text("\(badge)")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(K.F.tiny.weight(.bold))
                             .foregroundStyle(K.C.bg)
-                            .padding(.horizontal, 3).padding(.vertical, 1)
+                            .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
                             .background(badgeTone, in: Capsule())
                             .offset(x: -8, y: 3)
                     }
@@ -546,8 +546,8 @@ struct StatusBar: View {
                         BranchMenu(model: model) { branchMenu = false }
                     }
             } else {
-                HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
+                HStack(spacing: K.S.tight) {
+                    Image(systemName: "exclamationmark.triangle").font(K.F.tiny)
                     Text("no git").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -555,8 +555,8 @@ struct StatusBar: View {
             }
 
             if model.trusted {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.shield.fill").font(.system(size: 10))
+                HStack(spacing: K.S.tight) {
+                    Image(systemName: "checkmark.shield.fill").font(K.F.tiny)
                     Text("trusted").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -565,8 +565,8 @@ struct StatusBar: View {
                 // Untrusted is the safe state, but it is also the one where every command
                 // becomes a question — said here so the first refusal is not a surprise, and
                 // one click away from the decision that removes the toll.
-                HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.shield").font(.system(size: 10))
+                HStack(spacing: K.S.tight) {
+                    Image(systemName: "exclamationmark.shield").font(K.F.tiny)
                     Text("not trusted · commands will ask").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -584,8 +584,8 @@ struct StatusBar: View {
             if let gate = model.gateCommand {
                 item("checkmark.seal", gate)
             } else {
-                HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
+                HStack(spacing: K.S.tight) {
+                    Image(systemName: "exclamationmark.triangle").font(K.F.tiny)
                     Text("no gate").font(K.F.micro)
                 }
                 .foregroundStyle(K.C.warn)
@@ -596,9 +596,9 @@ struct StatusBar: View {
             // starts to loom on a 200k model, and compaction you did not see coming is how a
             // four-hour session loses its file paths.
             if let ctx = model.contextTokens {
-                HStack(spacing: 3) {
-                    Image(systemName: "rectangle.stack").font(.system(size: 10))
-                    Text("ctx \(compact(ctx))").font(K.F.mono(10)).monospacedDigit()
+                HStack(spacing: K.S.tight) {
+                    Image(systemName: "rectangle.stack").font(K.F.tiny)
+                    Text("ctx \(compact(ctx))").font(K.F.codeTiny).monospacedDigit()
                 }
                 .foregroundStyle(ctx > 150_000 ? K.C.warn : K.C.faint)
                 .help("Tokens in the context window after the last request. Compaction is near "
@@ -606,23 +606,23 @@ struct StatusBar: View {
             }
             if let t = model.sessionTokens {
                 Text(compact(t.total) + " tok")
-                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
                     .help("Tokens this session, cache included")
             }
             if model.running, let rate = model.burnRate {
                 Text(String(format: "$%.2f/min", rate))
-                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
                     .help("Spend rate, from this session's finished turns")
             }
             if let cost = model.sessionCost {
                 Text(String(format: "$%.3f", cost))
-                    .font(K.F.mono(10)).monospacedDigit().foregroundStyle(K.C.faint)
+                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
                     .help("This session, as reported by the CLI")
             }
 
             Button { withAnimation(K.M.quick) { terminalOpen.toggle() } } label: {
                 Image(systemName: "terminal")
-                    .font(.system(size: 10))
+                    .font(K.F.tiny)
                     .frame(width: 22, height: 18)
                     .contentShape(Rectangle())
             }
@@ -631,15 +631,15 @@ struct StatusBar: View {
             .hint("Terminal (⌘⌥T)")
         }
         .padding(.horizontal, K.S.md)
-        .padding(.vertical, 5)
+        .padding(.vertical, K.S.snug)
         .background(K.C.surface)
         .foregroundStyle(K.C.faint)
     }
 
     private func item(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(K.F.mono(10)).lineLimit(1)
+        HStack(spacing: K.S.tight) {
+            Image(systemName: icon).font(K.F.tiny)
+            Text(text).font(K.F.codeTiny).lineLimit(1)
         }
     }
 }
@@ -680,11 +680,11 @@ struct ProjectMenu: View {
             }
         } label: {
             HStack(spacing: prominent ? 6 : 4) {
-                Image(systemName: "folder.fill").font(.system(size: prominent ? 12 : 10))
+                Image(systemName: "folder.fill").font(K.F.ui(prominent ? 12 : 10))
                 Text((model.repoPath as NSString).lastPathComponent)
-                    .font(prominent ? K.F.ui(13, .semibold) : K.F.mono(10, .medium))
+                    .font(prominent ? K.F.body.weight(.semibold) : K.F.codeTiny.weight(.medium))
                 Image(systemName: "chevron.down")
-                    .font(.system(size: prominent ? 9 : 6, weight: .bold))
+                    .font(K.F.ui(prominent ? 9 : 6, .bold))
                 if prominent {
                     Text("switch").font(K.F.micro).foregroundStyle(K.C.faint)
                 }
@@ -909,7 +909,7 @@ private struct SplitHandle: View {
         Rectangle()
             .fill(hovering ? K.C.accent.opacity(0.6) : K.C.line)
             .frame(width: 1)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, K.S.xs)
             .contentShape(Rectangle())
             .onHover { over in
                 hovering = over
@@ -1007,7 +1007,7 @@ struct OpeningBar: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             if done {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(K.C.add)
+                Image(systemName: "checkmark.circle.fill").font(K.F.micro).foregroundStyle(K.C.add)
             } else {
                 ProgressView().controlSize(.small).frame(width: 12, height: 12)
             }
@@ -1017,7 +1017,7 @@ struct OpeningBar: View {
                 .contentTransition(.opacity)
             Spacer()
         }
-        .padding(.horizontal, K.S.md).padding(.vertical, 5)
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
         .background(done ? K.C.add.opacity(0.08) : K.C.surface)
         .overlay(alignment: .bottom) { Hairline() }
     }
@@ -1069,12 +1069,12 @@ struct BranchMenu: View {
                         HoverRow(selected: b.current) {
                             HStack(spacing: K.S.sm) {
                                 Image(systemName: b.current ? "checkmark" : "arrow.triangle.branch")
-                                    .font(.system(size: 10)).frame(width: 12)
+                                    .font(K.F.tiny).frame(width: 12)
                                     .foregroundStyle(b.current ? K.C.accent : K.C.faint)
-                                Text(b.name).font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                                Text(b.name).font(K.F.codeSmall).foregroundStyle(K.C.text).lineLimit(1)
                                 Spacer()
-                                if b.ahead > 0 { Text("\(b.ahead)↑").font(K.F.mono(10)).foregroundStyle(K.C.add) }
-                                if b.behind > 0 { Text("\(b.behind)↓").font(K.F.mono(10)).foregroundStyle(K.C.accent) }
+                                if b.ahead > 0 { Text("\(b.ahead)↑").font(K.F.codeTiny).foregroundStyle(K.C.add) }
+                                if b.behind > 0 { Text("\(b.behind)↓").font(K.F.codeTiny).foregroundStyle(K.C.accent) }
                                 if b.upstream == nil, !b.current {
                                     Text("local only").font(K.F.micro).foregroundStyle(K.C.faint)
                                 }
@@ -1085,9 +1085,9 @@ struct BranchMenu: View {
                     ForEach(remote, id: \.self) { r in
                         HoverRow {
                             HStack(spacing: K.S.sm) {
-                                Image(systemName: "icloud").font(.system(size: 10)).frame(width: 12)
+                                Image(systemName: "icloud").font(K.F.tiny).frame(width: 12)
                                     .foregroundStyle(K.C.faint)
-                                Text(r).font(K.F.mono(11)).foregroundStyle(K.C.text).lineLimit(1)
+                                Text(r).font(K.F.codeSmall).foregroundStyle(K.C.text).lineLimit(1)
                                 Spacer()
                                 Text("check out").font(K.F.micro).foregroundStyle(K.C.faint)
                             }
@@ -1097,10 +1097,10 @@ struct BranchMenu: View {
                         Hairline().padding(.vertical, K.S.xs)
                         HoverRow {
                             HStack(spacing: K.S.sm) {
-                                Image(systemName: "plus").font(.system(size: 10)).frame(width: 12)
+                                Image(systemName: "plus").font(K.F.tiny).frame(width: 12)
                                     .foregroundStyle(K.C.accent)
                                 Text("Create branch ").font(K.F.small).foregroundStyle(K.C.text)
-                                + Text(query.trimmingCharacters(in: .whitespaces)).font(K.F.mono(11))
+                                + Text(query.trimmingCharacters(in: .whitespaces)).font(K.F.codeSmall)
                                     .foregroundStyle(K.C.accent)
                                 Spacer()
                                 Text("from \(model.branch ?? "HEAD")").font(K.F.micro).foregroundStyle(K.C.faint)

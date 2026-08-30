@@ -50,14 +50,14 @@ struct ConnectionsSettings: View {
                 } else if broken.isEmpty {
                     HStack(spacing: K.S.sm) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11)).foregroundStyle(K.C.add)
+                            .font(K.F.micro).foregroundStyle(K.C.add)
                         Text("All \(tools.count) tools installed and signed in.")
                             .font(K.F.small).foregroundStyle(K.C.dim)
                     }
                 } else {
                     HStack(alignment: .top, spacing: K.S.sm) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11)).foregroundStyle(K.C.warn)
+                            .font(K.F.micro).foregroundStyle(K.C.warn)
                         VStack(alignment: .leading, spacing: K.S.xxs) {
                             Text(broken.map(\.label).joined(separator: ", "))
                                 .font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
@@ -113,7 +113,7 @@ struct ConnectionsSettings: View {
             if !log.isEmpty {
                 Section("Output") {
                     ScrollView {
-                        Text(log).font(.system(size: 10.5, design: .monospaced))
+                        Text(log).font(K.F.codeTiny)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
@@ -384,7 +384,7 @@ private struct ToolRow: View {
                     .font(K.F.small).foregroundStyle(tool.authenticated ? K.C.dim : K.C.faint)
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: K.S.sm)
-                if let version { Text(version).font(K.F.mono(10)).foregroundStyle(K.C.faint) }
+                if let version { Text(version).font(K.F.codeTiny).foregroundStyle(K.C.faint) }
                 actions
             }
             if let why = tool.blocked, !tool.authenticated {
@@ -426,7 +426,7 @@ private struct ToolRow: View {
                 }
             } else if let page = Self.installers[tool.id], let url = URL(string: page) {
                 Button { NSWorkspace.shared.open(url) } label: {
-                    Image(systemName: "arrow.up.right.square").font(.system(size: 10))
+                    Image(systemName: "arrow.up.right.square").font(K.F.tiny)
                         .frame(width: 18, height: 16).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(K.C.faint)

@@ -70,12 +70,12 @@ struct ArchitectureDiagram: View {
     }
 
     private var arrow: some View {
-        Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(K.C.faint)
+        Image(systemName: "arrow.right").font(K.F.tiny.weight(.semibold)).foregroundStyle(K.C.faint)
     }
 
     private func group(_ title: String, _ items: [Template.Component]) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Text(title).font(.system(size: 10, weight: .semibold)).tracking(0.7).foregroundStyle(K.C.faint)
+            Text(title).sectionLabel().foregroundStyle(K.C.faint)
             Flow(spacing: K.S.xs) { ForEach(items, id: \.name) { box($0) } }
         }
     }
@@ -87,13 +87,13 @@ struct ArchitectureDiagram: View {
 
     private func chip(name: String, tech: String, icon: String, tone: Color) -> some View {
         HStack(spacing: K.S.xs) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(tone)
+            Image(systemName: icon).font(K.F.micro).foregroundStyle(tone)
             VStack(alignment: .leading, spacing: 0) {
                 Text(name).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text).lineLimit(1)
-                Text(tech).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                Text(tech).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
             }
         }
-        .padding(.horizontal, K.S.sm).padding(.vertical, 5)
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
     }
@@ -106,12 +106,12 @@ struct FlowStrip: View {
     var body: some View {
         Flow(spacing: K.S.xs) {
             ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
-                HStack(spacing: 5) {
-                    Text("\(i + 1)").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                HStack(spacing: K.S.snug) {
+                    Text("\(i + 1)").font(K.F.tiny.weight(.bold)).foregroundStyle(.white)
                         .frame(width: 16, height: 16).background(K.C.accent, in: Circle())
                     Text(Self.short(s)).font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1)
                     if i < steps.count - 1 {
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(K.C.faint)
+                        Image(systemName: "chevron.right").font(K.F.tiny.weight(.bold)).foregroundStyle(K.C.faint)
                     }
                 }
                 .help(s)
@@ -133,11 +133,11 @@ struct PracticePills: View {
     var body: some View {
         Flow(spacing: K.S.xs) {
             ForEach(practices, id: \.self) { p in
-                HStack(spacing: 4) {
-                    Image(systemName: Self.icon(p)).font(.system(size: 10)).foregroundStyle(K.C.add)
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: Self.icon(p)).font(K.F.tiny).foregroundStyle(K.C.add)
                     Text(Self.short(p)).font(K.F.small).foregroundStyle(K.C.text).lineLimit(1)
                 }
-                .padding(.horizontal, K.S.sm).padding(.vertical, 4)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
                 .background(K.C.add.opacity(0.08), in: Capsule())
                 .overlay(Capsule().stroke(K.C.add.opacity(0.25), lineWidth: 1))
                 .help(p)

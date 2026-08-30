@@ -79,9 +79,9 @@ struct ReviewPacketView: View {
     private var verdict: some View {
         HStack(spacing: K.S.md) {
             Image(systemName: packet.blocker == nil ? "checkmark.seal.fill" : "exclamationmark.shield.fill")
-                .font(.system(size: 24, weight: .semibold))
+                .font(K.F.display)
                 .foregroundStyle(packet.blocker == nil ? K.C.add : K.C.warn)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: K.S.xxs) {
                 Text(packet.blocker == nil ? "Ready for your merge decision" : "Not ready to merge")
                     .font(K.F.title).foregroundStyle(K.C.text)
                 Text(packet.blocker ?? "Every recorded implementation turn passed its project gate.")
@@ -155,7 +155,7 @@ struct ReviewPacketView: View {
                     HStack(alignment: .top, spacing: K.S.sm) {
                         Image(systemName: call.failed ? "xmark.circle.fill" : "terminal")
                             .foregroundStyle(call.failed ? K.C.del : K.C.faint)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: K.S.xxs) {
                             Text(call.subject).font(K.F.code).foregroundStyle(K.C.text).lineLimit(2)
                             Text(call.reason ?? "No intent supplied by the agent")
                                 .font(K.F.micro).foregroundStyle(call.reason == nil ? K.C.warn : K.C.faint)
@@ -230,7 +230,7 @@ struct ReviewPacketView: View {
     }
 
     private func metric(_ value: Int, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: K.S.hair) {
             Text("\(value)").font(K.F.title).foregroundStyle(K.C.text)
             Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
         }

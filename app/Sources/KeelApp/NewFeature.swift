@@ -23,7 +23,7 @@ struct NewFeature: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.lg) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: K.S.xxs) {
                 Text("New feature").font(K.F.display).foregroundStyle(K.C.text)
                 Text("A conversation of its own, and — if you want one — a branch of its own.")
                     .font(K.F.small).foregroundStyle(K.C.dim)
@@ -33,7 +33,7 @@ struct NewFeature: View {
                 HStack(spacing: K.S.sm) {
                     Text((here as NSString).lastPathComponent.isEmpty ? "—" : (here as NSString).lastPathComponent)
                         .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                    Text(here).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                    Text(here).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                         .lineLimit(1).truncationMode(.head)
                     Spacer()
                     Menu("Change") {
@@ -107,7 +107,7 @@ struct NewFeature: View {
 
     private func field(_ label: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Text(label.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.7)
+            Text(label.uppercased()).sectionLabel()
                 .foregroundStyle(K.C.faint)
             content()
         }

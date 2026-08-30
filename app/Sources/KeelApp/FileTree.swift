@@ -13,12 +13,12 @@ struct FileTree: View {
         VStack(alignment: .leading, spacing: K.S.xxs) {
             HStack(spacing: K.S.xs) {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 10)).foregroundStyle(K.C.faint)
+                    .font(K.F.tiny).foregroundStyle(K.C.faint)
                 TextField("Filter", text: $filter)
                     .textFieldStyle(.plain)
-                    .font(K.F.mono(11))
+                    .font(K.F.codeSmall)
             }
-            .padding(.horizontal, K.S.sm).padding(.vertical, 3)
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
             .padding(.horizontal, K.S.sm)
@@ -51,7 +51,7 @@ struct FileTree: View {
                             Text((path as NSString).lastPathComponent)
                                 .foregroundStyle(K.C.dim)
                         }
-                        .font(K.F.mono(11))
+                        .font(K.F.codeSmall)
                         .lineLimit(1).truncationMode(.head)
                     } action: {
                         model.show(file: path)
@@ -73,13 +73,13 @@ private struct TreeRow: View {
             HStack(spacing: K.S.xs) {
                 if node.dir {
                     Image(systemName: open ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(K.F.ui(7, .bold))
                         .foregroundStyle(K.C.faint).frame(width: 8)
                 } else {
                     Spacer().frame(width: 8)
                 }
                 Image(systemName: node.dir ? "folder.fill" : icon(node.name))
-                    .font(.system(size: 10))
+                    .font(K.F.tiny)
                     .foregroundStyle(node.dir ? K.C.faint : K.C.faint.opacity(0.7))
                     .frame(width: 11)
                 Text(node.name)

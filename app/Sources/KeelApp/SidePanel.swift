@@ -121,11 +121,11 @@ struct SessionsPanel: View {
     var body: some View {
         if !model.sessions.isEmpty {
             HStack(spacing: K.S.xs) {
-                Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(K.C.faint)
+                Image(systemName: "magnifyingglass").font(K.F.tiny).foregroundStyle(K.C.faint)
                 TextField("Find a session", text: $query).textFieldStyle(.plain).font(K.F.small)
                 if !query.isEmpty { CloseButton(size: 9) { query = "" } }
             }
-            .padding(.horizontal, K.S.sm).padding(.vertical, 6)
+            .padding(.horizontal, K.S.sm).padding(.vertical, K.S.half)
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
             .padding(K.S.sm)
         }
@@ -136,18 +136,18 @@ struct SessionsPanel: View {
         }
         ForEach(visible) { s in
             HoverRow(selected: s.id == model.sessionId) {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: K.S.hair) {
                     Text(s.title ?? String(s.id.prefix(8)))
                         .font(K.F.small.weight(s.id == model.sessionId ? .semibold : .regular))
                         .foregroundStyle(K.C.text)
                         .lineLimit(1)
                     HStack(spacing: K.S.xs) {
-                        Text("\(s.messages) msg").font(K.F.mono(10))
-                        if let t = s.lastActive { Text(short(t)).font(K.F.mono(10)) }
+                        Text("\(s.messages) msg").font(K.F.codeTiny)
+                        if let t = s.lastActive { Text(short(t)).font(K.F.codeTiny) }
                         // Started in the folder above or below: said, because resuming it
                         // runs the agent there.
                         if let from = s.elsewhere {
-                            Text("· in \(from)/").font(K.F.mono(10))
+                            Text("· in \(from)/").font(K.F.codeTiny)
                                 .help("Started in \(s.cwd ?? from). Resuming runs the agent there.")
                         }
                     }
@@ -215,7 +215,7 @@ struct ReadinessPanel: View {
 
     private func nextAction(_ finding: Wire.Finding) -> some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Text("FIX NEXT").font(.system(size: 10, weight: .semibold)).tracking(0.7)
+            Text("FIX NEXT").sectionLabel()
                 .foregroundStyle(K.C.warn)
             Text(finding.title).font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -224,7 +224,7 @@ struct ReadinessPanel: View {
                 .buttonStyle(FilledButton()).disabled(model.running)
         }
         .padding(K.S.md)
-        .background(K.C.warn.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.md))
+        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
         .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1))
         .padding(.horizontal, K.S.sm).padding(.vertical, K.S.sm)
     }
@@ -243,7 +243,7 @@ struct ReadinessPanel: View {
 
     private var unscanned: some View {
         HStack(spacing: K.S.sm) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: K.S.xxs) {
                 Text("Readiness not checked").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                 Text("Scan the repository for release blockers.").font(K.F.micro).foregroundStyle(K.C.dim)
             }
@@ -266,13 +266,13 @@ struct ReadinessPanel: View {
                     ProgressView().controlSize(.mini)
                 } else {
                     Button { Task { await model.rescan() } } label: {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                        Image(systemName: "arrow.clockwise").font(K.F.tiny)
                     }
                     .buttonStyle(QuietButton()).help("Scan again — re-reads the repository and re-runs every check.")
                 }
             }
             if let p = model.scan?.profile {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: K.S.xxs) {
                     if p.template != "blank" {
                         HStack(spacing: K.S.xs) {
                             Text(p.template_title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
@@ -315,7 +315,7 @@ struct ReadinessPanel: View {
                         .disabled(saved != nil)
                     Button("Fix CLAUDE.md and AGENTS.md") { busy = true; Task { await model.fixDocs(); busy = false } }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
+                    Image(systemName: "ellipsis").font(K.F.micro.weight(.semibold))
                         .frame(width: 22, height: 22)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -333,7 +333,7 @@ struct ReadinessPanel: View {
                     ProgressView().controlSize(.mini)
                     Text("Reviewing in the background…").font(K.F.micro).foregroundStyle(K.C.faint)
                 } else if !(lane.turns.last?.text.isEmpty ?? true) {
-                    Image(systemName: "doc.text").font(.system(size: 10)).foregroundStyle(K.C.accent)
+                    Image(systemName: "doc.text").font(K.F.tiny).foregroundStyle(K.C.accent)
                     Button("Open the review") { model.openReview() }
                         .buttonStyle(.plain).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.accent)
                     Text("· opens as a tab").font(K.F.micro).foregroundStyle(K.C.faint)
@@ -350,10 +350,10 @@ struct ReadinessPanel: View {
         HoverRow {
             HStack(spacing: K.S.xs) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(K.C.faint).frame(width: 10)
+                    .font(K.F.tiny.weight(.semibold)).foregroundStyle(K.C.faint).frame(width: 10)
                 Text("\(i + 1). \(phase.title)").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
                 Spacer()
-                Text("\(phase.findings.count)").font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                Text("\(phase.findings.count)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
             }
         } action: {
             withAnimation(K.M.quick) {
@@ -400,10 +400,10 @@ struct ReadinessPanel: View {
             HoverRow(selected: isOpen) {
                 HStack(alignment: .top, spacing: K.S.sm) {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(K.C.faint)
-                        .frame(width: 10).padding(.top, 2)
+                        .font(K.F.tiny.weight(.semibold)).foregroundStyle(K.C.faint)
+                        .frame(width: 10).padding(.top, K.S.xxs)
                     Pill(text: String(f.severity.prefix(4)).uppercased(), tone: tone(f.severity))
-                        .padding(.top, 1)
+                        .padding(.top, K.S.hair)
                     Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
@@ -418,7 +418,7 @@ struct ReadinessPanel: View {
                     Text(f.detail).font(K.F.small).foregroundStyle(K.C.dim)
                         .fixedSize(horizontal: false, vertical: true)
                     if let path = f.path, !path.isEmpty {
-                        Text(path).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                        Text(path).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
                             .truncationMode(.head)
                     }
                     HStack(spacing: K.S.xs) {
@@ -430,7 +430,7 @@ struct ReadinessPanel: View {
                             .buttonStyle(QuietButton())
                             .help("Sets it aside in .keel/ignored.json. The score is unchanged and `keel scan` still reports it.")
                         Spacer()
-                        Text(f.id).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                        Text(f.id).font(K.F.codeTiny).foregroundStyle(K.C.faint)
                             .textSelection(.enabled)
                     }
                 }
@@ -450,8 +450,8 @@ struct ReadinessPanel: View {
             ForEach(ids, id: \.self) { id in
                 HoverRow {
                     HStack(spacing: K.S.sm) {
-                        Image(systemName: "eye.slash").font(.system(size: 10)).foregroundStyle(K.C.faint)
-                        Text(id).font(K.F.mono(11)).foregroundStyle(K.C.dim).lineLimit(1)
+                        Image(systemName: "eye.slash").font(K.F.tiny).foregroundStyle(K.C.faint)
+                        Text(id).font(K.F.codeSmall).foregroundStyle(K.C.dim).lineLimit(1)
                         Spacer()
                         Text("restore").font(K.F.micro).foregroundStyle(K.C.accent)
                     }

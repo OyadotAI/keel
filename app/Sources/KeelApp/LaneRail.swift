@@ -18,7 +18,7 @@ struct LaneTabs: View {
             Rectangle().fill(K.C.line).frame(width: 1, height: 20)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
+                HStack(spacing: K.S.xxs) {
                     ForEach(lanes.lanes.filter { !$0.hidden }) { lane in
                         LaneRow(lane: lane, lanes: lanes)
                     }
@@ -33,12 +33,12 @@ struct LaneTabs: View {
             Button {
                 NotificationCenter.default.post(name: .keelNewLane, object: nil)
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "plus").font(K.F.tiny.weight(.bold))
                     Text("New feature").font(K.F.small)
                 }
-                .padding(.horizontal, K.S.sm).padding(.vertical, 4)
-                .background(K.C.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: K.R.sm))
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
+                .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -59,7 +59,7 @@ struct LaneTabs: View {
             .hint("Click for a new feature")
             if lanes.runningCount > 0 {
                 Text("\(lanes.runningCount) running")
-                    .font(K.F.mono(10)).foregroundStyle(K.C.accent)
+                    .font(K.F.codeTiny).foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.md)
             }
         }
@@ -107,13 +107,13 @@ private struct LaneRow: View {
                 Pill(text: "ASKS", tone: .warn)
             }
             if let wt = checkout {
-                Image(systemName: "arrow.triangle.branch").font(.system(size: 10))
+                Image(systemName: "arrow.triangle.branch").font(K.F.tiny)
                     .foregroundStyle(wt.dirty ? K.C.accent : K.C.faint)
                     .help(branchText(wt))
             }
             if hovering {
                 Button { newTitle = lane.title; renaming = true } label: {
-                    Image(systemName: "pencil").font(.system(size: 10))
+                    Image(systemName: "pencil").font(K.F.tiny)
                         .frame(width: 16, height: 16).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(K.C.faint)
@@ -216,10 +216,10 @@ private struct LaneRow: View {
             switch lane.activity {
             case .waiting:
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.warn)
+                    .font(K.F.tiny).foregroundStyle(K.C.warn)
             case .failed:
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 10)).foregroundStyle(K.C.del)
+                    .font(K.F.tiny).foregroundStyle(K.C.del)
             case .working:
                 StatusDot(failed: false, running: true)
             case .idle:
