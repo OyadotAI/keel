@@ -217,7 +217,37 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
 /// includes a nested repository with changes of its own: `status` reports it as "untracked
 /// content" but `add -A` stages nothing for it, and git's "no changes added to commit" used to
 /// surface as a red error under every turn.
+/// Commit everything, in every repository the folder holds.
+///
+/// A workspace — `backend/` and `frontend/`, each its own repository — gets one commit in each,
+/// with the same message. Not atomic, because two repositories cannot commit atomically and
+/// pretending otherwise would be a lie about what was saved; but a turn that changed both halves
+/// is saved in both, which is what people mean by "commit".
 pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
+    let found = crate::gitroots::find(checkout);
+    // The ordinary case — the folder is the repository, or has no git at all — commits here, as
+    // it always did. Anything else is a workspace and each repository commits for itself.
+    let workspace = !found.is_empty() && !found.iter().any(|r| r.dir.is_empty());
+    if workspace {
+        let mut any = false;
+        let mut failures = Vec::new();
+        for root in &found {
+            match commit_one(&checkout.join(&root.dir), message) {
+                Ok(true) => any = true,
+                Ok(false) => {}
+                // One repository refusing must not lose the commit in the other.
+                Err(e) => failures.push(format!("{}: {e}", root.dir)),
+            }
+        }
+        if !failures.is_empty() && !any {
+            return Err(failures.join("; "));
+        }
+        return Ok(any);
+    }
+    commit_one(checkout, message)
+}
+
+fn commit_one(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("a commit needs a message".into());

@@ -211,6 +211,27 @@ struct NotARepo: View {
     @State private var error: String?
 
     var body: some View {
+        // A workspace is not a project without git; it is several projects with it. Offering
+        // `git init` here would make a third repository around the ones that already exist, which
+        // would then see them as untracked directories.
+        if model.isWorkspace {
+            VStack(alignment: .leading, spacing: K.S.sm) {
+                Text("A folder of repositories")
+                    .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                Text("This folder is not itself a git repository — "
+                     + model.repos.map(\.name).formatted(.list(type: .and))
+                     + (model.repos.count == 1 ? " is." : " are.")
+                     + " Keel reads them all, and a turn that changes both commits in both.")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(K.S.md)
+        } else {
+            initOffer
+        }
+    }
+
+    private var initOffer: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             Text("Not a git repository")
                 .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)

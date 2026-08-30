@@ -13,6 +13,7 @@ mod clitools;
 mod connect;
 mod dev;
 mod fsops;
+mod gitroots;
 mod gui;
 mod ignored;
 mod mcp;
