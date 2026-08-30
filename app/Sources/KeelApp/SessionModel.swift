@@ -552,6 +552,9 @@ final class SessionModel: Identifiable {
         }
         pinTick += 1
         prompt = ""
+        // A command Keel owns never reaches the agent. Everything else is sent verbatim, because
+        // Claude Code resolves slash commands itself — locally, for no tokens and no turn.
+        if runOwnCommand(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return }
         guard !running else { queued.append(text); return }
         start(text)
     }
@@ -737,6 +740,10 @@ final class SessionModel: Identifiable {
         var usage: Usage?
         /// Set on every record a subagent produced: the `Task` call it is working for.
         var parent_tool_use_id: String?
+        /// On `system/init`: every slash command this `claude` accepts, which is the only
+        /// authoritative list of them — built-ins, the project's own, plugins and skills, exactly
+        /// as configured on this machine. Keel guessing at it would be a worse list.
+        var slash_commands: [String]?
 
         struct Message: Decodable {
             var content: [Block]?
@@ -784,6 +791,7 @@ final class SessionModel: Identifiable {
         case "system" where r.subtype == "init":
             let fresh = sessionId == nil && r.session_id != nil
             sessionId = r.session_id ?? sessionId
+            if let cs = r.slash_commands, !cs.isEmpty { rememberCommands(cs) }
             // Claude Code only titles a session when its own UI asks for one, so a session
             // Keel drove would list as a bare id. The lane's title is the first ask; it goes
             // into Keel's own name store, which is what History reads.
@@ -1049,6 +1057,51 @@ final class SessionModel: Identifiable {
     var previewProblem: String?
     /// Bumped to ask the web view to reload the page it has.
     var reloadTick = 0
+
+    // MARK: - Slash commands
+
+    /// Every slash command this `claude` accepts, as it reported them.
+    ///
+    /// Read off the `init` record rather than derived: Claude Code knows its own built-ins, the
+    /// project's `.claude/commands`, every plugin's, and every skill — 88 of them on a normal
+    /// machine — and any list Keel assembled itself would be a worse one that drifts.
+    ///
+    /// Kept in `UserDefaults` per project so the picker works before the first turn of a session,
+    /// which is exactly when somebody reaches for `/`.
+    var slashCommands: [String] = []
+
+    private var commandsKey: String { "keel.slashCommands." + repoPath }
+
+    private func rememberCommands(_ list: [String]) {
+        slashCommands = list
+        UserDefaults.standard.set(list, forKey: commandsKey)
+    }
+
+    func loadCommands() {
+        guard slashCommands.isEmpty, !repoPath.isEmpty else { return }
+        slashCommands = UserDefaults.standard.stringArray(forKey: commandsKey) ?? []
+    }
+
+    /// Commands Keel answers itself, because they are about the lane rather than the agent.
+    ///
+    /// `/clear` is the one that matters: Claude Code clearing its own session would leave Keel
+    /// still holding the id and resuming the thing that was just cleared.
+    static let ownCommands: [(name: String, detail: String)] = [
+        ("clear", "start this task over — new conversation, same branch"),
+    ]
+
+    /// Runs a slash command Keel owns. Returns false when it belongs to the agent.
+    func runOwnCommand(_ text: String) -> Bool {
+        guard text == "/clear" else { return false }
+        stop()
+        turns.removeAll()
+        sessionId = nil
+        pending.removeAll()
+        queued.removeAll()
+        prompt = ""
+        Telemetry.track("lane_cleared")
+        return true
+    }
 
     func refreshDev() async {
         guard let d: DevStatus = try? await client.get("/api/dev", q()) else { return }

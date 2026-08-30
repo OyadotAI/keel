@@ -96,6 +96,13 @@ final class VisualCatalogTests: XCTestCase {
                     into: live.turns[0])
         try capture(ChatRail(model: live), named: "conversation-working", in: directory)
 
+        // `/` — the vocabulary the terminal has and Keel dropped on the floor.
+        let slash = self.model()
+        slash.slashCommands = ["compact", "context", "review", "cost", "code-review:code-review",
+                               "ponytail:ponytail", "swiftui-pro", "release"]
+        slash.prompt = "/c"
+        try capture(ChatRail(model: slash), named: "conversation-slash", in: directory)
+
         // The turn stopped and is waiting on somebody — the state the whole hook exists for, and
         // the one the catalog had no picture of.
         let asking = self.model()
