@@ -511,7 +511,10 @@ struct SearchField: View {
         .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)
         .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-        .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
+        // Bottom padding as well as top: without it the first row of the list sat hard against
+        // the field, and the two read as one control.
+        .padding(.horizontal, K.S.md)
+        .padding(.top, K.S.sm).padding(.bottom, K.S.md)
     }
 }
 
@@ -660,6 +663,107 @@ struct PanelFooter: View {
         }
         .buttonStyle(.plain)
         .overlay(alignment: .top) { Hairline() }
+    }
+}
+
+/// A group in Settings: what it is called, the controls, and the sentence that says what they do.
+///
+/// Three of the five settings panes were `Form` with `.formStyle(.grouped)` — AppKit's System
+/// Settings look, with its own inset, its own type and its own grey rounded boxes — and the other
+/// two were hand-rolled `VStack`s, flush left with none of that. Side by side they read as two
+/// applications, which is the exact complaint the `Field` modifier below was written to fix and
+/// only fixed for text fields.
+///
+/// This is `PanelSection`'s shape without the disclosure, because a settings group is always open.
+struct SettingsSection<Content: View>: View {
+    let title: String
+    /// The sentence under the controls. Settings is where somebody goes when they are unsure, so
+    /// the explanation is part of the group rather than a tooltip on it.
+    var note: String?
+    @ViewBuilder var content: Content
+
+    init(_ title: String, note: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.note = note
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            Text(title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+            content
+            if let note {
+                Text(.init(note))
+                    .font(K.F.small).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, K.S.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .top) { Hairline() }
+    }
+}
+
+/// A switch in Settings: what it does on the left, the switch on the right, the consequence below.
+///
+/// The two hand-rolled panes put the switch immediately after its label, so it landed in a
+/// different place on every row and the eye had to hunt for it.
+struct SettingsToggle: View {
+    let title: String
+    var note: String?
+    @Binding var isOn: Bool
+
+    init(_ title: String, note: String? = nil, isOn: Binding<Bool>) {
+        self.title = title
+        self.note = note
+        self._isOn = isOn
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.sm) {
+                Text(title).font(K.F.body).foregroundStyle(K.C.text)
+                Spacer(minLength: K.S.md)
+                Toggle("", isOn: $isOn)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .accessibilityLabel(title)
+            }
+            if let note {
+                Text(.init(note))
+                    .font(K.F.small).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One rule, one tool, one device: a name on the left and what you can do about it on the right.
+struct SettingsRow<Trailing: View>: View {
+    let title: String
+    var detail: String?
+    var code = false
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
+            VStack(alignment: .leading, spacing: K.S.hair) {
+                Text(title)
+                    .font(code ? K.F.code : K.F.body)
+                    .foregroundStyle(K.C.text)
+                    .textSelection(.enabled)
+                if let detail {
+                    Text(detail).font(K.F.small).foregroundStyle(K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: K.S.sm)
+            trailing
+        }
+        .padding(.vertical, K.S.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

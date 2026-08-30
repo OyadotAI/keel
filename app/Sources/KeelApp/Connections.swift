@@ -35,10 +35,10 @@ struct ConnectionsSettings: View {
     private var broken: [Tool] { tools.filter { !$0.installed || !$0.authenticated } }
 
     var body: some View {
-        Form {
+        VStack(alignment: .leading, spacing: 0) {
             // What is wrong, first. A list of nine rows where two matter is a list you read nine
             // times to find the two.
-            Section {
+            SettingsSection("Status") {
                 if tools.isEmpty {
                     // Seconds, because each tool is asked "who am I" in turn. Motion says it is
                     // working; a grey word says it is stuck.
@@ -51,6 +51,7 @@ struct ConnectionsSettings: View {
                     HStack(spacing: K.S.sm) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(K.F.micro).foregroundStyle(K.C.add)
+                            .accessibilityHidden(true)
                         Text("All \(tools.count) tools installed and signed in.")
                             .font(K.F.small).foregroundStyle(K.C.dim)
                     }
@@ -58,6 +59,7 @@ struct ConnectionsSettings: View {
                     HStack(alignment: .top, spacing: K.S.sm) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(K.F.micro).foregroundStyle(K.C.warn)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: K.S.xxs) {
                             Text(broken.map(\.label).joined(separator: ", "))
                                 .font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
@@ -65,7 +67,7 @@ struct ConnectionsSettings: View {
                             Text(broken.count == 1
                                  ? "is not ready. Nothing that needs it will work."
                                  : "are not ready. Nothing that needs them will work.")
-                                .font(K.F.micro).foregroundStyle(K.C.dim)
+                                .font(K.F.small).foregroundStyle(K.C.dim)
                         }
                     }
                 }
@@ -73,61 +75,72 @@ struct ConnectionsSettings: View {
 
             // One row per tool, the broken ones first. A grid of cards had ragged heights and
             // a command you had to retype; a row has the state, the account, and the button.
-            Section {
-                VStack(spacing: 0) {
-                    ForEach(tools.sorted { ($0.authenticated ? 1 : 0, $0.label) < ($1.authenticated ? 1 : 0, $1.label) }) { t in
+            SettingsSection("Command-line tools") {
+                boxed {
+                    ForEach(tools.sorted {
+                        ($0.authenticated ? 1 : 0, $0.label) < ($1.authenticated ? 1 : 0, $1.label)
+                    }) { t in
                         ToolRow(tool: t, busy: busy == t.id, anyBusy: busy != nil,
                                 install: { stream("/api/cli/install", ["id": t.id], t.id) },
                                 login: { stream("/api/cli/login", ["id": t.id], t.id) })
                         if t.id != tools.last?.id { Hairline() }
                     }
                 }
-                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
-                .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
             }
 
             // Tokens and the one AWS flow Keel can drive, as rows in the same list shape as the
             // tools above. The explanations are tooltips; the row says connected or not and
             // offers the one thing to do about it.
-            Section {
-                VStack(spacing: 0) {
+            SettingsSection(
+                "Credentials",
+                note: "They live in the macOS login keychain or the CLI's own cache — never in the "
+                    + "repository, never in Keel's files."
+            ) {
+                boxed {
                     TokenRow(client: client, label: "GitHub token", stored: stored?.github != nil,
                              path: "/api/connect/github",
                              help: "A personal access token, kept in the login keychain. Only "
                                  + "needed for what `gh` cannot do for you.")
                     Hairline()
-                    TokenRow(client: client, label: "Cloudflare token", stored: stored?.cloudflare != nil,
+                    TokenRow(client: client, label: "Cloudflare token",
+                             stored: stored?.cloudflare != nil,
                              path: "/api/connect/cloudflare",
                              help: "A scoped, rotatable API token, kept in the login keychain. "
                                  + "Cloudflare has no keyless deploy, so this is the only way.")
                     Hairline()
                     AwsSso(client: client) { Task { await refresh() } }
                 }
-                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
-                .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
-                Text("Credentials live in the macOS login keychain or the CLI's own cache — never "
-                     + "in the repository, never in Keel's files.")
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
             }
 
             if !log.isEmpty {
-                Section("Output") {
+                SettingsSection("Output") {
                     ScrollView {
-                        Text(log).font(K.F.codeTiny)
+                        Text(log).font(K.F.codeTiny).foregroundStyle(K.C.dim)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
+                            .padding(K.S.sm)
                     }
                     .frame(height: 160)
+                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.md)
+                        .stroke(K.C.line, lineWidth: 1))
                 }
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task {
             await refresh()
             stored = try? await client.get("/api/connections")
         }
+    }
+
+    /// The one place in Settings that draws a box: a list of rows that belong together and each
+    /// carry their own controls, which needs an edge to read as a list rather than as prose.
+    @ViewBuilder
+    private func boxed<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }
+            .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
+            .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
     }
 
     private func refresh() async {
