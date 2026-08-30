@@ -29,6 +29,7 @@ struct SkillsPanel: View {
                       body: "Add reusable instructions for reviews, deployments, and tools.",
                       action: "Browse skills") { model.sheet = .skills }
             } else {
+                RailHeader("Available skills", trailing: "\(model.workspace.skills.count)")
                 ForEach(model.workspace.skills) { s in
                     ItemRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
                             selected: model.inspecting == .skill(s)) {
@@ -94,17 +95,17 @@ struct HooksPanel: View {
     private var mine: [Wire.Hook] { model.workspace.hooks.filter { !$0.fromRepo } }
 
     var body: some View {
-        if model.workspace.hooks.isEmpty {
+            if model.workspace.hooks.isEmpty {
             Blank(icon: "bolt.horizontal", title: "No hooks",
                   body: "Hooks run local commands around agent actions. Repository hooks stay quarantined until trusted.",
                   action: nil) { }
         } else {
             if !fromRepo.isEmpty {
-                RailHeader("Came with the repo", trailing: "\(fromRepo.count)")
+                RailHeader("From this repository", trailing: "\(fromRepo.count)")
                 ForEach(fromRepo) { h in row(h) }
             }
             if !mine.isEmpty {
-                RailHeader("Yours", trailing: "\(mine.count)")
+                RailHeader("Your hooks", trailing: "\(mine.count)")
                 ForEach(mine) { h in row(h) }
             }
         }
@@ -129,6 +130,7 @@ struct PluginsPanel: View {
                       body: "Install bundles of skills, subagents, and commands.",
                       action: "Browse plugins") { model.sheet = .skills }
             } else {
+                RailHeader("Installed plugins", trailing: "\(model.workspace.plugins.count)")
                 ForEach(model.workspace.plugins) { p in
                     ItemRow(name: p.name,
                             detail: p.enabled ? p.marketplace : "disabled · \(p.marketplace)",
@@ -224,7 +226,7 @@ struct Recommended: View {
                 HStack(spacing: K.S.xs) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
                         .foregroundStyle(K.C.warn)
-                    Text("RECOMMENDED FOR THIS REPOSITORY")
+                    Text("Recommended for this repository")
                         .font(.system(size: 10, weight: .semibold)).tracking(0.7)
                         .foregroundStyle(K.C.warn)
                 }
