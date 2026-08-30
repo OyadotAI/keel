@@ -98,6 +98,14 @@ fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String
     if path.exists() {
         return Err(format!("lane {name} already exists"));
     }
+    // The two causes read identically to git (`fatal: Needed a single revision`) and could not be
+    // told apart in the message, so a folder that was never a repository was told it had no
+    // commits. The app offers to `git init` for the first and to commit for the second.
+    if git(root, &["rev-parse", "--git-dir"]).is_err() {
+        return Err(
+            "This folder is not a git repository, so there is nothing to branch from.".to_string(),
+        );
+    }
     git(root, &["rev-parse", "--verify", "HEAD"])
         .map_err(|_| "This repository has no commits yet, so there is nothing to branch from.")?;
 
@@ -344,9 +352,16 @@ pub async fn api_create(
     Json(body): Json<NameBody>,
 ) -> Result<Json<Worktree>, (StatusCode, String)> {
     let root = state.repo();
-    off_thread(move || create_from(&root, &body.name, body.from.as_deref()))
-        .await
-        .map(Json)
+    let made = off_thread(move || create_from(&root, &body.name, body.from.as_deref())).await;
+    // The failure that stopped a customer working. Reported so it is countable: the shape of the
+    // git error only — it quotes branch names and paths.
+    if made.is_err() {
+        sentry::capture_message(
+            "isolated checkout could not be created",
+            sentry::Level::Error,
+        );
+    }
+    made.map(Json)
 }
 
 pub async fn api_list(State(state): State<Arc<AppState>>) -> Json<Vec<Worktree>> {
