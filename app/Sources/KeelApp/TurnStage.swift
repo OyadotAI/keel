@@ -293,8 +293,10 @@ struct ChangedFiles: View {
             )
             if open {
                 VStack(alignment: .leading, spacing: K.S.sm) {
+                    // Through the same normaliser the Changes panel uses: an absolute path from
+                    // a lane's checkout is not a path this checkout's git can answer for.
                     ForEach(turn.files, id: \.self) { path in
-                        FileDiff(path: path, model: model)
+                        FileDiff(path: model.repoRelative(path), model: model)
                     }
                 }
                 .padding(.horizontal, K.S.sm)

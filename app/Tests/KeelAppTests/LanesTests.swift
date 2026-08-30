@@ -158,3 +158,39 @@ final class LanesTests: XCTestCase {
         XCTAssertTrue(model.mergeBlocker?.contains("8-file budget") == true)
     }
 }
+
+/// Paths as the checkout serving the diff knows them.
+///
+/// A lane writes to `<project>/.keel/worktrees/<lane>/…` and its diff is answered from that
+/// checkout, so the prefix has to come off. It did not: the project root was stripped first,
+/// leaving `.keel/worktrees/<lane>/…`, and the marker that should have removed it wanted a
+/// leading slash. Every file a lane touched then asked git for a path that was not there, and
+/// the diff pane said the file matched HEAD — a lane's work could not be reviewed at all.
+@MainActor
+final class LanePathTests: XCTestCase {
+    private func model(worktree: String?) -> SessionModel {
+        let m = SessionModel(client: Client(port: 0))
+        m.repoPath = "/Users/x/proj"
+        m.worktree = worktree
+        return m
+    }
+
+    func testALanesFileIsRelativeToItsOwnCheckout() {
+        let m = model(worktree: "fix-ci-ad0")
+        XCTAssertEqual(
+            m.repoRelative("/Users/x/proj/.keel/worktrees/fix-ci-ad0/.github/dependabot.yml"),
+            ".github/dependabot.yml")
+    }
+
+    func testTheProjectsOwnFilesAreUnaffected() {
+        XCTAssertEqual(model(worktree: nil).repoRelative("/Users/x/proj/src/main.rs"), "src/main.rs")
+        XCTAssertEqual(model(worktree: "lane").repoRelative("/Users/x/proj/src/main.rs"), "src/main.rs")
+    }
+
+    /// Another lane's checkout is not this one's, so its prefix is not stripped by this lane.
+    func testOnlyThisLanesPrefixComesOff() {
+        let m = model(worktree: "mine")
+        XCTAssertEqual(m.repoRelative("/Users/x/proj/.keel/worktrees/theirs/a.txt"),
+                       ".keel/worktrees/theirs/a.txt")
+    }
+}

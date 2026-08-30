@@ -95,6 +95,25 @@ final class SessionModel: Identifiable {
     var branch: String?
     var changes: [Wire.Change] = []
 
+    /// A path as the checkout that will serve its diff knows it.
+    ///
+    /// The agent reports absolute paths. A lane's files live at `<project>/.keel/worktrees/<lane>/…`
+    /// while every checkout-scoped request — the diff among them — is answered from the lane's own
+    /// checkout, where that prefix does not exist. Stripping the project root first left
+    /// `.keel/worktrees/<lane>/…`, and the marker that was meant to remove it required a leading
+    /// slash it no longer had. So every file a lane wrote asked git for a path that is not in that
+    /// checkout, and the pane reported it as matching HEAD: a lane's work could never be reviewed.
+    /// The lane's own prefix goes first now, and matches with or without the leading slash.
+    func repoRelative(_ path: String) -> String {
+        if let wt = worktree, let cut = path.range(of: ".keel/worktrees/\(wt)/") {
+            return String(path[cut.upperBound...])
+        }
+        if !repoPath.isEmpty, path.hasPrefix(repoPath + "/") {
+            return String(path.dropFirst(repoPath.count + 1))
+        }
+        return path
+    }
+
     /// The files the agent wrote in this conversation, newest turn last, as the Changes panel
     /// shows them — what happened here, not git's view of the working tree (that is the Git tab).
     var editedThisSession: [Wire.Change] {
@@ -102,11 +121,7 @@ final class SessionModel: Identifiable {
         var order: [String] = []
         for turn in turns {
             for call in turn.calls where Turn.writeTools.contains(call.tool) {
-                var path = call.subject
-                if !repoPath.isEmpty, path.hasPrefix(repoPath + "/") { path = String(path.dropFirst(repoPath.count + 1)) }
-                if let wt = worktree, path.contains("/.keel/worktrees/\(wt)/") {
-                    path = String(path.split(separator: "/.keel/worktrees/\(wt)/", maxSplits: 1).last ?? Substring(path))
-                }
+                let path = repoRelative(call.subject)
                 guard !path.isEmpty, !path.hasPrefix("/") else { continue }
                 let status = call.tool == "Write" && seen[path] == nil ? "A" : "M"
                 if seen[path] == nil { order.append(path) }

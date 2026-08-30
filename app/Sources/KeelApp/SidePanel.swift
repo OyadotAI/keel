@@ -93,6 +93,9 @@ struct SessionsPanel: View {
     }
 
     var body: some View {
+        // Grouped once. It was read again for every row's detail line, which on a parent folder
+        // with two hundred sessions is the same grouping done two hundred times.
+        let groups = grouped
         if !model.sessions.isEmpty {
             SearchField(prompt: "Find a session", text: $query)
         }
@@ -104,16 +107,30 @@ struct SessionsPanel: View {
             EmptyState(icon: "magnifyingglass", title: "Nothing matches",
                        "No past session mentions “\(query)”.")
         }
-        ForEach(visible) { s in
-            PanelRow(name: s.title ?? String(s.id.prefix(8)),
-                     detail: detail(s),
-                     selected: s.id == model.sessionId) {
-                // Resumed into its own lane, so opening an old session does not evict the one
-                // that is running.
-                Task { await model.lanes?.open(session: s.id) }
+        ForEach(groups, id: \.folder) { group in
+            // Only when there is more than one: a single header over every row names the project
+            // you are already in, which is the sort of label that makes a panel longer and no
+            // clearer. Open a parent folder and there are suddenly twelve, and then it is the
+            // only thing that tells them apart.
+            if groups.count > 1 {
+                HStack(spacing: K.S.xs) {
+                    Text(group.folder).sectionLabel().foregroundStyle(K.C.dim)
+                    Text("\(group.sessions.count)").font(K.F.micro).foregroundStyle(K.C.faint)
+                    Spacer()
+                }
+                .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
             }
-            .contextMenu {
-                Button("Rename…") { renaming = s.id; newTitle = s.title ?? "" }
+            ForEach(group.sessions) { s in
+                PanelRow(name: s.title ?? String(s.id.prefix(8)),
+                         detail: detail(s, grouped: groups.count > 1),
+                         selected: s.id == model.sessionId) {
+                    // Resumed into its own lane, so opening an old session does not evict the one
+                    // that is running.
+                    Task { await model.lanes?.open(session: s.id) }
+                }
+                .contextMenu {
+                    Button("Rename…") { renaming = s.id; newTitle = s.title ?? "" }
+                }
             }
         }
         // Rendered once, outside the loop: an alert per row is an alert per row.
@@ -129,13 +146,47 @@ struct SessionsPanel: View {
             }
     }
 
+    struct Group: Identifiable {
+        var folder: String
+        var sessions: [Wire.Session]
+        var id: String { folder }
+    }
+
+    /// Sessions by the folder they ran in, most recently active folder first.
+    ///
+    /// Open a parent folder — a monorepo, a client's directory — and History is every session
+    /// from every project under it, which was one flat list of two hundred and sixty rows where
+    /// nothing said which repository any of them belonged to.
+    private var grouped: [Group] {
+        var order: [String] = []
+        var byFolder: [String: [Wire.Session]] = [:]
+        for s in visible {
+            let key = folder(s)
+            if byFolder[key] == nil { order.append(key) }
+            byFolder[key, default: []].append(s)
+        }
+        // `visible` is already most-recent-first, so first appearance is the folder's own recency.
+        return order.map { Group(folder: $0, sessions: byFolder[$0] ?? []) }
+    }
+
+    /// Where a session ran, as a label: the path below this project when it is inside it, and the
+    /// folder's own name when it is somewhere else.
+    private func folder(_ s: Wire.Session) -> String {
+        let repo = model.repoPath
+        let here = (repo as NSString).lastPathComponent
+        guard let cwd = s.cwd, !cwd.isEmpty, cwd != repo else { return here.isEmpty ? "here" : here }
+        if cwd.hasPrefix(repo + "/") { return String(cwd.dropFirst(repo.count + 1)) }
+        return (cwd as NSString).lastPathComponent
+    }
+
     /// One line under the title: how much was said, when, and — because resuming runs the agent
     /// there — whether it started somewhere other than this folder. It was three monospace
     /// fragments with no separators, reading `42 msg 09:14`.
-    private func detail(_ s: Wire.Session) -> String {
+    private func detail(_ s: Wire.Session, grouped: Bool) -> String {
         var parts = ["\(s.messages) message\(s.messages == 1 ? "" : "s")"]
         if let t = s.lastActive { parts.append(short(t)) }
-        if let from = s.elsewhere { parts.append("in \(from)/") }
+        // The group header already says where it ran; saying it again on every row is noise.
+        if !grouped, let from = s.elsewhere { parts.append("in \(from)/") }
         return parts.joined(separator: " · ")
     }
 
