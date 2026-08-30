@@ -14,6 +14,7 @@ mod connect;
 mod dev;
 mod fsops;
 mod gui;
+mod ignored;
 mod mcp;
 mod names;
 mod packs;

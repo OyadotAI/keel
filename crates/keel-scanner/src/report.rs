@@ -16,6 +16,10 @@ pub struct Report {
     /// The findings as a road: which to do first and why, so a 40-item report reads as five
     /// steps. Empty when there is nothing to do.
     pub plan: Vec<Phase>,
+    /// Ids the team set aside, filled in by the daemon for the panel. A scan never sets it:
+    /// `keel scan` reports everything.
+    #[serde(default)]
+    pub ignored: Vec<String>,
 }
 
 /// One step on the road from "it runs on my machine" to production.
@@ -108,6 +112,7 @@ impl Report {
             findings,
             profile: None,
             plan,
+            ignored: Vec::new(),
         }
     }
 

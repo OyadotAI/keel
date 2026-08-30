@@ -930,6 +930,20 @@ final class SessionModel: Identifiable {
         send()
     }
 
+    struct IgnoreBody: Encodable { var id: String; var ignored: Bool; var why: String }
+
+    /// Set a finding aside, or bring it back. Written to `.keel/ignored.json` — a decision
+    /// about the project, in the project, where the next person can argue with it.
+    func ignore(_ id: String, _ ignored: Bool) async {
+        await attempt {
+            _ = try await client.post("/api/readiness/ignore",
+                                      body: IgnoreBody(id: id, ignored: ignored, why: ""),
+                                      q(), as: Bool.self)
+        }
+        await refreshState()
+        Telemetry.track(ignored ? "finding_ignored" : "finding_restored", ["id": id])
+    }
+
     func adoptPractices() async -> [String] {
         var written: [String] = []
         await attempt {

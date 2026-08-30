@@ -165,7 +165,8 @@ struct ReadinessPanel: View {
     let model: SessionModel
     @State private var saved: String?
     @State private var busy = false
-    @State private var open: Set<String> = []
+    @State private var closed: Set<String> = []
+    @State private var openFinding: String?
 
     var body: some View {
         card
@@ -173,11 +174,14 @@ struct ReadinessPanel: View {
             Empty(text: "Nothing outstanding. The checks re-run every time the project is read.")
         } else if let plan = model.scan?.plan, !plan.isEmpty {
             ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
-                phaseRows(i, phase, expanded: open.contains(phase.id) || (open.isEmpty && i == 0))
+                // Open, all of them: a collapsed list of headings is a report you have to
+                // click five times to read.
+                phaseRows(i, phase, expanded: !closed.contains(phase.id))
             }
         } else {
             ForEach(model.findings.prefix(40)) { f in row(f) }
         }
+        ignoredRow
     }
 
     // MARK: The card: the score, what it is, where it runs, and the one thing to do next.
@@ -285,8 +289,7 @@ struct ReadinessPanel: View {
             }
         } action: {
             withAnimation(K.M.quick) {
-                if open.isEmpty { open = Set((model.scan?.plan ?? []).prefix(1).map(\.id)) }
-                if open.contains(phase.id) { open.remove(phase.id) } else { open.insert(phase.id) }
+                if closed.contains(phase.id) { closed.remove(phase.id) } else { closed.insert(phase.id) }
             }
         }
         .help(phase.why)
@@ -320,22 +323,77 @@ struct ReadinessPanel: View {
         }
     }
 
+    /// A finding opens where it is: what it is, why it matters, and the two answers — fix it
+    /// now, or set it aside. Clicking used to start a turn with no warning and no way back.
+    @ViewBuilder
     private func row(_ f: Wire.Finding) -> some View {
-        HoverRow {
-            HStack(alignment: .top, spacing: K.S.sm) {
-                Pill(text: String(f.severity.prefix(4)).uppercased(), tone: tone(f.severity))
-                    .padding(.top, 1)
-                Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+        let isOpen = openFinding == f.id
+        VStack(alignment: .leading, spacing: 0) {
+            HoverRow(selected: isOpen) {
+                HStack(alignment: .top, spacing: K.S.sm) {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(K.C.faint)
+                        .frame(width: 10).padding(.top, 2)
+                    Pill(text: String(f.severity.prefix(4)).uppercased(), tone: tone(f.severity))
+                        .padding(.top, 1)
+                    Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, K.S.sm)
+            } action: {
+                withAnimation(K.M.quick) { openFinding = isOpen ? nil : f.id }
             }
-            .padding(.leading, K.S.sm)
-        } action: {
-            // Every finding carries a fix, so the click is the fix — not a draft in the box.
-            Task { await model.fix(f) }
+
+            if isOpen {
+                VStack(alignment: .leading, spacing: K.S.sm) {
+                    Text(f.detail).font(K.F.small).foregroundStyle(K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let path = f.path, !path.isEmpty {
+                        Text(path).font(K.F.mono(10)).foregroundStyle(K.C.faint).lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    HStack(spacing: K.S.xs) {
+                        Button("Fix it") { openFinding = nil; Task { await model.fix(f) } }
+                            .buttonStyle(FilledButton())
+                            .disabled(model.running)
+                            .help("Starts a turn that fixes this, in a mode that may edit, then runs the gate.")
+                        Button("Ignore") { openFinding = nil; Task { await model.ignore(f.id, true) } }
+                            .buttonStyle(QuietButton())
+                            .help("Sets it aside in .keel/ignored.json. The score is unchanged and `keel scan` still reports it.")
+                        Spacer()
+                        Text(f.id).font(K.F.mono(10)).foregroundStyle(K.C.faint)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, K.S.md).padding(.top, K.S.xs).padding(.bottom, K.S.sm)
+                .padding(.leading, K.S.sm)
+                .transition(.opacity)
+            }
         }
-        .disabled(model.running)
-        .help(f.detail + "\n\n" + f.id + " · click to fix it now.")
+    }
+
+    /// What was set aside, so it is not lost — one line, and a way back.
+    @ViewBuilder
+    private var ignoredRow: some View {
+        let ids = model.scan?.ignored ?? []
+        if !ids.isEmpty {
+            RailHeader("Ignored", trailing: "\(ids.count)")
+            ForEach(ids, id: \.self) { id in
+                HoverRow {
+                    HStack(spacing: K.S.sm) {
+                        Image(systemName: "eye.slash").font(.system(size: 10)).foregroundStyle(K.C.faint)
+                        Text(id).font(K.F.mono(11)).foregroundStyle(K.C.dim).lineLimit(1)
+                        Spacer()
+                        Text("restore").font(K.F.micro).foregroundStyle(K.C.accent)
+                    }
+                    .padding(.leading, K.S.sm)
+                } action: {
+                    Task { await model.ignore(id, false) }
+                }
+                .help("Bring this finding back into the report.")
+            }
+        }
     }
 
     private func tone(_ s: String) -> Pill.Tone {
