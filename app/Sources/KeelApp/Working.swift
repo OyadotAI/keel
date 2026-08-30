@@ -51,6 +51,9 @@ struct WorkingBar: View {
     /// And the two states that used to read as "thinking…" for ten minutes: waiting on the
     /// person, and a command that has gone quiet.
     private var activity: String {
+        // Before the agent exists there are no events to be quiet, so the "no output" clock below
+        // must not start. Checking out a repository is work, and it says which work.
+        if let preparing = model.preparing { return preparing }
         guard let turn = model.current else { return "starting…" }
         // The card above says what is being asked and offers the answers; this only has to say
         // that the clock is stopped on it.
@@ -62,9 +65,13 @@ struct WorkingBar: View {
         let quiet = Int(Date().timeIntervalSince(model.lastEventAt))
         if let call = turn.calls.last(where: \.running) ?? turn.calls.last {
             let name = call.subject.isEmpty ? call.tool : "\(call.tool)  \(call.subject)"
-            return quiet > 90 ? "\(name) — no output for \(quiet / 60)m \(quiet % 60)s; a server that never exits? Stop and run it from the terminal" : name
+            // It used to end "Stop and run it from the terminal", which is Keel telling you to
+            // go and use the thing Keel exists to replace — and saying it at ninety seconds, when
+            // a build or a test run has every right to be quiet. It names what is quiet and for
+            // how long; Stop is already the next control along.
+            return quiet > 90 ? "\(name) — quiet for \(quiet / 60)m \(quiet % 60)s" : name
         }
-        if quiet > 90 { return "no output for \(quiet / 60)m \(quiet % 60)s — stop and try again, or ask in the terminal" }
+        if quiet > 90 { return "quiet for \(quiet / 60)m \(quiet % 60)s" }
         return turn.text.isEmpty ? "thinking…" : "writing…"
     }
     private var waiting: Bool { !model.pending.isEmpty }

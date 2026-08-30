@@ -414,3 +414,27 @@ final class CanvasTests: XCTestCase {
         XCTAssertEqual(m.editing, "/repo/frontend/app/pricing/page.tsx", "a backend write changes nothing")
     }
 }
+
+/// Talking to the daemon.
+final class ClientTimeoutTests: XCTestCase {
+
+    /// The session's hour exists for the chat stream, and every ordinary call used to inherit it.
+    /// A daemon that never answered `/api/open` left the window dimmed on "Opening …" with
+    /// nothing to click and nothing to cancel — for an hour. An ordinary call has to give up.
+    func testAnOrdinaryCallDoesNotWaitAnHour() {
+        XCTAssertLessThanOrEqual(Client.ordinary, 120,
+                                 "long enough for a cold scan, short enough to come back")
+        XCTAssertGreaterThan(Client.ordinary, 30, "a cold /api/open on a large repo is slow")
+    }
+
+    /// It must actually fail rather than hang: nothing is listening on this port.
+    func testACallToADeadDaemonFails() async {
+        let client = Client(port: 9)
+        do {
+            _ = try await client.get("/api/state", as: Wire.State.self)
+            XCTFail("a call to a port with no daemon must not succeed")
+        } catch {
+            // Refused or timed out — either is an answer, which is the whole point.
+        }
+    }
+}
