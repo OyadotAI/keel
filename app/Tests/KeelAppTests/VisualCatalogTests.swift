@@ -96,6 +96,30 @@ final class VisualCatalogTests: XCTestCase {
                     into: live.turns[0])
         try capture(ChatRail(model: live), named: "conversation-working", in: directory)
 
+        // The turn stopped and is waiting on somebody — the state the whole hook exists for, and
+        // the one the catalog had no picture of.
+        let asking = self.model()
+        asking.running = true
+        asking.lastEventAt = Date()
+        asking.pending = [decode(Wire.Pending.self, """
+            {"id":"p1","tool":"Bash","command":"docker compose up -d --build",
+             "rules":["Bash(docker *)"],"session_id":"S"}
+            """)]
+        try capture(ChatRail(model: asking), named: "conversation-approval", in: directory)
+
+        let questioning = self.model()
+        questioning.running = true
+        questioning.lastEventAt = Date()
+        questioning.pending = [decode(Wire.Pending.self, """
+            {"id":"q1","tool":"AskUserQuestion","command":"","rules":[],"session_id":"S",
+             "input":{"questions":[{"question":"Which store should the retry counter live in?",
+             "header":"Storage","multiSelect":false,
+             "options":[{"label":"Redis","description":"Shared across instances, already deployed"},
+                        {"label":"Postgres","description":"Durable, one more table"},
+                        {"label":"In memory","description":"Fastest, lost on restart"}]}]}}
+            """)]
+        try capture(ChatRail(model: questioning), named: "conversation-question", in: directory)
+
         try capture(ReviewPacketView(model: model, lanes: lanes), named: "review", in: directory)
         try capture(ChatRail(model: model), named: "conversation", in: directory)
         try capture(TurnStage(model: model), named: "trace", in: directory)

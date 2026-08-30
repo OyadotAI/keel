@@ -52,8 +52,12 @@ struct WorkingBar: View {
     /// person, and a command that has gone quiet.
     private var activity: String {
         guard let turn = model.current else { return "starting…" }
+        // The card above says what is being asked and offers the answers; this only has to say
+        // that the clock is stopped on it.
         if !model.pending.isEmpty {
-            return "waiting for you — answer below"
+            return model.pending.count == 1
+                ? "paused — waiting for your answer"
+                : "paused — \(model.pending.count) questions waiting"
         }
         let quiet = Int(Date().timeIntervalSince(model.lastEventAt))
         if let call = turn.calls.last(where: \.running) ?? turn.calls.last {
