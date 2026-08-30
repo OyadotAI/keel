@@ -117,8 +117,7 @@ private struct LaneRow: View {
             // Which agent is behind this tab. Two lanes running different providers looked
             // identical, and the model picker below them offers a different list for each.
             Text(lane.provider.short)
-                .font(K.F.ui(9, .semibold))
-                .tracking(K.tracking)
+                .font(K.F.tiny.weight(.medium))
                 .foregroundStyle(K.C.faint)
                 .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
                 .background(K.C.ghost, in: RoundedRectangle(cornerRadius: K.R.sm - 1))
