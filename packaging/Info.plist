@@ -27,8 +27,14 @@
        private one on the release machine's keychain. Empty key = updater never starts. -->
   <key>SUFeedURL</key><string>https://github.com/OyadotAI/keel-releases/releases/latest/download/appcast.xml</string>
   <key>SUPublicEDKey</key><string>__SU_PUBLIC_KEY__</string>
-  <key>SUEnableInstallerLauncherService</key><true/>
-  <key>SUAutomaticallyUpdate</key><true/>
+  <!-- Both were true and both were wrong. The installer launcher service is for sandboxed
+       apps; in a non-sandboxed one it puts a synchronous XPC wait on the install path, which
+       is the mach_msg2_trap in Sentry's App Hang reports. Automatic update meant Sparkle
+       downloaded a 9 MB DMG and started installing it while somebody was working — the
+       breadcrumb right before every one of those hangs. Checks stay daily and cost 874 bytes;
+       the update is offered, and installs when the person says so. -->
+  <key>SUEnableInstallerLauncherService</key><false/>
+  <key>SUAutomaticallyUpdate</key><false/>
   <key>SUScheduledCheckInterval</key><integer>86400</integer>
   <key>NSHumanReadableCopyright</key><string>Keel</string>
   <key>NSHighResolutionCapable</key><true/>

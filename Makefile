@@ -60,11 +60,28 @@ sparkle-keys: sparkle-tools
 # Published to a *public* releases-only repository: this one is private, and Sparkle on a
 # tester's machine has no token. The DMG and the appcast are all that repo ever holds.
 RELEASES = OyadotAI/keel-releases
-release: dmg
-	@version="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
-	gh release create "v$$version" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) \
-	  --title "Keel $$version" --notes "Signed and notarised. Installed copies update themselves." --latest || \
-	gh release upload "v$$version" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) --clobber
-	@echo "    released v$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+# The version is the workspace version in Cargo.toml, and the release moves it: bumping by
+# hand and forgetting was how two builds went out calling themselves the same thing, which
+# Sparkle then refuses to offer. `make release` bumps the patch; `make release VERSION=0.3.0`
+# sets it. The bump is committed before the build, so the version in the bundle is the version
+# in the tag.
+release:
+	@current="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
+	next="$(VERSION)"; \
+	if [ -z "$$next" ]; then \
+	  next="$$(echo "$$current" | awk -F. '{ printf "%d.%d.%d", $$1, $$2, $$3 + 1 }')"; \
+	fi; \
+	if [ "$$next" = "$$current" ]; then echo "    version unchanged ($$current)"; else \
+	  sed -i '' "s/^version = \"$$current\"/version = \"$$next\"/" Cargo.toml; \
+	  cargo build -p keel --quiet; \
+	  git add Cargo.toml Cargo.lock; \
+	  git commit -qm "chore: $$next"; \
+	fi; \
+	$(MAKE) dmg; \
+	gh release create "v$$next" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) \
+	  --title "Keel $$next" --notes "Signed and notarised. Installed copies are offered the update." --latest || \
+	gh release upload "v$$next" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) --clobber; \
+	git push -q origin main || true; \
+	echo "    released v$$next"
 
 .PHONY: app dmg sparkle-tools sparkle-keys release

@@ -419,6 +419,13 @@ final class SessionModel: Identifiable {
             text = "Apply the notes on the pinned elements."
         }
         guard !text.isEmpty else { return }
+        // `# something` is a note for the project, not a turn — the same thing `#` does in the
+        // terminal. It goes into CLAUDE.md, which the agent reads every turn.
+        if text.hasPrefix("#"), !text.hasPrefix("##") {
+            prompt = ""
+            Task { await remember(text) }
+            return
+        }
         pinTick += 1
         prompt = ""
         guard !running else { queued.append(text); return }
@@ -1243,6 +1250,20 @@ final class SessionModel: Identifiable {
             let e = error as NSError
             Telemetry.warn("request failed", ["domain": e.domain, "code": "\(e.code)"])
         }
+    }
+
+    struct MemoryBody: Encodable { var text: String }
+    /// What was just remembered, shown for a moment under the composer.
+    var remembered: String?
+
+    func remember(_ text: String) async {
+        await attempt {
+            _ = try await client.post("/api/memory", body: MemoryBody(text: text), q(), as: String.self)
+            remembered = String(text.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).prefix(80))
+            Telemetry.track("memory_added")
+        }
+        await refreshGit()
+        Task { try? await Task.sleep(for: .seconds(5)); remembered = nil }
     }
 
     struct SessionRename: Encodable { var id: String; var title: String }
