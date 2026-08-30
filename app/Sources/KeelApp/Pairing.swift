@@ -57,53 +57,48 @@ struct PairingSettings: View {
     @State var model: PairingModel
 
     var body: some View {
-        Form {
-            Section {
+        VStack(alignment: .leading, spacing: 0) {
+            // Said here rather than discovered later. A phone that goes quiet the moment it is
+            // backgrounded is the single most-reported disappointment with this kind of feature
+            // elsewhere, and it is a consequence of not running a relay — which is the trade
+            // being made on purpose.
+            SettingsSection(
+                "Pairing",
+                note: "Pairing works while this Mac is awake and the device can reach it — on the "
+                    + "same network, or anywhere over Tailscale. There are no push notifications "
+                    + "to a backgrounded phone: that needs a relay server, and Keel does not have "
+                    + "one so that your code never leaves your machine."
+            ) {
                 if let code = model.code {
                     VStack(alignment: .leading, spacing: K.S.xs) {
                         Text(code)
                             .font(K.F.mono(34, .medium))
                             .tracking(6)
                             .monospacedDigit()
+                            .foregroundStyle(K.C.text)
                         Text("Type this on the other device within two minutes.")
-                            .font(K.F.micro).foregroundStyle(K.C.dim)
+                            .font(K.F.small).foregroundStyle(K.C.dim)
                     }
                 } else {
                     Button("Pair a device") { Task { await model.begin() } }
+                        .buttonStyle(FilledButton())
                 }
-                if let e = model.error {
-                    ErrorRow(message: e)
-                }
-            } header: {
-                Text("Pairing")
-            } footer: {
-                // Said here rather than discovered later. A phone that goes quiet the moment it is
-                // backgrounded is the single most-reported disappointment with this kind of feature
-                // elsewhere, and it is a consequence of not running a relay — which is the trade
-                // being made on purpose.
-                Text("Pairing works while this Mac is awake and the device can reach it — on the "
-                     + "same network, or anywhere over Tailscale. There are no push notifications "
-                     + "to a backgrounded phone: that needs a relay server, and Keel does not have "
-                     + "one so that your code never leaves your machine.")
-                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                if let e = model.error { ErrorRow(message: e) }
             }
 
-            Section("Paired devices") {
+            SettingsSection("Paired devices") {
                 if model.devices.isEmpty {
-                    EmptyState("Keel listens only on this machine until a device is paired.")
+                    Text("None. Keel listens only on this machine until a device is paired.")
+                        .font(K.F.small).foregroundStyle(K.C.faint)
                 }
                 ForEach(model.devices) { d in
-                    HStack {
-                        Text(d.name)
-                        Spacer()
+                    SettingsRow(title: d.name) {
                         Button("Revoke") { Task { await model.revoke(d.id) } }
-                            .controlSize(.small)
+                            .buttonStyle(QuietButton(tone: K.C.del))
                     }
                 }
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task { await model.refresh() }
     }

@@ -94,6 +94,27 @@ final class VisualCatalogTests: XCTestCase {
             try capture(SidePanel(panel: panel, model: model), named: "panel-\(panel.rawValue)",
                         in: directory, size: CGSize(width: 320, height: 760))
         }
+
+        // Settings is five panes behind one nav, and it was the last place in the app where two
+        // of them were built one way and three another.
+        let pairing = PairingModel(client: model.client)
+        try capture(SettingsPage(model: model, pairing: pairing) {},
+                    named: "settings", in: directory, size: CGSize(width: 900, height: 700))
+        try capture(pane { PermissionsSettings(client: model.client, sessionId: nil) },
+                    named: "settings-permissions", in: directory)
+        try capture(pane { ConnectionsSettings(client: model.client) },
+                    named: "settings-tools", in: directory)
+        try capture(pane { PrivacySettings() }, named: "settings-privacy", in: directory)
+        try capture(pane { AppearanceSettings() }, named: "settings-appearance", in: directory)
+    }
+
+    /// A settings pane in the frame the page gives it, so the catalog shows what a reader sees.
+    private func pane<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: K.S.lg) { content() }
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(K.S.xl)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(K.C.bg)
     }
 
     private func capture<Content: View>(_ content: Content, named name: String, in directory: URL,

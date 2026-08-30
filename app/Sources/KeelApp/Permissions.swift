@@ -30,35 +30,32 @@ struct PermissionsSettings: View {
     struct RuleBody: Encodable { var rule: String; var scope: String; var session: String? }
 
     var body: some SwiftUI.View {
-        Form {
-            Section {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsSection(
+                "Trust",
+                note: view?.trusted == true
+                    ? "The agent runs commands here without asking. Withdrawing keeps the rules "
+                      + "already approved."
+                    : "Removes the per-command question for this repository only. It is never on "
+                      + "by default, and it can be withdrawn from here at any time."
+            ) {
                 // Granting confirms; withdrawing does not. Turning trust on is the one switch
                 // in the app that changes what runs on this machine unattended.
-                Toggle("Trust this project", isOn: Binding(
+                SettingsToggle("Trust this project", isOn: Binding(
                     get: { view?.trusted ?? false },
                     set: { on in if on { confirmingTrust = true } else { setTrust(false) } }))
-                .toggleStyle(.switch)
                 .alert("Trust this project?", isPresented: $confirmingTrust) {
                     Button("Trust") { setTrust(true) }
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text(TrustAlert.blurb)
                 }
-            } footer: {
-                Text(view?.trusted == true
-                     ? "The agent runs commands here without asking. Withdrawing keeps the rules "
-                       + "already approved."
-                     : "Removes the per-command question for this repository only. It is never on "
-                       + "by default, and it can be withdrawn from here at any time.")
-                    .font(K.F.small).foregroundStyle(K.C.dim)
             }
 
             if let v = view, !v.project.isEmpty {
-                Section("Allowed in this project") {
+                SettingsSection("Allowed in this project") {
                     ForEach(v.project, id: \.self) { rule in
-                        HStack {
-                            Text(rule).font(K.F.code)
-                            Spacer()
+                        SettingsRow(title: rule, code: true) {
                             Button("Remove") { remove(rule, scope: "project") }
                                 .buttonStyle(QuietButton())
                         }
@@ -67,62 +64,55 @@ struct PermissionsSettings: View {
             }
 
             if let v = view, !v.session.isEmpty {
-                Section {
+                SettingsSection(
+                    "Allowed once, this conversation",
+                    note: "These belong to this window's session and go when Keel does. Another "
+                        + "window's agent is still asked."
+                ) {
                     ForEach(v.session, id: \.self) { rule in
-                        Text(rule).font(K.F.code)
+                        SettingsRow(title: rule, code: true) { EmptyView() }
                     }
-                } header: {
-                    Text("Allowed once, this conversation")
-                } footer: {
-                    Text("These belong to this window's session and go when Keel does. Another "
-                         + "window's agent is still asked.")
-                        .font(K.F.small).foregroundStyle(K.C.dim)
                 }
             }
 
             if let v = view, !v.suggested.isEmpty {
-                Section {
+                // Applied, not suggested — shown so it is visible *why* the agent can run `make`
+                // without ever having asked.
+                SettingsSection(
+                    "The project's own commands",
+                    note: "Applied automatically. Running what a repository declares about itself "
+                        + "is the reason the agent is here."
+                ) {
                     ForEach(v.suggested, id: \.self) { rule in
-                        Text(rule).font(K.F.code)
+                        SettingsRow(title: rule, code: true) { EmptyView() }
                             .foregroundStyle(K.C.dim)
                     }
-                } header: {
-                    Text("The project's own commands")
-                } footer: {
-                    // Applied, not suggested — shown so it is visible *why* the agent can run
-                    // `make` without ever having asked.
-                    Text("Applied automatically. Running what a repository declares about itself "
-                         + "is the reason the agent is here.")
-                        .font(K.F.small).foregroundStyle(K.C.dim)
                 }
             }
 
-            Section {
-                HStack {
+            // A malformed rule that matches nothing is worse than a refusal: it looks approved and
+            // keeps failing, so the daemon refuses anything not shaped like a tool pattern.
+            SettingsSection(
+                "Add a rule",
+                note: "Claude Code's own pattern syntax, e.g. `Bash(docker *)`. The space before "
+                    + "the star matters — without it, `Bash(git diff*)` also matches "
+                    + "`git diff-index`."
+            ) {
+                HStack(spacing: K.S.sm) {
                     TextField("Bash(docker *)", text: $newRule)
                         .field()
                         .font(K.F.code)
                         .onSubmit { add() }
                     Button("Allow") { add() }
-                        .buttonStyle(QuietButton(tone: K.C.accent))
+                        .buttonStyle(FilledButton())
                         .disabled(newRule.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-            } header: {
-                Text("Add a rule")
-            } footer: {
-                // A malformed rule that matches nothing is worse than a refusal: it looks approved
-                // and keeps failing, so the daemon refuses anything not shaped like a tool pattern.
-                Text("Claude Code's own pattern syntax, e.g. `Bash(docker *)`. The space before the "
-                     + "star matters — without it, `Bash(git diff*)` also matches `git diff-index`.")
-                    .font(K.F.small).foregroundStyle(K.C.dim)
             }
 
             if let error {
-                Text(error).font(K.F.small).foregroundStyle(K.C.del)
+                ErrorRow(message: error).padding(.top, K.S.md)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task { await refresh() }
     }

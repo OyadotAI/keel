@@ -152,12 +152,11 @@ struct AppearanceSettings: View {
     @State private var mode = Appearance.current
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.md) {
-            Text("System follows the Mac. Both palettes are complete and contrast-checked; dark "
-                 + "is the one the diffs were designed in. The icon in the toolbar switches too.")
-                .font(K.F.body).foregroundStyle(K.C.dim)
-                .fixedSize(horizontal: false, vertical: true)
-
+        SettingsSection(
+            "Appearance",
+            note: "System follows the Mac. Both palettes are complete and contrast-checked; dark "
+                + "is the one the diffs were designed in. The icon in the toolbar switches too."
+        ) {
             HStack(spacing: 0) {
                 ForEach(Appearance.allCases) { a in
                     let on = mode == a
@@ -186,37 +185,46 @@ struct PrivacySettings: View {
     @State private var usage = Telemetry.usage
     @State private var sent = false
 
+    /// One paragraph rather than two, so the general explanation does not end up printed *under*
+    /// the specific one and reading backwards.
+    private var privacyNote: String {
+        let what = "Two things, and nothing else: a crash report when Keel crashes, and counts of "
+            + "what was used — \"a turn finished, the checks passed, three files\". Never a "
+            + "prompt, a file, a path, or a repository name."
+        guard Telemetry.sentryConfigured || Telemetry.posthogConfigured else {
+            return what + " This build has no reporting keys, so nothing is sent either way."
+        }
+        return what
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.md) {
-            Text("Two things can leave this Mac, and nothing else: a crash report when Keel "
-                 + "crashes, and counts of what was used — \"a turn finished, the checks passed, "
-                 + "three files\". Never a prompt, a file, a path, or a repository name.")
-                .font(K.F.body).foregroundStyle(K.C.dim)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsSection("What leaves this Mac", note: privacyNote) {
+                SettingsToggle("Send crash reports", isOn: $crashes)
+                    .onChange(of: crashes) { Telemetry.crashReports = crashes }
+                    .disabled(!Telemetry.sentryConfigured)
+                SettingsToggle("Send anonymous usage", isOn: $usage)
+                    .onChange(of: usage) { Telemetry.usage = usage }
+                    .disabled(!Telemetry.posthogConfigured)
 
-            Toggle("Send crash reports", isOn: $crashes)
-                .toggleStyle(.switch)
-                .onChange(of: crashes) { Telemetry.crashReports = crashes }
-                .disabled(!Telemetry.sentryConfigured)
-            Toggle("Send anonymous usage", isOn: $usage)
-                .toggleStyle(.switch)
-                .onChange(of: usage) { Telemetry.usage = usage }
-                .disabled(!Telemetry.posthogConfigured)
-
-            if !Telemetry.sentryConfigured && !Telemetry.posthogConfigured {
-                Text("This build has no reporting keys, so nothing is sent either way.")
-                    .font(K.F.small).foregroundStyle(K.C.faint)
-            } else if Telemetry.sentryConfigured {
-                Button(sent ? "Sent — check the dashboard" : "Send a test report") {
-                    Telemetry.sendTest(); sent = true
+                if Telemetry.sentryConfigured {
+                    Button(sent ? "Sent — check the dashboard" : "Send a test report") {
+                        Telemetry.sendTest(); sent = true
+                    }
+                    .buttonStyle(QuietButton())
+                    .disabled(!crashes)
+                    .padding(.top, K.S.xs)
                 }
-                .buttonStyle(QuietButton())
-                .disabled(!crashes)
             }
 
-            Text("Version \(Telemetry.version)"
-                 + (Updater.shared.available ? " · updates automatically" : ""))
-                .font(K.F.micro).foregroundStyle(K.C.faint)
+            SettingsSection("This build") {
+                SettingsRow(title: "Version \(Telemetry.version)",
+                            detail: Updater.shared.available
+                                ? "Updates automatically." : "No update feed in this build.") {
+                    EmptyView()
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
