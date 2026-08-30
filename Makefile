@@ -54,17 +54,17 @@ packaging/sparkle/bin/generate_appcast:
 sparkle-keys: sparkle-tools
 	@packaging/sparkle/bin/generate_keys
 
-# Build, sign, notarise, write the appcast, and publish a GitHub release the updater feed
-# points at. After this, every installed Keel offers the update by itself.
+# Bump the version, commit it, and push the tag. `.github/workflows/release.yml` does the rest:
+# build, sign, notarise, write the appcast, publish. Building it here instead is how a release
+# came to mean one laptop, one keychain and one person — the tag is the handover point now.
 #
-# Published to a *public* releases-only repository: this one is private, and Sparkle on a
-# tester's machine has no token. The DMG and the appcast are all that repo ever holds.
-RELEASES = OyadotAI/keel-releases
+# The release is published to a *public* releases-only repository: this one is private, and
+# Sparkle on a tester's machine has no token. The DMG and the appcast are all that repo holds.
+#
 # The version is the workspace version in Cargo.toml, and the release moves it: bumping by
 # hand and forgetting was how two builds went out calling themselves the same thing, which
 # Sparkle then refuses to offer. `make release` bumps the patch; `make release VERSION=0.3.0`
-# sets it. The bump is committed before the build, so the version in the bundle is the version
-# in the tag.
+# sets it. The bump is committed before the tag, and the workflow refuses a tag that disagrees.
 release:
 	@current="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
 	next="$(VERSION)"; \
@@ -76,12 +76,10 @@ release:
 	  cargo build -p keel --quiet; \
 	  git commit -qm "chore: $$next" -- Cargo.toml Cargo.lock; \
 	fi; \
-	$(MAKE) dmg; \
-	gh release create "v$$next" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) \
-	  --title "Keel $$next" --notes "Signed and notarised. Installed copies are offered the update." --latest || \
-	gh release upload "v$$next" dist/Keel.dmg dist/appcast.xml -R $(RELEASES) --clobber; \
-	git push -q origin main || true; \
-	echo "    released v$$next"
+	git push -q origin HEAD; \
+	git tag -a "v$$next" -m "Keel $$next"; \
+	git push -q origin "v$$next"; \
+	echo "    tagged v$$next — the release workflow builds, signs, notarises and publishes it"
 
 # Ten evals: the product's promises against a real agent — the daemon, the hook, `claude`, the gate.
 #

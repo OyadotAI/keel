@@ -1,0 +1,9 @@
+version: 2
+
+# The actions above are pinned to SHAs, which cannot move — including when the move is a security
+# fix. This is the other half of that decision: Dependabot opens the PR that advances the pin.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

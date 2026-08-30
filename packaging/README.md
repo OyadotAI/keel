@@ -61,6 +61,31 @@ same breath:
     source=Notarized Developer ID
     Keel.app does not have a ticket stapled to it.
 
+## Releasing
+
+`make release` bumps the version in `Cargo.toml`, commits it, and pushes a `v*` tag.
+`.github/workflows/release.yml` does everything after that — build, sign, notarise, staple, write
+the appcast, publish to `OyadotAI/keel-releases`. Nothing about a release depends on which Mac you
+are sitting at, which was the point.
+
+The workflow needs these repository secrets, and does nothing useful without them:
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERT_P12` | The Developer ID Application certificate and key, `base64 -i cert.p12` |
+| `MACOS_CERT_PASSWORD` | The password set when exporting that `.p12` |
+| `MACOS_SIGN_IDENTITY` | Optional. Left empty, the job finds the identity it just imported |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | The three `notarytool store-credentials` asks for |
+| `SPARKLE_PRIVATE_KEY` | `packaging/sparkle/bin/generate_keys -x -` on the machine that ran `make sparkle-keys` |
+| `SPARKLE_PUBLIC_KEY` | The public half, baked into `Info.plist` so the updater trusts the feed |
+| `RELEASES_TOKEN` | A token with `contents: write` on `OyadotAI/keel-releases` — the default one cannot reach another repository |
+| `KEEL_SENTRY_DSN`, `KEEL_POSTHOG_KEY`, `KEEL_POSTHOG_HOST` | Optional. Absent, that SDK is off in the build |
+
+If the workflow is down, the manual path is what it always was — `make dmg`, then upload the two
+files it leaves in `dist/`:
+
+    gh release create v0.2.52 dist/Keel.dmg dist/appcast.xml -R OyadotAI/keel-releases --latest
+
 ## If notarisation is not set up
 
 The image still builds and is signed, and works on the machine that built it. Anyone else gets
