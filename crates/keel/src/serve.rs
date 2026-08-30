@@ -84,7 +84,10 @@ impl AppState {
                 if path.is_dir() {
                     Ok(path)
                 } else {
-                    Err(format!("lane {name} has no checkout"))
+                    Err(format!(
+                        "The feature “{name}” has no checkout in this project. Its worktree was \
+                         removed, or it belongs to a project that was open before this one."
+                    ))
                 }
             }
         }

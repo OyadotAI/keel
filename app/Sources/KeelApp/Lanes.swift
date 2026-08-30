@@ -111,6 +111,32 @@ final class Lanes {
         activeID = restored[min(saved.active, restored.count - 1)].id
     }
 
+    /// Everything on screen belongs to the project that is open, so a project switch clears it.
+    ///
+    /// `restore(repo:)` ran once, in the window's `.task`, and nothing re-ran it — so opening a
+    /// different project left the old one's tabs in the strip, pointing at its sessions and its
+    /// worktrees. Those lanes could not even be closed: a lane with a checkout has no close button
+    /// because the choice is meant to be merge or discard, and both of those were about a
+    /// repository that was no longer open.
+    ///
+    /// It also corrupted what was saved. `remember` writes under whatever project is open *now*,
+    /// and it fires whenever the lane list changes — so the old project's lanes were being written
+    /// into the new project's saved list, and restoring it later would have reopened someone
+    /// else's conversations.
+    ///
+    /// The lane that did the opening is kept, because `openProject` has already reset it; its
+    /// checkout is cleared because that belonged to the old repository.
+    func switchProject(to repo: String) async {
+        let keep = active
+        for lane in lanes where lane.id != keep.id { lane.stop() }
+        keep.worktree = nil
+        keep.isolated = false
+        lanes = [keep]
+        activeID = keep.id
+        await refreshWorktrees()
+        await restore(repo: repo)
+    }
+
     /// Never nil: `close` refills an emptied list, and the window reads this on every pass.
     var active: SessionModel {
         if let found = lanes.first(where: { $0.id == activeID }) ?? lanes.first { return found }
@@ -134,7 +160,19 @@ final class Lanes {
     private(set) var worktrees: [Wire.Worktree] = []
 
     func refreshWorktrees() async {
-        worktrees = (try? await client.get("/api/worktree")) ?? []
+        guard let live: [Wire.Worktree] = try? await client.get("/api/worktree") else { return }
+        worktrees = live
+
+        // A lane pointing at a checkout that is not there sends `?wt=` on every request and is
+        // refused every time — "the feature X has no checkout in this project", forever, with no
+        // way to act on it. It happens when a worktree is removed outside Keel, and it happened on
+        // every project switch until switching cleared the lanes. Falling back to the project is
+        // not a silent loss: the branch is still on disk, and the lane is usable again.
+        let names = Set(live.map(\.name))
+        for lane in lanes where lane.worktree.map({ !names.contains($0) }) == true {
+            lane.worktree = nil
+            lane.isolated = false
+        }
     }
 
     func worktree(of lane: SessionModel) -> Wire.Worktree? {
