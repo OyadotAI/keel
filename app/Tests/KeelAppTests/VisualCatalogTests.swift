@@ -127,6 +127,19 @@ final class VisualCatalogTests: XCTestCase {
             """)]
         try capture(ChatRail(model: questioning), named: "conversation-question", in: directory)
 
+        // The status bar is looked at more often than any pane in here and was the one surface the
+        // catalogue never showed — which is how a control in it stayed indistinguishable from the
+        // readouts beside it for as long as it did.
+        let trusted = self.model()
+        trusted.trusted = true
+        try capture(StatusBar(model: trusted, terminalOpen: .constant(true)) {},
+                    named: "status-bar", in: directory, size: CGSize(width: 900, height: 44))
+
+        // The first screen anybody sees, at a real window's width — it was laid out as though the
+        // window were as narrow as a panel.
+        try capture(Welcome(model: model) {}, named: "welcome", in: directory,
+                    size: CGSize(width: 1100, height: 860))
+
         try capture(ReviewPacketView(model: model), named: "review", in: directory)
         try capture(ChatRail(model: model), named: "conversation", in: directory)
         try capture(TurnStage(model: model), named: "trace", in: directory)
@@ -146,6 +159,217 @@ final class VisualCatalogTests: XCTestCase {
                     named: "settings-tools", in: directory)
         try capture(pane { PrivacySettings() }, named: "settings-privacy", in: directory)
         try capture(pane { AppearanceSettings() }, named: "settings-appearance", in: directory)
+    }
+
+    // MARK: - README media
+
+    static let ask = "Make checkout retries safe and observable"
+    static let fps = 10
+
+    /// The turn the README's artwork is made of, as the steps it actually arrives in.
+    ///
+    /// One list, replayed two ways: a still applies all of it and photographs the end, the reel
+    /// applies one step at a time and photographs each. Kept as one list on purpose — two fixtures
+    /// drift, and the day they do is the day half the README is a picture of an app that no longer
+    /// exists.
+    ///
+    /// `seconds` is per step because the beats are not equally worth reading: the gate landing
+    /// earns two and a half, a tool call opening earns one.
+    static let script: [(seconds: Double, apply: (SessionModel, Turn) -> Void)] = [
+        // Sent, and nothing back yet — the state the composer has to answer "is it working?" in,
+        // and the one a still of a finished turn never shows.
+        (0.7, { m, _ in m.running = true; m.lastEventAt = Date() }),
+
+        (0.7, { m, t in
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"Sources/Checkout/RetryPolicy.swift"}}]}}"#), into: t)
+        }),
+        (0.6, { m, t in
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"struct RetryPolicy {\n    let attempts = 3\n}"}]}}"#), into: t)
+        }),
+
+        // The first write: one file changed, and the pane that says so appears.
+        (0.7, { m, t in
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"Sources/Checkout/RetryPolicy.swift"}}]}}"#), into: t)
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"e1","content":"Applied 1 edit"}]}}"#), into: t)
+        }),
+        (0.8, { m, t in
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e2","name":"Edit","input":{"file_path":"Sources/Checkout/Telemetry.swift"}}]}}"#), into: t)
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"e2","content":"Applied 2 edits"}]}}"#), into: t)
+        }),
+        (0.8, { m, t in
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"Tests/Checkout/RetryPolicyTests.swift"}}]}}"#), into: t)
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"Wrote 64 lines"}]}}"#), into: t)
+        }),
+
+        // A command, with what it printed. The half a diff does not show.
+        (0.8, { m, t in
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"swift test --filter RetryPolicyTests","description":"Run the new tests"}}]}}"#), into: t)
+        }),
+        (0.9, { m, t in
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"Executed 6 tests, with 0 failures (0 unexpected) in 0.418 seconds"}]}}"#), into: t)
+            m.record(event(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Bounded the retries at three attempts with jittered backoff, and recorded every attempt so a retry storm is visible before it pages someone."}}}"#), into: t)
+        }),
+
+        // The project's own gate, running — not the agent's opinion of its own work.
+        (0.8, { _, t in t.gate = .running("make check") }),
+
+        // The verdict, and with it the footer: what it cost, how long, how much was cache.
+        (1.8, { m, t in
+            t.gate = .passed("make check", 11.4)
+            m.record(event(#"{"type":"result","total_cost_usd":0.1832,"duration_ms":48210,"usage":{"input_tokens":4120,"output_tokens":2860,"cache_read_input_tokens":61440,"cache_creation_input_tokens":8192}}"#), into: t)
+            t.commit = "a1b2c3d"
+            t.finished = true
+            m.running = false
+        }),
+    ]
+
+    /// A command Keel will not run until somebody says so.
+    ///
+    /// The reel this drives is the one that answers "what happens when it wants to do something
+    /// you did not ask for" — the question every reader of an agent README arrives with, and the
+    /// one a picture of a passing gate does not touch.
+    static let approval: [(seconds: Double, apply: (SessionModel, Turn) -> Void)] = [
+        (1.4, { m, t in
+            m.running = true
+            m.lastEventAt = Date()
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d0","name":"Read","input":{"file_path":"docker-compose.yml"}}]}}"#), into: t)
+        }),
+
+        // The turn stops here. It does not carry on without the command and tell you afterwards.
+        (4.6, { m, _ in
+            m.pending = [VisualCatalogTests.pending]
+        }),
+
+        (2.4, { m, t in
+            m.pending = []
+            m.trusted = true
+            m.record(event(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"docker compose up -d --build","description":"Bring the stack up"}}]}}"#), into: t)
+            m.record(event(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"Container checkout-api-1  Started"}]}}"#), into: t)
+        }),
+
+        (1.6, { m, t in
+            t.gate = .passed("make check", 11.4)
+            t.finished = true
+            m.running = false
+        }),
+    ]
+
+    private static let pending = try! JSONDecoder().decode(Wire.Pending.self, from: Data("""
+        {"id":"p1","tool":"Bash","command":"docker compose up -d --build",
+         "rules":["Bash(docker *)"],"session_id":"S"}
+        """.utf8))
+
+    private static func event(_ json: String) -> Data { Data(json.utf8) }
+
+    /// The whole script applied at once: what a still of a finished turn shows.
+    private func scripted() -> SessionModel {
+        let model = self.model()
+        let turn = Turn(prompt: Self.ask)
+        model.turns = [turn]
+        for step in Self.script { step.apply(model, turn) }
+        return model
+    }
+
+    /// The README's stills, and the frames `make media` assembles its reels from.
+    ///
+    /// Every frame is the real SwiftUI view drawing real model state, so a change to the app shows
+    /// up in the artwork the next time this runs — which is the whole reason the reel is rendered
+    /// rather than screen-recorded. What it is *not* is a photograph of a live agent: the session
+    /// is [`script`], a fixture, and the README says so next to the picture.
+    ///
+    /// The reel replays that one script a step at a time. The catalog applies all of it and
+    /// photographs the end; sharing the list is what stops the two from drifting into pictures of
+    /// two different apps.
+    func testCaptureReadmeMediaWhenRequested() throws {
+        guard let raw = ProcessInfo.processInfo.environment["KEEL_README_MEDIA"] else {
+            throw XCTSkip("Set KEEL_README_MEDIA to render the README artwork")
+        }
+        let root = URL(fileURLWithPath: raw, isDirectory: true)
+        try? FileManager.default.removeItem(at: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // The turn: sized to its content rather than to a square, because the pane lays out from
+        // the top and the leftover was coming out as half a frame of empty background.
+        try capture(TurnStage(model: scripted()), named: "turn", in: root,
+                    size: CGSize(width: 900, height: 360))
+        try capture(ChatRail(model: waiting()), named: "approval", in: root, size: Self.chat)
+
+        // The turn reel is `TurnStage`, not the conversation: the conversation shows the ask and
+        // one line for whatever is running, and everything the reel is *for* — the files as they
+        // are touched, the commands with their output, the gate arriving — is in the turn pane.
+        // The first cut of this reeled the chat and was ten seconds of an empty rectangle.
+        try reel("turn", into: root, size: Self.stage) { TurnStage(model: $0) }
+        try reel("approve", into: root, size: Self.chat) { ChatRail(model: $0) }
+    }
+
+    static let stage = CGSize(width: 900, height: 420)
+    static let chat = CGSize(width: 900, height: 470)
+
+    /// The turn stopped, holding, waiting on a person — the state the whole hook exists for.
+    private func waiting() -> SessionModel {
+        let model = scripted()
+        model.running = true
+        model.lastEventAt = Date()
+        model.pending = [decode(Wire.Pending.self, """
+            {"id":"p1","tool":"Bash","command":"docker compose up -d --build",
+             "rules":["Bash(docker *)"],"session_id":"S"}
+            """)]
+        return model
+    }
+
+    /// One reel's frames, numbered for `ffmpeg`, in `frames/<name>/`.
+    ///
+    /// A held state is rendered once and copied: at ten frames a second most of a reel is the same
+    /// picture again, and laying it out ninety more times would cost seconds a beat for files that
+    /// come out byte-identical anyway.
+    private func reel<V: View>(_ name: String, into root: URL, size: CGSize,
+                               of view: @escaping (SessionModel) -> V) throws {
+        let directory = root.appendingPathComponent("frames/\(name)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let model = self.model()
+        let turn = Turn(prompt: Self.ask)
+        model.turns = [turn]
+
+        var index = 0
+        var held = 0.0
+        func hold(_ seconds: Double) throws {
+            let first = String(format: "%03d", index)
+            try capture(view(model), named: first, in: directory, size: size)
+            let source = directory.appendingPathComponent("\(first).png")
+            index += 1
+            held += seconds
+            for _ in 1 ..< max(1, Int((seconds * Double(Self.fps)).rounded())) {
+                try FileManager.default.copyItem(
+                    at: source, to: directory.appendingPathComponent(String(format: "%03d.png", index)))
+                index += 1
+            }
+        }
+
+        if name == "turn" {
+            // The ask, typed. Three glyphs a frame: one at a time reads as a stall, and the beat
+            // is there to say a person started this.
+            var typed = ""
+            for character in Self.ask {
+                typed.append(character)
+                guard typed.count % 3 == 0 || typed.count == Self.ask.count else { continue }
+                model.prompt = typed
+                try hold(1 / Double(Self.fps))
+            }
+            model.prompt = ""
+            for step in Self.script {
+                step.apply(model, turn)
+                try hold(step.seconds)
+            }
+        } else {
+            for step in Self.approval {
+                step.apply(model, turn)
+                try hold(step.seconds)
+            }
+        }
+
+        XCTAssertEqual(held, 10, accuracy: 0.05,
+                       "the \(name) reel runs \(held)s — the README budgets ten")
     }
 
     /// A settings pane in the frame the page gives it, so the catalog shows what a reader sees.

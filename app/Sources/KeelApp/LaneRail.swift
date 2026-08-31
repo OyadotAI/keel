@@ -300,10 +300,41 @@ private struct LaneRow: View {
             } else {
                 Button("Close feature") { lanes.close(lane) }
             }
+            bulkClose
         }
         .help(tooltip)
         .accessibilityLabel("\(lane.title), \(lane.provider.rawValue), \(activityText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// The browser's tab menu, because a row of tabs sets that expectation and this is a row of
+    /// tabs.
+    ///
+    /// Counted rather than named — "Close 3 to the right" says what will happen where "Close tabs
+    /// to the right" leaves you counting them yourself — and each is hidden rather than disabled
+    /// when there is nothing to close, so the menu is as long as it has reason to be.
+    ///
+    /// None of these is destructive. Closing a lane keeps its branch and its checkout, which the
+    /// item above says in as many words; throwing work away is `Discard feature…`, and it stays
+    /// one lane at a time on purpose.
+    @ViewBuilder private var bulkClose: some View {
+        let others = lanes.others(than: lane)
+        let before = lanes.before(lane)
+        let after = lanes.after(lane)
+        if !others.isEmpty {
+            Divider()
+            Button("Close \(others.count) other tab\(others.count == 1 ? "" : "s")") {
+                lanes.activeID = lane.id
+                lanes.close(others)
+            }
+            if !before.isEmpty {
+                Button("Close \(before.count) to the left") { lanes.close(before) }
+            }
+            if !after.isEmpty {
+                Button("Close \(after.count) to the right") { lanes.close(after) }
+            }
+            Button("Close all \(others.count + 1) tabs") { lanes.close(lanes.shown) }
+        }
     }
 
     /// Closing a lane with a checkout is not discarding it, and the difference is worth the words.
