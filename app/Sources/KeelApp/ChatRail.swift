@@ -106,7 +106,7 @@ struct ChatRail: View {
         .scrollPosition(id: $anchor, anchor: .bottom)
         // Watches the reply text as well as the tool calls. It only watched calls before, and
         // a reply arrives as text deltas — so the pane sat still through the entire answer.
-        .onChange(of: tailToken) {
+        .onChange(of: model.tailToken) {
             guard pinned else { return }
             // Coalesced. A reply arrives as many small deltas, and scrolling on each of them
             // competes with the wheel and makes the pane feel like it is resisting.
@@ -150,13 +150,6 @@ struct ChatRail: View {
     private func toBottom() {
         guard let last = model.turns.last else { return }
         anchor = "chat-\(last.id)"
-    }
-
-    /// Everything that means "there is more text below", as one value. Includes the reply length,
-    /// which is what actually grows while an answer streams.
-    private var tailToken: String {
-        let last = model.turns.last
-        return "\(model.turns.count)-\(last?.text.count ?? 0)-\(last?.calls.count ?? 0)"
     }
 
     /// What an empty lane is for.

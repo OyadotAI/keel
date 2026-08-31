@@ -92,6 +92,37 @@ final class StreamTests: XCTestCase {
         XCTAssertTrue(t.calls[1].failed)
     }
 
+    /// Both panes follow their tail by watching one token change. Everything that makes a running
+    /// turn taller has to be in it, or the pane sits still while the turn grows under it and you
+    /// scroll to the end by hand — which is what a landing `tool_result` and a subagent's rows
+    /// both did: neither changes a count, and both are most of what a turn produces.
+    func testTheTailTokenMovesWithEverythingARunningTurnAdds() {
+        let m = model(), t = Turn(prompt: "run")
+        m.turns.append(t)
+
+        var seen = [m.tailToken]
+        func moved(_ what: String) {
+            XCTAssertFalse(seen.contains(m.tailToken), "\(what) left the tail token unchanged")
+            seen.append(m.tailToken)
+        }
+
+        feed(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"look"}}]}}"#, m, t)
+        moved("a call starting")
+        feed(#"{"type":"assistant","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"a.rs"}}]}}"#, m, t)
+        moved("a subagent's call")
+        feed(#"{"type":"user","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"fn main"}]}}"#, m, t)
+        moved("a subagent's output")
+        feed(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#, m, t)
+        moved("a second call")
+        // Out of order on purpose: the newest call is `t2`, and it is `t1` that grew the card.
+        feed(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"forty lines of it"}]}}"#, m, t)
+        moved("output landing on a call that is not the newest")
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hm"}}}"#, m, t)
+        moved("a thinking delta")
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done."}}}"#, m, t)
+        moved("a text delta")
+    }
+
     func testResultCarriesCostAndDuration() {
         let m = model(), t = Turn(prompt: "x")
         feed(#"{"type":"result","total_cost_usd":0.31,"duration_ms":134000,"session_id":"s1"}"#, m, t)
