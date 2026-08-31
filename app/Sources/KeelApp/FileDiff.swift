@@ -52,7 +52,10 @@ struct FileDiff: View {
         }
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-        .task(id: model.diffTick) { diff = try? await model.diff(path).get() }
+        // The path is part of the id, as it is in `DiffSurface`: a row in a `ForEach` can be
+        // handed a different file without being rebuilt, and a task keyed on the tick alone would
+        // keep showing the previous file's diff under the new one's name.
+        .task(id: "\(path)-\(model.diffTick)") { diff = try? await model.diff(path).get() }
     }
 
     // MARK: Header
