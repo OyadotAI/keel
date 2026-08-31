@@ -17,6 +17,25 @@ struct Workflow<'a> {
     lower: String,
 }
 
+/// A comment is prose, not configuration. `has()` substring-matches the whole file, so a note
+/// explaining that a build's *deployment target* comes from elsewhere used to reclassify the
+/// workflow as a deploy and fail the repository's own `scan --strict`. A YAML comment starts at a
+/// `#` that begins the line or follows whitespace — anything else (`sha#frag`) is a value.
+fn without_comments(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            match line
+                .char_indices()
+                .find(|&(i, c)| c == '#' && (i == 0 || line[..i].ends_with(char::is_whitespace)))
+            {
+                Some((i, _)) => &line[..i],
+                None => line,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl Workflow<'_> {
     fn has(&self, s: &str) -> bool {
         self.lower.contains(s)
@@ -130,7 +149,7 @@ impl Check for PipelineQuality {
             .filter_map(|p| {
                 ctx.read(p.as_str()).map(|text| Workflow {
                     path: p,
-                    lower: text.to_lowercase(),
+                    lower: without_comments(&text).to_lowercase(),
                     text,
                 })
             })
@@ -398,6 +417,31 @@ mod tests {
             ),
         ]);
         assert!(ids(&ctx).is_empty(), "{:?}", ids(&ctx));
+    }
+
+    /// This repository's own release workflow builds a Mac app and publishes it; a comment saying
+    /// the *deployment target* comes from Package.swift is prose about Swift, not a deploy step.
+    /// Matching it dropped the self-scan from 92 to 77 and failed `scan --strict` on a comment.
+    #[test]
+    fn a_comment_is_not_a_deploy() {
+        let workflow = "name: release\non:\n  push:\n    tags: ['v*']\npermissions:\n  contents: read\nconcurrency:\n  group: release\njobs:\n  publish:\n    # The app still runs on macOS 15: the deployment target comes from `platforms:`\n    # in Package.swift, not from the SDK it was built against.\n    runs-on: macos-26\n    timeout-minutes: 90\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4\n      - run: make dmg\n";
+        let (_d, ctx) = fixture(&[(".github/workflows/release.yml", workflow)]);
+        assert!(
+            !ids(&ctx).contains(&"ci/deploy-not-gated"),
+            "a comment reclassified the workflow: {:?}",
+            ids(&ctx)
+        );
+
+        // The same word on a real step still counts.
+        let (_d, ctx) = fixture(&[(
+            ".github/workflows/release.yml",
+            &workflow.replace("      - run: make dmg\n", "      - run: ./deploy.sh\n"),
+        )]);
+        assert!(
+            ids(&ctx).contains(&"ci/deploy-not-gated"),
+            "{:?}",
+            ids(&ctx)
+        );
     }
 
     #[test]
