@@ -173,7 +173,7 @@ private struct LaneRow: View {
             Button("Open in a new window") { detach() }
             Divider()
             if lane.worktree != nil {
-                Button("Review task before merge…") {
+                Button("Review task and open a pull request…") {
                     lanes.activeID = lane.id
                     NotificationCenter.default.post(name: .keelReviewTask, object: nil)
                 }

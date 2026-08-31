@@ -103,7 +103,7 @@ struct Palette: View {
         out.append(Item(title: "Previous lane", detail: "the one above", shortcut: "⌘⇧[") {
             NotificationCenter.default.post(name: .keelNextLane, object: -1)
         })
-        out.append(Item(title: "Review this task", detail: "the evidence, and the merge decision") {
+        out.append(Item(title: "Review this task", detail: "the evidence, and the pull request") {
             NotificationCenter.default.post(name: .keelReviewTask, object: nil)
         })
 
