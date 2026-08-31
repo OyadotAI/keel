@@ -45,4 +45,22 @@ final class RenderTests: XCTestCase {
         layout(LaneTabs(lanes: lanes))
         layout(DiffSurface(model: m, path: "a/b.txt"))
     }
+
+    /// The cap a pasted prompt is drawn through.
+    ///
+    /// Reported as a 2,000 ms App Hang on 0.2.53: `TASCIIEncoder::Encode` under
+    /// `LazyStack.measureEstimates`, because a lazy stack estimates every row and `lineLimit` caps
+    /// the drawn height without capping what CoreText encodes.
+    ///
+    /// This checks the helper, not the hang. A timing budget was written first and deleted:
+    /// `NSHostingView` laid out offscreen never enters `measureEstimates`, so it passed at 0.09s
+    /// with the cap removed. A budget that cannot fail reads as proof and is worse than none.
+    /// What is still not covered is a *third* pane drawing `turn.prompt` and forgetting `capped`.
+    func testALongPasteIsCappedBeforeItIsDrawn() {
+        let paste = String(repeating: "sentry stack frame ", count: 20_000)
+        XCTAssertEqual(paste.capped(800).count, 801, "capped to the limit, plus the ellipsis")
+        XCTAssertTrue(paste.capped(800).hasSuffix("…"))
+        XCTAssertEqual("short".capped(800), "short", "under the limit is left alone")
+        XCTAssertEqual("exactly".capped(7), "exactly", "the limit itself is not truncated")
+    }
 }

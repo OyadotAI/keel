@@ -117,9 +117,17 @@ struct SessionWindow: View {
         }
         // A different project is a different set of conversations. Without this the old
         // project's tabs stayed in the strip and were then saved under the new project's name.
+        //
+        // The first `"" → path` is not a switch, it is the cold launch finishing: `repoPath` is
+        // only filled in when `/api/state` answers, which is after the `.task` above has already
+        // called `restore` with an empty repo and had it return on its own guard. Skipping this
+        // transition meant a relaunch restored nothing — every lane gone, back to one empty tab.
         .onChange(of: model.repoPath) { was, now in
-            guard pinned == nil, !was.isEmpty, was != now, !now.isEmpty else { return }
-            Task { await lanes.switchProject(to: now) }
+            guard pinned == nil, was != now, !now.isEmpty else { return }
+            Task {
+                if was.isEmpty { await lanes.restore(repo: now) }
+                else { await lanes.switchProject(to: now) }
+            }
         }
         // Anything that changes which conversations are open is worth writing down: a lane that
         // has just been given a session id, one closed, or a different one focused.

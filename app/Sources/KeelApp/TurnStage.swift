@@ -13,7 +13,9 @@ struct TurnStage: View {
     struct Row: Identifiable {
         enum Kind {
             case turn(Turn, Int)
-            case quiet(Int, Int)
+            /// First and last turn number, and the prompt when it is a single turn — a row that
+            /// says only "changed nothing" does not say what was asked.
+            case quiet(Int, Int, String)
         }
         let id: String
         let kind: Kind
@@ -44,10 +46,12 @@ struct TurnStage: View {
     private var rows: [Row] {
         var out: [Row] = []
         var quietFrom: Int?
+        var quietPrompt = ""
 
         func closeQuiet(_ upTo: Int) {
             guard let from = quietFrom else { return }
-            out.append(Row(id: "quiet-\(from)-\(upTo)", kind: .quiet(from, upTo)))
+            out.append(Row(id: "quiet-\(from)-\(upTo)",
+                           kind: .quiet(from, upTo, from == upTo ? quietPrompt : "")))
             quietFrom = nil
         }
 
@@ -59,7 +63,7 @@ struct TurnStage: View {
                 closeQuiet(n - 1)
                 out.append(Row(id: turn.id.uuidString, kind: .turn(turn, n)))
             } else {
-                if quietFrom == nil { quietFrom = n }
+                if quietFrom == nil { quietFrom = n; quietPrompt = turn.prompt }
             }
         }
         closeQuiet(model.turns.count)
@@ -80,8 +84,8 @@ struct TurnStage: View {
                         switch row.kind {
                         case .turn(let t, let n):
                             TurnCard(turn: t, number: n, model: model).id(row.id)
-                        case .quiet(let first, let last):
-                            QuietRun(first: first, last: last).id(row.id)
+                        case .quiet(let first, let last, let prompt):
+                            QuietRun(first: first, last: last, prompt: prompt).id(row.id)
                         }
                         if row.id != rows.last?.id { Hairline() }
                     }
@@ -120,13 +124,19 @@ struct TurnStage: View {
 private struct QuietRun: View {
     let first: Int
     let last: Int
+    /// Empty for a run of several — one line cannot honestly stand for three different asks.
+    var prompt = ""
 
     var body: some View {
         HStack(spacing: K.S.sm) {
             Text(first == last ? "Turn \(first)" : "Turns \(first)–\(last)")
                 .sectionLabel()
+            if !prompt.isEmpty {
+                Text(prompt.capped(200)).font(K.F.micro).lineLimit(1).truncationMode(.tail)
+                    .foregroundStyle(K.C.dim).help(prompt.capped(500))
+            }
             Text("answered in the conversation, changed nothing")
-                .font(K.F.micro)
+                .font(K.F.micro).layoutPriority(1)
             Spacer()
         }
         .foregroundStyle(K.C.faint)
@@ -178,7 +188,9 @@ struct TurnCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             header
-            Text(turn.prompt)
+            // Capped as a string, not only by `lineLimit` — two lines of a 12,000-character paste
+            // still costs measuring all 12,000. `String.capped` says why.
+            Text(turn.prompt.capped(300))
                 .font(K.F.small).foregroundStyle(K.C.dim)
                 .lineLimit(2).truncationMode(.tail)
 
