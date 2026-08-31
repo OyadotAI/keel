@@ -435,9 +435,17 @@ pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn
 
 /// Claude Code's directory name for a working directory.
 ///
-/// Path separators become dashes, so `/Users/mk/Dev/oya` is stored as `-Users-mk-Dev-oya`.
+/// Separators *and dots* become dashes, so `/Users/mk/Dev/oya` is stored as `-Users-mk-Dev-oya`
+/// and `/repo/.keel/worktrees/x` as `-repo--keel-worktrees-x`.
+///
+/// The dot was missing, and every lane is `.keel/worktrees/<name>`: asked for a lane's session
+/// directly — which is what happens when the app reopens a conversation that ran in a lane, since
+/// the request carries the lane — this named a directory that has never existed, `read_dir` failed
+/// and the answer was an empty conversation. The session was still *listed*, because the listing
+/// finds it by scanning for directories that extend the repository's key rather than by building
+/// one, so History showed 81 messages and opening it showed a blank pane.
 pub fn project_key(cwd: &Utf8Path) -> String {
-    cwd.as_str().replace('/', "-")
+    cwd.as_str().replace(['/', '.'], "-")
 }
 
 /// The directories whose sessions belong to this repository: itself, up to two parents (never
@@ -872,6 +880,37 @@ mod tests {
             wrote("cp /tmp/shot.png /tmp/before.png").is_empty(),
             "a scratch file outside the repository is not a change to review"
         );
+    }
+
+    /// Every lane lives in `.keel/worktrees/<name>`, and Claude Code writes a dot as a dash the
+    /// same way it writes a slash as one. Keying only the slashes named a directory that has
+    /// never existed, so a lane's own conversation reopened blank — while still being listed,
+    /// because the listing scans for directories rather than building the name.
+    #[test]
+    fn a_lanes_own_directory_is_keyed_the_way_claude_code_writes_it() {
+        assert_eq!(
+            project_key(Utf8Path::new("/Users/mk/Dev/oya/keel/.keel/worktrees/hi")),
+            "-Users-mk-Dev-oya-keel--keel-worktrees-hi"
+        );
+        assert_eq!(
+            project_key(Utf8Path::new("/Users/mk/Dev/oya/keel")),
+            "-Users-mk-Dev-oya-keel"
+        );
+    }
+
+    /// Opening a session that ran in a lane, asked for the way the app asks for it: with the lane
+    /// as the checkout. It came back empty.
+    #[test]
+    fn a_session_that_ran_in_a_lane_opens_from_that_lane() {
+        let (_d, home) = home_with(
+            "-repo--keel-worktrees-hi",
+            "abc-1.jsonl",
+            r#"{"type":"user","message":{"content":"hi"}}"#,
+        );
+        let lane = Utf8Path::new("/repo/.keel/worktrees/hi");
+        assert_eq!(transcript(lane, &home, "abc-1").len(), 1);
+        // And from the project root, which finds it by scanning instead.
+        assert_eq!(transcript(Utf8Path::new("/repo"), &home, "abc-1").len(), 1);
     }
 
     fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
