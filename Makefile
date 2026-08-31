@@ -51,6 +51,11 @@ dev:
 dmg: app sparkle-tools
 	@packaging/build-dmg.sh
 
+# The README's stills and GIFs, rendered from the app's own views rather than screen-recorded, so
+# they can be regenerated after a UI change instead of going quietly out of date. Needs ffmpeg.
+media:
+	@packaging/media.sh
+
 # Sparkle's command-line tools (generate_keys, generate_appcast), fetched once from the
 # release the framework came from. Not vendored: 10 MB of somebody else's binaries.
 sparkle-tools: packaging/sparkle/bin/generate_appcast
@@ -104,4 +109,4 @@ release:
 evals:
 	@KEEL_EVALS=1 cargo test -p keel --test evals -- --nocapture --test-threads=1
 
-.PHONY: app dmg sparkle-tools sparkle-keys release evals
+.PHONY: app dmg media sparkle-tools sparkle-keys release evals

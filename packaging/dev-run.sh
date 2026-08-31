@@ -18,10 +18,24 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-app="dist/Keel.app"
-if [ ! -d "$app" ]; then
-  echo "no bundle yet — run 'make app' once to create $app, then 'make dev' from then on" >&2
+# A bundle of its own, rather than debug binaries swapped into the release one.
+#
+# `BudgetTests.testBundleStaysSmall` measures dist/Keel.app, and a debug build of it is 86 MB
+# against a 40 MB ceiling. `make check` rebuilds the release bundle first so the gate is honest
+# either way — but a bare `swift test` after a `make dev` failed on a budget nobody had touched,
+# which is a confusing failure to leave lying around for the sake of one `cp` path.
+release="dist/Keel.app"
+app="dist/Keel-dev.app"
+if [ ! -d "$release" ]; then
+  echo "no bundle yet — run 'make app' once to create $release, then 'make dev' from then on" >&2
   exit 1
+fi
+# Everything but the binaries: the plist, the icon, Sparkle. Copied once, and again whenever the
+# release bundle is newer than this one — which is how a change to Info.plist reaches the loop.
+if [ ! -d "$app" ] || [ "$release/Contents/Info.plist" -nt "$app/Contents/Info.plist" ]; then
+  echo "==> refreshing the dev bundle from $release"
+  rm -rf "$app"
+  cp -R "$release" "$app"
 fi
 
 echo "==> building (debug)"

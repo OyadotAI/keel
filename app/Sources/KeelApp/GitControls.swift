@@ -103,7 +103,11 @@ struct CommitBox: View {
                     .help(all ? "Commits every change" : "Commits the \(staged) staged file\(staged == 1 ? "" : "s")")
             }
             HStack(spacing: K.S.xs) {
+                // `branches` arrives a moment after the pane does, and until it has, staged and
+                // unstaged are both nought — which read as "0 unstaged" beside a button offering
+                // to commit two files. Say what is known instead of a number that is not.
                 Text(n == 0 ? "nothing to commit"
+                     : b == nil ? "\(n) to commit"
                      : (all ? "\(unstaged) unstaged — all will be committed" : "\(staged) staged · \(unstaged) unstaged"))
                     .font(K.F.micro).foregroundStyle(K.C.faint)
                 Spacer()

@@ -112,7 +112,7 @@ enum K {
         /// Every named size, for the test.
         static let sizes: [(String, CGFloat)] = [
             ("tiny", 10), ("micro", 11), ("small", 12), ("body", 13), ("reading", 14),
-            ("title", 16), ("display", 24),
+            ("title", 16), ("display", 24), ("hero", 34),
             ("codeTiny", 10), ("codeSmall", 11), ("code", 12),
         ]
         /// 12 · secondary rows
@@ -123,6 +123,9 @@ enum K {
         static let title = ui(16, .semibold)
         /// 24 · the one heading on a screen
         static let display = ui(24, .semibold)
+        /// 34 · the first screen, and only the first screen. `display` is the heading of a pane
+        /// you are working in; this is the one line on a page that has nothing else to do.
+        static let hero = ui(34, .semibold)
 
         /// 14 · text you type into or read at length: the composer, the palette's query, and the
         /// assistant's prose. A step above `body` because a paragraph and a table row are not read
@@ -848,6 +851,56 @@ struct CloseButton: View {
     }
 }
 
+
+/// A control in a row of readouts.
+///
+/// The status bar is otherwise passive — a change count, the gate's name, tokens, a cost — so a
+/// lone faint glyph in that company reads as one more thing being reported at you. Reported as
+/// exactly that: "not obvious it's a terminal and clickable". Four things fix it: it says what it
+/// is in words, it is the amber the trust chip uses rather than the faint grey the readouts share,
+/// it is set a size up from them, and it lights under the pointer.
+///
+/// Amber, deliberately, for the same reason the trust chip is: this row's colour code is "grey is
+/// a fact, amber is yours to act on". A control is the second kind.
+struct StatusToggle: View {
+    let icon: String
+    let title: String
+    /// Drawn filled while it is on — a menu that is open, a pane that is showing.
+    var on = false
+    /// Shown in the tooltip, which is also the VoiceOver label.
+    var shortcut = ""
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: K.S.tight) {
+                Image(systemName: icon).font(K.F.micro)
+                Text(title).font(K.F.small.weight(.medium)).lineLimit(1)
+            }
+            .foregroundStyle(K.C.warn)
+            .padding(.horizontal, K.S.xs)
+            .padding(.vertical, K.S.xxs)
+            .background(
+                RoundedRectangle(cornerRadius: K.R.sm)
+                    .fill(on ? K.C.warn.wash : (hovering ? K.C.hover : .clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: K.R.sm)
+                    .stroke(K.C.warn)
+                    // A border painted only on hover makes the row jump by a pixel as the pointer
+                    // crosses it. It is always there; only its strength changes.
+                    .opacity(on ? 0.55 : (hovering ? 0.45 : 0.25))
+            )
+            // The fill is transparent when it is off, so without this only the glyph takes the
+            // click — which is most of why it did not feel like a button.
+            .contentShape(RoundedRectangle(cornerRadius: K.R.sm))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .hint(shortcut.isEmpty ? title : "\(title) (\(shortcut))")
+    }
+}
 
 /// Items in a row that wraps to the next line.
 ///

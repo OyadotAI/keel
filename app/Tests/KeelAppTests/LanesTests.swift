@@ -193,6 +193,82 @@ final class LanesTests: XCTestCase {
         XCTAssertTrue(model.mergeBlocker?.contains("since the checks last ran") == true)
     }
 
+    /// A lane with a conversation in it, so `newLane` makes a new one rather than handing back
+    /// the idle one it is right to reuse for `+`.
+    private func occupied(_ lanes: Lanes, _ title: String) -> SessionModel {
+        let lane = lanes.newLane()
+        lane.title = title
+        lane.sessionId = "session-\(title)"
+        return lane
+    }
+
+    /// Closing the last tab returns you to the start screen, not to a blank tab.
+    ///
+    /// The replacement lane is still made — `active` conjures one anyway, and it carries the
+    /// project so Welcome has a model to open with — so the thing that has to be true is the flag
+    /// the window reads. It cannot be `projectOpen`: the daemon still holds the project open, so
+    /// the next state refresh would put the workbench straight back.
+    func testClosingTheLastTabReturnsToTheStartScreen() {
+        let lanes = Lanes(client: Client(port: 0), port: 0)
+        lanes.active.repoPath = "/Users/engineer/Projects/payments"
+        let first = occupied(lanes, "a")
+        let second = occupied(lanes, "b")
+        XCTAssertFalse(lanes.atStart, "opening a lane is leaving the start screen")
+
+        lanes.close(second)
+        XCTAssertFalse(lanes.atStart, "one tab left is not the start screen")
+        lanes.close(first)
+        XCTAssertTrue(lanes.atStart)
+        XCTAssertEqual(lanes.shown.count, 1, "the window still has a lane to draw Welcome with")
+        XCTAssertEqual(lanes.shown[0].repoPath, "/Users/engineer/Projects/payments",
+                       "the replacement inherits the project, so Welcome can reopen it")
+
+        lanes.newLane()
+        XCTAssertFalse(lanes.atStart, "making a lane leaves the start screen")
+    }
+
+    /// The browser's tab menu: others, left, right, all.
+    func testTheTabMenuClosesTheRightTabs() {
+        let lanes = Lanes(client: Client(port: 0), port: 0)
+        occupied(lanes, "a")
+        occupied(lanes, "b")
+        let c = occupied(lanes, "c")
+        occupied(lanes, "d")
+        XCTAssertEqual(lanes.shown.map(\.title), ["a", "b", "c", "d"])
+
+        XCTAssertEqual(lanes.before(c).map(\.title), ["a", "b"])
+        XCTAssertEqual(lanes.after(c).map(\.title), ["d"])
+        XCTAssertEqual(lanes.others(than: c).map(\.title), ["a", "b", "d"])
+
+        lanes.close(lanes.before(c))
+        XCTAssertEqual(lanes.shown.map(\.title), ["c", "d"])
+        lanes.close(lanes.after(c))
+        XCTAssertEqual(lanes.shown.map(\.title), ["c"])
+
+        // Closing every tab is the same door as closing the last one.
+        lanes.close(lanes.shown)
+        XCTAssertTrue(lanes.atStart)
+        XCTAssertEqual(lanes.shown.count, 1)
+    }
+
+    /// A hidden lane is work with no tab, so it must not stand in for one.
+    ///
+    /// Two ways it did. The count that decides "was that the last tab" was `lanes` rather than
+    /// `shown`, and the idle lane `+` reuses was found without excluding hidden ones — so closing
+    /// the last tab while the background review ran left a window with no tabs at all.
+    func testABackgroundLaneDoesNotStandInForATab() {
+        let lanes = Lanes(client: Client(port: 0), port: 0)
+        let visible = occupied(lanes, "a")
+        let background = lanes.newLane()
+        background.hidden = true
+        XCTAssertEqual(lanes.shown.map(\.title), ["a"])
+
+        lanes.close(visible)
+        XCTAssertTrue(lanes.atStart, "the last tab closed even though a hidden lane is still live")
+        XCTAssertEqual(lanes.shown.count, 1, "and a tab exists again to draw with")
+        XCTAssertTrue(lanes.lanes.contains { $0.hidden }, "the background job was not taken over")
+    }
+
     func testMergeStopsOversizedAgentChanges() {
         let model = SessionModel(client: Client(port: 0))
         model.isolated = true

@@ -19,6 +19,14 @@ final class Lanes {
     private(set) var lanes: [SessionModel] = []
     var activeID: UUID?
 
+    /// The window is showing the start screen rather than a project.
+    ///
+    /// Closing the last tab used to open a blank one in its place, which is a window that looks
+    /// busy and is not — and there was no way back to the screen you pick a project from without
+    /// quitting. It is view state and not the daemon's: the daemon still holds the project open,
+    /// so a state refresh would flip `projectOpen` back the moment it landed.
+    var atStart = false
+
     /// Bumped whenever the project changes, so work started for the old one stops.
     ///
     /// `restore` is a sequential loop of per-lane network calls — `open`, `refreshGit`,
@@ -317,14 +325,24 @@ final class Lanes {
 
     @discardableResult
     func newLane(resuming id: String? = nil, isolated: Bool = false) -> SessionModel {
+        // Anything that makes a lane is leaving the start screen. `close` sets the flag *after*
+        // its own call to this, which is the one case where that order matters.
+        atStart = false
         // An empty lane you never typed into is not a second agent, it is a second row. Focusing
         // the one that already exists is what the click meant.
         //
         // "Empty" has to mean no session as well as no turns. Checking turns alone meant a lane
         // holding a real conversation whose transcript had not loaded yet — a restored one, on
         // launch — counted as spare, and the next `+` quietly took it over.
+        //
+        // A hidden lane is never the spare. It is the background Staff review — real work with no
+        // tab — and it is idle by this test for the whole time it is starting up, so `+` could
+        // hand the person a tab onto somebody else's job. It is also why closing every tab while
+        // one ran left `shown` empty after the replacement: the replacement *was* the hidden one.
         if id == nil,
-           let idle = lanes.first(where: { $0.turns.isEmpty && $0.sessionId == nil && !$0.running }) {
+           let idle = lanes.first(where: {
+               $0.turns.isEmpty && $0.sessionId == nil && !$0.running && !$0.hidden
+           }) {
             activeID = idle.id
             idle.isolated = isolated
             // Everything the last occupant chose, not just isolation. A lane that had been
@@ -414,13 +432,54 @@ final class Lanes {
     func close(_ model: SessionModel) {
         model.closed()
         lanes.removeAll { $0.id == model.id }
-        // A window with no lane has nothing to show, so closing the last one starts a fresh one
-        // rather than leaving an empty frame. It has to inherit the project from the lane just
-        // closed: `newLane` copies that from a sibling, and closing the *only* tab leaves no
-        // sibling to copy from — so the fresh lane had no `repoPath`, `projectOpen` went false,
-        // and the whole window dropped to the Welcome screen. Which reads as the ✕ being broken.
-        if lanes.isEmpty { newLane().adopt(project: model) }
-        if activeID == model.id { activeID = lanes.last?.id }
+        // A window with no lane has nothing to draw, and `active` would conjure one anyway — so
+        // the replacement is still made, and it still inherits the project from the lane just
+        // closed (`newLane` copies that from a sibling, and the last tab leaves no sibling). What
+        // changed is what the window shows over it: closing everything returns you to the screen
+        // you pick a project from, rather than to a blank tab that looks like work.
+        // `shown`, not `lanes`: a hidden lane is real work with no tab, so closing every tab
+        // while the background review runs leaves a window with no tabs, a workbench drawn for a
+        // lane nothing can select, and no way back to the start screen.
+        if shown.isEmpty {
+            newLane().adopt(project: model)
+            atStart = true
+        }
+        if activeID == model.id { activeID = shown.last?.id }
+    }
+
+    /// Close several at once, the way a browser does.
+    ///
+    /// One call rather than a loop at each menu item, because `close` has a tail — the
+    /// replacement lane, `atStart`, the active id — and running it per lane would make and
+    /// discard a replacement for every tab on the way down.
+    func close(_ doomed: [SessionModel]) {
+        guard !doomed.isEmpty else { return }
+        let ids = Set(doomed.map(\.id))
+        for lane in doomed { lane.closed() }
+        lanes.removeAll { ids.contains($0.id) }
+        if shown.isEmpty {
+            newLane().adopt(project: doomed[0])
+            atStart = true
+        }
+        if let active = activeID, ids.contains(active) { activeID = shown.last?.id }
+    }
+
+    /// The other tabs, the ones before this one, and the ones after — as the menu needs them.
+    ///
+    /// Ordered by what the rail draws, not by `lanes`: a hidden lane is real work with no tab, so
+    /// "close the tabs to the right" must not silently take one with it.
+    func others(than lane: SessionModel) -> [SessionModel] {
+        shown.filter { $0.id != lane.id }
+    }
+
+    func before(_ lane: SessionModel) -> [SessionModel] {
+        guard let index = shown.firstIndex(where: { $0.id == lane.id }) else { return [] }
+        return Array(shown[..<index])
+    }
+
+    func after(_ lane: SessionModel) -> [SessionModel] {
+        guard let index = shown.firstIndex(where: { $0.id == lane.id }) else { return [] }
+        return Array(shown[(index + 1)...])
     }
 
     /// Reload the shared, project-level state once, rather than once per lane.

@@ -96,7 +96,11 @@ struct SessionWindow: View {
 
     var body: some View {
         Group {
-            if model.projectOpen {
+            // `atStart` first, and short-circuiting: the person closed every tab, and the daemon
+            // still has the project open, so `projectOpen` would put the workbench straight back.
+            if lanes.atStart {
+                Welcome(model: model, daemonFailure: app?.failure) { lanes.atStart = false }
+            } else if model.projectOpen {
                 workbench
             } else {
                 Welcome(model: model, daemonFailure: app?.failure) { }
@@ -797,16 +801,16 @@ struct StatusBar: View {
             } else if model.isRepo {
                 // The branch is a menu, the way every IDE's status bar treats it: click to see
                 // the others and switch, or start a new one from here.
-                item("arrow.triangle.branch", model.branch ?? "—")
-                    .contentShape(Rectangle())
-                    .asButton {
-                        Task { await model.refreshBranches() }
-                        branchMenu = true
-                    }
-                    .help("Switch or create a branch")
-                    .popover(isPresented: $branchMenu, arrowEdge: .top) {
-                        BranchMenu(model: model) { branchMenu = false }
-                    }
+                // The branch is a menu, the same as every IDE's status bar — and it was drawn as
+                // one more grey readout, so nothing said so.
+                StatusToggle(icon: "arrow.triangle.branch", title: model.branch ?? "—",
+                             on: branchMenu, shortcut: "switch or create a branch") {
+                    Task { await model.refreshBranches() }
+                    branchMenu = true
+                }
+                .popover(isPresented: $branchMenu, arrowEdge: .top) {
+                    BranchMenu(model: model) { branchMenu = false }
+                }
             } else {
                 HStack(spacing: K.S.tight) {
                     Image(systemName: "exclamationmark.triangle").font(K.F.tiny)
@@ -882,15 +886,10 @@ struct StatusBar: View {
                     .help("This session, as reported by the CLI")
             }
 
-            Button { withAnimation(K.M.quick) { terminalOpen.toggle() } } label: {
-                Image(systemName: "terminal")
-                    .font(K.F.tiny)
-                    .frame(width: 22, height: 18)
-                    .contentShape(Rectangle())
+            StatusToggle(icon: "terminal", title: "Terminal",
+                         on: terminalOpen, shortcut: "⌘⌥T") {
+                withAnimation(K.M.quick) { terminalOpen.toggle() }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(terminalOpen ? K.C.accent : K.C.faint)
-            .hint("Terminal (⌘⌥T)")
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.snug)
