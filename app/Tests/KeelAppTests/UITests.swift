@@ -205,6 +205,43 @@ extension UITests {
         }
     }
 
+    /// A shared lane's Review pane still offers a way to finish the work.
+    ///
+    /// The reported screen: a lane with no checkout of its own, reopened from history. Every
+    /// action on the pane was gated on `worktree != nil`, so it drew a red banner, some counters,
+    /// and two buttons that move the work nowhere — and it passed `testEverySurfaceDrawsSomething`
+    /// the whole time, because "is there ink" is not the same question as "can you do anything".
+    ///
+    /// Measured against the same pane with nothing to act on: the branch line, the commit field
+    /// and the action row are the difference, so gating them out again drops the ink back.
+    func testASharedLaneCanStillActFromReview() {
+        let working = populated()
+        working.worktree = nil
+        working.isolated = false
+        // `populated()` leaves one file uncommitted, which is exactly the state the gate rule is
+        // about: the recorded pass happened before that edit, so it is not a verdict on this tree.
+        XCTAssertEqual(working.mergeBlocker,
+                       "1 uncommitted change since the checks last ran. "
+                       + "Commit them; the checks run again before the merge.")
+        // …and it is stated as that, not as the old "this feature has no work on its branch yet",
+        // which was the sentence a shared lane got for every state it could be in.
+        XCTAssertFalse(working.mergeBlocker?.contains("no work on its branch") == true)
+
+        let empty = SessionModel(client: Client(port: 0))
+        empty.loaded = true
+        empty.repoPath = working.repoPath
+        empty.title = working.title
+
+        let size = CGSize(width: 720, height: 900)
+        let acted = shoot(ReviewPacketView(model: working), size).allInk
+        let bare = shoot(ReviewPacketView(model: empty), size).allInk
+        XCTAssertGreaterThan(
+            acted, bare + 1000,
+            "the Review pane for a shared lane with work drew \(acted) against \(bare) for one "
+            + "with none — the branch line, the commit field and the action row are missing again"
+        )
+    }
+
     /// 2. The card that must never be missed is visible the moment there is one.
     ///
     /// The specific regression: pending is non-empty, the card is in the tree, and nothing is on

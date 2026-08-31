@@ -61,14 +61,6 @@ struct SidePanel: View {
                 model.renamingSession = nil
             }
         }
-        .confirmationDialog("Discard every uncommitted change?", isPresented: $model.confirmingDiscard, titleVisibility: .visible) {
-            Button("Discard \(model.changes.count) file\(model.changes.count == 1 ? "" : "s")", role: .destructive) {
-                Task { await model.discardAll() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Modified files go back to the last commit. New files go to the Trash, where they can be recovered. Ignored files such as .env are left alone. The last commit is untouched.")
-        }
     }
 
     private var count: String? {

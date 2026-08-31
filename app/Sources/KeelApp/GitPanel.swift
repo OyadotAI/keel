@@ -9,9 +9,6 @@ import SwiftUI
 /// a terminal would ask twice about.
 struct GitPanel: View {
     @Bindable var model: SessionModel
-    @State private var message = ""
-    @State private var addingRemote = false
-    @State private var remoteURL = ""
     @State private var newBranch = ""
     @State private var creating = false
     @State private var allBranches = false
@@ -29,7 +26,7 @@ struct GitPanel: View {
                 NotARepo(model: model)
             } else {
                 branchHeader
-                commitBox
+                CommitBox(model: model)
                 PanelSection(title: "Changed files", count: model.changes.count,
                              open: $showFiles) {
                     workingTree
@@ -52,46 +49,7 @@ struct GitPanel: View {
 
     private var branchHeader: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
-            HStack(spacing: K.S.sm) {
-                Image(systemName: "arrow.triangle.branch").font(K.F.micro)
-                    .foregroundStyle(K.C.accent)
-                Text(b?.current ?? model.branch ?? "—")
-                    .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text).lineLimit(1)
-                Spacer()
-                if let c = current, c.upstream != nil {
-                    if c.ahead > 0 { Pill(text: "\(c.ahead) ↑", tone: .warn) }
-                    if c.behind > 0 { Pill(text: "\(c.behind) ↓", tone: .accent) }
-                    if c.ahead == 0 && c.behind == 0 { Pill(text: "IN SYNC", tone: .good) }
-                } else if b != nil {
-                    Pill(text: "NO REMOTE", tone: .neutral)
-                    // The state a freshly created project is in. Fetch and Push are greyed
-                    // out until this is answered, so the answer sits beside them.
-                    Button("Add remote…") { addingRemote = true; remoteURL = "" }
-                        .buttonStyle(QuietButton(tone: K.C.accent))
-                        .disabled(busy)
-                        .popover(isPresented: $addingRemote, arrowEdge: .bottom) {
-                            VStack(alignment: .leading, spacing: K.S.sm) {
-                                Text("Where should this project be pushed?")
-                                    .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                                Text("Create an empty repository on GitHub first, then paste its URL. "
-                                     + "It becomes `origin`; the first Push sets the upstream.")
-                                    .font(K.F.micro).foregroundStyle(K.C.dim)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                TextField("git@github.com:owner/repo.git", text: $remoteURL)
-                                    .textFieldStyle(.roundedBorder).font(K.F.codeSmall)
-                                    .onSubmit { addRemote() }
-                                HStack {
-                                    Spacer()
-                                    Button("Cancel") { addingRemote = false }.buttonStyle(QuietButton())
-                                    Button("Add") { addRemote() }
-                                        .buttonStyle(QuietButton(tone: K.C.accent))
-                                        .disabled(remoteURL.trimmingCharacters(in: .whitespaces).isEmpty)
-                                }
-                            }
-                            .padding(K.S.md).frame(width: 360)
-                        }
-                }
-            }
+            BranchStatus(model: model)
             HStack(spacing: K.S.sm) {
                 if let c = current, let up = c.upstream {
                     Text(up).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
@@ -127,13 +85,6 @@ struct GitPanel: View {
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
     }
 
-    private func addRemote() {
-        let url = remoteURL.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else { return }
-        addingRemote = false
-        Task { await model.remote("add", url: url) }
-    }
-
     // MARK: Working tree — git's view, as a tree, with the same rows as Changes.
 
     @ViewBuilder
@@ -146,52 +97,6 @@ struct GitPanel: View {
     }
 
     // MARK: Commit
-
-    /// One field, one button. The button commits what is staged when something is, and
-    /// everything when nothing is — which is what the person meant in both cases.
-    private var commitBox: some View {
-        let staged = b?.staged ?? 0, unstaged = b?.unstaged ?? 0
-        let all = staged == 0
-        let n = all ? model.changes.count : staged
-        return VStack(alignment: .leading, spacing: K.S.xs) {
-            RailHeader("Commit changes", trailing: nil)
-            HStack(spacing: K.S.xs) {
-                TextField("What changed, in one line", text: $message)
-                    .field().font(K.F.small)
-                    .onSubmit { commit(all: all) }
-                Button(n == 0 ? "Commit" : "Commit \(n)") { commit(all: all) }
-                    .buttonStyle(QuietButton(tone: K.C.accent))
-                    .disabled(busy || message.trimmingCharacters(in: .whitespaces).isEmpty || n == 0)
-                    .help(all ? "Commits every change" : "Commits the \(staged) staged file\(staged == 1 ? "" : "s")")
-            }
-            .padding(.horizontal, K.S.md)
-            HStack(spacing: K.S.xs) {
-                Text(n == 0 ? "nothing to commit"
-                     : (all ? "\(unstaged) unstaged — all will be committed" : "\(staged) staged · \(unstaged) unstaged"))
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
-                Spacer()
-                if unstaged > 0 {
-                    Button("stage all") { Task { await model.stageAll(true) } }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
-                }
-                if staged > 0 {
-                    Button("unstage all") { Task { await model.stageAll(false) } }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
-                }
-                if n > 0 {
-                    // Destructive, so it asks — and the question says what goes where.
-                    Button("discard all") { model.confirmingDiscard = true }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.del).disabled(busy)
-                }
-            }
-            .padding(.horizontal, K.S.md)
-        }
-        .padding(.bottom, K.S.sm)
-    }
-
-    private func commit(all: Bool) {
-        Task { await model.commit(message, all: all); if model.lastError == nil { message = "" } }
-    }
 
     // MARK: Branches
 
