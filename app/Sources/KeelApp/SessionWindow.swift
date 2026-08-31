@@ -10,8 +10,6 @@ struct SessionWindow: View {
     @State var lanes: Lanes
     let pairing: PairingModel
     var app: AppModel? = nil
-    /// A torn-out window shows one lane and only that one; the main window follows the tabs.
-    var pinned: SessionModel? = nil
     /// History, not Changes. A window opens onto a project you have worked in before, and the
     /// first question is which conversation to carry on — Changes is empty until a turn runs.
     @State private var panel: Panel? = .sessions
@@ -107,10 +105,6 @@ struct SessionWindow: View {
         .animation(K.M.quick, value: model.loaded)
         .background(K.C.bg)
         .task {
-            // Only the window that owns the tabs. A torn-out window ran this too, and restore
-            // replaces the whole lane list — including the lane the window was showing, which
-            // then resolved to nothing and went white.
-            guard pinned == nil else { return }
             await lanes.refreshShared()
             // Restore once the project is known: the saved lanes are keyed by it.
             await lanes.restore(repo: model.repoPath)
@@ -123,7 +117,7 @@ struct SessionWindow: View {
         // called `restore` with an empty repo and had it return on its own guard. Skipping this
         // transition meant a relaunch restored nothing — every lane gone, back to one empty tab.
         .onChange(of: model.repoPath) { was, now in
-            guard pinned == nil, was != now, !now.isEmpty else { return }
+            guard was != now, !now.isEmpty else { return }
             Task {
                 if was.isEmpty { await lanes.restore(repo: now) }
                 else { await lanes.switchProject(to: now) }
@@ -132,10 +126,10 @@ struct SessionWindow: View {
         // Anything that changes which conversations are open is worth writing down: a lane that
         // has just been given a session id, one closed, or a different one focused.
         .onChange(of: lanes.lanes.compactMap(\.sessionId)) {
-            if pinned == nil { lanes.remember(repo: model.repoPath) }
+            lanes.remember(repo: model.repoPath)
         }
         .onChange(of: lanes.activeID) {
-            if pinned == nil { lanes.remember(repo: model.repoPath) }
+            lanes.remember(repo: model.repoPath)
         }
         // The working tree also changes when Keel is not the one changing it — a commit in the
         // terminal, a revert in another lane, an editor saving a file. Nothing re-read git status
@@ -241,9 +235,9 @@ struct SessionWindow: View {
                 SetupSheet(model: model) { model.sheet = nil }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .keelNewFeatureSheet)) { _ in
+        .onWindowCommand(.keelNewFeatureSheet) { _ in
             // Only the window you are in: a sheet in every window at once is a modal maze.
-            if pinned == nil { startingFeature = true }
+            startingFeature = true
         }
         // A turn arriving while you are on the Designer or the readiness report is the case where
         // the record is written and never read. Marked unread there, and read the moment the Trace
@@ -1043,7 +1037,7 @@ struct WindowEvents: ViewModifier {
         content
             .modifier(ChatEvents(lanes: lanes, model: model, showSettings: $showSettings))
             .modifier(LaneEvents(lanes: lanes, panel: $panel))
-            .onReceive(NotificationCenter.default.publisher(for: .keelTrust)) { _ in
+            .onWindowCommand(.keelTrust) { _ in
                 confirmingTrust = true
             }
             .modifier(TrustAlert(model: model, shown: $confirmingTrust))
@@ -1051,37 +1045,37 @@ struct WindowEvents: ViewModifier {
             .task(id: model.id) { await lanes.refreshShared() }
             .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
                                   showSettings: $showSettings))
-            .onReceive(NotificationCenter.default.publisher(for: .keelReviewTask)) { _ in
+            .onWindowCommand(.keelReviewTask) { _ in
                 model.viewingDiff = nil
                 model.viewingFile = nil
                 model.viewingCommit = nil
                 model.inspecting = nil
                 withAnimation(K.M.quick) { stage = .review; showSettings = false }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelPalette)) { _ in
+            .onWindowCommand(.keelPalette) { _ in
                 withAnimation(K.M.quick) { paletteOpen.toggle() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelSettings)) { _ in
+            .onWindowCommand(.keelSettings) { _ in
                 withAnimation(K.M.quick) { showSettings.toggle() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelNewLane)) { _ in
+            .onWindowCommand(.keelNewLane) { _ in
                 // The two questions a feature starts with — which project, from which branch —
                 // instead of assuming the open one and wherever it is standing.
                 NotificationCenter.default.post(name: .keelNewFeatureSheet, object: nil)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
+            .onWindowCommand(.keelNewProject) { _ in
                 starting = true
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelRunInTerminal)) { note in
+            .onWindowCommand(.keelRunInTerminal) { note in
                 // Open the terminal where you are — under Settings too, since that is where
                 // the button lives — and hand it the command; it types it once the shell is up.
                 terminalCommand = note.object as? String
                 withAnimation(K.M.quick) { showTerminal = true }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelToggleTerminal)) { _ in
+            .onWindowCommand(.keelToggleTerminal) { _ in
                 withAnimation(K.M.quick) { showTerminal.toggle() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelOpenProject)) { _ in
+            .onWindowCommand(.keelOpenProject) { _ in
                 openProject()
             }
     }
@@ -1146,13 +1140,13 @@ private struct LaneEvents: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onReceive(NotificationCenter.default.publisher(for: .keelFocusLane)) { note in
+            .onWindowCommand(.keelFocusLane, addressed: true) { note in
                 focus(note.object)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelNextLane)) { note in
+            .onWindowCommand(.keelNextLane) { note in
                 step((note.object as? Int) ?? 1)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelTogglePanel)) { _ in
+            .onWindowCommand(.keelTogglePanel) { _ in
                 withAnimation(K.M.quick) {
                     if let open = panel {
                         lastPanel = open
@@ -1162,7 +1156,7 @@ private struct LaneEvents: ViewModifier {
                     }
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelShowPanel)) { note in
+            .onWindowCommand(.keelShowPanel) { note in
                 guard let raw = note.object as? String,
                       let p = SessionWindow.Panel(rawValue: raw) else { return }
                 withAnimation(K.M.quick) { panel = p }
@@ -1209,20 +1203,20 @@ private struct ChatEvents: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onReceive(NotificationCenter.default.publisher(for: .keelSend)) { _ in model.send() }
-            .onReceive(NotificationCenter.default.publisher(for: .keelStop)) { _ in model.stop() }
-            .onReceive(NotificationCenter.default.publisher(for: .keelFocusComposer)) { _ in
+            .onWindowCommand(.keelSend) { _ in model.send() }
+            .onWindowCommand(.keelStop) { _ in model.stop() }
+            .onWindowCommand(.keelFocusComposer) { _ in
                 showSettings = false
                 model.focusComposerTick += 1
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelToggleMode)) { _ in
+            .onWindowCommand(.keelToggleMode) { _ in
                 model.mode = model.mode == "plan" ? "acceptEdits" : "plan"
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelApprove)) { note in
+            .onWindowCommand(.keelApprove, addressed: true) { note in
                 let m = lane(named: note)
                 if let p = m.pending.first { m.answer(p, allow: true, scope: "session") }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .keelDeny)) { note in
+            .onWindowCommand(.keelDeny, addressed: true) { note in
                 let m = lane(named: note)
                 if let p = m.pending.first { m.answer(p, allow: false, scope: "session") }
             }
@@ -1291,7 +1285,7 @@ private struct StageEvents: ViewModifier {
             .onChange(of: model.designTick) { followTheEdit() }
             .onChange(of: model.running) { followTheWork() }
             .onChange(of: model.focusedTurn) { showTrace() }
-            .onReceive(NotificationCenter.default.publisher(for: .keelShowStage)) { note in
+            .onWindowCommand(.keelShowStage) { note in
                 guard let raw = note.object as? String,
                       let s = SessionWindow.Stage(rawValue: raw) else { return }
                 withAnimation(K.M.quick) {
@@ -1485,5 +1479,45 @@ struct BranchMenu: View {
         let name = query.trimmingCharacters(in: .whitespaces)
         close()
         Task { await model.branch("create", name) }
+    }
+}
+
+/// A menu key, a ⌘K item or a toolbar button means *this* window — but every one of them travels
+/// as a `NotificationCenter` post, which has no idea which window that is. So every open window
+/// acted on every one of them: one ⌘N put the "New feature" sheet on two screens at once, and
+/// filling in one of them left the other standing.
+///
+/// `SessionWindow.pinned` used to stand in for "the main window" and the sheet was guarded on it,
+/// but nothing has passed it since a detached window got its own `Lanes` — the guard was reading a
+/// parameter no caller sets. `controlActiveState` is `.key` in exactly one window and is told so by
+/// AppKit, so it cannot go quietly stale the same way.
+///
+/// `addressed: true` is for the commands that also arrive from a click on a system notification,
+/// which names its lane by id: that one belongs to whichever window holds that lane, key or not.
+extension View {
+    func onWindowCommand(_ name: Notification.Name, addressed: Bool = false,
+                         perform act: @escaping (Notification) -> Void) -> some View {
+        modifier(WindowCommand(name: name, addressed: addressed, act: act))
+    }
+}
+
+struct WindowCommand: ViewModifier {
+    let name: Notification.Name
+    let addressed: Bool
+    let act: (Notification) -> Void
+    @Environment(\.controlActiveState) private var active
+
+    /// A lane id is a String; ⌘1–9 sends an Int and a menu key sends nothing.
+    static func acts(key: Bool, addressed: Bool, object: Any?) -> Bool {
+        key || (addressed && object is String)
+    }
+
+    func body(content: Content) -> some View {
+        content.onReceive(NotificationCenter.default.publisher(for: name)) { note in
+            guard Self.acts(key: active == .key, addressed: addressed, object: note.object) else {
+                return
+            }
+            act(note)
+        }
     }
 }
