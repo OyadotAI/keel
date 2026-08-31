@@ -12,7 +12,9 @@ struct SessionWindow: View {
     var app: AppModel? = nil
     /// A torn-out window shows one lane and only that one; the main window follows the tabs.
     var pinned: SessionModel? = nil
-    @State private var panel: Panel? = .changes
+    /// History, not Changes. A window opens onto a project you have worked in before, and the
+    /// first question is which conversation to carry on — Changes is empty until a turn runs.
+    @State private var panel: Panel? = .sessions
     @State private var stage: Stage = .turn
     /// A turn ran while the person was looking at something else. The Trace tab keeps moving until
     /// they look at it — see `stageBar`.
@@ -1131,6 +1133,8 @@ struct TrustAlert: ViewModifier {
 private struct LaneEvents: ViewModifier {
     let lanes: Lanes
     @Binding var panel: SessionWindow.Panel?
+    /// The last panel that was open, so ⌘⇧E brings back what you closed rather than a fixed one.
+    @State private var lastPanel = SessionWindow.Panel.sessions
 
     func body(content: Content) -> some View {
         content
@@ -1141,7 +1145,14 @@ private struct LaneEvents: ViewModifier {
                 step((note.object as? Int) ?? 1)
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelTogglePanel)) { _ in
-                withAnimation(K.M.quick) { panel = panel == nil ? .changes : nil }
+                withAnimation(K.M.quick) {
+                    if let open = panel {
+                        lastPanel = open
+                        panel = nil
+                    } else {
+                        panel = lastPanel
+                    }
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelShowPanel)) { note in
                 guard let raw = note.object as? String,
