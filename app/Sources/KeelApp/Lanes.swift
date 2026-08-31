@@ -394,8 +394,11 @@ final class Lanes {
         model.closed()
         lanes.removeAll { $0.id == model.id }
         // A window with no lane has nothing to show, so closing the last one starts a fresh one
-        // rather than leaving an empty frame.
-        if lanes.isEmpty { newLane() }
+        // rather than leaving an empty frame. It has to inherit the project from the lane just
+        // closed: `newLane` copies that from a sibling, and closing the *only* tab leaves no
+        // sibling to copy from — so the fresh lane had no `repoPath`, `projectOpen` went false,
+        // and the whole window dropped to the Welcome screen. Which reads as the ✕ being broken.
+        if lanes.isEmpty { newLane().adopt(project: model) }
         if activeID == model.id { activeID = lanes.last?.id }
     }
 
