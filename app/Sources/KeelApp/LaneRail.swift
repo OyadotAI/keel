@@ -236,42 +236,6 @@ private struct LaneRow: View {
                     if abs(g.translation.height) > Self.tearOff { detach() }
                 }
         )
-        .contextMenu {
-            Button("Rename…") { newTitle = lane.title; renaming = true }
-            Button("Open in a new window") { detach() }
-            Divider()
-            if lane.worktree != nil {
-                Button("Review task and open a pull request…") {
-                    lanes.activeID = lane.id
-                    NotificationCenter.default.post(name: .keelReviewTask, object: nil)
-                }
-                Button("Finish task — merge into \(checkout?.base ?? "the project")…") {
-                    lanes.activeID = lane.id
-                    message = lane.title
-                    finishing = true
-                }
-                .disabled(!lane.readyToMerge)
-                // A greyed-out row that will not say why is the shape of a bug report. The
-                // sentence exists; it was only ever rendered in the pull-request sheet.
-                if let why = lane.mergeBlocker {
-                    Text(why).font(K.F.micro)
-                }
-                Button("Close tab, keep the branch") { lanes.close(lane) }
-                Button("Discard feature…", role: .destructive) {
-                    // Focused first. A refusal lands in `lane.lastError`, which renders only in
-                    // the *active* lane's composer — so discarding a background lane and being
-                    // refused showed nothing at all, anywhere.
-                    lanes.activeID = lane.id
-                    Task {
-                        // Ask the daemon first: it knows what is on the branch and what is not
-                        // committed at all.
-                        if let why = await lanes.discard(lane, force: false) { discarding = why }
-                    }
-                }
-            } else {
-                Button("Close feature") { lanes.close(lane) }
-            }
-        }
         .alert("Finish this task", isPresented: $finishing) {
             TextField("Commit message", text: $message)
             Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
@@ -324,6 +288,46 @@ private struct LaneRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .asButton { lanes.activeID = lane.id }
+        // Last, and it has to be last. Attached higher up the chain this bound to a view whose
+        // only hit-testable area was the drawn text and icons — an unselected tab's background is
+        // `.clear` until the `contentShape` above claims it — and `asButton` then wrapped the whole
+        // thing in a `Button`, which takes the mouse. Right-clicking a tab did nothing.
+        .contextMenu {
+            Button("Rename…") { newTitle = lane.title; renaming = true }
+            Button("Open in a new window") { detach() }
+            Divider()
+            if lane.worktree != nil {
+                Button("Review task and open a pull request…") {
+                    lanes.activeID = lane.id
+                    NotificationCenter.default.post(name: .keelReviewTask, object: nil)
+                }
+                Button("Finish task — merge into \(checkout?.base ?? "the project")…") {
+                    lanes.activeID = lane.id
+                    message = lane.title
+                    finishing = true
+                }
+                .disabled(!lane.readyToMerge)
+                // A greyed-out row that will not say why is the shape of a bug report. The
+                // sentence exists; it was only ever rendered in the pull-request sheet.
+                if let why = lane.mergeBlocker {
+                    Text(why).font(K.F.micro)
+                }
+                Button("Close tab, keep the branch") { lanes.close(lane) }
+                Button("Discard feature…", role: .destructive) {
+                    // Focused first. A refusal lands in `lane.lastError`, which renders only in
+                    // the *active* lane's composer — so discarding a background lane and being
+                    // refused showed nothing at all, anywhere.
+                    lanes.activeID = lane.id
+                    Task {
+                        // Ask the daemon first: it knows what is on the branch and what is not
+                        // committed at all.
+                        if let why = await lanes.discard(lane, force: false) { discarding = why }
+                    }
+                }
+            } else {
+                Button("Close feature") { lanes.close(lane) }
+            }
+        }
         .help(tooltip)
         .accessibilityLabel("\(lane.title), \(lane.provider.rawValue), \(activityText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
