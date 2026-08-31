@@ -97,6 +97,12 @@ jobs:
           chmod 600 "$RUNNER_TEMP/sparkle_ed_key"
           echo "KEEL_SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle_ed_key" >> "$GITHUB_ENV"
 
+      # `packaging/icon.py` renders the icon at build time rather than checking a binary in, so
+      # the runner needs Pillow. Homebrew's python is externally managed and this runner is
+      # thrown away at the end of the job, so there is nothing to protect it from.
+      - name: Install Pillow, which the icon is rendered with
+        run: python3 -m pip install --break-system-packages --quiet Pillow
+
       # The same target a person would have run, so there is one build path and not two.
       - name: Build, sign, notarise, package
         run: make dmg
