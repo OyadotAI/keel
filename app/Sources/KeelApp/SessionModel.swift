@@ -1935,6 +1935,20 @@ final class SessionModel: Identifiable {
         }
     }
 
+    /// Approve a plan: answer the tool, switch this lane to Auto, and queue the build.
+    ///
+    /// Two turns rather than one, because the turn that planned cannot build — it is running under
+    /// `--permission-mode plan`, which is the whole reason the plan came back as a question. The
+    /// second turn resumes the same conversation, so the plan it is told to implement is the one
+    /// directly above it. `send` queues while that first turn finishes and the queue drains when
+    /// it ends, by every path that ends it.
+    func approvePlan(_ p: Wire.Pending) {
+        answer(p, text: Wire.Pending.planApproved)
+        mode = "acceptEdits"
+        prompt = "Implement the plan you just submitted."
+        send()
+    }
+
     func answer(_ p: Wire.Pending, allow: Bool, scope: String) {
         pending.removeAll { $0.id == p.id }
         // The question's own conversation, not this window's guess at it. A card can arrive
