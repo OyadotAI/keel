@@ -108,14 +108,24 @@ create a file, the agent attempts `Write`, is refused, and produces a plan inste
 no file on disk afterwards. An unrecognised mode falls back to Plan, because the safe default is the
 one that cannot change the repository.
 
-Getting *out* of it is Keel's own tool. Headless `claude -p` offers no `ExitPlanMode` — its
-plan-mode tool list has no plan tool at all, verified against 2.1.251 — so a planning turn's only
-ways to deliver a plan were its own reply and a file on disk, and the one thing the person had to
-decide on arrived as prose with nothing to click. `submit_plan` (the `keel` MCP server, offered in
-plan mode alone) queues the plan into the same card a question uses. Approving cannot mean "carry
-on", because that turn is under `--permission-mode plan` and cannot write whatever it is told: it
+Getting *out* of it is the one thing headless plan mode gives nobody. There is no `ExitPlanMode`
+in `claude -p` — its plan-mode tool list has no plan tool at all, verified against 2.1.251 — and an
+MCP tool cannot stand in for one, because plan mode refuses every MCP call outright: `Cannot call
+mcp__keel__ask_user while in plan mode`. That is Claude Code, and nothing on our command line
+changes it. It is also why `ask_user` never worked in a planning turn, which is a question card
+that could not appear rather than one nobody answered.
+
+So Keel uses the channel Claude Code already drives. Every plan turn opens with a `plan_mode`
+attachment naming a `planFilePath` under the Claude home, the turn is told to write its plan there,
+and that write is permitted where everything else is refused. Keel hooks `Write` already, so it
+recognises that path, holds the call, and draws the plan with an Approve button. Both answers deny
+the write — Keel has the plan's text, so the file is one nobody needed — and neither is a refusal.
+Approving cannot mean "carry on", because that turn cannot write a file whatever it is told: it
 ends, and the build is a second turn in `acceptEdits` resumed on the same conversation, which is
 where the plan is.
+
+The system prompt says the same thing to the agent, including what to do with a question it cannot
+ask: put it in the plan, as the decision made and the one it would rather have checked.
 
 ## What the server will read
 

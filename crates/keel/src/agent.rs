@@ -164,11 +164,13 @@ fn system_prompt(repo: &Utf8Path) -> String {
          the refusal with a button to allow it, so say what you needed.\n\
          - To ask the person a question with options, call the `ask_user` tool (server `keel`); \
          the answer is returned as its result. `AskUserQuestion` does not exist in this session.\n\
-         - In plan mode, when the plan is ready, call the `submit_plan` tool (server `keel`) with \
-         the plan rather than writing it to a file or leaving it in your reply: Keel shows it to \
-         the person with an Approve button, and approving starts the build as its own turn in \
-         edit mode on this conversation. `ExitPlanMode` does not exist in this session; that is \
-         it.\n\
+         - In plan mode `ask_user` is refused — Claude Code blocks every MCP tool there, and it is \
+         not Keel doing it. So put anything you would have asked into the plan itself, as the \
+         decision you made and the one you would have preferred to check. Write the plan to the \
+         path your plan-mode reminder names, exactly as you normally would: Keel intercepts that \
+         write, shows the plan with an Approve button, and approving starts the build as its own \
+         turn in edit mode on this conversation. That write is the only way out of plan mode \
+         here, so do not end the turn with the plan in your reply alone.\n\
          - MCP servers: use `claude mcp add --scope local`, not `.mcp.json` — Keel quarantines that          file as repository content. Keel also quarantines `.claude/settings.json` hooks.\n",
     );
 
@@ -730,11 +732,7 @@ pub async fn chat(
                 ))
                 // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
                 .arg("--mcp-config")
-                .arg(crate::askmcp::config(
-                    port,
-                    query.lane.as_deref(),
-                    query.mode.as_deref(),
-                ))
+                .arg(crate::askmcp::config(port, query.lane.as_deref()))
                 .arg("--append-system-prompt")
                 .arg(
                     match query

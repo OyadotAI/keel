@@ -326,6 +326,14 @@ pub async fn ask(
         return Ok(Json(monitor_request(&state, &hook).await));
     }
 
+    // A plan is not a permission either, so it sits with the monitor request rather than below
+    // the trust check. Trust means "stop asking whether it may run things"; whether to build this
+    // plan is not that question, and a trusted project that silently swallowed the plan write
+    // would leave a planning turn with no way to show its work at all.
+    if let Some(plan) = plan_being_written(&hook.tool_name, &hook.tool_input) {
+        return Ok(Json(plan_request(&hook, plan).await));
+    }
+
     // A question is not a permission. Trust means "stop asking whether it may run things", and
     // an answer to "which of these two designs" is not covered by that — so it is never
     // short-circuited, on any project.
@@ -580,6 +588,111 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
 
 /// The tool name a monitor request travels under, so the app can draw the right card.
 pub const MONITOR: &str = "MonitorRequest";
+
+/// The name a finished plan travels under: the tool Claude Code would have used, if it had one.
+pub const PLAN: &str = "ExitPlanMode";
+
+/// What the Approve button answers a plan with.
+///
+/// A sentinel rather than prose, so every word the agent reads is written here with the rest of
+/// what Keel tells it, and not in a Swift view. Matched by `Wire.Pending.planApproved`.
+pub const APPROVED: &str = "keel:plan-approved";
+
+/// The plan a plan-mode turn is writing, if this write is that.
+///
+/// There is no `ExitPlanMode` in headless `claude -p` — its plan-mode tool list has no plan tool
+/// at all, verified against 2.1.251 — and an MCP tool cannot stand in for one, because plan mode
+/// refuses every MCP call outright: `Cannot call mcp__keel__ask_user while in plan mode`, arriving
+/// as `toolDenialKind: "user-rejected"`. That is Claude Code, not Keel, and nothing on our command
+/// line changes it. It is also why `ask_user` has never worked in a planning turn.
+///
+/// What does work is the channel Claude Code itself drives. Every plan turn opens with a
+/// `plan_mode` attachment naming a `planFilePath` under the Claude home, the turn is told to write
+/// its plan there, and that write is permitted where everything else is refused. So the plan
+/// arrives as a `Write` — a tool Keel already hooks — and this is where it is recognised.
+///
+/// `Write` alone, deliberately: both answers deny the write, so the file is never created and a
+/// revised plan is another `Write` rather than an `Edit`.
+fn plan_being_written(tool: &str, input: &serde_json::Value) -> Option<String> {
+    if tool != "Write" {
+        return None;
+    }
+    let path = input.get("file_path").and_then(|p| p.as_str())?;
+    let home = keel_workspace::claude_home()?;
+    if !std::path::Path::new(path).starts_with(home.join("plans").as_std_path()) {
+        return None;
+    }
+    let plan = input.get("content").and_then(|c| c.as_str())?.trim();
+    (!plan.is_empty()).then(|| plan.to_string())
+}
+
+/// Show the plan and hold the turn on it.
+///
+/// Both answers deny the write, and neither is a refusal. Approving cannot mean "carry on": this
+/// turn runs under `--permission-mode plan` and cannot write a file whatever it is told, so the
+/// build is a second turn in `acceptEdits` that Keel sends, resumed on the same conversation —
+/// which is where the plan is. Keel already holds the plan's text, so the file it denies is one
+/// nobody needed.
+async fn plan_request(hook: &HookInput, plan: String) -> Decision {
+    let id = if hook.tool_use_id.is_empty() {
+        format!("{:?}", std::time::Instant::now())
+    } else {
+        hook.tool_use_id.clone()
+    };
+    let pending = Pending {
+        id: id.clone(),
+        lane: hook.lane.clone(),
+        // Not "Write": the card this draws is the plan, and its answers are not permissions.
+        tool: PLAN.into(),
+        command: String::new(),
+        // Nothing to remember. "Build this plan" is a decision about one plan, and a rule
+        // allowing writes to the plans directory would answer the next one silently.
+        rules: Vec::new(),
+        input: serde_json::json!({ "plan": plan }),
+        session_id: hook.session_id.clone(),
+    };
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    waiters().locked().insert(id.clone(), tx);
+    queue().locked().push(pending);
+
+    let answer = match tokio::time::timeout(WAIT, rx).await {
+        Ok(Ok(d)) => d
+            .reason
+            .split_once("do not ask again.\n\n")
+            .map(|(_, a)| a.to_string())
+            .unwrap_or(d.reason),
+        // Nobody there, which is not the same as being told no. The plan is the whole of what the
+        // turn did, so the one thing that must not happen is losing it.
+        _ => {
+            waiters().locked().remove(&id);
+            queue().locked().retain(|p| p.id != id);
+            return Decision {
+                decision: "deny".into(),
+                reason: "Nobody answered within the time allowed, so Keel did not show this plan. \
+                         End your turn with the plan in your reply so it is not lost."
+                    .into(),
+            };
+        }
+    };
+
+    Decision {
+        decision: "deny".into(),
+        reason: if answer.trim() == APPROVED {
+            "The person approved the plan in Keel, which already has its text — this write is \
+             refused because the file is not needed, not because anything went wrong. Keel is \
+             starting the build itself, as a new turn in edit mode on this same conversation, so \
+             do not implement anything now. End your turn with one line saying the plan is \
+             approved."
+                .into()
+        } else {
+            format!(
+                "The person has not approved the plan. Revise it and write it again; do not start \
+                 building.\n\nWhat they said:\n{answer}"
+            )
+        },
+    }
+}
 
 /// What to say when Keel is not going to watch it.
 ///
@@ -1203,6 +1316,82 @@ pub(crate) mod tests {
 
     /// A question reaches the person even on a trusted project, and the answer reaches the agent.
     ///
+    /// The plan a planning turn writes is a plan, and a write anywhere else is not.
+    ///
+    /// This is the whole seam. Plan mode refuses every MCP tool, so the plan write is the only
+    /// channel out of a planning turn — if the detector stops matching, a plan silently becomes a
+    /// permission card asking whether the agent may write a file in the Claude home, which is the
+    /// question nobody can answer usefully.
+    #[test]
+    fn a_plan_write_is_recognised_and_an_ordinary_write_is_not() {
+        let home = keel_workspace::claude_home().expect("a claude home");
+        let plan = serde_json::json!({
+            "file_path": home.join("plans").join("some-slug.md"),
+            "content": "# Plan\n1. Do the thing",
+        });
+        assert_eq!(
+            plan_being_written("Write", &plan).as_deref(),
+            Some("# Plan\n1. Do the thing")
+        );
+        // The tool matters: only `Write` creates one, because both answers deny the write and a
+        // revision therefore arrives as another `Write`.
+        assert!(plan_being_written("Edit", &plan).is_none());
+        // A write to the Claude home that is not a plan is an ordinary out-of-project edit.
+        let elsewhere = serde_json::json!({
+            "file_path": home.join("settings.json"),
+            "content": "{}",
+        });
+        assert!(plan_being_written("Write", &elsewhere).is_none());
+        // An empty plan is not a plan; it would draw an empty card the turn then waits on.
+        let empty = serde_json::json!({
+            "file_path": home.join("plans").join("some-slug.md"),
+            "content": "   ",
+        });
+        assert!(plan_being_written("Write", &empty).is_none());
+    }
+
+    /// Approving stops the planning turn, and both answers refuse the write.
+    ///
+    /// The stop is the part worth pinning. A turn told "approved, go ahead" is running under
+    /// `--permission-mode plan` and cannot write whatever it is told, so it would read as success
+    /// and produce nothing.
+    #[tokio::test]
+    async fn approving_a_plan_stops_the_turn_and_refusing_sends_the_note_back() {
+        let _guard = lock().await;
+        for (answer, expected) in [
+            (APPROVED, "do not implement anything now"),
+            ("Fold the export instead", "has not approved"),
+        ] {
+            let hook = HookInput {
+                tool_name: "Write".into(),
+                tool_input: serde_json::json!({}),
+                tool_use_id: format!("plan-{answer}"),
+                session_id: "s1".into(),
+                lane: "l1".into(),
+                cwd: String::new(),
+            };
+            let asking = tokio::spawn(async move { plan_request(&hook, "# Plan".into()).await });
+            let mut found = None;
+            for _ in 0..50 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                if let Some(p) = queue().locked().iter().find(|p| p.tool == PLAN) {
+                    assert_eq!(p.input["plan"], "# Plan");
+                    found = Some(p.id.clone());
+                    break;
+                }
+            }
+            let id = found.expect("queued");
+            let tx = waiters().locked().remove(&id).unwrap();
+            queue().locked().retain(|p| p.id != id);
+            tx.send(answered(answer)).unwrap();
+            let decision = asking.await.unwrap();
+            // Never an allow: the file is not needed either way, and letting the write through on
+            // approval would leave the turn believing it is still planning.
+            assert_eq!(decision.decision, "deny");
+            assert!(decision.reason.contains(expected), "{}", decision.reason);
+        }
+    }
+
     /// Trust short-circuits permissions, and `AskUserQuestion` matched the same hook — so on a
     /// trusted project the CLI's own sixty-second timeout ran instead, and the agent "continued
     /// without an answer" to a question nobody saw.
