@@ -89,8 +89,9 @@ struct SidePanel: View {
 struct SessionsPanel: View {
     @Bindable var model: SessionModel
     @State private var query = ""
-    /// Which time buckets are unfolded. Today, until you say otherwise.
-    @State private var opened: Set<String> = ["Today"]
+    /// Which time buckets are unfolded, once one has been folded or unfolded by hand. `nil` until
+    /// then, and `firstOpen` decides instead.
+    @State private var opened: Set<String>?
 
     private var visible: [Wire.Session] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,15 +118,21 @@ struct SessionsPanel: View {
                        "No past session mentions “\(query)”.")
         }
         ForEach(groups) { group in
-            // Today open, the rest folded. 158 sessions is a scroll bar with no landmarks in it;
-            // what you came for is nearly always from this morning, and the three other headers
-            // say where the rest went rather than hiding it. A search opens all of them, because
-            // a match inside a folded group is a search that looks broken.
+            // The newest group open, the rest folded. 158 sessions is a scroll bar with no
+            // landmarks in it; what you came for is nearly always the most recent thing, and the
+            // other headers say where the rest went rather than hiding it. A search opens all of
+            // them, because a match inside a folded group is a search that looks broken.
             PanelSection(title: group.label, count: group.sessions.count,
-                         open: Binding(get: { !query.isEmpty || opened.contains(group.label) },
+                         open: Binding(get: {
+                                           !query.isEmpty
+                                           || (opened ?? Self.firstOpen(groups))
+                                               .contains(group.label)
+                                       },
                                        set: { want in
-                                           if want { opened.insert(group.label) }
-                                           else { opened.remove(group.label) }
+                                           var set = opened ?? Self.firstOpen(groups)
+                                           if want { set.insert(group.label) }
+                                           else { set.remove(group.label) }
+                                           opened = set
                                        })) {
             VStack(alignment: .leading, spacing: 0) {
             ForEach(group.sessions) { s in
@@ -152,6 +159,15 @@ struct SessionsPanel: View {
         var label: String
         var sessions: [Wire.Session]
         var id: String { label }
+    }
+
+    /// The group that starts unfolded: the first one with anything in it.
+    ///
+    /// It was the literal "Today", so a person who had not run anything since yesterday opened
+    /// History onto four folded headers and nothing to read — which looks like an empty panel with
+    /// extra steps. `grouped` drops empty buckets, so the first group is the newest that exists.
+    static func firstOpen(_ groups: [Group]) -> Set<String> {
+        groups.first.map { [$0.label] } ?? []
     }
 
     /// The four buckets, in the order they are shown. `nil` days fall in the last one.

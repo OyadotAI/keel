@@ -11,7 +11,7 @@ struct StartProject: View {
     /// The path opened, the brief to send first (empty for none), and a file to attach with it.
     let onOpened: (String, String, URL?) -> Void
 
-    @State private var mode = Mode.new
+    @State private var mode = Flags.scaffolding ? Mode.new : .clone
     @State private var name = ""
     @State private var parent = "~/Dev"
     @State private var template: Template = Template.all[0]
@@ -22,6 +22,8 @@ struct StartProject: View {
     @State private var query = ""
     @State private var repos: [Repo] = []
     @State private var chosen: Repo?
+    /// Organisations whose full list has been asked for. A search shows everything regardless.
+    @State private var expanded: Set<String> = []
     @State private var busy = false
     @State private var error: String?
 
@@ -41,6 +43,7 @@ struct StartProject: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
+            if Flags.scaffolding {
             HStack(spacing: 0) {
                 ForEach(Mode.allCases, id: \.self) { m in
                     let on = mode == m
@@ -56,6 +59,7 @@ struct StartProject: View {
             }
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            }
 
             switch mode {
             case .new: newForm
@@ -284,6 +288,43 @@ struct StartProject: View {
         return repos.filter { ($0.full_name ?? $0.name).localizedCaseInsensitiveContains(query) }
     }
 
+    /// One organisation's repositories. GitHub already sorts by update time, so `repos` is in the
+    /// order people want and each group inherits it.
+    struct Owner: Identifiable {
+        var name: String
+        var repos: [Repo]
+        var id: String { name }
+    }
+
+    /// Repositories grouped by who owns them, the busiest organisation first.
+    ///
+    /// A flat list is fine for the ten repositories one person has and useless for an account in
+    /// eight organisations: the names collide, `api` appears four times, and the only thing that
+    /// tells them apart is a prefix the eye skips. Each group shows its five most recent until it
+    /// is opened, so the whole picker is a screen of headings rather than three hundred rows.
+    /// A search runs over every repository in every group, whether or not it is showing.
+    private var owners: [Owner] {
+        var byOwner: [String: [Repo]] = [:]
+        for r in hits { byOwner[Self.owner(of: r), default: []].append(r) }
+        return byOwner
+            .map { Owner(name: $0.key, repos: $0.value) }
+            .sorted { ($0.repos.first?.updated_at ?? "") > ($1.repos.first?.updated_at ?? "") }
+    }
+
+    /// The account a repository belongs to. `full_name` is `owner/name`; a response without one is
+    /// its own group rather than a crash.
+    static func owner(of r: Repo) -> String {
+        r.full_name?.split(separator: "/").first.map(String.init) ?? "Other"
+    }
+
+    /// How many of a group's repositories are shown before it is opened.
+    static let perOwner = 5
+
+    /// The rows for one group: five, unless it has been opened or a search is on.
+    private func showing(_ o: Owner) -> [Repo] {
+        query.isEmpty && !expanded.contains(o.name) ? Array(o.repos.prefix(Self.perOwner)) : o.repos
+    }
+
     private var cloneForm: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             if repos.isEmpty {
@@ -293,17 +334,38 @@ struct StartProject: View {
             } else {
                 search("Search \(repos.count) repositories…")
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(hits) { r in
-                            HoverRow(selected: chosen == r) {
-                                HStack {
-                                    Text(r.full_name ?? r.name).font(K.F.code).foregroundStyle(K.C.text)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text((r.updated_at ?? "").prefix(10)).font(K.F.codeTiny)
-                                        .foregroundStyle(K.C.faint)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(owners) { owner in
+                            HStack(spacing: K.S.xs) {
+                                Text(owner.name.uppercased()).sectionLabel()
+                                    .foregroundStyle(K.C.dim)
+                                Text("\(owner.repos.count)").font(K.F.codeTiny)
+                                    .foregroundStyle(K.C.faint)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, K.S.sm)
+                            .padding(.top, K.S.sm).padding(.bottom, K.S.hair)
+
+                            ForEach(showing(owner)) { r in
+                                HoverRow(selected: chosen == r) {
+                                    HStack {
+                                        Text(r.name).font(K.F.code).foregroundStyle(K.C.text)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text((r.updated_at ?? "").prefix(10)).font(K.F.codeTiny)
+                                            .foregroundStyle(K.C.faint)
+                                    }
+                                } action: { chosen = r }
+                            }
+
+                            let hidden = owner.repos.count - showing(owner).count
+                            if hidden > 0 {
+                                Button("\(hidden) more in \(owner.name)") {
+                                    expanded.insert(owner.name)
                                 }
-                            } action: { chosen = r }
+                                .buttonStyle(QuietButton())
+                                .padding(.horizontal, K.S.sm).padding(.bottom, K.S.xs)
+                            }
                         }
                         if hits.isEmpty {
                             EmptyState("Nothing matches.")

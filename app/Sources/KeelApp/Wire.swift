@@ -188,10 +188,14 @@ enum Wire {
         var changes: [Change]
         /// One entry for an ordinary project; two or more when the folder is a workspace.
         var repos: [Repo] = []
+        /// The list is not the whole working tree: untracked files were folded into their folders
+        /// and the list cut. Said on screen — a short list that pretends to be the full one is the
+        /// "never weird" failure.
+        var collapsed = false
 
         enum CodingKeys: String, CodingKey {
             case isRepo = "is_repo"
-            case branch, changes, repos
+            case branch, changes, repos, collapsed
         }
     }
 
@@ -199,6 +203,9 @@ enum Wire {
         var path: String
         var status: String
         var label: String
+        /// A whole untracked folder, listed as one row because the daemon folded a working tree
+        /// too big to list file by file. There is nothing under it to open.
+        var dir = false
         var id: String { path }
     }
 

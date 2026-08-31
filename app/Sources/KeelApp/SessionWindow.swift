@@ -39,7 +39,14 @@ struct SessionWindow: View {
     ///
     /// Trace is first, and the one a new window opens on: the centre of a window is the turn, and
     /// the readiness report is something you go and ask for.
-    enum Stage: String, CaseIterable { case turn = "Trace", review = "Review", preview = "Designer" }
+    enum Stage: String, CaseIterable {
+        case turn = "Trace", review = "Review", preview = "Designer"
+
+        /// The tabs a window offers. The Designer is behind `Flags.designer`, and hiding it means
+        /// hiding the tab *and* the two redirects that take the stage there on their own — a stage
+        /// nothing can navigate to is only half-hidden if something still switches to it.
+        static var shown: [Stage] { Flags.designer ? allCases : [.turn, .review] }
+    }
 
     /// One icon per thing, because they are different things. Grouping skills, subagents, MCP
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
@@ -52,6 +59,9 @@ struct SessionWindow: View {
         case files, readiness
         case skills, agents, mcp, hooks, plugins
         var id: String { rawValue }
+
+        /// The panels the rail and the palette offer. Readiness is behind `Flags.readiness`.
+        static var shown: [Panel] { allCases.filter { $0 != .readiness || Flags.readiness } }
 
         var icon: String {
             switch self {
@@ -88,7 +98,9 @@ struct SessionWindow: View {
         /// as two sets rather than nine icons in a column.
         /// The divider sits after the panels about *this* project's work, before the ones that
         /// are reference material about the machine's setup.
-        var endsGroup: Bool { self == .readiness }
+        /// Readiness is the last of the project group, so with it hidden the divider moves up to
+        /// Files rather than vanishing and leaving nine icons in one column.
+        var endsGroup: Bool { self == (Flags.readiness ? .readiness : .files) }
     }
 
     /// The lane in focus. Every pane below draws this one; the rail shows all of them.
@@ -419,7 +431,7 @@ struct SessionWindow: View {
     /// A segmented control drawn by hand: the stock one is a rounded capsule that reads as iOS.
     private var stageBar: some View {
         HStack(spacing: K.S.xxs) {
-            ForEach(Stage.allCases, id: \.self) { s in
+            ForEach(Stage.shown, id: \.self) { s in
                 // Selected even while a diff or a file is covering the stage. It used to go dark
                 // for all four of those, so opening a diff put you somewhere the navigation could
                 // not describe — no tab lit, no name for where you were, no way back but an ✕.
@@ -598,7 +610,7 @@ struct ActivityRail: View {
 
     var body: some View {
         VStack(alignment: .center, spacing: K.S.xxs) {
-            ForEach(SessionWindow.Panel.allCases) { p in
+            ForEach(SessionWindow.Panel.shown) { p in
                 RailButton(
                     icon: p.icon,
                     label: p.title,
@@ -950,7 +962,7 @@ struct ProjectMenu: View {
             Button("Open Another Project…   ⌘O") {
                 NotificationCenter.default.post(name: .keelOpenProject, object: nil)
             }
-            Button("New Project…   ⇧⌘N") {
+            Button(Flags.scaffolding ? "New Project…   ⇧⌘N" : "Clone from GitHub…   ⇧⌘N") {
                 NotificationCenter.default.post(name: .keelNewProject, object: nil)
             }
             Divider()
@@ -1160,7 +1172,8 @@ private struct LaneEvents: ViewModifier {
             }
             .onWindowCommand(.keelShowPanel) { note in
                 guard let raw = note.object as? String,
-                      let p = SessionWindow.Panel(rawValue: raw) else { return }
+                      let p = SessionWindow.Panel(rawValue: raw),
+                      SessionWindow.Panel.shown.contains(p) else { return }
                 withAnimation(K.M.quick) { panel = p }
             }
     }
@@ -1289,7 +1302,8 @@ private struct StageEvents: ViewModifier {
             .onChange(of: model.focusedTurn) { showTrace() }
             .onWindowCommand(.keelShowStage) { note in
                 guard let raw = note.object as? String,
-                      let s = SessionWindow.Stage(rawValue: raw) else { return }
+                      let s = SessionWindow.Stage(rawValue: raw),
+                      SessionWindow.Stage.shown.contains(s) else { return }
                 withAnimation(K.M.quick) {
                     stage = s
                     showSettings = false
@@ -1304,7 +1318,7 @@ private struct StageEvents: ViewModifier {
     /// Something to look at is worth looking at — unless you are deliberately reading something
     /// else.
     private func showPreviewIfIdle() {
-        guard model.previewURL != nil, !showSettings,
+        guard Flags.designer, model.previewURL != nil, !showSettings,
               model.viewingDiff == nil, model.inspecting == nil,
               model.focusedTurn == nil else { return }
         withAnimation(K.M.quick) { stage = .preview }
@@ -1312,7 +1326,7 @@ private struct StageEvents: ViewModifier {
 
     /// The agent is writing the page. Show the page — that is the whole point of having one.
     private func followTheEdit() {
-        guard model.followEdits, model.editing != nil, model.previewURL != nil,
+        guard Flags.designer, model.followEdits, model.editing != nil, model.previewURL != nil,
               model.id == lanes.activeID else { return }
         withAnimation(K.M.quick) {
             stage = .preview

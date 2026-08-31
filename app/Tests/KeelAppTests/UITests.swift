@@ -867,6 +867,49 @@ extension UITests {
         XCTAssertEqual(bucket(""), "Older", "a session with no date is not today's")
         XCTAssertEqual(bucket("2027-01-01"), "Today", "a clock ahead of ours is still recent")
     }
+
+    /// An account in eight organisations gets a screen of headings, not three hundred rows — and
+    /// the owner comes off `full_name`, which is the only place it is.
+    func testCloneListGroupsByOwner() {
+        func repo(_ full: String) -> StartProject.Repo {
+            StartProject.Repo(name: String(full.split(separator: "/").last ?? ""),
+                              full_name: full, clone_url: nil, updated_at: nil)
+        }
+        XCTAssertEqual(StartProject.owner(of: repo("OyadotAI/keel")), "OyadotAI")
+        XCTAssertEqual(StartProject.owner(of: repo("mk/dotfiles")), "mk")
+        var loose = repo("solo")
+        loose.full_name = nil
+        XCTAssertEqual(StartProject.owner(of: loose), "Other",
+                       "a repository with no full name is its own group rather than a crash")
+        XCTAssertEqual(StartProject.perOwner, 5)
+    }
+
+    /// A folded folder is one row with nothing under it: the daemon never listed its contents, so
+    /// the tree must not draw it as a folder you can open onto nothing.
+    func testAFoldedFolderIsARowWithNoChildren() {
+        func change(_ path: String, dir: Bool) -> Wire.Change {
+            Wire.Change(path: path, status: "??", label: "New", dir: dir)
+        }
+        let nodes = ChangeTree.build([change("node_modules", dir: true),
+                                      change("src/main.swift", dir: false)])
+        let folded = nodes.first { $0.name == "node_modules" }
+        XCTAssertEqual(folded?.folded, true)
+        XCTAssertEqual(folded?.isDir, true)
+        XCTAssertEqual(folded?.children.count, 0)
+        XCTAssertNotNil(nodes.first { $0.name == "src" }, "ordinary files still build a tree")
+    }
+
+    /// Nothing today means This week opens, and so on down: a panel of folded headers reads as an
+    /// empty one.
+    func testTheFirstGroupWithSessionsInItIsOpen() {
+        func groups(_ labels: [String]) -> [SessionsPanel.Group] {
+            labels.map { SessionsPanel.Group(label: $0, sessions: []) }
+        }
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Today", "This week", "Older"])), ["Today"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["This week", "Older"])), ["This week"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Older"])), ["Older"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups([])), [])
+    }
 }
 
 // MARK: - Opening a long session
