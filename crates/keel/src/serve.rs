@@ -424,6 +424,15 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route("/api/fs/delete", axum::routing::post(crate::fsops::delete))
         .route("/api/fs/reveal", axum::routing::post(crate::fsops::reveal))
         .route("/api/term/ws", get(crate::term::ws))
+        .route("/api/monitors", get(crate::monitor::api_list))
+        .route(
+            "/api/monitors/stop",
+            axum::routing::post(crate::monitor::api_stop),
+        )
+        .route(
+            "/api/monitors/ack",
+            axum::routing::post(crate::monitor::api_ack),
+        )
         .route("/api/dev", get(crate::dev::status))
         .route("/api/dev/start", axum::routing::post(crate::dev::start))
         .route("/api/dev/stop", axum::routing::post(crate::dev::stop))

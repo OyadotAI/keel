@@ -52,6 +52,10 @@ pub struct HookInput {
     /// hook's command line — and it is the only id that exists on a lane's first turn.
     #[serde(default)]
     pub lane: String,
+    /// The checkout the turn runs in, from the same command line. A monitored command has to run
+    /// where the agent would have run it.
+    #[serde(default)]
+    pub cwd: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -309,6 +313,18 @@ pub async fn ask(
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     let repo = state.repo();
 
+    // A command the agent backgrounds is killed when the turn ends — measured, and the reason
+    // `monitor.rs` exists. So it never runs under the agent at all: the person is asked whether
+    // Keel should watch it, Keel runs it if they say yes, and either way the call is refused so
+    // the agent does not end up with a duplicate shell that is about to die.
+    //
+    // Above the trust check on purpose. Trust means "stop asking whether it may run things", and
+    // "should this keep running after the turn" is not that question — the same reasoning that
+    // keeps `AskUserQuestion` out of it.
+    if is_background(&hook.tool_name, &hook.tool_input) {
+        return Ok(Json(monitor_request(&state, &hook).await));
+    }
+
     // A question is not a permission. Trust means "stop asking whether it may run things", and
     // an answer to "which of these two designs" is not covered by that — so it is never
     // short-circuited, on any project.
@@ -408,6 +424,102 @@ pub async fn ask(
         }
     }
 }
+
+/// A `Bash` call the agent wants to leave running behind it.
+pub fn is_background(tool: &str, input: &serde_json::Value) -> bool {
+    tool == "Bash"
+        && input
+            .get("run_in_background")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
+/// Ask whether Keel should monitor it, and either start it or say why it did not.
+///
+/// The answer is always a `deny`, and the reason is the whole message: `deny` is the only hook
+/// verdict that reaches the agent as text it can act on, and here there is genuinely something to
+/// say — "I am watching this for you, end your turn" is not a refusal even though it travels as
+/// one.
+async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
+    let command = hook
+        .tool_input
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let id = if hook.tool_use_id.is_empty() {
+        format!("{:?}", std::time::Instant::now())
+    } else {
+        hook.tool_use_id.clone()
+    };
+    let pending = Pending {
+        id: id.clone(),
+        lane: hook.lane.clone(),
+        // Not "Bash": the card this draws asks a different question, with different answers.
+        tool: MONITOR.into(),
+        command: shown(&command),
+        // Nothing to remember. "Monitor this" is a decision about one command, not a rule about
+        // a program — writing it into the allowlist would silently background the next one too.
+        rules: Vec::new(),
+        input: hook.tool_input.clone(),
+        session_id: hook.session_id.clone(),
+    };
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    waiters()
+        .lock()
+        .expect("waiters lock")
+        .insert(id.clone(), tx);
+    queue().lock().expect("queue lock").push(pending);
+
+    let said_yes = match tokio::time::timeout(WAIT, rx).await {
+        Ok(Ok(d)) => d.decision == "allow",
+        // Nobody answered, or nobody was there. Falls back to the foreground, which is the
+        // behaviour that at least finishes inside the turn.
+        _ => {
+            waiters().lock().expect("waiters lock").remove(&id);
+            queue().lock().expect("queue lock").retain(|p| p.id != id);
+            false
+        }
+    };
+
+    if !said_yes {
+        return Decision {
+            decision: "deny".into(),
+            reason: NO_MONITOR.into(),
+        };
+    }
+
+    // The lane's checkout, so a monitored `make check` sees the lane's work and not the project's.
+    let dir = if hook.cwd.is_empty() {
+        state.repo()
+    } else {
+        camino::Utf8PathBuf::from(&hook.cwd)
+    };
+    match crate::monitor::start(&hook.lane, &command, &dir) {
+        Ok(job) => Decision {
+            decision: "deny".into(),
+            reason: format!(
+                "Keel is running this for you as background job `{job}`, outside this turn. It \
+                 survives past the end of the turn and its output will be delivered to you as a \
+                 new message when it finishes — so do not wait for it, do not poll it, and do not \
+                 start it again. Say that you are watching it and end your turn."
+            ),
+        },
+        Err(e) => Decision {
+            decision: "deny".into(),
+            reason: format!("Keel could not start that as a background job ({e}). {NO_MONITOR}"),
+        },
+    }
+}
+
+/// The tool name a monitor request travels under, so the app can draw the right card.
+pub const MONITOR: &str = "MonitorRequest";
+
+const NO_MONITOR: &str = "Not monitored. A command you background yourself is killed the moment \
+     this turn ends and no completion ever reaches you, so run it in the foreground instead and \
+     report what it said in this turn.";
 
 #[derive(Deserialize)]
 pub struct PollQuery {

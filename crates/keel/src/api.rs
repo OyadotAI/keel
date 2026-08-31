@@ -352,8 +352,19 @@ fn system_prompt(repo: &Utf8Path) -> String {
     }
     out.push('\n');
 
+    // Measured, twice: a turn is one `claude -p`, and the CLI kills every tracked background
+    // shell at teardown — `gh run watch` was `[killed]` eight seconds after the turn ended, and
+    // the person only found out six minutes on. So the hook intercepts the call and `monitor.rs`
+    // runs the command in the daemon instead. The agent is told all of that in the refusal it
+    // gets back; this bullet is here so it plans for it rather than discovering it.
     out.push_str(
-        "- Permissions: a command outside the allowed set comes back refused; Keel shows the person \
+        "- Background commands belong to Keel, not to your turn. Call `Bash` with \
+         `run_in_background: true` as usual: the person is asked whether to monitor it, Keel runs \
+         it outside the turn, and its output is delivered to you as a new message when it \
+         finishes. Your own call comes back refused, naming the job it became — that is the \
+         confirmation, not a failure. Do not poll it and do not start it again; say you are \
+         watching it and end the turn.\n\
+         - Permissions: a command outside the allowed set comes back refused; Keel shows the person \
          the refusal with a button to allow it, so say what you needed.\n\
          - To ask the person a question with options, call the `ask_user` tool (server `keel`); \
          the answer is returned as its result. `AskUserQuestion` does not exist in this session.\n\
@@ -502,6 +513,25 @@ mod prompt_tests {
             prompt.lines().count() < 20,
             "short: {}",
             prompt.lines().count()
+        );
+    }
+
+    /// The agent promised to watch a CI run and report back, and the shell it started was killed
+    /// eight seconds later when the turn ended. Keel runs it instead — but only the prompt can
+    /// stop the agent planning around a background task it no longer owns.
+    #[test]
+    fn the_prompt_says_who_owns_a_background_command() {
+        let (_d, root) = repo_with(&[("README.md", "x")]);
+        let prompt = system_prompt(&root);
+        assert!(
+            prompt.contains("Background commands belong to Keel"),
+            "{prompt}"
+        );
+        // The refusal it gets back is a confirmation. An agent that reads it as a failure runs
+        // the job a second time in the foreground.
+        assert!(
+            prompt.contains("that is the confirmation, not a failure"),
+            "{prompt}"
         );
     }
 
@@ -698,6 +728,7 @@ pub async fn chat(
                     port,
                     query.session.as_deref(),
                     query.lane.as_deref(),
+                    &cwd,
                 ))
                 // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
                 .arg("--mcp-config")

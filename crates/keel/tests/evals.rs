@@ -841,6 +841,65 @@ fn eval_20_trust_does_not_cover_an_edit_that_leaves_the_project() {
     );
 }
 
+/// 21. A command the agent backgrounds outlives the turn, because Keel is the one running it.
+///
+/// Measured before this existed: a turn is one `claude -p`, and the CLI kills every tracked
+/// background shell at teardown — `gh run watch` was `[killed]` eight seconds after the turn
+/// ended, and the person found out six minutes later from a notification that only arrived
+/// because they typed again. So the hook takes the call: the person is asked, Keel runs it, and
+/// the agent is refused with the job's name rather than left holding a shell that is about to die.
+#[test]
+fn eval_21_a_monitored_command_outlives_the_turn_that_asked_for_it() {
+    let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    // Trusted, because "stop asking whether it may run things" must not silently answer "should
+    // this keep running after the turn" — a different question, and the one being tested.
+    post(port, "/api/permissions/trust", r#"{"trusted":true}"#);
+
+    let asking = std::thread::spawn(move || {
+        post_read(
+            port,
+            "/api/approve/ask",
+            r#"{"tool_name":"Bash","tool_input":{"command":"echo watching; sleep 1; echo done","run_in_background":true},"session_id":"","lane":"m","tool_use_id":"bg-1"}"#,
+        )
+        .unwrap_or_default()
+    });
+    std::thread::sleep(Duration::from_secs(2));
+
+    let queued = get(port, "/api/approve/poll?lane=m").unwrap_or_default();
+    post(
+        port,
+        "/api/approve/answer",
+        r#"{"id":"bg-1","decision":"allow","rules":[],"scope":"session"}"#,
+    );
+    let decision = asking.join().unwrap_or_default();
+
+    // Long past the point the agent's own shell would have been killed with the turn.
+    std::thread::sleep(Duration::from_secs(3));
+    let jobs = get(port, "/api/monitors?lane=m").unwrap_or_default();
+    let other = get(port, "/api/monitors?lane=elsewhere").unwrap_or_default();
+    stop_daemon(&mut daemon);
+
+    assert!(
+        queued.contains("MonitorRequest"),
+        "a backgrounded command was queued as an ordinary permission, so the person was asked the \
+         wrong question — or, on a trusted project, was not asked at all: {queued}"
+    );
+    assert!(
+        decision.contains("deny") && decision.contains("background job"),
+        "the agent was not told which job its command became; letting the call through would run \
+         a second shell that dies with the turn: {decision}"
+    );
+    assert!(
+        jobs.contains("\"exit\":0") && jobs.contains("done"),
+        "the job did not finish under Keel with its output kept — which is the entire point: \
+         {jobs}"
+    );
+    assert!(
+        !other.contains("bg-1") && other.trim() == "[]",
+        "another conversation was shown this one's job: {other}"
+    );
+}
+
 /// A stubbed project with extra files in place before the daemon starts.
 fn stubbed_project_with(
     files: &[(&str, &str)],

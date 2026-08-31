@@ -800,6 +800,7 @@ final class SessionModel: Identifiable {
         stallReported = false; lastEventAt = Date(); running = true
         lastError = nil; lastFix = nil
         watchApprovals(true)
+        watchMonitors()
 
         streamTask = Task { [client] in
             // An isolated task gets its checkout before the provider starts. Failure stops the
@@ -1550,6 +1551,76 @@ final class SessionModel: Identifiable {
             if previewURL != nil { return }
             try? await Task.sleep(for: .milliseconds(400))
         }
+    }
+
+    // MARK: - Background jobs
+
+    /// Commands Keel is running for this conversation, newest first.
+    var monitors: [Wire.Job] = []
+    private var monitorTask: Task<Void, Never>?
+
+    /// Started with the first turn and never cancelled while the lane lives.
+    ///
+    /// Not tied to `running`, which is the whole point: a job outlives the turn that asked for
+    /// it, so the loop that notices it finishing has to outlive the turn too. Approvals poll only
+    /// while a turn is up because a question cannot exist without one; a job can.
+    func watchMonitors() {
+        guard monitorTask == nil else { return }
+        monitorTask = Task { [weak self, client] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let q: [String: String] = ["lane": self.id.uuidString]
+                if let jobs: [Wire.Job] = try? await client.get("/api/monitors", q) {
+                    self.monitors = jobs
+                    // Acked before it is delivered, and by the one lane that owns it: the result
+                    // reaching the conversation twice is worse than not reaching it at all.
+                    for job in jobs where !job.running && !job.reported {
+                        await self.ack(job)
+                        self.deliver(job)
+                    }
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func ack(_ job: Wire.Job) async {
+        struct Id: Encodable { var id: String }
+        struct Ok: Decodable {}
+        _ = try? await client.post("/api/monitors/ack", body: Id(id: job.id), as: Bool.self)
+    }
+
+    func stopMonitor(_ job: Wire.Job) {
+        struct Id: Encodable { var id: String }
+        Task { [client] in
+            _ = try? await client.post("/api/monitors/stop", body: Id(id: job.id), as: Bool.self)
+        }
+    }
+
+    /// The prefix a delivered result carries, so the conversation can draw it as a report from
+    /// the machine rather than as something the person typed.
+    static let jobPrefix = "Background job "
+
+    /// Put a finished job back into the conversation as its own turn.
+    ///
+    /// Queued rather than dropped when a turn is already up — the same rule as a prompt typed
+    /// while the agent works, and for the same reason: the answer is not less wanted because it
+    /// arrived at a busy moment.
+    private func deliver(_ job: Wire.Job) {
+        let took = job.elapsed < 60
+            ? "\(Int(job.elapsed))s"
+            : "\(Int(job.elapsed) / 60)m\(Int(job.elapsed) % 60)s"
+        // Capped: 400 lines of `cargo build` in a chat bubble is not a report, and the agent
+        // reads the end of a log rather than the middle of it.
+        let tail = job.log.suffix(80).joined(separator: "\n")
+        let text = """
+            \(Self.jobPrefix)\(job.id) finished — exit \(job.exit ?? -1), after \(took).
+
+            $ \(job.command)
+
+            \(tail.isEmpty ? "(no output)" : tail)
+            """
+        if running { queued.append(text) } else { start(text) }
     }
 
     // MARK: - Approvals
