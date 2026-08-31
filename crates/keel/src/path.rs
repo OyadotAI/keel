@@ -126,6 +126,58 @@ pub fn adopt_shell_path() {
 mod tests {
     use super::*;
 
+    /// No test sets an environment variable.
+    ///
+    /// `cargo test` is one process and a thread pool; an environment variable is process-global.
+    /// A test that sets one is setting it for whatever else is running at that instant, and Rust
+    /// 2024 made `set_var` `unsafe` because of exactly that.
+    ///
+    /// It cost a red CI on a release commit. `connect::tests` set `HOME=/Users/x` to check tilde
+    /// expansion; on Linux the `trash` crate resolves `$HOME/.local/share/Trash`, so whichever
+    /// test happened to be discarding files at that moment tried to write into `/Users/x` and
+    /// failed with `PermissionDenied`. It passed on macOS, where the trash does not consult
+    /// `HOME` — so `make check` was green on the machine it runs on and the failure only ever
+    /// appeared in CI, and only when the scheduling lined up.
+    ///
+    /// The fix is never a lock around the mutation; it is a function that takes the value.
+    ///
+    /// The one legitimate call is in this file: `augment_path`, once, at the top of `main`,
+    /// before any thread exists. Production code with the same justification may say so with
+    /// `// set_var: <reason>` on the line above.
+    #[test]
+    fn no_test_mutates_the_environment() {
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+            .expect("the crate's own sources")
+            .filter_map(Result::ok)
+        {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap_or_default();
+            let Some(tests) = source.find("#[cfg(test)]") else {
+                continue;
+            };
+            // Code, not prose — this test's own explanation names the call it forbids — and the
+            // needle is assembled rather than written, because otherwise this line is a hit.
+            let needle = concat!("set_", "var(");
+            let calls_it = source[tests..]
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .any(|l| l.contains(needle));
+            if calls_it {
+                offenders.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these files set an environment variable from a test: {offenders:?}. \
+             Pass the value to the function instead — the variable is shared with every other \
+             test running at the same moment."
+        );
+    }
+
     /// Whatever else happens, the places these tools actually install to have to be reachable.
     #[test]
     fn the_search_path_covers_where_things_install() {

@@ -293,11 +293,26 @@ pub async fn browse_files(
 
 /// Expand a leading `~`, which is what people type.
 fn shellexpand(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(home) => expand_under(&home, path),
+        Err(_) => path.to_string(),
+    }
+}
+
+/// The half that can be tested, which is the half that has the rule in it.
+///
+/// Separated because the test for it used to be `set_var("HOME", "/Users/x")`, and an environment
+/// variable is process-global while `cargo test` is a thread pool. It hijacked `HOME` for whatever
+/// else happened to be running: on Linux the `trash` crate resolves `$HOME/.local/share/Trash`, so
+/// `discard_all_…` tried to write into `/Users/x` and failed with `PermissionDenied`. It passed on
+/// macOS, where the trash does not consult `HOME` — so the race was invisible on the machine the
+/// gate runs on and only ever showed up in CI, and only when scheduling happened to line up.
+///
+/// Rust 2024 made `set_var` `unsafe` for exactly this. The fix is not a lock around it; it is not
+/// needing it.
+fn expand_under(home: &str, path: &str) -> String {
     match path.strip_prefix('~') {
-        Some(rest) => match std::env::var("HOME") {
-            Ok(home) => format!("{home}{rest}"),
-            Err(_) => path.to_string(),
-        },
+        Some(rest) => format!("{home}{rest}"),
         None => path.to_string(),
     }
 }
@@ -308,9 +323,9 @@ mod tests {
 
     #[test]
     fn expands_a_leading_tilde() {
-        unsafe { std::env::set_var("HOME", "/Users/x") };
-        assert_eq!(shellexpand("~/Dev/repo"), "/Users/x/Dev/repo");
-        assert_eq!(shellexpand("/abs/path"), "/abs/path");
-        assert_eq!(shellexpand("relative"), "relative");
+        assert_eq!(expand_under("/Users/x", "~/Dev/repo"), "/Users/x/Dev/repo");
+        assert_eq!(expand_under("/Users/x", "~"), "/Users/x");
+        assert_eq!(expand_under("/Users/x", "/abs/path"), "/abs/path");
+        assert_eq!(expand_under("/Users/x", "relative"), "relative");
     }
 }
