@@ -46,6 +46,21 @@ struct SidePanel: View {
         .background(K.C.surface)
         // The one destructive question in the panels, anchored here for the same reason as
         // the sheets below: a row can be recycled under its own dialog.
+        // Renaming a past session, asked from the panel root for the same reason: the list is a
+        // lazy stack, and a dialog presented from a row it has not built does not appear at all.
+        .alert("Rename feature", isPresented: Binding(
+            get: { model.renamingSession != nil },
+            set: { if !$0 { model.renamingSession = nil } })) {
+            TextField("Name", text: $model.renameDraft)
+            Button("Cancel", role: .cancel) { model.renamingSession = nil }
+            Button("Rename") {
+                if let id = model.renamingSession {
+                    let name = model.renameDraft
+                    Task { await model.rename(session: id, to: name) }
+                }
+                model.renamingSession = nil
+            }
+        }
         .confirmationDialog("Discard every uncommitted change?", isPresented: $model.confirmingDiscard, titleVisibility: .visible) {
             Button("Discard \(model.changes.count) file\(model.changes.count == 1 ? "" : "s")", role: .destructive) {
                 Task { await model.discardAll() }
@@ -80,9 +95,7 @@ struct SidePanel: View {
 // MARK: - Sessions
 
 struct SessionsPanel: View {
-    let model: SessionModel
-    @State private var renaming: String?
-    @State private var newTitle = ""
+    @Bindable var model: SessionModel
     @State private var query = ""
     /// Which time buckets are unfolded. Today, until you say otherwise.
     @State private var opened: Set<String> = ["Today"]
@@ -132,23 +145,15 @@ struct SessionsPanel: View {
                     Task { await model.lanes?.open(session: s.id) }
                 }
                 .contextMenu {
-                    Button("Rename…") { renaming = s.id; newTitle = s.title ?? "" }
+                    Button("Rename…") {
+                        model.renameDraft = s.title ?? ""
+                        model.renamingSession = s.id
+                    }
                 }
             }
             }
             }
         }
-        // Rendered once, outside the loop: an alert per row is an alert per row.
-        Color.clear.frame(height: 0)
-            .alert("Rename feature", isPresented: Binding(
-                get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-                TextField("Name", text: $newTitle)
-                Button("Cancel", role: .cancel) { renaming = nil }
-                Button("Rename") {
-                    if let id = renaming { Task { await model.rename(session: id, to: newTitle) } }
-                    renaming = nil
-                }
-            }
     }
 
     struct Group: Identifiable {

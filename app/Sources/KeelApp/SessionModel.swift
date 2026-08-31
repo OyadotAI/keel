@@ -2282,14 +2282,21 @@ final class SessionModel: Identifiable {
         }
         if replayed.isEmpty { replayed = [Turn(prompt: title)] }
 
-        if let did, let last = replayed.last {
-            for f in did.files { last.noteEdit(f) }
+        if let did, !replayed.isEmpty {
+            // Each on the turn that ran it. The daemon files every call and every file against a
+            // turn now; before that it sent one flat list and this put all of it on the last
+            // turn, so a session that edited forty files over nine turns drew eight turns that
+            // "changed nothing" and one that did everything. A turn out of range — a transcript
+            // the two readers disagree about — goes on the last one rather than nowhere.
+            func turn(_ i: Int) -> Turn { replayed.indices.contains(i) ? replayed[i] : replayed[replayed.count - 1] }
+            for f in did.files { turn(f.turn).noteEdit(f.path) }
             for (i, c) in did.calls.enumerated() {
-                last.begin(call: "replay-\(i)", tool: c.tool,
-                           input: ["command": .string(c.subject)])
-                last.finish(call: "replay-\(i)", output: c.output, failed: c.error)
+                let t = turn(c.turn)
+                t.begin(call: "replay-\(i)", tool: c.tool,
+                        input: ["command": .string(c.subject)])
+                t.finish(call: "replay-\(i)", output: c.output, failed: c.error)
             }
-            last.truncated = did.truncated
+            replayed[replayed.count - 1].truncated = did.truncated
         }
         replayed.forEach { $0.finished = true; $0.replayed = true }
         // The one assignment, at the end, on every path that got this far.
@@ -2298,14 +2305,20 @@ final class SessionModel: Identifiable {
     }
 
     struct SessionWork: Decodable {
-        var files: [String]
+        var files: [File]
         var calls: [Call]
         var truncated: Bool
+        /// The index of the turn that ran it, into the replayed conversation.
+        struct File: Decodable {
+            var path: String
+            var turn: Int
+        }
         struct Call: Decodable {
             var tool: String
             var subject: String
             var output: String
             var error: Bool
+            var turn: Int
         }
     }
 
@@ -2577,6 +2590,15 @@ final class SessionModel: Identifiable {
     /// Asked from the panel root, not a row: a dialog presented from a row inside a lazy stack
     /// can vanish with the row, and its button then does nothing.
     var confirmingDiscard = false
+
+    /// The past session being renamed from History, and the name being typed for it.
+    ///
+    /// On the model for the same reason as `confirmingDiscard`, and it took the same bug to
+    /// learn it twice: the alert used to hang off a zero-height `Color.clear` at the end of the
+    /// session list, which a lazy stack with 158 rows in it never builds. Right-click, Rename,
+    /// and nothing at all happened.
+    var renamingSession: String?
+    var renameDraft = ""
     var discarded: String?
     func discardAll() async {
         var counts = [0, 0]

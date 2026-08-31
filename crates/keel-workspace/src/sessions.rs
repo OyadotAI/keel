@@ -58,13 +58,26 @@ pub struct SessionCall {
     pub subject: String,
     pub output: String,
     pub error: bool,
+    /// Which turn of the conversation ran it, counted the way [`transcript`] counts turns.
+    ///
+    /// Without this the app had nowhere to put a replayed call but the last turn, so a session
+    /// that edited forty files across nine turns showed eight turns that "changed nothing" and
+    /// one that did everything — the opposite of what the trace is for.
+    pub turn: usize,
+}
+
+/// A file a session wrote, and the turn that wrote it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionFile {
+    pub path: String,
+    pub turn: usize,
 }
 
 /// What a session actually did: which files it changed, and what it ran.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionWork {
     /// Repository-relative, in the order they were first touched.
-    pub files: Vec<String>,
+    pub files: Vec<SessionFile>,
     pub calls: Vec<SessionCall>,
     /// Whether the record was cut short by the caps below.
     pub truncated: bool,
@@ -73,10 +86,164 @@ pub struct SessionWork {
 /// Tools whose input names a file the session wrote.
 const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"];
 
+/// Shell verbs whose arguments are files they change. `sed` counts only with `-i`, which is why
+/// the match is on the flag rather than on the name.
+const WRITE_VERBS: &[&str] = &["tee", "touch", "cp", "mv", "rm", "patch"];
+
+/// Fragments that mean the inline script in this command writes a file, so every path in it is a
+/// path it wrote. A `python3 - <<PY` that opens a file for writing names it as a plain string.
+const WRITE_FRAGMENTS: &[&str] = &[".write(", "writeFileSync", "write_text", "'w')", "\"w\")"];
+
+/// The files a shell command changed, as far as the command itself says.
+///
+/// The trace exists to answer "what did the agent do", and for a session driven through `Bash` —
+/// heredocs, `sed -i`, a redirect — the tool names answer nothing: 131 calls, 28 files edited, and
+/// a trace reporting no file changed at all, because `Edit` and `Write` were never used.
+///
+/// Deliberately conservative, in both directions. A path is kept only when the command carries a
+/// write signal *and* the path exists in the repository, so a `grep` over a file, a `sed -n`, and
+/// a heredoc that only reads are all silent. It will miss a path a script computes rather than
+/// names — nothing in a transcript can recover that one.
+///
+/// ponytail: string matching, not a shell parser. A real parse would catch `eval`, an aliased
+/// verb and a path in a variable; if that starts mattering, the upgrade is a `shlex` pass over
+/// the pipeline rather than more fragments here.
+fn shell_writes(command: &str, repo: &Utf8Path) -> Vec<String> {
+    /// A token that could be a path: no flags, no globs, no shell expansion, and a name with an
+    /// extension somewhere below a directory. `p='app/x.swift'` is one — an assignment inside a
+    /// heredoc is how a script names the file it is about to write.
+    fn candidate(token: &str) -> Option<&str> {
+        let t = token.rsplit('=').next().unwrap_or(token);
+        let t = t.trim_matches(|c: char| "'\"`;,()<>&|".contains(c));
+        if t.is_empty() || t.starts_with('-') || t.contains(['$', '*', '?']) {
+            return None;
+        }
+        let name = t.rsplit('/').next().unwrap_or(t);
+        (t.contains('/') && name.contains('.') && !name.starts_with('.')).then_some(t)
+    }
+
+    /// Every `'…'` and `"…"` in the command. An inline script's paths are string literals, not
+    /// whitespace-separated arguments: `open('app/x.swift', 'w')` is one token to a shell.
+    fn quoted(command: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = command;
+        while let Some(open) = rest.find(['\'', '"']) {
+            let quote = rest.as_bytes()[open] as char;
+            let after = &rest[open + 1..];
+            let Some(close) = after.find(quote) else {
+                break;
+            };
+            out.push(&after[..close]);
+            rest = &after[close + 1..];
+        }
+        out
+    }
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    // An inline script that writes names its file as a string literal, so the literals are the
+    // arguments rather than the tokens after one verb.
+    let inline = WRITE_FRAGMENTS.iter().any(|f| command.contains(f));
+    let mut targets: Vec<&str> = if inline { quoted(command) } else { Vec::new() };
+
+    for (i, token) in tokens.iter().enumerate() {
+        // `> file`, `>>file`, `2> file` — the target is whatever the redirect points at.
+        if token.contains('>') {
+            let rest = token.rsplit('>').next().unwrap_or_default();
+            if rest.is_empty() {
+                targets.extend(tokens.get(i + 1));
+            } else {
+                targets.push(rest);
+            }
+        }
+        let verb = token.rsplit('/').next().unwrap_or(token);
+        if WRITE_VERBS.contains(&verb)
+            || (verb == "sed" && tokens[i..].iter().any(|t| t.starts_with("-i")))
+        {
+            targets.extend(&tokens[i + 1..]);
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for path in targets.into_iter().filter_map(candidate) {
+        let rel = path.strip_prefix(&format!("{repo}/")).unwrap_or(path);
+        let rel = rel.trim_start_matches("./");
+        // Inside the repository only: a turn that wrote a scratch file in `/tmp` changed nothing
+        // anybody is reviewing, and listing it as a changed file is noise in the one pane that
+        // has to be exact.
+        if rel.starts_with('/') {
+            continue;
+        }
+        // Only what is really there. Existence is the filter that keeps a command's other
+        // arguments — a pattern, a branch name, a URL — from being reported as edits.
+        if repo.join(rel).exists() && !out.iter().any(|p| p == rel) {
+            out.push(rel.to_string());
+        }
+    }
+    out
+}
+
 /// Bounds on what one session can put on screen. A long session is thousands of calls, and the
-/// last few hundred are the ones anybody scrolls to.
+/// last few hundred are the ones anybody scrolls to — which is what this now keeps. It stopped
+/// recording at the three hundredth call instead, so a long session's trace was its *first* three
+/// hundred calls under a note in the app reading "capped at the most recent 300". Memory while
+/// parsing is bounded by `MAX_OUTPUT` per call, not by this.
 const MAX_CALLS: usize = 300;
 const MAX_OUTPUT: usize = 8_000;
+
+/// What one record of a transcript contributes to the conversation, or `None` when it is not part
+/// of it at all.
+///
+/// One function because two readers have to agree on it: [`transcript`] turns these into the
+/// conversation, and [`session_work`] counts the user ones to know which turn a tool call belongs
+/// to. When the two disagreed by a single skipped record, every call in the session was filed
+/// against the wrong turn.
+fn spoken(record: &Value) -> Option<(&'static str, String, Vec<String>)> {
+    let role = match record.get("type").and_then(Value::as_str) {
+        Some("user") => "user",
+        Some("assistant") => "assistant",
+        _ => return None,
+    };
+    // Sidechain records are subagent chatter, not the conversation the user had.
+    if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let (mut text, mut tools) = (String::new(), Vec::new());
+    match record.get("message").and_then(|m| m.get("content")) {
+        // A plain user message.
+        Some(Value::String(s)) => text.push_str(s),
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(t) = block.get("text").and_then(Value::as_str) {
+                            text.push_str(t);
+                        }
+                    }
+                    Some("tool_use") => {
+                        if let Some(n) = block.get("name").and_then(Value::as_str) {
+                            tools.push(n.to_string());
+                        }
+                    }
+                    // Thinking and tool results are skipped: replaying an old session is for
+                    // reading what was said and done, not for re-litigating the reasoning.
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    if text.trim().is_empty() && tools.is_empty() {
+        return None;
+    }
+    // Claude Code writes background-task notifications back into the transcript as user messages
+    // so the model can consume them. They are transport envelopes, not something the person
+    // typed: rendering the XML and an embedded subagent report as a giant blue chat bubble makes
+    // a resumed conversation unreadable and misattributes the content.
+    if role == "user" && text.trim_start().starts_with("<task-notification>") {
+        return None;
+    }
+    Some((role, text.trim().to_string(), tools))
+}
 
 /// Read what a session changed and ran.
 ///
@@ -94,10 +261,24 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
     // arrives rather than being emitted twice.
     let mut pending: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
+    // Which turn of the conversation is being read. `transcript` starts a turn on every user
+    // record it keeps, and the app's replay does the same, so counting them here with the same
+    // predicate is what makes the two line up.
+    let mut turn = 0usize;
+    let mut started = false;
+
     for line in contents.lines() {
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if let Some(("user", _, _)) = spoken(&record) {
+            // The first user record opens turn 0 rather than turn 1; anything before it — there
+            // should be nothing — is filed against the same turn.
+            if started {
+                turn += 1;
+            }
+            started = true;
+        }
         if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
@@ -128,14 +309,19 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
                             get("file_path")
                         };
                         let rel = path.strip_prefix(&root).unwrap_or(&path).to_string();
-                        if !rel.is_empty() && !work.files.contains(&rel) {
-                            work.files.push(rel);
+                        if !rel.is_empty()
+                            && !work.files.iter().any(|f| f.path == rel && f.turn == turn)
+                        {
+                            work.files.push(SessionFile { path: rel, turn });
                         }
                     }
 
-                    if work.calls.len() >= MAX_CALLS {
-                        work.truncated = true;
-                        continue;
+                    if tool == "Bash" {
+                        for rel in shell_writes(&get("command"), repo) {
+                            if !work.files.iter().any(|f| f.path == rel && f.turn == turn) {
+                                work.files.push(SessionFile { path: rel, turn });
+                            }
+                        }
                     }
                     let subject = match tool {
                         "Bash" => get("command"),
@@ -157,6 +343,7 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
                         subject,
                         output: String::new(),
                         error: false,
+                        turn,
                     });
                 }
                 Some("tool_result") => {
@@ -179,8 +366,11 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
                     if let Some(call) = work.calls.get_mut(at) {
                         if text.len() > MAX_OUTPUT {
                             // Keep the tail: an error is at the end of the output, not the start.
+                            // Not `truncated`: that word is the app's "this session ran more calls
+                            // than are shown", and setting it here made a 131-call session say it
+                            // had been capped at 300 — a note that is not true, on a pane whose
+                            // whole job is being accurate about what happened.
                             call.output = text[text.len() - MAX_OUTPUT..].to_string();
-                            work.truncated = true;
                         } else {
                             call.output = text;
                         }
@@ -195,6 +385,12 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
         }
     }
 
+    // The tail, not the head: a long session's last few hundred calls are the ones anybody
+    // scrolls to, and they are the ones the app already says it is showing.
+    if work.calls.len() > MAX_CALLS {
+        work.calls.drain(..work.calls.len() - MAX_CALLS);
+        work.truncated = true;
+    }
     work
 }
 
@@ -229,59 +425,10 @@ pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let role = match record.get("type").and_then(Value::as_str) {
-            Some("user") => "user",
-            Some("assistant") => "assistant",
-            _ => continue,
+        let Some((role, text, tools)) = spoken(&record) else {
+            continue;
         };
-        // Sidechain records are subagent chatter, not the conversation the user had.
-        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-
-        let content = record.get("message").and_then(|m| m.get("content"));
-        let (mut text, mut tools) = (String::new(), Vec::new());
-
-        match content {
-            // A plain user message.
-            Some(Value::String(s)) => text.push_str(s),
-            Some(Value::Array(blocks)) => {
-                for block in blocks {
-                    match block.get("type").and_then(Value::as_str) {
-                        Some("text") => {
-                            if let Some(t) = block.get("text").and_then(Value::as_str) {
-                                text.push_str(t);
-                            }
-                        }
-                        Some("tool_use") => {
-                            if let Some(n) = block.get("name").and_then(Value::as_str) {
-                                tools.push(n.to_string());
-                            }
-                        }
-                        // Thinking and tool results are skipped: replaying an old session is for
-                        // reading what was said and done, not for re-litigating the reasoning.
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        if text.trim().is_empty() && tools.is_empty() {
-            continue;
-        }
-        // Claude Code writes background-task notifications back into the transcript as user
-        // messages so the model can consume them. They are transport envelopes, not something
-        // the person typed: rendering the XML and an embedded subagent report as a giant blue
-        // chat bubble makes a resumed conversation unreadable and misattributes the content.
-        if role == "user" && text.trim_start().starts_with("<task-notification>") {
-            continue;
-        }
-        turns.push(Turn {
-            role,
-            text: text.trim().to_string(),
-            tools,
-        });
+        turns.push(Turn { role, text, tools });
     }
     turns
 }
@@ -638,6 +785,95 @@ mod tests {
         );
     }
 
+    /// The trace is a record of what the agent did *when*, so every call has to land on the turn
+    /// that ran it. Everything used to be handed to the app in one flat list, which had nowhere
+    /// to put it but the last turn: nine turns of work read as eight that changed nothing and one
+    /// that did all of it.
+    #[test]
+    fn every_call_is_filed_against_the_turn_that_ran_it() {
+        let lines = [
+            r#"{"type":"user","message":{"content":"add the endpoint"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/repo/api.ts"}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+            r#"{"type":"user","message":{"content":"now the tests"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make check"}}]}}"#,
+            // Not the person typing: a background job report must not open a third turn.
+            r#"{"type":"user","message":{"content":"<task-notification>done</task-notification>"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/repo/api.test.ts"}}]}}"#,
+        ]
+        .join("\n");
+
+        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
+        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
+        let turns = transcript(Utf8Path::new("/repo"), &home, "abc-1");
+
+        assert_eq!(
+            work.calls.iter().map(|c| c.turn).collect::<Vec<_>>(),
+            vec![0, 1, 1],
+            "the write is the first ask, the check and the edit the second"
+        );
+        assert_eq!(
+            work.files
+                .iter()
+                .map(|f| (f.path.as_str(), f.turn))
+                .collect::<Vec<_>>(),
+            vec![("api.ts", 0), ("api.test.ts", 1)]
+        );
+        // The count the app replays into, so an index out of it would be a call with no home.
+        assert_eq!(
+            turns.iter().filter(|t| t.role == "user").count(),
+            2,
+            "both readers count the same turns"
+        );
+    }
+
+    /// An agent that edits through the shell — a heredoc, `sed -i`, a redirect — changed files
+    /// just as much as one that used `Edit`, and a trace that says "changed nothing" over 28 of
+    /// them is worse than no trace. Conservative on purpose: a read is not a write.
+    #[test]
+    fn shell_edits_count_as_changed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap().to_path_buf();
+        std::fs::create_dir_all(repo.join("app/Sources")).unwrap();
+        for f in [
+            "app/Sources/LaneRail.swift",
+            "app/Sources/Theme.swift",
+            "Makefile.md",
+        ] {
+            std::fs::write(repo.join(f), "x").unwrap();
+        }
+
+        let wrote = |cmd: &str| shell_writes(cmd, &repo);
+
+        assert_eq!(
+            wrote("python3 - <<'PY'\np='app/Sources/LaneRail.swift'\nopen(p,'w').write(s)\nPY"),
+            vec!["app/Sources/LaneRail.swift"],
+            "an inline script that writes names its file as a string"
+        );
+        assert_eq!(
+            wrote("sed -i.bak 's/a/b/' app/Sources/Theme.swift"),
+            vec!["app/Sources/Theme.swift"]
+        );
+        assert_eq!(
+            wrote("cat >> app/Sources/Theme.swift <<EOF"),
+            vec!["app/Sources/Theme.swift"],
+            "the target of a redirect"
+        );
+        assert!(
+            wrote("sed -n '1,200p' app/Sources/Theme.swift").is_empty(),
+            "a read is not a write"
+        );
+        assert!(wrote("grep -rn \"Reading\" app/Sources/LaneRail.swift | head -20").is_empty());
+        assert!(
+            wrote("cp app/Sources/Nowhere.swift app/Sources/Gone.swift").is_empty(),
+            "a path that is not in the repository is not reported as edited"
+        );
+        assert!(
+            wrote("cp /tmp/shot.png /tmp/before.png").is_empty(),
+            "a scratch file outside the repository is not a change to review"
+        );
+    }
+
     fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
         transcript(Utf8Path::new("/repo"), home, "abc-1")
     }
@@ -671,10 +907,16 @@ mod tests {
         let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
 
         assert_eq!(
-            work.files,
-            vec!["src/a.ts".to_string()],
+            work.files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/a.ts"],
             "written once, relative"
         );
+        // A record that is only a tool result is not something anybody said, so it does not
+        // start a turn — everything here belongs to the first one.
+        assert!(work.calls.iter().all(|c| c.turn == 0));
         assert_eq!(
             work.calls.len(),
             4,

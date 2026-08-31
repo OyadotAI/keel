@@ -283,7 +283,10 @@ private struct UndoBar: View {
 struct ChangedFiles: View {
     let turn: Turn
     let model: SessionModel
-    @State private var open = false
+    /// Open. The files are the answer to "what did this turn do" — folding them costs a click on
+    /// every turn to see the thing the pane is for. Each file's *diff* is still closed, so this
+    /// is a list of names and stats, not a wall of code.
+    @State private var open = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
