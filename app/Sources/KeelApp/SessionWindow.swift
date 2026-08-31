@@ -43,7 +43,7 @@ struct SessionWindow: View {
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
     /// 256pt rail and no room for any of them to have actions.
     enum Panel: String, CaseIterable, Identifiable {
-        case changes, git, files, sessions, readiness
+        case changes, git, files, sessions, readiness, monitors
         case skills, agents, mcp, hooks, plugins
         var id: String { rawValue }
 
@@ -54,6 +54,7 @@ struct SessionWindow: View {
             case .files: "folder"
             case .sessions: "clock.arrow.circlepath"
             case .readiness: "checkmark.shield"
+            case .monitors: "binoculars"
             case .skills: "sparkles"
             case .agents: "person.2"
             case .mcp: "cable.connector"
@@ -68,6 +69,7 @@ struct SessionWindow: View {
             case .files: "Files"
             case .sessions: "History"
             case .readiness: "Readiness"
+            case .monitors: "Monitors"
             case .skills: "Skills"
             case .agents: "Subagents"
             case .mcp: "MCP"
@@ -78,7 +80,7 @@ struct SessionWindow: View {
 
         /// A separator after these, so the repository group and the agent-configuration group read
         /// as two sets rather than nine icons in a column.
-        var endsGroup: Bool { self == .readiness }
+        var endsGroup: Bool { self == .monitors }
     }
 
     /// The lane in focus. Every pane below draws this one; the rail shows all of them.
@@ -639,6 +641,9 @@ struct ActivityRail: View {
             return "Plugins — \(n) recommended for this repository, not installed"
         case .skills:
             return "Skills — \(model.workspace.skills.count) installed"
+        case .monitors:
+            let n = model.monitors.count(where: \.running)
+            return n > 0 ? "Monitors — \(n) running in the background" : p.title
         case .hooks:
             let repo = model.workspace.hooks.filter(\.fromRepo).count
             return repo > 0
@@ -670,6 +675,9 @@ struct ActivityRail: View {
         // Every finding, not only the blocking ones: a warning in the panel with no number on
         // the icon read as a panel that had nothing to say.
         case .readiness: model.findings.count.nonZero
+        // Only what is still going. A finished job is history the moment it is reported, and a
+        // number that never goes back down is a number people stop reading.
+        case .monitors: model.monitors.count(where: \.running).nonZero
         // Hooks that came with the repository are the one count worth shouting: each is a shell
         // command someone else wrote that runs on this machine.
         case .hooks: model.workspace.hooks.filter(\.fromRepo).count.nonZero

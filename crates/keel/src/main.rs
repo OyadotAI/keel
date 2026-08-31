@@ -17,6 +17,7 @@ mod gitroots;
 mod gui;
 mod ignored;
 mod mcp;
+mod monitor;
 mod names;
 mod packs;
 mod pair;
@@ -161,6 +162,13 @@ enum Command {
         /// to the hook before it was accepted here and an older hook may still be on disk.
         #[arg(long, default_value = "")]
         lane: String,
+        /// The checkout the turn is running in.
+        ///
+        /// Same reason as `lane`: Claude Code does not send it, and Keel needs it to run a
+        /// monitored command where the agent would have run it — a lane's worktree, not the
+        /// project root. Empty falls back to the project.
+        #[arg(long, default_value = "")]
+        cwd: String,
     },
 
     /// Move repository-supplied agent configuration out of the way.
@@ -288,7 +296,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Command::Approve { port, lane } => {
+        Command::Approve { port, lane, cwd } => {
             // Every failure here prints nothing and exits 0, which defers to Claude Code's own
             // permission check. A guardrail that can wedge the agent is one people disable.
             let mut raw = String::new();
@@ -298,8 +306,9 @@ fn main() -> Result<()> {
             let Ok(mut hook) = serde_json::from_str::<approve::HookInput>(&raw) else {
                 return Ok(());
             };
-            // Not in what Claude Code sends; it arrives on the command line instead.
+            // Not in what Claude Code sends; they arrive on the command line instead.
             hook.lane = lane;
+            hook.cwd = cwd;
 
             let decision = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -390,6 +399,10 @@ fn watch_parent() {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let now = std::os::unix::process::parent_id();
             if now != original || now == 1 {
+                // The jobs Keel is monitoring are its children, and `exit` alone reparents them
+                // to init. A dev server nobody can see and nobody can stop is worse than one
+                // that never started.
+                monitor::stop_all();
                 std::process::exit(0);
             }
         }

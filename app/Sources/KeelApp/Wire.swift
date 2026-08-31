@@ -258,6 +258,28 @@ enum Wire {
         var text: String
     }
 
+    /// A background command Keel is running on the conversation's behalf.
+    ///
+    /// It belongs to the daemon rather than to the turn because a turn is one `claude -p` and the
+    /// CLI kills its own background shells at teardown — which is why "I'll watch it and report"
+    /// used to be a sentence nothing behind it could keep.
+    struct Job: Decodable, Identifiable, Equatable {
+        var id: String
+        var lane: String
+        var command: String
+        var dir: String
+        var started: Double
+        var finished: Double?
+        var exit: Int?
+        var log: [String]
+        var reported: Bool
+
+        var running: Bool { finished == nil }
+
+        /// How long it has been going, or how long it took.
+        var elapsed: TimeInterval { (finished ?? Date().timeIntervalSince1970) - started }
+    }
+
     /// A tool call the agent is blocked on.
     struct Pending: Decodable, Identifiable {
         var id: String
@@ -274,6 +296,10 @@ enum Wire {
         }
 
         var isQuestion: Bool { tool == "AskUserQuestion" }
+
+        /// The agent wants to leave a command running behind it. Not a permission — the answer
+        /// decides who runs it, not whether it is allowed — so it gets a card of its own.
+        var isMonitor: Bool { tool == "MonitorRequest" }
 
         /// The questions an `AskUserQuestion` carries, or none for a permission.
         var questions: [Question] {

@@ -211,6 +211,8 @@ pub fn settings_json(
     port: u16,
     session: Option<&str>,
     lane: Option<&str>,
+    // Where the turn runs — the lane's checkout, which is not the project root.
+    cwd: &Utf8Path,
 ) -> String {
     let mut allow = effective(repo, session);
     if trusted(repo) {
@@ -250,7 +252,7 @@ pub fn settings_json(
                 "matcher": HOOKED_TOOLS,
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} approve --port {port} --lane {}", exe.display(), lane.unwrap_or("")),
+                    "command": format!("{} approve --port {port} --lane {} --cwd {}", exe.display(), lane.unwrap_or(""), cwd),
                     // Must exceed the wait Keel itself enforces, or Claude Code gives up first and
                     // the person's answer arrives too late to be applied.
                     "timeout": crate::approve::WAIT.as_secs() + 30,
@@ -643,7 +645,7 @@ mod tests {
         set_trusted(&root, true).unwrap();
 
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777, None, None)).unwrap();
+            serde_json::from_str(&settings_json(&root, 7777, None, None, &root)).unwrap();
         let allow = json["permissions"]["allow"].as_array().unwrap();
 
         for tool in HOOKED_TOOLS.split('|') {
@@ -658,13 +660,13 @@ mod tests {
     fn a_trusted_project_says_so_in_its_settings() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let before: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777, None, None)).unwrap();
+            serde_json::from_str(&settings_json(&root, 7777, None, None, &root)).unwrap();
         let allow = before["permissions"]["allow"].as_array().unwrap();
         assert!(!allow.iter().any(|r| r == "Bash"));
 
         set_trusted(&root, true).unwrap();
         let after: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777, None, None)).unwrap();
+            serde_json::from_str(&settings_json(&root, 7777, None, None, &root)).unwrap();
         let allow = after["permissions"]["allow"].as_array().unwrap();
         assert!(allow.iter().any(|r| r == "Bash"));
     }
@@ -673,7 +675,8 @@ mod tests {
     fn settings_payload_is_shaped_the_way_the_cli_expects() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7777, None, None)).expect("valid json");
+            serde_json::from_str(&settings_json(&root, 7777, None, None, &root))
+                .expect("valid json");
         assert!(json["permissions"]["allow"].is_array());
     }
 
@@ -684,7 +687,8 @@ mod tests {
     fn the_settings_carry_the_hook_that_blocks_the_agent() {
         let (_d, root) = repo(&["Cargo.toml"]);
         let json: serde_json::Value =
-            serde_json::from_str(&settings_json(&root, 7788, None, None)).expect("valid json");
+            serde_json::from_str(&settings_json(&root, 7788, None, None, &root))
+                .expect("valid json");
 
         let hook = &json["hooks"]["PreToolUse"][0];
         assert_eq!(hook["matcher"], HOOKED_TOOLS);

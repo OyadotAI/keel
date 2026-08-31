@@ -272,6 +272,28 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(w.mcpServers[0].fromRepo)
     }
 
+    /// The two shapes the monitoring feature travels in. A field renamed on the daemon side
+    /// leaves the panel empty and the completion never reaches the conversation, and both
+    /// failures are silent — the job still runs, nobody is told anything.
+    func testABackgroundJobDecodesAndKnowsWhetherItIsStillRunning() throws {
+        let running = try decode(#"{"id":"m1","lane":"L","command":"gh run watch 1","dir":"/repo","started":1000,"finished":null,"exit":null,"log":["queued"],"reported":false}"#, Wire.Job.self)
+        XCTAssertTrue(running.running)
+
+        let done = try decode(#"{"id":"m2","lane":"L","command":"true","dir":"/repo","started":1000,"finished":1090,"exit":0,"log":["ok"],"reported":false}"#, Wire.Job.self)
+        XCTAssertFalse(done.running)
+        XCTAssertEqual(done.exit, 0)
+        XCTAssertEqual(done.elapsed, 90)
+    }
+
+    /// A monitor request is not a permission and must not be drawn as one: its answers decide who
+    /// runs the command, not whether it is allowed.
+    func testAMonitorRequestIsItsOwnKindOfQuestion() throws {
+        let p = try decode(#"{"id":"bg-1","tool":"MonitorRequest","command":"gh run watch 1","rules":[],"session_id":"s"}"#, Wire.Pending.self)
+        XCTAssertTrue(p.isMonitor)
+        XCTAssertFalse(p.isQuestion)
+        XCTAssertTrue(p.rules.isEmpty, "monitoring must never write a permission rule")
+    }
+
     func testDiffLinesCarryBothLineNumbers() throws {
         let d = try decode(#"""
         {"path":"a.rs","untracked":false,"hunks":[{"header":"@@ -1 +1 @@","lines":[

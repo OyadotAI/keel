@@ -33,6 +33,8 @@ struct ChatRail: View {
                     ForEach(model.pending) { p in
                         if p.isQuestion {
                             QuestionCard(pending: p, model: model)
+                        } else if p.isMonitor {
+                            MonitorCard(pending: p, model: model)
                         } else {
                             ApprovalCard(pending: p, model: model)
                         }
@@ -222,17 +224,26 @@ private struct ChatTurn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.half) {
             // Yours, on the right, in blue. Nothing above it: a message does not need a title.
-            HStack(alignment: .bottom) {
-                Spacer(minLength: 64)
-                Text(turn.prompt)
-                    .font(K.F.body)
-                    .foregroundStyle(K.C.text)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
-                    .frame(maxWidth: 560, alignment: .trailing)
+            //
+            // Except when nobody typed it. A finished background job is delivered as a turn, and
+            // drawn as a blue bubble on the right it reads as something the person said — the
+            // same misattribution that makes a resumed transcript unreadable when Claude Code's
+            // own task notifications are rendered as chat.
+            if turn.prompt.hasPrefix(SessionModel.jobPrefix) {
+                JobReport(text: turn.prompt)
+            } else {
+                HStack(alignment: .bottom) {
+                    Spacer(minLength: 64)
+                    Text(turn.prompt)
+                        .font(K.F.body)
+                        .foregroundStyle(K.C.text)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                        .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
+                        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
+                        .frame(maxWidth: 560, alignment: .trailing)
+                }
             }
 
             if !turn.thinking.isEmpty {
@@ -712,5 +723,51 @@ struct ModelPicker: View {
         .menuStyle(.borderlessButton).fixedSize()
         .hint("Which model answers — the same choice `/model` makes in the terminal. Default "
               + "leaves it to the CLI's own config. Applies from the next turn.")
+    }
+}
+
+
+/// A background job coming back, drawn as what it is: the machine reporting, not the person
+/// asking. Collapsed to its first line, because the log underneath is usually the boring half and
+/// the exit code is the part being read.
+private struct JobReport: View {
+    let text: String
+    @State private var open = false
+
+    private var headline: String { text.split(separator: "\n").first.map(String.init) ?? text }
+    private var rest: String {
+        text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            .dropFirst().first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: "binoculars.fill")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                    .accessibilityHidden(true)
+                Text(headline).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
+                Spacer(minLength: 0)
+                if !rest.isEmpty {
+                    Text(open ? "hide output" : "output")
+                        .font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+            }
+            .contentShape(Rectangle())
+            .asButton { withAnimation(K.M.quick) { open.toggle() } }
+
+            if open, !rest.isEmpty {
+                Text(rest)
+                    .font(K.F.codeSmall).foregroundStyle(K.C.dim)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(K.S.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
     }
 }

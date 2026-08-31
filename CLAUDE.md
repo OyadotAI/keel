@@ -215,6 +215,28 @@ tension:
   nothing and exits 0, which defers to the allowlist. A guardrail that can wedge the agent is one
   people turn off.
 
+## Monitoring
+
+A turn is one `claude -p`, and the CLI kills every tracked background shell at teardown —
+measured twice: `gh run watch` started with `run_in_background` was `[killed]` eight seconds after
+the turn ended, and the person only found out six minutes on, from a `<task-notification>` that
+arrived because *they* typed again. The same kill is why "run it" needed running twice. Nothing
+Keel puts on the command line changes it, so the job belongs to the daemon instead:
+
+- The `PreToolUse` hook takes any `Bash` with `run_in_background`, **before** the trust check.
+  "Should this keep running after the turn" is not the question trust answered, so a trusted
+  project is still asked — the same reasoning that keeps `AskUserQuestion` out of it.
+- **Yes** runs it in `monitor.rs`, in the lane's checkout, outside the turn's lifetime; **no**
+  sends the agent back to the foreground. Either way the agent's own call is refused, because a
+  duplicate shell that is about to die helps nobody. The refusal names the job, and the system
+  prompt says that naming is the confirmation.
+- The completion is delivered back into that conversation as its own turn, acked first so it
+  lands exactly once, and drawn as a report rather than as a blue bubble the person did not type.
+- `stop_all()` on the parent-death path. `exit` alone reparents a monitored `pnpm dev` to init,
+  and a dev server nobody can see or stop is worse than one that never started.
+
+It is a list of processes with their output, not a scheduler: no cron, no retry, one run each.
+
 ## Trusting a project
 
 Per-command approval on a repository somebody already owns is not a safety property, it is a toll —
@@ -246,6 +268,7 @@ stops rather than substituting.
 - `keel-mcp` — the tool surface.
 - `keel-providers` — GitHub, Cloudflare.
 - `keel-generator` — golden-path templates and workload placement.
+- `keel/monitor.rs` — background commands the daemon owns, so they outlive the turn.
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
 - `app/` — the Swift macOS application. A client of the daemon, and nothing else.
