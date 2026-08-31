@@ -66,15 +66,11 @@ impl Prefs {
         }
     }
 
-    /// The project to reopen, if it is still there.
+    /// The last project opened.
     ///
-    /// A remembered path that has since been moved or deleted is not an error to report — it is a
-    /// reason to show the welcome screen, which is what someone in that position needs anyway.
-    pub fn resume(&self) -> Option<Utf8PathBuf> {
-        let p = self.last_project.as_ref()?;
-        p.is_dir().then(|| p.clone())
-    }
-
+    /// Written, not reopened: a GUI launch starts with nothing open and lands on Welcome. This is
+    /// what `keel workspace` and a terminal `keel serve` can still lean on, and what makes
+    /// `onboarded` true.
     pub fn remember(project: &Utf8Path) {
         let mut prefs = Self::load();
         prefs.last_project = Some(project.to_owned());
@@ -110,30 +106,22 @@ pub fn no_project() -> Utf8PathBuf {
 mod tests {
     use super::*;
 
+    /// The last project is remembered, and no longer reopened.
+    ///
+    /// It is still written — `Recents` in the app is seeded from the same act of opening — but a
+    /// GUI launch starts with nothing open and lands on Welcome. The test that used to live here
+    /// asserted the opposite; it went with `Prefs::resume`.
     #[test]
-    fn a_remembered_path_that_no_longer_exists_is_not_resumed() {
+    fn opening_a_project_is_remembered() {
         let dir = tempfile::tempdir().unwrap();
         let real = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
         let prefs = Prefs {
             last_project: Some(real.clone()),
             onboarded: true,
             ..Default::default()
         };
-        assert_eq!(prefs.resume(), Some(real.clone()));
-
-        let gone = Prefs {
-            last_project: Some(real.join("deleted-since")),
-            onboarded: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            gone.resume(),
-            None,
-            "a moved project shows the welcome screen"
-        );
-
-        assert_eq!(Prefs::default().resume(), None);
+        assert_eq!(prefs.last_project, Some(real));
+        assert!(prefs.onboarded);
     }
 
     /// Corrupt state on disk must not stop the application from starting.

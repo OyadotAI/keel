@@ -227,11 +227,17 @@ pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()>
 ///
 /// This is how the application is launched from the Dock, where there is no working directory to
 /// infer a project from — the Finder hands a process `/` and it would be a strange thing to open.
+/// A GUI launch: no working directory worth inferring a project from, and no project reopened.
+///
+/// Both halves matter. From Finder the working directory is `/`, so the `path` default would open
+/// the whole filesystem as a repository — that is what this flag was originally added to prevent.
+/// It no longer reopens the last project either: with several projects, lanes and worktrees in
+/// play, being dropped somewhere and having to read the title bar to find out where is worse than
+/// being asked. The app lands on Welcome, and its RECENT list is one click back.
+///
+/// `keel serve` in a terminal is untouched — there, the working directory *is* the answer.
 pub async fn run_app(port: u16, open_browser: bool) -> Result<()> {
-    let state = match crate::prefs::Prefs::load().resume() {
-        Some(project) => AppState::new(project),
-        None => AppState::empty(),
-    };
+    let state = AppState::empty();
     let launch = if open_browser {
         Launch::Window
     } else {

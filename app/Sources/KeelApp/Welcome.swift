@@ -1,7 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The first screen, and the one a launch lands on when the remembered project has moved.
+/// The first screen, and the one every launch lands on.
+///
+/// Keel does not reopen the project you closed last. With several projects, lanes and worktrees in
+/// play, being dropped somewhere and having to read the title bar to find out where is worse than
+/// being asked — and RECENT below makes the answer one click.
 ///
 /// It asks for one thing — a project — and reports one thing: whether the `claude` it is about to
 /// drive is actually usable. Opening a project before that works gets you a chat box that cannot

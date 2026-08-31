@@ -100,11 +100,14 @@ enum Command {
         #[arg(long)]
         sentry_dsn: Option<String>,
 
-        /// Reopen the last project instead of reading `path`.
+        /// A GUI launch: start with no project open, ignoring `path`.
         ///
-        /// For a GUI launch, which has no working directory worth inferring a project from — from
-        /// Finder it is `/`, so the default `.` would open the whole filesystem as a repository.
-        /// `keel serve` in a terminal keeps meaning "this directory", because there it does.
+        /// From Finder the working directory is `/`, so the default `.` would open the whole
+        /// filesystem as a repository. The app lands on Welcome and the person picks; `keel serve`
+        /// in a terminal keeps meaning "this directory", because there it does.
+        ///
+        /// Still spelled `--resume-last` because an app built before this change passes it, and a
+        /// daemon that rejects its own launcher's flag does not start at all.
         #[arg(long)]
         resume_last: bool,
     },

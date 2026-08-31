@@ -106,8 +106,12 @@ struct SessionWindow: View {
         }
         // A different project is a different set of conversations. Without this the old
         // project's tabs stayed in the strip and were then saved under the new project's name.
+        // Including the first project of a launch — `was` is empty then, and it used to be
+        // excluded because the daemon always resumed one, so there was never a launch that
+        // started with nothing. Now every launch does, and without this the lanes saved for the
+        // project you open from Welcome are never restored.
         .onChange(of: model.repoPath) { was, now in
-            guard pinned == nil, !was.isEmpty, was != now, !now.isEmpty else { return }
+            guard pinned == nil, was != now, !now.isEmpty else { return }
             Task { await lanes.switchProject(to: now) }
         }
         // Anything that changes which conversations are open is worth writing down: a lane that

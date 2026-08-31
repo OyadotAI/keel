@@ -44,7 +44,7 @@ final class Daemon {
     /// True when something already answers on this port.
     func answering() async -> Bool { await isUp() }
 
-    func start(resumeLast: Bool = true) async throws {
+    func start() async throws {
         if await isUp() { return }
         guard let bin = Self.binary() else {
             throw Failure("Could not find the `keel` binary next to this app or on PATH.")
@@ -56,10 +56,17 @@ final class Daemon {
         // has no `PR_SET_PDEATHSIG` for the child to notice with. So the daemon watches instead.
         // `--resume-last` because a Finder launch has no working directory worth inferring a
         // project from: it is `/`, and the default would open the whole filesystem as a repo.
-        p.arguments = ["serve", "--port", String(port), "--no-open", "--exit-with-parent"]
-        // Only the first window infers a project from the last one; a second window is told
-        // which repository it is for.
-        if resumeLast { p.arguments! += ["--resume-last"] }
+        // `--resume-last` is unconditional and no longer resumes anything: it is the flag that
+        // says *this is a GUI launch*, so the daemon must not infer a project from the working
+        // directory. From Finder that directory is `/`, and without the flag the daemon opens the
+        // whole filesystem as a repository — briefly for a second window, which then opens its own
+        // project over the top, and permanently for the first, which does not.
+        //
+        // It keeps the old name because an app built before this change passes it, and a daemon
+        // that rejects its own launcher's flag does not start at all.
+        p.arguments = [
+            "serve", "--port", String(port), "--no-open", "--exit-with-parent", "--resume-last",
+        ]
         // The daemon reports crashes under the app's key, tagged as the daemon.
         if let dsn = Bundle.main.infoDictionary?["KeelSentryDSN"] as? String, !dsn.isEmpty {
             p.arguments! += ["--sentry-dsn", dsn]

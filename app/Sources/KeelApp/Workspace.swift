@@ -45,7 +45,7 @@ final class Workspace {
     /// Start the daemon, open `project`, and resume `session` when there is one.
     func start(project: String, resume session: String?) async {
         do {
-            try await daemon.start(resumeLast: false)
+            try await daemon.start()
         } catch {
             failure = error.localizedDescription
             return

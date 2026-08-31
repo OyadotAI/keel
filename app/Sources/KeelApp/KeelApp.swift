@@ -294,6 +294,12 @@ final class AppModel {
         Updater.shared.start()
         crashes = Crashes.unseen()
         Notifications.prepare()
+        // Deliberately not `--resume-last`. A launch lands on Welcome and you pick a project,
+        // rather than being dropped into whichever one you happened to close last: with lanes,
+        // worktrees and several projects in play, "where am I" is a question the app should not
+        // make you answer by reading the title bar. Recents on that screen is one click back.
+        //
+        // `keel serve` in a terminal is unaffected — it still means "this directory".
         do { try await daemon.start() } catch { failure = error.localizedDescription }
         ready = true
         await advertiseIfReachable()
