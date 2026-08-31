@@ -41,12 +41,49 @@ fn branch_of(name: &str) -> String {
     format!("keel/{name}")
 }
 
+/// Where the lane started, remembered so that finishing it knows where to put it back.
+///
+/// In git's own per-branch config section. Git owns `branch.<name>.*`: it moves the section on
+/// `branch -m` and removes it on `branch -d`, so this needs no cleanup of its own and cannot
+/// outlive the branch it describes. It also survives what the app cannot — a daemon restart, a
+/// project switch, a quit — which is why the base is not kept in the window that chose it.
+fn base_key(name: &str) -> String {
+    format!("branch.{}.keelbase", branch_of(name))
+}
+
+fn remember_base(root: &Utf8Path, name: &str, base: &str) {
+    // `HEAD` is where the project was standing, which is a position, not a branch. Resolve it to
+    // the name now — by the time the lane is finished the project has usually moved.
+    let branch = if base == "HEAD" {
+        git(root, &["branch", "--show-current"]).unwrap_or_default()
+    } else {
+        base.to_string()
+    };
+    if !branch.is_empty() {
+        let _ = git(root, &["config", "--local", &base_key(name), &branch]);
+    }
+}
+
+/// The branch a lane was cut from, or where the project is standing for one made before Keel
+/// recorded it.
+pub fn base_of(root: &Utf8Path, name: &str) -> String {
+    git(root, &["config", "--local", "--get", &base_key(name)])
+        .ok()
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| git(root, &["branch", "--show-current"]).unwrap_or_default())
+}
+
 use crate::git::trimmed as git;
 
 #[derive(Serialize, Clone)]
 pub struct Worktree {
     pub name: String,
     pub branch: String,
+    /// The branch this lane was cut from, and the one `finish` merges it into. `ahead` is counted
+    /// against it too — against the project's *current* branch, the count that decides whether a
+    /// discard warns could be anything at all.
+    pub base: String,
     pub path: String,
     /// Commits on the lane's branch that the project's branch does not have.
     pub ahead: u32,
@@ -88,7 +125,12 @@ fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String
     // The two causes read identically to git (`fatal: Needed a single revision`) and could not be
     // told apart in the message, so a folder that was never a repository was told it had no
     // commits. The app offers to `git init` for the first and to commit for the second.
-    if git(root, &["rev-parse", "--git-dir"]).is_err() {
+    //
+    // `is_root`, not `rev-parse --git-dir`: that succeeds from any subdirectory of any
+    // repository, so opening a plain folder that happens to sit inside one — a directory under a
+    // dotfiles checkout is the everyday case — made a worktree of the *ancestor* repository
+    // underneath it. `gitroots` already owns this question.
+    if !crate::gitroots::is_root(root) {
         return Err(
             "This folder is not a git repository, so there is nothing to branch from.".to_string(),
         );
@@ -115,10 +157,12 @@ fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String
             base,
         ],
     )?;
+    remember_base(root, name, base);
     copy_included(root, &path);
     Ok(Worktree {
         name: name.to_string(),
         branch: branch_of(name),
+        base: base_of(root, name),
         path: path.to_string(),
         ahead: 0,
         dirty: false,
@@ -136,11 +180,26 @@ fn copy_included(root: &Utf8Path, into: &Utf8Path) {
         return;
     };
     for line in list.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') || line.contains("..") {
+        // `.worktreeinclude` is repository content — the same author whose `.claude/settings.json`
+        // is quarantined before the first invocation and rated Critical by the scanner. `..` was
+        // the only escape it filtered, and it was not the only one: `Path::join` *replaces* the
+        // base when what it is given is absolute, so an absolute line made `from` and `to` the
+        // same path somewhere else entirely on the machine.
+        if line.is_empty()
+            || line.starts_with('#')
+            || line.contains("..")
+            || Utf8Path::new(line).is_absolute()
+        {
             continue;
         }
         let from = root.join(line);
         let to = into.join(line);
+        // `is_dir` follows symlinks, so a tracked `deps -> /` turned this into an unbounded walk
+        // of the filesystem inside a `spawn_blocking` with nothing watching it. What the entry
+        // *is* decides; what it points at does not.
+        if from.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+            continue;
+        }
         if from.is_dir() {
             let _ = copy_dir(from.as_std_path(), to.as_std_path());
         } else if from.is_file() {
@@ -157,6 +216,11 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
+        // `read_dir`'s file type does not follow links, which is what we want: a symlink inside
+        // an included directory is copied as a link, never walked.
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         if entry.file_type()?.is_dir() {
             copy_dir(&entry.path(), &target)?;
         } else {
@@ -166,19 +230,43 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
     Ok(())
 }
 
-/// Every lane checkout, with how far each has gone.
-pub fn list(root: &Utf8Path) -> Vec<Worktree> {
-    let Ok(entries) = std::fs::read_dir(root.join(DIR)) else {
+/// The lane checkouts git knows about, by name.
+///
+/// `read_dir` was the wrong question. It asks the filesystem what is there, and git keeps its own
+/// register: delete a checkout in Finder and git still holds it, so Keel could not see the lane
+/// while `worktree add` refused its name forever with `fatal: '<path>' is a missing but already
+/// registered worktree` — a state nothing in the app could reach or explain. `prune` clears
+/// exactly that, and is a no-op when there is nothing stale.
+fn registered(root: &Utf8Path) -> Vec<String> {
+    let _ = git(root, &["worktree", "prune"]);
+    let Ok(listing) = git(root, &["worktree", "list", "--porcelain"]) else {
         return Vec::new();
     };
-    let base = git(root, &["branch", "--show-current"]).unwrap_or_default();
-    let mut out: Vec<Worktree> = entries
-        .filter_map(Result::ok)
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| valid_name(n))
+    // Matched on the tail rather than by stripping `root`: git reports resolved paths, and on
+    // macOS the repository's own path very often is not one — `/tmp` and `/var` are symlinks into
+    // `/private`, so a prefix comparison against `root` finds nothing and every lane disappears.
+    let marker = format!("/{DIR}/");
+    listing
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|path| path.trim().split_once(&marker))
+        .map(|(_, rest)| rest.split('/').next().unwrap_or_default().to_string())
+        .filter(|name| valid_name(name))
+        .collect()
+}
+
+/// Every lane checkout, with how far each has gone.
+pub fn list(root: &Utf8Path) -> Vec<Worktree> {
+    let mut out: Vec<Worktree> = registered(root)
+        .into_iter()
         .map(|name| {
             let path = root.join(DIR).join(&name);
             let branch = branch_of(&name);
+            // Against where the lane started, not against where the project happens to be
+            // standing now. A lane cut from `release` while the project sits on `main` had every
+            // commit `main` was missing counted as its own, and that number is what a discard
+            // shows the person before it throws the branch away.
+            let base = base_of(root, &name);
             let ahead = git(root, &["rev-list", "--count", &format!("{base}..{branch}")])
                 .ok()
                 .and_then(|n| n.parse().ok())
@@ -189,6 +277,7 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
             Worktree {
                 name,
                 branch,
+                base,
                 path: path.to_string(),
                 ahead,
                 dirty,
@@ -274,6 +363,25 @@ pub fn finish(root: &Utf8Path, name: &str, message: &str) -> Result<(), String> 
     if !path.exists() {
         return Err(format!("no lane {name}"));
     }
+    // Into the branch the lane came from, and only while the project is standing on it.
+    //
+    // The merge runs in the project root against whatever HEAD is, which for a lane cut from
+    // `release` while the project sits on `main` silently put release-derived work on main.
+    // Checking the branch out on someone's behalf is not Keel's decision to make — moving a
+    // person's working tree under them is exactly the surprise this file exists to avoid — so
+    // this refuses and names the branch instead.
+    let base = base_of(root, name);
+    let here = git(root, &["branch", "--show-current"]).unwrap_or_default();
+    if !base.is_empty() && base != here {
+        let where_now = if here.is_empty() {
+            "a detached HEAD".to_string()
+        } else {
+            format!("“{here}”")
+        };
+        return Err(format!(
+            "This feature was branched from “{base}”, and the project is on {where_now}.              Switch to “{base}” and finish it there, so the work lands where it came from."
+        ));
+    }
     if !git(root, &["status", "--porcelain"])?.is_empty() {
         return Err(
             "The project has uncommitted changes. Commit or discard them first, so the \
@@ -310,24 +418,56 @@ pub fn discard(root: &Utf8Path, name: &str, force: bool) -> Result<(), String> {
         return Err(format!("no lane {name}"));
     }
     let lost = unmerged(root, name);
-    if lost > 0 && !force {
-        return Err(if lost == 1 {
-            "1 commit on this lane is not merged and would be lost.".into()
-        } else {
-            format!("{lost} commits on this lane are not merged and would be lost.")
-        });
+    // Uncommitted files count too. `worktree remove --force` is what makes a dirty checkout
+    // removable at all, so a lane where the agent had written twenty files and committed none
+    // reported nothing to lose and lost all of it — while this module's own header promised that
+    // a discard says what it would lose before it loses it.
+    let uncommitted = git(&path, &["status", "--porcelain"])
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    if (lost > 0 || uncommitted > 0) && !force {
+        let commits = match lost {
+            0 => None,
+            1 => Some("1 unmerged commit".to_string()),
+            n => Some(format!("{n} unmerged commits")),
+        };
+        let files = match uncommitted {
+            0 => None,
+            1 => Some("1 uncommitted file".to_string()),
+            n => Some(format!("{n} uncommitted files")),
+        };
+        let what = [commits, files]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return Err(format!("This feature has {what}, which would be lost."));
     }
     git(root, &["worktree", "remove", "--force", path.as_str()])?;
-    // `-D` only here, and only after the person was told the count. `finish` never uses it.
-    git(
-        root,
-        &[
-            "branch",
-            if lost > 0 { "-D" } else { "-d" },
-            &branch_of(name),
-        ],
-    )
-    .map(|_| ())
+    // `-D` only here, and only once the person has been told the count above — `finish` never
+    // uses it.
+    //
+    // Always `-D`, though, and that is not the same decision it looks like. `-d` asks a
+    // *different* question than the one the person was answering: it judges the branch against
+    // its upstream, so a lane fully merged into its base still refuses when `origin/keel/<name>`
+    // is merely behind it — measured here on a lane that was 0 ahead of `main`, with git's own
+    // message admitting it "is merged to HEAD". By then the checkout is already gone, so the
+    // refusal left a branch with no worktree and returned an error saying nothing had happened.
+    // The count above is the promise; it is made against the base, and it is the one that
+    // decides.
+    git(root, &["branch", "-D", &branch_of(name)])
+        .map(|_| ())
+        // The worktree is gone whatever git says about the branch. Reporting a bare git failure
+        // here reads as "the discard did not work", and the next thing the person does is try
+        // again against a checkout that no longer exists.
+        .map_err(|why| {
+            format!(
+                "The checkout is gone, but the branch {} could not be deleted: {why}. \
+                 Remove it with `git branch -D {}` if you still want it gone.",
+                branch_of(name),
+                branch_of(name)
+            )
+        })
 }
 
 /// Remove a merged lane. `-d`, never `-D`: a branch git will not delete safely is one whose
@@ -364,6 +504,13 @@ pub struct DiscardBody {
 #[derive(Deserialize)]
 pub struct CommitBody {
     pub message: String,
+    /// Keel's own checkpoint after a turn, rather than the Commit button.
+    ///
+    /// The same distinction `git::AUTOMATIC` already makes: the button is an act the person
+    /// chose and runs whatever they have set up, the checkpoint is Keel's initiative and is
+    /// refused when it would photograph somebody else's half-written tree.
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 fn bad(e: String) -> (StatusCode, String) {
@@ -428,9 +575,23 @@ pub async fn api_discard(
 
 /// Commit everything in the request's checkout.
 pub async fn api_commit(
+    State(state): State<Arc<AppState>>,
     crate::serve::Checkout(checkout): crate::serve::Checkout,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
+    // `add -A` photographs the whole tree, so an automatic commit taken while another lane's
+    // agent is still writing holds that lane's half-finished files under this lane's message —
+    // and the other lane's own commit then shows less than it did. The claim is the only place
+    // that knows, because the other lane may be in a different window.
+    //
+    // Refusing costs a checkpoint, which is recoverable: the files are still there and the next
+    // turn commits them. The alternative is not.
+    if body.automatic && state.writer_in(&checkout) {
+        return Err(bad(
+            "Another feature is editing this working tree, so this turn was not committed — a              commit now would hold its half-written files. The changes are still here; commit              them once it finishes."
+                .into(),
+        ));
+    }
     off_thread(move || commit_all(&checkout, &body.message))
         .await
         .map(Json)
@@ -482,6 +643,184 @@ mod tests {
             "the lane starts where it was told to, not where the project is"
         );
         assert!(create_from(&root, "bad", Some("release; rm -rf /")).is_err());
+    }
+
+    /// Where the lane started is remembered, so finishing it puts the work back where it came
+    /// from rather than wherever the project happens to be standing.
+    #[test]
+    fn a_lane_finishes_into_the_branch_it_came_from() {
+        let (_d, root) = repo();
+        git(&root, &["checkout", "-qb", "release"]).unwrap();
+        std::fs::write(root.join("on-release.txt"), "x").unwrap();
+        git(&root, &["add", "-A"]).unwrap();
+        git(&root, &["commit", "-qm", "release work"]).unwrap();
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+
+        let wt = create_from(&root, "off-release", Some("release")).unwrap();
+        assert_eq!(wt.base, "release");
+        std::fs::write(Utf8PathBuf::from(&wt.path).join("new.txt"), "y").unwrap();
+
+        // Counted against `release`, not against `main` — which is missing `release work` and
+        // would have called this lane 2 commits ahead when it is 1.
+        assert_eq!(unmerged(&root, "off-release"), 0, "nothing committed yet");
+        commit_all(&Utf8PathBuf::from(&wt.path), "the lane's work").unwrap();
+        assert_eq!(unmerged(&root, "off-release"), 1);
+
+        let refused = finish(&root, "off-release", "merge").unwrap_err();
+        assert!(refused.contains("release"), "{refused}");
+        assert!(refused.contains("main"), "{refused}");
+        assert!(
+            git(&root, &["rev-parse", "--verify", "keel/off-release"]).is_ok(),
+            "the lane was touched by a refusal"
+        );
+
+        git(&root, &["checkout", "-q", "release"]).unwrap();
+        finish(&root, "off-release", "merge").unwrap();
+        assert!(root.join("new.txt").exists(), "the work did not land");
+        git(&root, &["checkout", "-q", "main"]).unwrap();
+        assert!(
+            !root.join("new.txt").exists(),
+            "the work landed on main too"
+        );
+        assert!(
+            git(
+                &root,
+                &["config", "--local", "--get", &base_key("off-release")]
+            )
+            .is_err(),
+            "git did not take the recorded base away with the branch"
+        );
+    }
+
+    /// The header promises a discard says what it would lose. It only ever counted commits, and
+    /// `worktree remove --force` is exactly what makes a dirty checkout removable.
+    #[test]
+    fn discard_counts_uncommitted_work_as_work() {
+        let (_d, root) = repo();
+        let wt = create(&root, "feature").unwrap();
+        std::fs::write(
+            Utf8PathBuf::from(&wt.path).join("unsaved.txt"),
+            "hours of it",
+        )
+        .unwrap();
+
+        let refused = discard(&root, "feature", false).unwrap_err();
+        assert!(refused.contains("1 uncommitted file"), "{refused}");
+        assert!(
+            Utf8PathBuf::from(&wt.path).join("unsaved.txt").exists(),
+            "the refusal removed it anyway"
+        );
+        discard(&root, "feature", true).unwrap();
+    }
+
+    /// The count a discard shows is measured against the lane's base, and it is the only question
+    /// that decides. `-d` asks git's own, different one — is this branch merged into its
+    /// *upstream* — and answers no for a lane that is fully in `main` whenever
+    /// `origin/keel/<name>` is merely behind it. Measured on a real lane: 0 ahead of `main`, and
+    /// git refusing while saying it "is merged to HEAD". The checkout is removed first, so that
+    /// refusal used to leave a branch with no worktree behind an error saying nothing happened.
+    #[test]
+    fn a_discard_that_promised_nothing_would_be_lost_finishes_the_job() {
+        let (_d, root) = repo();
+        let wt = create(&root, "feature").unwrap();
+        // An upstream that is behind the branch: exactly the shape `-d` refuses on.
+        git(
+            &root,
+            &["update-ref", "refs/remotes/origin/keel/feature", "HEAD~0"],
+        )
+        .ok();
+        git(&root, &["config", "branch.keel/feature.remote", "origin"]).unwrap();
+        git(
+            &root,
+            &[
+                "config",
+                "branch.keel/feature.merge",
+                "refs/heads/keel/feature",
+            ],
+        )
+        .unwrap();
+        std::fs::write(Utf8PathBuf::from(&wt.path).join("x.txt"), "x").unwrap();
+        commit_all(&Utf8PathBuf::from(&wt.path), "work").unwrap();
+        git(
+            &root,
+            &["merge", "--no-ff", "-q", "-m", "in", "keel/feature"],
+        )
+        .unwrap();
+
+        assert_eq!(unmerged(&root, "feature"), 0, "it is merged into its base");
+        discard(&root, "feature", false).unwrap();
+        assert!(!Utf8PathBuf::from(&wt.path).exists());
+        assert!(
+            git(&root, &["rev-parse", "--verify", "keel/feature"]).is_err(),
+            "the branch outlived the discard that said it would go"
+        );
+    }
+
+    /// Keel's view of its lanes and git's must not be able to drift apart.
+    ///
+    /// This listed the *directory*, so a checkout removed outside Keel vanished from the app while
+    /// git kept it registered — and `worktree add` then refused that name forever with a message
+    /// nothing in the app could reach, explain, or clear.
+    #[test]
+    fn a_checkout_removed_behind_keels_back_is_pruned_not_stuck() {
+        let (_d, root) = repo();
+        let wt = create(&root, "feature").unwrap();
+        assert_eq!(list(&root).len(), 1, "the lane is not listed at all");
+
+        std::fs::remove_dir_all(&wt.path).unwrap();
+        assert!(
+            list(&root).is_empty(),
+            "a checkout that is gone is still listed"
+        );
+        assert!(
+            create(&root, "feature").is_err(),
+            "the branch is still there, so the name is still taken"
+        );
+
+        git(&root, &["branch", "-D", "keel/feature"]).unwrap();
+        assert!(
+            create(&root, "feature").is_ok(),
+            "the name never became usable again"
+        );
+    }
+
+    /// `.worktreeinclude` is repository content, and the only escape it filtered was `..`.
+    #[test]
+    fn worktreeinclude_cannot_reach_outside_the_repository() {
+        let (_d, root) = repo();
+        let outside = root.parent().unwrap().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            outside.join("precious.txt"),
+            "not yours
+",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.as_std_path(), root.join("link").as_std_path()).unwrap();
+        std::fs::write(
+            root.join(".worktreeinclude"),
+            format!(
+                "{outside}
+link
+.env
+"
+            ),
+        )
+        .unwrap();
+
+        let wt = create(&root, "feature").unwrap();
+        let path = Utf8PathBuf::from(&wt.path);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("precious.txt")).unwrap(),
+            "not yours
+",
+            "an absolute entry reached a file outside the repository"
+        );
+        assert!(!path.join("link").exists(), "a symlink entry was followed");
+        assert!(
+            path.join(".env").exists(),
+            "an ordinary entry stopped working"
+        );
     }
 
     #[test]
@@ -587,7 +926,7 @@ mod tests {
         assert_eq!(list(&root)[0].ahead, 1);
 
         let err = discard(&root, "feature", false).unwrap_err();
-        assert!(err.starts_with("1 commit "), "{err}");
+        assert!(err.contains("1 unmerged commit"), "{err}");
         assert!(path.exists());
 
         discard(&root, "feature", true).unwrap();

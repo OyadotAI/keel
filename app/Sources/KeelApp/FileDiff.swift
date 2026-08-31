@@ -52,7 +52,7 @@ struct FileDiff: View {
         }
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-        .task(id: model.diffTick) { diff = await model.diff(path) }
+        .task(id: model.diffTick) { diff = try? await model.diff(path).get() }
     }
 
     // MARK: Header

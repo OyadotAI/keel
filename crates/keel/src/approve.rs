@@ -742,12 +742,22 @@ pub async fn answer(
             let _ = crate::permissions::set_trusted(&state.repo(), true);
         } else {
             for rule in &body.rules {
-                let _ = crate::permissions::remember(
+                // Reported rather than dropped. "Allow once, this session" needs a conversation
+                // to belong to, and when it had none the `Err` went into a `let _ =` — the call
+                // was allowed, the rule was never stored, and the next identical call asked
+                // again. Silent, and indistinguishable from the feature not existing.
+                if let Err(why) = crate::permissions::remember(
                     &state.repo(),
                     rule,
                     &body.scope,
                     body.session.as_deref(),
-                );
+                ) {
+                    tracing::warn!("could not remember {rule:?} for {}: {why}", body.scope);
+                    sentry::capture_message(
+                        "an approval rule could not be remembered",
+                        sentry::Level::Error,
+                    );
+                }
             }
         }
     }

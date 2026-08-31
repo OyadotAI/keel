@@ -11,6 +11,8 @@ struct DiffSurface: View {
 
     @State private var diff: Wire.Diff?
     @State private var loading = true
+    /// Why the request failed, when it did. Distinct from a diff that is genuinely empty.
+    @State private var failure: String?
 
     private var adds: Int { diff?.hunks.flatMap(\.lines).count { $0.kind == "add" } ?? 0 }
     private var dels: Int { diff?.hunks.flatMap(\.lines).count { $0.kind == "del" } ?? 0 }
@@ -24,7 +26,10 @@ struct DiffSurface: View {
         .background(K.C.bg)
         .task(id: "\(path)-\(model.diffTick)") {
             loading = true
-            diff = await model.diff(path)
+            switch await model.diff(path) {
+            case .success(let got): diff = got; failure = nil
+            case .failure(let error): diff = nil; failure = error.localizedDescription
+            }
             loading = false
         }
     }
@@ -132,6 +137,10 @@ struct DiffSurface: View {
                         }
                 }
             }
+        } else if let failure {
+            // Keel could not ask. Saying so beats the sentence below, which is a claim about the
+            // person's code and was being made whenever the request itself had failed.
+            centred("Keel could not read this diff: \(failure)")
         } else {
             // Not an error: an agent can revert a file, or the change can land in a commit while
             // you are looking at it. The daemon says which, when it knows.

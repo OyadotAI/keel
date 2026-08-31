@@ -54,8 +54,8 @@ struct Palette: View {
             Item(title: "Open project…", detail: "switches every lane", shortcut: "⌘O") {
                 NotificationCenter.default.post(name: .keelOpenProject, object: nil)
             },
-            Item(title: "New lane sharing the working tree", detail: "for reading or planning alongside") {
-                model.lanes?.newLane()
+            Item(title: "New feature", detail: "project, name, branch to start from", shortcut: "⌘N") {
+                NotificationCenter.default.post(name: .keelNewLane, object: nil)
             },
             Item(title: "Run the project's checks", detail: "the gate, on demand") {
                 Task { await model.runGateNow() }

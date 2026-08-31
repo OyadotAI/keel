@@ -151,14 +151,25 @@ final class Lanes {
         return m
     }
 
-    /// How many lanes are doing something right now — the number the window title and the Dock
-    /// badge care about.
-    var runningCount: Int { lanes.count { $0.running } }
-    var waitingCount: Int { lanes.reduce(0) { $0 + $1.pending.count } }
+    /// The lanes the rail actually draws. A hidden lane — the background Staff review — is real
+    /// work but not a tab, so it must not be counted in a number the person is meant to reconcile
+    /// with what is on screen, and ⌘3 must not select something with no tab to highlight.
+    var shown: [SessionModel] { lanes.filter { !$0.hidden } }
 
-    /// Whether any other lane is mid-turn — the condition under which a second agent editing the
+    /// How many lanes are doing something right now — the number the window title and the Dock
+    /// badge care about. "2 running" beside one visible spinner is a number nobody can check.
+    var runningCount: Int { shown.count { $0.running } }
+    var waitingCount: Int { shown.reduce(0) { $0 + $1.pending.count } }
+
+    /// Whether *another* lane is mid-turn — the condition under which a second agent editing the
     /// same working tree can clobber the first.
-    var wouldOverlap: Bool { lanes.contains { $0.running } }
+    ///
+    /// It used to include the asking lane, so a lane warned about itself: the composer of the only
+    /// running lane told its own author that another feature was editing right now. It disagreed
+    /// with `writingElsewhere`, which excludes self, about what "another lane" means.
+    func wouldOverlap(with lane: SessionModel) -> Bool {
+        shown.contains { $0.id != lane.id && $0.running }
+    }
 
     /// Every lane checkout the project has, with how far each has gone.
     private(set) var worktrees: [Wire.Worktree] = []
@@ -183,15 +194,44 @@ final class Lanes {
         lane.worktree.flatMap { name in worktrees.first { $0.name == name } }
     }
 
+    /// Checkouts with no tab looking at them.
+    ///
+    /// Closing a lane is honestly labelled "the branch and its checkout stay", and then nothing in
+    /// the app ever mentioned what stayed. Measured on Keel's own repository: eight of them,
+    /// 43 GB, three with no commits and no diff at all — every one built from a lane somebody
+    /// closed. The list was already here; it was only ever used to look up an *open* lane's
+    /// checkout.
+    var orphans: [Wire.Worktree] {
+        let claimed = Set(lanes.compactMap(\.worktree))
+        return worktrees.filter { !claimed.contains($0.name) }
+    }
+
+    /// Put a checkout that has no tab back in front of somebody, in a lane of its own.
+    func reopen(_ checkout: Wire.Worktree) {
+        let lane = newLane(isolated: true)
+        lane.worktree = checkout.name
+        lane.title = checkout.name
+        Task {
+            await lane.refreshGit()
+            await lane.refreshTree()
+        }
+    }
+
     struct FinishBody: Encodable { var name: String; var message: String }
     struct DiscardBody: Encodable { var name: String; var force: Bool }
 
     /// Merge a lane's work into the project and close it. The daemon refuses rather than
     /// guesses — a dirty project, a conflict — and the refusal is shown on the lane.
     /// What finishing actually does, said the same way wherever it is offered.
-    static func finishBlurb(branch: String?) -> String {
-        "Commits everything in the feature and merges \(branch ?? "its branch") into the project. "
-        + "The feature's checkout is removed; the branch is deleted only once it is merged."
+    static func finishBlurb(_ checkout: Wire.Worktree?) -> String {
+        let branch = checkout?.branch ?? "its branch"
+        // Where it lands, named. The sentence used to say "into the project", which is not a
+        // branch, and the menu item above it read the *focused* lane's branch rather than this
+        // one's — so with several features open the one sentence naming where your work goes was
+        // reliably wrong.
+        let into = checkout?.base.map { "“\($0)”" } ?? "the project's branch"
+        return "Commits everything in the feature and merges \(branch) into \(into). "
+            + "The feature's checkout is removed; the branch is deleted only once it is merged."
     }
 
     func finish(_ lane: SessionModel, message: String) async {
@@ -214,10 +254,20 @@ final class Lanes {
     /// says how many; the row turns that into the confirmation.
     func discard(_ lane: SessionModel, force: Bool) async -> String? {
         guard let name = lane.worktree else { close(lane); return nil }
+        if let why = await discardCheckout(name: name, force: force) { return why }
+        close(lane)
+        return nil
+    }
+
+    /// Throw away a checkout nobody has a tab on. Same refusal, same daemon, no lane to close.
+    func discardCheckout(_ checkout: Wire.Worktree, force: Bool) async -> String? {
+        await discardCheckout(name: checkout.name, force: force)
+    }
+
+    private func discardCheckout(name: String, force: Bool) async -> String? {
         do {
             _ = try await client.post("/api/worktree/discard",
                                       body: DiscardBody(name: name, force: force), as: Bool.self)
-            close(lane)
             await refreshShared()
             return nil
         } catch {
@@ -237,6 +287,15 @@ final class Lanes {
            let idle = lanes.first(where: { $0.turns.isEmpty && $0.sessionId == nil && !$0.running }) {
             activeID = idle.id
             idle.isolated = isolated
+            // Everything the last occupant chose, not just isolation. A lane that had been
+            // switched to Codex and then emptied came back as a Codex lane under a menu item
+            // that never mentioned an agent, and kept the old lane's title until the first send.
+            idle.provider = .claude
+            idle.mode = "acceptEdits"
+            idle.baseBranch = nil
+            idle.nextSystem = nil
+            idle.chosenName = ""
+            idle.title = "Untitled"
             return idle
         }
         let m = SessionModel(client: client, port: port, sessionId: id)
@@ -283,8 +342,15 @@ final class Lanes {
     ///
     /// Only unisolated, non-plan lanes count: a lane with a worktree of its own writes somewhere
     /// else, and a plan turn writes nothing at all.
+    /// `running` alone was not the question. It goes false the moment the stream ends, and the
+    /// two things that actually touch the tree happen after that: the gate, which is minutes, and
+    /// then the auto-commit's `git add -A`. A lane that started in that window had its
+    /// half-written files swept into somebody else's commit under somebody else's prompt — the
+    /// exact corruption the caller's comment says it prevents. `settling` covers the tail.
     func writingElsewhere(than lane: SessionModel) -> String? {
-        lanes.first { $0.id != lane.id && $0.running && !$0.isolated && $0.mode != "plan" }?.title
+        lanes.first {
+            $0.id != lane.id && ($0.running || $0.settling) && !$0.isolated && $0.mode != "plan"
+        }?.title
     }
 
     func close(_ model: SessionModel) {

@@ -350,6 +350,9 @@ enum Wire {
     struct Worktree: Decodable, Identifiable, Sendable {
         var name: String
         var branch: String
+        /// The branch it was cut from, and the one Finish merges it into. Optional so a daemon
+        /// that predates it still decodes.
+        var base: String?
         var path: String
         var ahead: Int
         var dirty: Bool
