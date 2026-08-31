@@ -937,3 +937,49 @@ struct Field: ViewModifier {
 extension View {
     func field() -> some View { modifier(Field()) }
 }
+
+/// Whether a scrolling pane is still following its own tail.
+///
+/// One rule, in one place, because both panes that stream — the conversation and the Trace — had
+/// their own copy of it and their own copy of the bug: *only a person stops the follow.*
+///
+/// Content growing underneath a pane that is at the end is not a scroll away from the end, and
+/// treating it as one is what made every long turn need a manual scroll. A delta that arrived
+/// inside the 80ms coalescing window left the pane a line short, the geometry then read as "not at
+/// the bottom", following turned itself off — and nothing turned it back on, so the rest of the
+/// turn streamed out of sight. Now only a drag, a wheel or a fling can unfollow, and arriving back
+/// at the end follows again.
+struct FollowsTail: ViewModifier {
+    @Binding var pinned: Bool
+    /// The scroll is the person's doing rather than the content's.
+    @State private var byHand = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollPhaseChange { _, phase in
+                byHand = phase == .tracking || phase == .interacting || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: Bool.self) { g in
+                // Within a line or two of the end counts as the end: demanding exactness means
+                // one stray pixel silently turns following off.
+                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
+            } action: { was, atBottom in
+                // Only on a transition. Assigning on every scroll event republishes state for the
+                // whole pane mid-gesture, which is its own source of stutter.
+                guard was != atBottom else { return }
+                pinned = Self.following(pinned, atBottom: atBottom, byHand: byHand)
+            }
+    }
+
+    /// The decision on its own, so it can be asserted without a scroll view.
+    static func following(_ pinned: Bool, atBottom: Bool, byHand: Bool) -> Bool {
+        if atBottom { return true }
+        return byHand ? false : pinned
+    }
+}
+
+extension View {
+    func followsTail(_ pinned: Binding<Bool>) -> some View {
+        modifier(FollowsTail(pinned: pinned))
+    }
+}
