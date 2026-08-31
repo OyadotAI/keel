@@ -73,12 +73,37 @@ pub struct SessionFile {
     pub turn: usize,
 }
 
-/// What a session actually did: which files it changed, and what it ran.
+/// What one turn of a past session spent, read off the transcript.
+///
+/// The footer under a live turn — time, tokens, how much of it came from cache — is the strip
+/// people say is the most useful thing on the pane, and a session opened from History had none of
+/// it: the numbers arrive on the stream's `result` record, and a replay never sees one. They are
+/// in the transcript all the same, one `usage` per request, so they are summed here.
+///
+/// Cost is deliberately absent: the CLI stopped writing `costUSD` into transcripts, and a figure
+/// derived from a price table Keel keeps would be a guess printed in the same style as a measured
+/// number. The turn's own timestamps stay strings — the app parses ISO-8601 already, and adding a
+/// date crate to this reader to subtract two of them is not worth it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SessionSpend {
+    pub turn: usize,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    /// The first and last record of the turn, as the transcript wrote them.
+    pub started: String,
+    pub ended: String,
+}
+
+/// What a session actually did: which files it changed, what it ran, and what it spent.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionWork {
     /// Repository-relative, in the order they were first touched.
     pub files: Vec<SessionFile>,
     pub calls: Vec<SessionCall>,
+    /// One entry per turn that spent anything, in turn order.
+    pub spent: Vec<SessionSpend>,
     /// Whether the record was cut short by the caps below.
     pub truncated: bool,
 }
@@ -282,6 +307,41 @@ pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Sessio
         if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
+
+        // The footer's numbers, before the content check: a record with no blocks still carries a
+        // timestamp, and the turn's span is what the app shows as TIME.
+        if started {
+            let spend = match work.spent.last_mut() {
+                Some(s) if s.turn == turn => s,
+                _ => {
+                    work.spent.push(SessionSpend {
+                        turn,
+                        ..Default::default()
+                    });
+                    work.spent.last_mut().expect("just pushed")
+                }
+            };
+            if let Some(at) = record.get("timestamp").and_then(Value::as_str) {
+                if spend.started.is_empty() {
+                    spend.started = at.to_string();
+                }
+                spend.ended = at.to_string();
+            }
+            // One per request, and a turn is many requests — so these are summed, which is what
+            // the CLI's own `result` total does with them.
+            if let Some(usage) = record
+                .get("message")
+                .and_then(|m| m.get("usage"))
+                .filter(|_| record.get("type").and_then(Value::as_str) == Some("assistant"))
+            {
+                let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+                spend.input += n("input_tokens");
+                spend.output += n("output_tokens");
+                spend.cache_read += n("cache_read_input_tokens");
+                spend.cache_write += n("cache_creation_input_tokens");
+            }
+        }
+
         let Some(Value::Array(blocks)) = record.get("message").and_then(|m| m.get("content"))
         else {
             continue;
@@ -833,6 +893,39 @@ mod tests {
             2,
             "both readers count the same turns"
         );
+    }
+
+    /// A turn opened from History gets the same footer a live one has, because the numbers under
+    /// it are in the transcript: one `usage` per request, summed, and the turn's own timestamps.
+    /// Without this a replayed session showed the work and none of what it took.
+    #[test]
+    fn a_replayed_turn_carries_what_it_spent() {
+        let lines = [
+            r#"{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":"go"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-01T10:00:20.000Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":900,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"one"}]}}"#,
+            // A second request in the same turn: both count.
+            r#"{"type":"assistant","timestamp":"2026-01-01T10:00:41.000Z","message":{"usage":{"input_tokens":2,"output_tokens":7},"content":[{"type":"text","text":"two"}]}}"#,
+            // A subagent's own tokens are not this turn's, the same rule the rest of this reader
+            // follows for what a sidechain contributes.
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-01-01T10:00:30.000Z","message":{"usage":{"input_tokens":9999,"output_tokens":9999},"content":[{"type":"text","text":"sub"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-01T11:00:00.000Z","message":{"content":"again"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-01T11:00:05.000Z","message":{"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}"#,
+        ]
+        .join("\n");
+
+        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
+        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
+
+        assert_eq!(work.spent.len(), 2, "one entry per turn, in turn order");
+        let first = &work.spent[0];
+        assert_eq!((first.turn, first.input, first.output), (0, 12, 12));
+        assert_eq!((first.cache_read, first.cache_write), (900, 100));
+        assert_eq!(first.started, "2026-01-01T10:00:00.000Z");
+        assert_eq!(
+            first.ended, "2026-01-01T10:00:41.000Z",
+            "the span is the turn's own records, not the subagent's"
+        );
+        assert_eq!((work.spent[1].turn, work.spent[1].output), (1, 1));
     }
 
     /// An agent that edits through the shell — a heredoc, `sed -i`, a redirect — changed files
