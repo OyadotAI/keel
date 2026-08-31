@@ -8,6 +8,19 @@ import SwiftUI
 struct LaneTabs: View {
     @Bindable var lanes: Lanes
 
+    /// The width the strip actually has, so the tabs can shrink into it rather than run off the
+    /// end of it. Reported, not taken: a `GeometryReader` here would take part in the layout it
+    /// is trying to measure.
+    @State private var strip: Double = 0
+
+    /// A browser shrinks its tabs until they stop fitting and only then scrolls. Below `96` a tab
+    /// is two characters and a close button, so that is the floor; past it the strip scrolls.
+    /// `44` is the `+` and its padding, kept out of the division so the button stays reachable
+    /// instead of being the first thing pushed off the end.
+    private var tabWidth: CGFloat {
+        min(220, max(96, (strip - 44) / Double(max(lanes.shown.count, 1))))
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // The project first, then its sessions — the way a browser puts the site before the
@@ -17,62 +30,117 @@ struct LaneTabs: View {
                 .padding(.horizontal, K.S.sm)
             Rectangle().fill(K.C.line).frame(width: 1, height: 20)
 
+            // The tabs and the `+` scroll together, so the button sits against the last tab the
+            // way a browser's does. They used to be siblings in the outer row, and the scroll
+            // view then took whatever width was left over — which squeezed the third tab down to
+            // two characters while a full-width "New feature" pill sat beside it.
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: K.S.xxs) {
-                    ForEach(lanes.lanes.filter { !$0.hidden }) { lane in
-                        LaneRow(lane: lane, lanes: lanes)
+                HStack(alignment: .bottom, spacing: K.S.hair) {
+                    ForEach(lanes.shown) { lane in
+                        LaneRow(lane: lane, lanes: lanes, width: tabWidth)
                     }
+                    newTab
                 }
-                .padding(.horizontal, K.S.sm)
+                .padding(.leading, K.S.xs)
+                .padding(.trailing, K.S.sm)
             }
+            .onGeometryChange(for: Double.self) { $0.size.width } action: { strip = $0 }
 
-            // A labelled button, not a bare plus: testers did not find the plus. One button,
-            // and it opens the same dialog the menu bar and ⌘N open — it used to be a split
-            // button whose halves skipped the questions, so the two disagreed about what "new
-            // feature" meant.
-            Button {
-                NotificationCenter.default.post(name: .keelNewLane, object: nil)
-            } label: {
-                HStack(spacing: K.S.xs) {
-                    Image(systemName: "plus").font(K.F.tiny.weight(.bold))
-                    Text("New feature").font(K.F.small)
-                }
-                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
-                .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.sm))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(K.C.accent)
-            .padding(.leading, K.S.xs)
-            .hint("Start another agent — asks which project and which branch to start from (⌘N)")
-
-            // The empty run of the header asks the same question when clicked: an empty tab
-            // strip in a browser makes a tab, and people click it expecting that.
-            // The same dialog as the button and ⌘N. It used to be a menu that made a lane on
-            // the spot, asking nothing — which is the split-button bug the note above says was
-            // fixed, reintroduced two lines below it. A feature started this way had no name, no
-            // base branch and whichever project happened to be open.
-            Button {
-                NotificationCenter.default.post(name: .keelNewLane, object: nil)
-            } label: {
-                Color.clear.frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .hint("Click for a new feature")
             if lanes.runningCount > 0 {
                 Text("\(lanes.runningCount) running")
                     .font(K.F.codeTiny).foregroundStyle(K.C.accent)
                     .padding(.trailing, K.S.md)
             }
         }
-        .frame(height: 42)
+        .frame(height: 38)
+        // The empty run of the strip asks the same question when clicked: an empty tab strip in a
+        // browser makes a tab, and people click it expecting that. Behind the row rather than a
+        // sibling in it: as a sibling with `maxWidth: .infinity` it split the row evenly with the
+        // scroll view, so half the width went to blank space and the tabs — and the `+` with them
+        // — were cut off with room to spare beside them.
+        .background {
+            Button {
+                NotificationCenter.default.post(name: .keelNewLane, object: nil)
+            } label: {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hint("Click for a new feature")
+        }
         .background(K.C.surface)
+        .overlay(alignment: .bottom) { Hairline() }
+    }
+
+    /// A bare `+`, against the last tab.
+    ///
+    /// It was a labelled pill because testers could not find a plus — but a plus *beside the
+    /// tabs*, where every browser puts one, is a different thing from a plus floating in a
+    /// toolbar. The label moves to the tooltip and the width goes back to the tabs.
+    private var newTab: some View {
+        Button {
+            NotificationCenter.default.post(name: .keelNewLane, object: nil)
+        } label: {
+            Image(systemName: "plus")
+                .font(K.F.ui(11, .semibold))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(K.C.dim)
+        .padding(.leading, K.S.xxs)
+        .padding(.bottom, K.S.tight)
+        .hint("New feature — asks which project, what to call it, and which branch to start "
+              + "from (⌘N)")
+    }
+}
+
+/// The agent's own icon, at favicon size.
+///
+/// The word "Claude" in a pill was four of the tab's characters spent on something an icon says
+/// at a glance — and it is the same job a browser gives a favicon. Falls back to the short name
+/// rather than to nothing: `Resources.url` returns `nil` when packaging has not copied the file,
+/// and a tab with a hole in it is the failure that reads as a broken build.
+struct ProviderMark: View {
+    let provider: SessionModel.Provider
+    var size: CGFloat = 14
+
+    /// Loaded once per provider. A `ForEach` of tabs re-renders on every keystroke in the
+    /// composer, and decoding a PNG on each pass is work with a known answer.
+    private static let cache = NSCache<NSString, NSImage>()
+
+    private var image: NSImage? {
+        let key = provider.iconResource as NSString
+        if let hit = Self.cache.object(forKey: key) { return hit }
+        guard let url = Resources.url(provider.iconResource, "png"),
+              let made = NSImage(contentsOf: url) else { return nil }
+        Self.cache.setObject(made, forKey: key)
+        return made
+    }
+
+    var body: some View {
+        if let image {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
+                .accessibilityLabel(provider.rawValue)
+        } else {
+            Text(provider.short)
+                .font(K.F.tiny.weight(.medium))
+                .foregroundStyle(K.C.faint)
+                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
+                .background(K.C.ghost, in: RoundedRectangle(cornerRadius: K.R.sm - 1))
+        }
     }
 }
 
 private struct LaneRow: View {
     @Bindable var lane: SessionModel
     let lanes: Lanes
+    /// Handed down rather than chosen here: every tab has to agree, and only the strip knows how
+    /// much room there is to share out.
+    let width: CGFloat
     @State private var hovering = false
     @State private var finishing = false
     @State private var message = ""
@@ -122,17 +190,13 @@ private struct LaneRow: View {
             marker
             // Which agent is behind this tab. Two lanes running different providers looked
             // identical, and the model picker below them offers a different list for each.
-            Text(lane.provider.short)
-                .font(K.F.tiny.weight(.medium))
-                .foregroundStyle(K.C.faint)
-                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
-                .background(K.C.ghost, in: RoundedRectangle(cornerRadius: K.R.sm - 1))
+            ProviderMark(provider: lane.provider)
             Text(lane.title)
                 .font(K.F.small.weight(selected ? .semibold : .regular))
                 .foregroundStyle(lane.turns.isEmpty ? K.C.faint : K.C.text)
                 .italic(lane.turns.isEmpty)
                 .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: 200, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if lane.pending.count > 0 {
                 Pill(text: "ASKS", tone: .warn)
             }
@@ -141,17 +205,15 @@ private struct LaneRow: View {
                     .foregroundStyle(wt.dirty ? K.C.accent : K.C.faint)
                     .hint(branchText(wt))
             }
-            Button { newTitle = lane.title; renaming = true } label: {
-                Image(systemName: "pencil").font(K.F.tiny)
-                    .frame(width: 16, height: 16).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).foregroundStyle(K.C.faint)
-            .opacity(hovering ? 1 : 0.4)
-            .hint("Rename this feature (double-click also works)")
-            CloseButton(size: 10, label: closeLabel) { lanes.close(lane) }
-                .opacity(hovering ? 1 : 0.4)
+            // Close only, and only on the tab you are pointing at or the one you are in — the
+            // way a browser does it. The pencil that used to sit here was a third control in a
+            // 200pt tab, and renaming already has two ways in: double-click and the menu.
+            CloseButton(size: 9, label: closeLabel) { lanes.close(lane) }
+                .opacity(hovering || selected ? 0.7 : 0)
                 .hint(closeLabel)
         }
+        .padding(.horizontal, K.S.sm)
+        .frame(width: width, height: 30)
         .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
         .alert("Rename feature", isPresented: $renaming) {
             TextField("Name", text: $newTitle)
@@ -230,21 +292,23 @@ private struct LaneRow: View {
         } message: {
             Text(discarding ?? "")
         }
-        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .background(
-            RoundedRectangle(cornerRadius: K.R.md)
-                .fill(drag != nil ? K.C.raised
-                                  : (selected ? K.C.raised : (hovering ? K.C.chrome : .clear)))
-        )
-        .overlay {
+        // A tab shape, not a pill: rounded at the top and square at the bottom, so the selected
+        // one reads as continuous with the pane under it. That continuity is the whole reason a
+        // browser's tabs are legible at a glance, and a row of floating pills is not.
+        .background {
+            let shape = UnevenRoundedRectangle(topLeadingRadius: K.R.md,
+                                               bottomLeadingRadius: 0,
+                                               bottomTrailingRadius: 0,
+                                               topTrailingRadius: K.R.md)
+            shape.fill(selected || drag != nil ? K.C.bg
+                                               : (hovering ? K.C.chrome : .clear))
             if let drag {
                 // Accent once releasing would tear it out, so the outcome is visible before the
                 // mouse comes up rather than as a window appearing from nowhere.
-                RoundedRectangle(cornerRadius: K.R.md)
-                    .stroke(drag.willDetach ? K.C.accent : K.C.lineStrong,
-                            lineWidth: drag.willDetach ? 2 : 1)
+                shape.stroke(drag.willDetach ? K.C.accent : K.C.lineStrong,
+                             lineWidth: drag.willDetach ? 2 : 1)
             } else if selected {
-                RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line)
+                shape.stroke(K.C.line, lineWidth: 1)
             }
         }
         // Picked up: it lifts off the strip and follows the pointer. The one shadow in a window

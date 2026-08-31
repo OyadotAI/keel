@@ -19,6 +19,15 @@ final class Lanes {
     private(set) var lanes: [SessionModel] = []
     var activeID: UUID?
 
+    /// Bumped whenever the project changes, so work started for the old one stops.
+    ///
+    /// `restore` is a sequential loop of per-lane network calls — `open`, `refreshGit`,
+    /// `refreshTree` — and the project switch that should end it arrives as a *detached* `Task`
+    /// from `onChange(of: repoPath)`, which cancels nothing. So both ran, and every lane the old
+    /// loop had left asked about the old project's checkout against the new project's root: a 400
+    /// each, reported to Sentry as a daemon failure, for a window that had simply moved on.
+    private var generation = 0
+
     init(client: Client, port: UInt16) {
         self.client = client
         self.port = port
@@ -77,7 +86,11 @@ final class Lanes {
               let saved = try? JSONDecoder().decode(Saved.self, from: data),
               !saved.sessions.isEmpty else { return }
 
+        // Everything below is for *this* project. Checked after each await, because the switch
+        // that invalidates it does not cancel this task.
+        let mine = generation
         await refreshWorktrees()
+        guard mine == generation else { return }
         let checkouts = Set(worktrees.map(\.name))
 
         // Only sessions the daemon can still see: a transcript can be deleted, and a lane pointing
@@ -105,8 +118,13 @@ final class Lanes {
             if let a = lanes.first { m.adopt(project: a) }
             restored.append(m)
             await m.open(session: id)
+            guard mine == generation else { return }
             if wt != nil { await m.refreshGit(); await m.refreshTree() }
+            guard mine == generation else { return }
         }
+        // Never over the top of a project that arrived while this was running: `restored` holds
+        // the previous project's conversations and its checkouts.
+        guard mine == generation, !restored.isEmpty else { return }
         lanes = restored
         activeID = restored[min(saved.active, restored.count - 1)].id
     }
@@ -127,6 +145,7 @@ final class Lanes {
     /// The lane that did the opening is kept, because `openProject` has already reset it; its
     /// checkout is cleared because that belonged to the old repository.
     func switchProject(to repo: String) async {
+        generation += 1
         let keep = active
         // `closed()`, not `stop()`: these lanes are being dropped from the window, so their
         // background-job loops go with them. `stop()` deliberately leaves that loop running,
@@ -301,6 +320,11 @@ final class Lanes {
         let m = SessionModel(client: client, port: port, sessionId: id)
         m.lanes = self
         m.isolated = isolated
+        // Reading from the moment the tab exists. `open(session:)` sets this, but only once the
+        // caller gets round to awaiting it — so a resumed lane drew the "what a second agent is
+        // for" hint first, replaced it with the spinner, and then replaced that with the
+        // conversation. Three states for one click.
+        m.replaying = id != nil
         Telemetry.track("lane_created", ["isolated": isolated, "resumed": id != nil])
         // From whichever lane exists, not from `active` — which would refill an emptied list
         // with a lane of its own on the way to making this one.

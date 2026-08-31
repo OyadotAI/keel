@@ -391,4 +391,18 @@ final class SlashCommandTests: XCTestCase {
         l.lanes[0].slashCommands = ["/review"]
         XCTAssertEqual(l.newLane().slashCommands, ["/review"])
     }
+
+    /// A new tab holds the project's data the moment it is made, so it must not also hold "not
+    /// read yet" — that combination is a panel spinning over a list it already has.
+    func testANewLaneIsNotStillReading() {
+        let l = Lanes(client: Client(port: 0), port: 0)
+        let first = l.lanes[0]
+        first.sessionId = "already-talking"   // or `+` just reuses this empty lane
+        first.loaded = true
+        first.sessions = [Wire.Session(id: "aaa", title: "a", messages: 1)]
+
+        let second = l.newLane()
+        XCTAssertEqual(second.sessions.count, 1, "the new lane took the project's sessions")
+        XCTAssertTrue(second.loaded, "and must not draw Reading… over them")
+    }
 }

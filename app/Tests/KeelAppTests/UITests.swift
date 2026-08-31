@@ -812,3 +812,51 @@ extension UITests {
         XCTAssertNil(m.preparing, "the bar would otherwise keep naming work that was cancelled")
     }
 }
+
+// MARK: - History
+
+extension UITests {
+
+    /// History is where you go looking for the one from this morning, so the headers are dates.
+    func testSessionsAreBucketedByWhenTheyRan() {
+        func bucket(_ day: String) -> String {
+            SessionsPanel.bucket(day, today: "2026-08-31", week: "2026-08-24", month: "2026-08-01")
+        }
+        XCTAssertEqual(bucket("2026-08-31"), "Today")
+        XCTAssertEqual(bucket("2026-08-30"), "This week")
+        XCTAssertEqual(bucket("2026-08-24"), "This week", "the boundary day is in the bucket")
+        XCTAssertEqual(bucket("2026-08-23"), "This month")
+        XCTAssertEqual(bucket("2026-07-31"), "Older")
+        XCTAssertEqual(bucket(""), "Older", "a session with no date is not today's")
+        XCTAssertEqual(bucket("2027-01-01"), "Today", "a clock ahead of ours is still recent")
+    }
+}
+
+// MARK: - Opening a long session
+
+extension UITests {
+
+    /// A prompt is often a paste, and `fixedSize` measures every line of one whether or not it is
+    /// on screen. Ninety-two real turns took 264 ms per layout pass for that reason — paid on
+    /// opening the session and again on every keystroke in the composer. Capped at
+    /// `ChatTurn.promptLines`, the same session lays out in 20 ms.
+    func testALongSessionLaysOutQuickly() {
+        let m = SessionModel(client: Client(port: 0))
+        m.loaded = true
+        m.turns = (0..<60).map { i in
+            let t = Turn(prompt: String(repeating: "pasted line \(i)\n", count: 3_000))
+            t.finished = true
+            t.replayed = true
+            return t
+        }
+        // The first host in a process pays SwiftUI's own setup; the measurement is the second.
+        _ = shoot(ChatRail(model: SessionModel(client: Client(port: 0))), CGSize(width: 900, height: 600))
+
+        let started = Date.now
+        let host = NSHostingView(rootView: ChatRail(model: m).frame(width: 900, height: 600))
+        host.frame = CGRect(x: 0, y: 0, width: 900, height: 600)
+        host.layoutSubtreeIfNeeded()
+        let ms = -started.timeIntervalSinceNow * 1000
+        XCTAssertLessThan(ms, 400, "opening a session with long prompts stalls the window")
+    }
+}
