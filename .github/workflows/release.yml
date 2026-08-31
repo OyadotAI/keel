@@ -21,7 +21,12 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: macos-15
+    # macos-15 is Xcode 16.4, and 16.4's Swift is 6.1 — which does not know isolated conformances
+    # (`@MainActor TerminalViewDelegate` in TerminalPane.swift), so it reads the attribute as
+    # unknown and then rejects every delegate method under it. macos-26 is Xcode 26. The app still
+    # runs on macOS 15: the deployment target comes from `platforms:` in Package.swift, not from
+    # the SDK it was built against.
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       KEEL_NOTARY_PROFILE: keel
@@ -91,6 +96,12 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
           chmod 600 "$RUNNER_TEMP/sparkle_ed_key"
           echo "KEEL_SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle_ed_key" >> "$GITHUB_ENV"
+
+      # `packaging/icon.py` renders the icon at build time rather than checking a binary in, so
+      # the runner needs Pillow. Homebrew's python is externally managed and this runner is
+      # thrown away at the end of the job, so there is nothing to protect it from.
+      - name: Install Pillow, which the icon is rendered with
+        run: python3 -m pip install --break-system-packages --quiet Pillow
 
       # The same target a person would have run, so there is one build path and not two.
       - name: Build, sign, notarise, package
