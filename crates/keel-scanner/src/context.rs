@@ -42,19 +42,26 @@ impl RepoContext {
             }
             let path = Utf8Path::from_path(entry.path())
                 .context("repository contains a non-UTF-8 path")?;
+            let Ok(rel) = path.strip_prefix(&root) else {
+                continue;
+            };
             // `.git` internals are noise for every check we have. `.keel` is Keel's own working
             // directory, and skipping it matters for correctness rather than tidiness: it holds
             // quarantined agent config, and re-reporting a file that `keel trust` already
             // neutralised would mean the finding could never be cleared.
-            if path
+            //
+            // Asked of the path *inside* the repository, never of the absolute one. A lane's
+            // checkout lives at `<project>/.keel/worktrees/<name>`, so matching on the full path
+            // skipped every file it held: the scan of a lane saw an empty repository, reported
+            // "no tests", "no CLAUDE.md", "no CI" whatever the code said, and no fix could ever
+            // clear a finding.
+            if rel
                 .components()
                 .any(|c| matches!(c.as_str(), ".git" | ".keel"))
             {
                 continue;
             }
-            if let Ok(rel) = path.strip_prefix(&root) {
-                files.insert(rel.to_owned());
-            }
+            files.insert(rel.to_owned());
         }
 
         Ok(Self { root, files })
@@ -117,6 +124,24 @@ mod tests {
         ]);
         assert!(!ctx.has(".keel/quarantine/.claude/settings.json"));
         assert_eq!(ctx.files().count(), 1);
+    }
+
+    /// The one that made a lane's readiness report fiction: a checkout under
+    /// `<project>/.keel/worktrees/<name>` matched the `.keel` skip on its *absolute* path, so the
+    /// scan saw no files at all and every "you have no X" check fired.
+    #[test]
+    fn a_checkout_under_dot_keel_still_sees_its_own_files() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .expect("utf8 tempdir")
+            .join(".keel/worktrees/a-lane");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir");
+        std::fs::write(root.join("src/app.ts"), "export const x = 1").expect("write");
+        std::fs::write(root.join("CLAUDE.md"), "# instructions").expect("write");
+
+        let ctx = crate::RepoContext::load(&root).expect("load");
+        assert!(ctx.has("CLAUDE.md"), "the lane's own files are its files");
+        assert!(ctx.has("src/app.ts"));
     }
 
     #[test]

@@ -113,9 +113,11 @@ final class BudgetTests: XCTestCase {
     /// the crash that hit the first testers on the first click into the Designer.
     func testThePackagedAppCarriesThePicker() throws {
         let bundle = try bundlePath()
-        let picker = bundle.appendingPathComponent("Contents/Resources/Picker.js")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: picker.path),
-                      "Picker.js is not in the app bundle; the Designer will crash on open")
+        for script in ["Picker.js", "JSONView.js"] {
+            let url = bundle.appendingPathComponent("Contents/Resources/" + script)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+                          "\(script) is not in the app bundle; the preview ships without it")
+        }
     }
 
     /// Orca ships a ~250 MB DMG. The whole argument for going native is that this does not have to.

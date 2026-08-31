@@ -240,6 +240,9 @@ enum Wire {
         var path: String
         var hunks: [Hunk]
         var untracked: Bool
+        /// Where these hunks came from when they are not the working tree — the commit that
+        /// already holds them — or why there are none. Nil for an ordinary uncommitted change.
+        var note: String?
     }
 
     struct Hunk: Decodable {

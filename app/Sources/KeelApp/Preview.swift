@@ -120,6 +120,13 @@ struct PreviewPane: NSViewRepresentable {
             config.userContentController.addUserScript(
                 WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
         }
+        // The address bar goes wherever you type, and half of what you want to look at while
+        // building this stack is your own API. WebKit renders `application/json` as one unwrapped
+        // line of text; this makes it a tree. It touches nothing that is not JSON.
+        if let source = Resources.text("JSONView", "js") {
+            config.userContentController.addUserScript(
+                WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        }
         config.userContentController.add(context.coordinator, name: "keel")
 
         let view = WKWebView(frame: .zero, configuration: config)
