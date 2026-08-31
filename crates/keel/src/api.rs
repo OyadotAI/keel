@@ -1627,10 +1627,20 @@ mod git_tests {
         assert!(fresh.untracked);
         assert_eq!(fresh.hunks.len(), 1);
 
-        // And a tracked file that matches HEAD is neither new nor changed.
+        // A tracked file that matches HEAD is not new — and is no longer blank either. Auto-commit
+        // puts a turn's work in a commit seconds after it lands, so "matches HEAD" is the ordinary
+        // state of everything the agent just wrote; the diff now comes from the commit that holds
+        // it, with a note saying which. See `a_committed_change_is_still_shown_and_says_where_it_is`.
         let same = git_diff(&root, "a.txt");
         assert!(!same.untracked);
-        assert!(same.hunks.is_empty());
+        assert!(
+            !same.hunks.is_empty(),
+            "the committing commit is the baseline"
+        );
+        assert!(
+            same.note
+                .is_some_and(|n| n.starts_with("Already committed"))
+        );
     }
 
     #[test]
@@ -2066,12 +2076,26 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
 /// The everyday case rather than the corner: auto-commit is on by default, so a turn's work is in
 /// a commit seconds after it is written, and every diff in the window went blank at that moment.
 fn committed_diff(root: &Utf8Path, path: &str) -> (String, Option<String>) {
+    // Nothing in the working tree, nothing staged, and nothing in history either. The reason
+    // matters: a file that was written and deleted again says so, where a stale path from another
+    // checkout has genuinely nothing to report. Untracked-and-gone reaches here rather than the
+    // arm above because a path with no file on disk must not wear a NEW badge over an empty diff.
+    let nothing = || {
+        if root.join(path).exists() {
+            (String::new(), Some("No changes to show.".to_string()))
+        } else {
+            (
+                String::new(),
+                Some("This file is not on disk any more.".to_string()),
+            )
+        }
+    };
     let Some(head) = git(root, &["log", "-1", "--format=%h %s", "--", path]) else {
-        return (String::new(), Some("No changes to show.".to_string()));
+        return nothing();
     };
     let head = head.trim();
     let Some((sha, subject)) = head.split_once(' ') else {
-        return (String::new(), Some("No changes to show.".to_string()));
+        return nothing();
     };
     let raw = git(
         root,
