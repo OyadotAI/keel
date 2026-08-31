@@ -31,7 +31,11 @@ struct ReviewPacket {
 
 struct ReviewPacketView: View {
     @Bindable var model: SessionModel
+    /// The lanes this window holds, so Finish and Discard can act on this one. Optional because
+    /// the pane is also drawn in tests and in the visual catalogue, where there is no window.
+    var lanes: Lanes?
     @State private var exported: String?
+    @State private var flow = FinishFlow()
     @State private var identityOpen = false
     /// Open when something failed: a command that did not work is evidence you should not have to
     /// go looking for.
@@ -43,13 +47,13 @@ struct ReviewPacketView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
-                finish
                 verdict
+                branch
+                quality
                 identity
                 evidence
                 files
                 commands
-                gates
                 export
             }
             .padding(.horizontal, K.S.xl)
@@ -58,7 +62,13 @@ struct ReviewPacketView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .background(K.C.bg)
+        // The branch data this pane never asked for. Without it the status line reads "—" and
+        // Push is disabled on a branch that is three commits ahead.
+        .task { await model.refreshBranches() }
+        .finishAndDiscard(flow, lane: model, lanes: lanes, checkout: checkout)
     }
+
+    private var checkout: Wire.Worktree? { lanes?.worktree(of: model) }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
@@ -69,23 +79,40 @@ struct ReviewPacketView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Ready, blocked, or merged-without-checks — three states, because two of them read as
+    /// success and only one of them is.
     private var verdict: some View {
-        HStack(spacing: K.S.md) {
-            Image(systemName: packet.blocker == nil ? "checkmark.seal.fill" : "exclamationmark.shield.fill")
+        let blocked = packet.blocker != nil
+        let unverified = !blocked && model.noChecksDeclared
+        let tone = blocked ? K.C.warn : (unverified ? K.C.warn : K.C.add)
+        return HStack(spacing: K.S.md) {
+            Image(systemName: blocked ? "exclamationmark.shield.fill"
+                  : (unverified ? "questionmark.diamond.fill" : "checkmark.seal.fill"))
                 .font(K.F.display)
-                .foregroundStyle(packet.blocker == nil ? K.C.add : K.C.warn)
+                .foregroundStyle(tone)
             VStack(alignment: .leading, spacing: K.S.xxs) {
-                Text(packet.blocker == nil ? "Ready for a pull request" : "Not ready for a pull request")
+                Text(blocked ? "Not ready for a pull request"
+                     : (unverified ? "Nothing here has been checked" : "Ready for a pull request"))
                     .font(K.F.title).foregroundStyle(K.C.text)
-                Text(packet.blocker ?? "Every recorded implementation turn passed its project gate.")
+                Text(packet.blocker ?? (unverified
+                     ? unverifiedReason
+                     : "Every recorded implementation turn passed its project gate."))
                     .font(K.F.small).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(K.S.lg)
         .marginBottom(K.S.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background((packet.blocker == nil ? K.C.add : K.C.warn).opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.md))
-        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke((packet.blocker == nil ? K.C.add : K.C.warn).opacity(0.3)))
+        .background(tone.opacity(0.08), in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(tone.opacity(0.3)))
+    }
+
+    /// Why nothing was verified, in the project's own words. Keel never invents a check, so this
+    /// is a caveat on the merge rather than a refusal — but it is never silence.
+    private var unverifiedReason: String {
+        if case .none(let why) = model.latestGate { return why }
+        return "This project declares no checks for Keel to run."
     }
 
     private var identity: some View {
@@ -95,13 +122,12 @@ struct ReviewPacketView: View {
                     fact("Task", packet.title)
                     fact("Provider", packet.provider.rawValue)
                     fact("Task ID", packet.taskID.uuidString.lowercased())
-                    fact("Branch", packet.branch ?? "not created")
-                    fact("Worktree", packet.worktree ?? "not isolated")
+                    fact("Worktree", packet.worktree ?? "shares the project's tree")
                     fact("Policy", model.policySources.joined(separator: " → "))
                 }
                 .padding(.top, K.S.sm)
             } label: {
-                Text("Branch, provider, worktree, and policy")
+                Text("Provider, task id, and policy")
                     .font(K.F.small).foregroundStyle(K.C.dim)
             }
         }
@@ -193,8 +219,83 @@ struct ReviewPacketView: View {
         return failed > 0 ? "\(ran), \(failed) failed" : ran
     }
 
-    private var gates: some View {
-        section("Quality evidence") {
+    /// Where the work is, and everything that moves it out of the lane.
+    ///
+    /// It used to be one button — "create pull request" — hidden entirely unless the lane had a
+    /// checkout of its own, so a shared lane's Review pane offered nothing at all and said nothing
+    /// about why. Finish and Discard existed only on the tab's right-click menu; the branch, its
+    /// distance from the remote and the commit box only in the Git panel. This is the screen for
+    /// the merge decision, so they are on it.
+    private var branch: some View {
+        section("Branch") {
+            BranchStatus(model: model)
+            if let checkout {
+                Text("\(checkout.branch) → \(checkout.base ?? "the project's branch")")
+                    .font(K.F.codeSmall).foregroundStyle(K.C.dim)
+            } else {
+                // A shared lane is not a broken lane, and saying nothing was how it read as one.
+                Text("Shares the project's working tree — no branch of its own to merge.")
+                    .font(K.F.micro).foregroundStyle(K.C.faint)
+            }
+
+            CommitBox(model: model, titled: false)
+                .padding(.top, K.S.xs)
+
+            HStack(spacing: K.S.sm) {
+                if let checkout {
+                    Button("Finish — merge into \(checkout.base ?? "the project")…") {
+                        lanes?.activeID = model.id
+                        flow.begin(model)
+                    }
+                    .buttonStyle(FilledButton())
+                    .disabled(lanes == nil || model.mergeBlocker != nil || model.gitBusy != nil)
+                    .help(Lanes.finishBlurb(checkout))
+                }
+                Button("Push") { Task { await model.remote("push") } }
+                    .buttonStyle(QuietButton())
+                    .disabled(pushDisabled)
+                Button("Open pull request…") { model.sheet = .pr }
+                    .buttonStyle(QuietButton(tone: K.C.accent))
+                    .disabled(model.branches?.remotes.isEmpty ?? true)
+                Spacer()
+                if let lanes, checkout != nil {
+                    // "Discard the feature" and "discard the changes" are different sizes of
+                    // destruction, so both are on screen and neither borrows the other's word:
+                    // this one throws the branch away, the one in the commit box above throws
+                    // away what has not been committed.
+                    Button("Discard feature…") { flow.askToDiscard(model, lanes) }
+                        .buttonStyle(QuietButton(tone: K.C.del))
+                }
+            }
+            .padding(.top, K.S.xs)
+
+            if let why = model.mergeBlocker, checkout != nil {
+                // A greyed-out button that will not say why is the shape of a bug report.
+                Text(why).font(K.F.micro).foregroundStyle(K.C.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var pushDisabled: Bool {
+        guard let b = model.branches, !b.remotes.isEmpty else { return true }
+        let current = b.local.first { $0.current }
+        return !((current?.ahead ?? 0) > 0 || current?.upstream == nil)
+    }
+
+    /// The checks, and the button that runs them — always, not only once something has failed.
+    ///
+    /// The gate is what this page is for. It used to report whatever happened to be recorded and
+    /// offer to re-run only when something was already blocking, so a lane whose checks had never
+    /// run showed an empty list and a merge you could press.
+    private var quality: some View {
+        section("Quality evidence", detail: gateDetail) {
+            if case .running(let command) = model.latestGate {
+                HStack(spacing: K.S.sm) {
+                    Sweep().scaleEffect(0.7, anchor: .leading).frame(width: 32, height: 3)
+                    Text(command).font(K.F.codeSmall).foregroundStyle(K.C.dim).lineLimit(1)
+                }
+            }
             if packet.gates.isEmpty { empty("No project quality gate has run") }
             ForEach(Array(packet.gates.enumerated()), id: \.offset) { index, gate in
                 HStack(spacing: K.S.sm) {
@@ -205,29 +306,23 @@ struct ReviewPacketView: View {
                     Text(gateLabel(gate)).font(K.F.micro).foregroundStyle(K.C.dim)
                 }
             }
-            if packet.blocker != nil && !model.running {
-                Button("Run project checks again") { Task { await model.runGateNow() } }
-                    .buttonStyle(QuietButton(tone: K.C.accent))
+            if !model.running, !model.isRunningGate {
+                Button(model.gateIsCurrent ? "Run project checks again" : "Run project checks") {
+                    Task { await model.runGateNow() }
+                }
+                .buttonStyle(QuietButton(tone: K.C.accent))
+                .help("Finish runs these itself; this is for looking before you decide.")
             }
         }
     }
 
-    /// The one thing this screen is for, at the top of it.
-    ///
-    /// It opens a pull request rather than merging: the work lands where the rest of the team
-    /// reviews it, which is what a lane's branch was for. Merging straight into the project is
-    /// still on the lane's own menu for whoever wants it.
-    @ViewBuilder private var finish: some View {
-        if packet.worktree != nil {
-            Button { model.sheet = .pr } label: {
-                Label("Review complete — create pull request",
-                      systemImage: "arrow.triangle.pull")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(FilledButton())
-            .disabled(packet.blocker != nil)
-            .padding(.bottom, K.S.md)
-        }
+    /// Whether the recorded verdict is about the tree as it stands — said in the header, because
+    /// a stale pass and a fresh one look identical in a list.
+    private var gateDetail: String? {
+        if model.isRunningGate { return "running" }
+        if model.noChecksDeclared { return "no checks declared" }
+        if model.gateIsCurrent { return "current" }
+        return model.changes.isEmpty ? nil : "stale — \(model.changes.count) uncommitted"
     }
 
     private var export: some View {

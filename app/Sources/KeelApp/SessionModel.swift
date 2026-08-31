@@ -672,30 +672,86 @@ final class SessionModel: Identifiable {
         if settling { return "The turn is still finishing — the gate, then the commit." }
         if !pending.isEmpty { return "The agent is waiting for a decision." }
         if isolated && worktree == nil { return "The isolated checkout is unavailable." }
-        let work = turns.filter { $0.didWork && !$0.replayed }
-        let checkout = lanes?.worktree(of: self)
-        if work.isEmpty {
-            // Commits on the branch, or files not yet committed, are work whether or not this
-            // process was running when they were made.
-            guard let checkout, checkout.ahead > 0 || checkout.dirty else {
-                return "This feature has no work on its branch yet."
-            }
-            return "The gate has not run since this feature was reopened, so nothing here has "
-                + "checked it. Send a turn — even an empty review — to run it."
+        // Recorded turns, or — for a lane reopened from history, whose turns are all replays —
+        // commits on the branch and files not yet committed. Work is work whether or not this
+        // process was running when it was done.
+        guard turns.contains(where: { $0.didWork && !$0.replayed }) || hasWork else {
+            return worktree == nil
+                ? "Nothing has been changed yet."
+                : "This feature has no work on its branch yet."
         }
         if editedThisSession.count > scopeFileLimit {
             return "Scope exceeded the approved \(scopeFileLimit)-file budget. Split or explicitly reduce the task before merging."
         }
-        switch work[work.count - 1].gate {
+        // A gate result is only worth what it was run against. Anything uncommitted arrived after
+        // the checks did — a hand edit, or a file the agent left behind — so the recorded verdict
+        // is about a tree that no longer exists.
+        if !changes.isEmpty, !gateIsCurrent {
+            let n = changes.count
+            return "\(n) uncommitted change\(n == 1 ? "" : "s") since the checks last ran. "
+                + "Commit them; the checks run again before the merge."
+        }
+        switch latestGate {
         case .passed: return nil
         case .failed: return "The project's quality gate failed on the last turn."
-        case .none(let reason): return "Quality could not be verified: \(reason)"
+        // Not a refusal. Keel never invents a check, so a project that declares none is not one
+        // Keel will not let you merge — it is one where the verdict says so instead of showing a
+        // tick nobody earned. `noChecksDeclared` is what puts that on the screen and the button.
+        case .none: return nil
         case .running: return "The project quality gate is still running."
-        case .notRun: return "A project quality gate has not run."
+        case .notRun:
+            return "The checks have not run on this work yet."
         }
     }
 
+    /// The gate whose verdict this lane is judged by.
+    ///
+    /// The last implementation turn's, falling back to the last turn of any kind — which is what a
+    /// reopened lane has, since replaying a conversation produces turns that did no work. Without
+    /// the fallback, pressing Run checks on a reopened lane ran the project's whole suite and
+    /// changed nothing on screen, because the verdict was reading a turn the result never reached.
+    var latestGate: Turn.Gate {
+        (turns.last(where: { $0.didWork && !$0.replayed }) ?? turns.last)?.gate ?? .notRun
+    }
+
+    /// The checks are running right now, so nothing should offer to start them again.
+    var isRunningGate: Bool {
+        if case .running = latestGate { return true }
+        return false
+    }
+
+    /// The project declares no check of its own, so there is nothing that could have passed.
+    var noChecksDeclared: Bool {
+        if case .none = latestGate { return true }
+        return false
+    }
+
     var readyToMerge: Bool { mergeBlocker == nil }
+
+    /// Whether anything has been done in this lane at all.
+    ///
+    /// Asked of the checkout when there is one, and of the working tree when there is not. It used
+    /// to be asked *only* of the checkout, so a shared lane — which has none — reported that its
+    /// branch was empty while the same screen listed the files it had touched. That answer also
+    /// reached `readyToMerge`, the tab menu's Finish item and `Lanes.finish`'s own refusal, so all
+    /// four were wrong together: the reason this is one property rather than a check at each of
+    /// them.
+    var hasWork: Bool {
+        if let checkout = lanes?.worktree(of: self) {
+            return checkout.ahead > 0 || checkout.dirty
+        }
+        return !changes.isEmpty
+    }
+
+    /// Whether the recorded gate is about the tree as it stands now.
+    ///
+    /// The gate runs before the auto-commit, so "the last implementation turn passed, and nothing
+    /// has changed since" is the whole of it. A green tick about a tree that no longer exists is
+    /// worse than no tick at all, because it is one somebody would act on.
+    var gateIsCurrent: Bool {
+        guard case .passed = latestGate else { return false }
+        return changes.isEmpty
+    }
 
     var current: Turn? { turns.last }
 
@@ -1547,7 +1603,12 @@ final class SessionModel: Identifiable {
 
     /// Run the gate against the latest turn, on demand.
     func runGateNow() async {
-        guard let turn = turns.last else { return }
+        // The turn the verdict reads, not merely the last one. On a reopened lane the last turn is
+        // a replay, and a gate recorded there is one `mergeBlocker` never looks at — so the button
+        // ran the project's whole suite and nothing on screen changed.
+        guard let turn = turns.last(where: { $0.didWork && !$0.replayed }) ?? turns.last else {
+            return
+        }
         await runGate(turn)
     }
 

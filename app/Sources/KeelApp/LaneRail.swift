@@ -142,9 +142,7 @@ private struct LaneRow: View {
     /// much room there is to share out.
     let width: CGFloat
     @State private var hovering = false
-    @State private var finishing = false
-    @State private var message = ""
-    @State private var discarding: String?
+    @State private var flow = FinishFlow()
     @State private var renaming = false
     @State private var newTitle = ""
 
@@ -236,26 +234,7 @@ private struct LaneRow: View {
                     if abs(g.translation.height) > Self.tearOff { detach() }
                 }
         )
-        .alert("Finish this task", isPresented: $finishing) {
-            TextField("Commit message", text: $message)
-            Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(Lanes.finishBlurb(checkout))
-        }
-        .alert("Discard this feature?", isPresented: Binding(get: { discarding != nil },
-                                                          set: { if !$0 { discarding = nil } })) {
-            Button("Discard anyway", role: .destructive) {
-                // A forced discard that fails used to produce nothing at all — the tab stayed and
-                // nothing was said, which reads as the button not working.
-                Task {
-                    if let why = await lanes.discard(lane, force: true) { lane.lastError = why }
-                }
-            }
-            Button("Keep it", role: .cancel) {}
-        } message: {
-            Text(discarding ?? "")
-        }
+        .finishAndDiscard(flow, lane: lane, lanes: lanes, checkout: checkout)
         // A tab shape, not a pill: rounded at the top and square at the bottom, so the selected
         // one reads as continuous with the pane under it. That continuity is the whole reason a
         // browser's tabs are legible at a glance, and a row of floating pills is not.
@@ -303,8 +282,7 @@ private struct LaneRow: View {
                 }
                 Button("Finish task — merge into \(checkout?.base ?? "the project")…") {
                     lanes.activeID = lane.id
-                    message = lane.title
-                    finishing = true
+                    flow.begin(lane)
                 }
                 .disabled(!lane.readyToMerge)
                 // A greyed-out row that will not say why is the shape of a bug report. The
@@ -317,12 +295,7 @@ private struct LaneRow: View {
                     // Focused first. A refusal lands in `lane.lastError`, which renders only in
                     // the *active* lane's composer — so discarding a background lane and being
                     // refused showed nothing at all, anywhere.
-                    lanes.activeID = lane.id
-                    Task {
-                        // Ask the daemon first: it knows what is on the branch and what is not
-                        // committed at all.
-                        if let why = await lanes.discard(lane, force: false) { discarding = why }
-                    }
+                    flow.askToDiscard(lane, lanes)
                 }
             } else {
                 Button("Close feature") { lanes.close(lane) }

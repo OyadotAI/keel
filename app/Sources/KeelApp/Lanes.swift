@@ -253,6 +253,27 @@ final class Lanes {
             + "The feature's checkout is removed; the branch is deleted only once it is merged."
     }
 
+    /// Finish, with the project's checks run first.
+    ///
+    /// This is what makes the Review pane the gate rather than a page that reports one. The checks
+    /// run at the moment of the decision, against the tree being merged, so there is no window in
+    /// which a recorded pass is about something else — and no staleness rule to get wrong. When
+    /// they already ran and nothing has changed since, they are not run twice.
+    ///
+    /// A failure leaves the lane exactly as it was. Nothing is committed, nothing is merged, and
+    /// the problems are on the screen the person is already looking at.
+    func finishChecked(_ lane: SessionModel, message: String) async {
+        if !lane.gateIsCurrent {
+            await lane.runGateNow()
+            if case .failed = lane.latestGate {
+                lane.lastError = "The project's checks failed, so nothing was merged. "
+                    + "The problems are in Review."
+                return
+            }
+        }
+        await finish(lane, message: message)
+    }
+
     func finish(_ lane: SessionModel, message: String) async {
         guard let name = lane.worktree else { return }
         if let blocker = lane.mergeBlocker {

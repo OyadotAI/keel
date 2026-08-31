@@ -139,9 +139,58 @@ final class LanesTests: XCTestCase {
         turn.finished = true
         model.turns = [turn]
 
-        XCTAssertEqual(model.mergeBlocker, "A project quality gate has not run.")
+        XCTAssertEqual(model.mergeBlocker, "The checks have not run on this work yet.")
         turn.gate = .passed("make check", 1)
         XCTAssertNil(model.mergeBlocker)
+    }
+
+    /// The screenshot's lane: shared, reopened from history, two files edited.
+    ///
+    /// It reported "This feature has no work on its branch yet" above a list of the files it had
+    /// touched. The cause was that "is there work here" was only ever asked of the lane's
+    /// checkout, and a shared lane has none — so the answer for every shared lane was no.
+    func testAReopenedSharedLaneIsNotReportedAsEmpty() {
+        let model = SessionModel(client: Client(port: 0))
+        let replay = Turn(prompt: "closing the first tab is not working")
+        replay.begin(call: "1", tool: "Edit", input: ["file_path": .string("app/Sources/KeelApp/Lanes.swift")])
+        replay.finish(call: "1", output: "ok", failed: false)
+        replay.finished = true
+        replay.replayed = true
+        model.turns = [replay]
+
+        // Nothing recorded, nothing in the tree: honest, and it does not mention a branch the
+        // lane does not have.
+        XCTAssertEqual(model.mergeBlocker, "Nothing has been changed yet.")
+
+        // The same lane with the work still uncommitted is not empty.
+        model.changes = [Wire.Change(path: "app/Sources/KeelApp/Lanes.swift", status: "M", label: "modified")]
+        XCTAssertNotEqual(model.mergeBlocker, "Nothing has been changed yet.")
+        XCTAssertNotEqual(model.mergeBlocker, "This feature has no work on its branch yet.")
+    }
+
+    /// A verdict is only worth the tree it was run against.
+    ///
+    /// The failure this guards is the one that costs the most: a pass recorded before somebody
+    /// edited is a green tick about a tree that no longer exists, and it is the tick they merge on.
+    func testAGateIsOnlyCurrentWhileNothingHasChangedSince() {
+        let model = SessionModel(client: Client(port: 0))
+        let turn = Turn(prompt: "change it")
+        turn.begin(call: "1", tool: "Edit", input: ["file_path": .string("src/app.swift")])
+        turn.finish(call: "1", output: "ok", failed: false)
+        turn.finished = true
+        model.turns = [turn]
+
+        turn.gate = .notRun
+        XCTAssertFalse(model.gateIsCurrent)
+        turn.gate = .failed("make check", [])
+        XCTAssertFalse(model.gateIsCurrent)
+        turn.gate = .passed("make check", 1)
+        XCTAssertTrue(model.gateIsCurrent)
+
+        // Edited after the checks ran: the recorded pass is about something else now.
+        model.changes = [Wire.Change(path: "src/app.swift", status: "M", label: "modified")]
+        XCTAssertFalse(model.gateIsCurrent)
+        XCTAssertTrue(model.mergeBlocker?.contains("since the checks last ran") == true)
     }
 
     func testMergeStopsOversizedAgentChanges() {

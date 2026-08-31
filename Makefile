@@ -1,10 +1,12 @@
-.PHONY: help build check fmt lint test scan clean
+.PHONY: help build check fmt lint test scan clean dev app
 
 help:
 	@echo "build   compile the workspace"
 	@echo "check   fmt + clippy + tests, the gate everything must pass"
 	@echo "test    run tests"
 	@echo "scan    scan this repository with the freshly built binary"
+	@echo "app     build dist/Keel.app (release, signed) — run this once"
+	@echo "dev     rebuild and relaunch the app, ~5s — the loop while working on it"
 
 build:
 	cargo build
@@ -40,6 +42,11 @@ clean:
 # ── macOS packaging ──────────────────────────────────────────────────────────
 app:
 	@packaging/build-app.sh
+
+# The loop for working on the app: rebuild what changed, relaunch, about five seconds.
+# `make app` is the release path and does a minute of work that has nothing to do with your edit.
+dev:
+	@packaging/dev-run.sh
 
 dmg: app sparkle-tools
 	@packaging/build-dmg.sh
