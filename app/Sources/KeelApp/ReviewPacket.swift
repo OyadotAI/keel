@@ -31,9 +31,6 @@ struct ReviewPacket {
 
 struct ReviewPacketView: View {
     @Bindable var model: SessionModel
-    let lanes: Lanes
-    @State private var finishing = false
-    @State private var message = ""
     @State private var exported: String?
     @State private var identityOpen = false
     /// Open when something failed: a command that did not work is evidence you should not have to
@@ -46,6 +43,7 @@ struct ReviewPacketView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                finish
                 verdict
                 identity
                 evidence
@@ -53,7 +51,6 @@ struct ReviewPacketView: View {
                 commands
                 gates
                 export
-                finish
             }
             .padding(.horizontal, K.S.xl)
             .padding(.bottom, K.S.xxl)
@@ -61,13 +58,6 @@ struct ReviewPacketView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .background(K.C.bg)
-        .alert("Finish this task", isPresented: $finishing) {
-            TextField("Commit message", text: $message)
-            Button("Commit and merge") { Task { await lanes.finish(model, message: message) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(Lanes.finishBlurb(branch: model.branch))
-        }
     }
 
     private var header: some View {
@@ -85,7 +75,7 @@ struct ReviewPacketView: View {
                 .font(K.F.display)
                 .foregroundStyle(packet.blocker == nil ? K.C.add : K.C.warn)
             VStack(alignment: .leading, spacing: K.S.xxs) {
-                Text(packet.blocker == nil ? "Ready for your merge decision" : "Not ready to merge")
+                Text(packet.blocker == nil ? "Ready for a pull request" : "Not ready for a pull request")
                     .font(K.F.title).foregroundStyle(K.C.text)
                 Text(packet.blocker ?? "Every recorded implementation turn passed its project gate.")
                     .font(K.F.small).foregroundStyle(K.C.dim)
@@ -222,17 +212,21 @@ struct ReviewPacketView: View {
         }
     }
 
+    /// The one thing this screen is for, at the top of it.
+    ///
+    /// It opens a pull request rather than merging: the work lands where the rest of the team
+    /// reviews it, which is what a lane's branch was for. Merging straight into the project is
+    /// still on the lane's own menu for whoever wants it.
     @ViewBuilder private var finish: some View {
         if packet.worktree != nil {
-            Button {
-                message = packet.title
-                finishing = true
-            } label: {
-                Label("Review complete — merge task", systemImage: "arrow.triangle.merge")
+            Button { model.sheet = .pr } label: {
+                Label("Review complete — create pull request",
+                      systemImage: "arrow.triangle.pull")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(FilledButton())
             .disabled(packet.blocker != nil)
+            .padding(.bottom, K.S.md)
         }
     }
 
