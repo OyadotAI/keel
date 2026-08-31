@@ -225,6 +225,14 @@ final class Turn: Identifiable {
         }
     }
 
+    /// Which tool a call id belongs to, including one made by a subagent.
+    func toolName(of id: String) -> String? {
+        if let parent = parentOf[id], let pi = callIndex[parent] {
+            return calls[pi].children.first { $0.id == id }?.tool
+        }
+        return callIndex[id].map { calls[$0].tool }
+    }
+
     func finish(call id: String, output: String, failed: Bool) {
         if let parent = parentOf[id], let pi = callIndex[parent],
            let ci = calls[pi].children.firstIndex(where: { $0.id == id }) {

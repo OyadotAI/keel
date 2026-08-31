@@ -206,6 +206,16 @@ pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion|Write|Ed
 /// Keel's own, points at Keel's own binary, and is passed on the command line rather than read
 /// from the working tree — the thing that made repo hooks dangerous is exactly the thing this
 /// does not do.
+/// One shell word, whatever is in it.
+///
+/// Claude Code runs a hook command through a shell, so an unquoted path with a space in it
+/// arrives as two arguments — and `clap`'s usage error exits 2, which a `PreToolUse` hook uses to
+/// mean *block this call*. Every command on a machine whose checkout lives under "My Projects"
+/// would have been refused, with a usage message as the reason.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 pub fn settings_json(
     repo: &Utf8Path,
     port: u16,
@@ -252,7 +262,15 @@ pub fn settings_json(
                 "matcher": HOOKED_TOOLS,
                 "hooks": [{
                     "type": "command",
-                    "command": format!("{} approve --port {port} --lane {} --cwd {}", exe.display(), lane.unwrap_or(""), cwd),
+                    "command": format!(
+                        "{} approve --port {port} --lane {} --cwd {}",
+                        sh_quote(&exe.display().to_string()),
+                        // Quoted even though a lane id is a uuid: `--lane` with no lane rendered
+                        // as two spaces, the shell collapsed them, and `--cwd` became the *value*
+                        // of `--lane`. Same exit 2, same "every call blocked".
+                        sh_quote(lane.unwrap_or("")),
+                        sh_quote(cwd.as_str()),
+                    ),
                     // Must exceed the wait Keel itself enforces, or Claude Code gives up first and
                     // the person's answer arrives too late to be applied.
                     "timeout": crate::approve::WAIT.as_secs() + 30,
@@ -713,6 +731,35 @@ mod tests {
             timeout > crate::approve::WAIT.as_secs(),
             "the CLI's timeout ({timeout}s) must exceed Keel's wait ({}s)",
             crate::approve::WAIT.as_secs()
+        );
+    }
+
+    /// A hook command is a shell line, and a checkout under "My Projects" made it two arguments.
+    ///
+    /// `clap`'s usage error exits 2, and 2 from a `PreToolUse` hook means *block the call* — so
+    /// on that machine every command, edit and question would have come back refused, with a
+    /// usage message as the reason.
+    #[test]
+    fn a_path_with_a_space_in_it_stays_one_shell_word() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        let checkout = root.join("My Projects/app");
+        std::fs::create_dir_all(&checkout).expect("mkdir");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&settings_json(&root, 7777, None, None, &checkout))
+                .expect("valid json");
+        let command = json["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .expect("a command");
+        assert!(
+            command.contains(&format!("--cwd '{checkout}'")),
+            "the checkout is not one shell word: {command}"
+        );
+        // And an absent lane is an empty word, not an absent one: `--lane  --cwd x` makes
+        // `--cwd` the lane's value and the path an unexpected argument.
+        assert!(
+            command.contains("--lane ''"),
+            "an absent lane swallowed the next flag: {command}"
         );
     }
 }

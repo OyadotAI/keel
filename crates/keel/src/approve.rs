@@ -507,10 +507,15 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
                  start it again. Say that you are watching it and end your turn."
             ),
         },
-        Err(e) => Decision {
-            decision: "deny".into(),
-            reason: format!("Keel could not start that as a background job ({e}). {NO_MONITOR}"),
-        },
+        Err(e) => {
+            sentry::capture_message("could not start a background job", sentry::Level::Error);
+            Decision {
+                decision: "deny".into(),
+                reason: format!(
+                    "Keel could not start that as a background job ({e}). {NO_MONITOR}"
+                ),
+            }
+        }
     }
 }
 

@@ -211,9 +211,17 @@ tension:
   the working tree, so nothing a repository contains can change it.
 - It points at Keel's own binary and does one thing: ask the running Keel whether the person
   approves this call, and block until they answer.
-- It fails open. Keel unreachable, socket dropped, nobody at the keyboard — every path prints
-  nothing and exits 0, which defers to the allowlist. A guardrail that can wedge the agent is one
-  people turn off.
+- It fails open. Keel unreachable, socket dropped, nobody at the keyboard — every path exits 0,
+  which defers to the allowlist. A guardrail that can wedge the agent is one people turn off.
+
+**The hook's command line is a shell line, so every interpolation into it is quoted.** Twice now
+the opposite has shipped. `--lane` was added to it before the binary accepted the flag, and clap
+exits 2 — which a `PreToolUse` hook reads as *block* — so every `Bash` call died. The fix made an
+unparseable `approve` exit 0 instead, and that turned the next one silent: `--cwd <path>` unquoted
+split on the space in `My Projects`, clap failed, the hook did nothing, and deferring means the
+allowlist decides alone — every command outside it refused, no card ever queued, nobody told. It
+reached us as a tester saying the agent had no access to a folder and worked in a different
+project. Failing open must still *say so*, and it now prints one line to stderr.
 
 ## Monitoring
 
@@ -236,6 +244,29 @@ Keel puts on the command line changes it, so the job belongs to the daemon inste
   and a dev server nobody can see or stop is worse than one that never started.
 
 It is a list of processes with their output, not a scheduler: no cron, no retry, one run each.
+
+## What reports itself
+
+Testers crash on machines with no logs, and they also *fail* on them — quietly, which is worse,
+because a failure nobody can see reads as the product not working rather than as a bug. So the
+failure paths report themselves, and the rule is the same one the redaction has always had: the
+shape travels, the content never does.
+
+- **Every failed response, from one layer.** `report_failures` in `serve.rs` tags the matched
+  route *pattern* and the status. Sixty handlers returned `(StatusCode, String)` to the app and to
+  nobody else; this is one layer and covers all of them. Never the body — it quotes paths, branch
+  names and the person's own text — and never the concrete path, which would carry a device id.
+- **"Refused without asking."** The signature of every report that has cost trust: a tool came
+  back denied and no approval card was ever shown, so there was nothing to click and no reason
+  given. Reported from the app at turn end with the tool names only. It has had four different
+  causes so far, which is exactly why the *symptom* is what is watched.
+- **The agent exiting non-zero says why.** `classify` names the cause — `auth`, `limits`,
+  `no-such-session`, `silent` and the rest — and `redact` sends the last stderr line with the
+  identifying tokens removed. It used to send the exit code alone, and ten identical issues said
+  "exit 1" with no way to tell a spent balance from an expired login.
+- **Failing open still says so.** An `approve` invocation that cannot parse its own arguments
+  exits 0, which defers to the allowlist — and now prints one line saying that commands will be
+  refused without asking. Silence there is what turned an hour's diagnosis into never.
 
 ## Trusting a project
 

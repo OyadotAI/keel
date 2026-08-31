@@ -1214,6 +1214,7 @@ final class SessionModel: Identifiable {
                 guard let id = b.tool_use_id else { continue }
                 let output = b.content?.flatText ?? ""
                 turn.finish(call: id, output: output, failed: b.is_error ?? false)
+                noteRefusal(in: output, call: id, turn: turn)
                 // The write landed; the dev server is about to rebuild. Arm the page again so a
                 // slow HMR is still caught, and keep the bar up until the next call starts.
                 if editing != nil { canvas?(["keel": "expect"]) }
@@ -2127,15 +2128,42 @@ final class SessionModel: Identifiable {
         case .notRun: props["gate"] = "not_run"
         case .none: props["gate"] = "none"
         }
+        props["refused"] = refusedThisTurn.count
         Telemetry.track("turn_finished", props)
+        // The shape of every "Keel keeps rejecting me" report: a tool was refused and no card
+        // was ever put in front of anyone, so there was nothing to click and no reason given.
+        // It has had several causes — a hook that could not parse its own arguments, a session
+        // resumed in the wrong project, a lane that could not read the project root — and it is
+        // the *symptom* that is worth watching, because it is the same however it is reached.
+        if !refusedThisTurn.isEmpty, approvalsThisTurn == 0 {
+            Telemetry.warn("refused without asking", [
+                "tools": Set(refusedThisTurn).sorted().joined(separator: ","),
+                "count": "\(refusedThisTurn.count)",
+                "mode": mode,
+                "isolated": isolated ? "yes" : "no",
+                "resumed": sessionId == nil ? "no" : "yes",
+            ])
+        }
         // A turn that failed the gate or ran no tools is the shape of a bad experience; a
         // warning so it is findable next to the crashes rather than buried in a funnel.
         if case .failed = turn.gate {
             Telemetry.warn("turn failed the gate", ["mode": mode, "calls": "\(turn.calls.count)"])
         }
         approvalsThisTurn = 0
+        refusedThisTurn = []
     }
     var approvalsThisTurn = 0
+
+    /// The tools refused this turn. Names only — never the path or command that was refused.
+    var refusedThisTurn: [String] = []
+
+    /// Claude Code's own wording when a tool is denied, confirmed against real transcripts rather
+    /// than guessed: "Claude requested permissions to read from …, but you haven't granted it
+    /// yet." The tail is the stable half; the verb and the subject both vary.
+    private func noteRefusal(in output: String, call id: String, turn: Turn) {
+        guard output.contains("haven't granted it yet") else { return }
+        refusedThisTurn.append(turn.toolName(of: id) ?? "unknown")
+    }
 
     private func attempt(_ work: () async throws -> Void) async {
         do { try await work(); lastError = nil; lastFix = nil } catch {

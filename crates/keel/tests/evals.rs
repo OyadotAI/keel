@@ -900,6 +900,66 @@ fn eval_21_a_monitored_command_outlives_the_turn_that_asked_for_it() {
     );
 }
 
+/// 22. A lane can read the project it is a lane of.
+///
+/// A lane runs in `<repo>/.keel/worktrees/<name>`, so everything at the project root is outside
+/// the agent's working directory — including `.keel/attachments`, where Keel writes the file the
+/// person has just dragged into the chat. Found in a real transcript: the agent asked to read the
+/// attachment it had been handed and was told it had no permission, with no card to click,
+/// because `Read` is not a tool the hook covers.
+#[test]
+fn eval_22_a_lane_can_still_read_the_project_it_belongs_to() {
+    let (repo, port, mut daemon, argv) = stubbed_project();
+    post(port, "/api/worktree/create", r#"{"name":"eval-add-dir"}"#);
+    let _ = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&wt=eval-add-dir&prompt={}",
+        urlencode("hello")
+    ));
+    let line = argv_of(&argv);
+    let root = repo.path().canonicalize().expect("canonical repo");
+    stop_daemon(&mut daemon);
+
+    assert!(
+        line.contains("--add-dir"),
+        "a lane was given no way to read the project root, so an attachment it was handed is \
+         unreadable:\n{line}"
+    );
+    assert!(
+        line.contains(root.to_str().expect("utf8")),
+        "`--add-dir` was passed something other than the project:\n{line}"
+    );
+}
+
+/// 23. A conversation belongs to the project it was started in.
+///
+/// History lists sessions from a shared parent directory, so two repositories under `~/Dev` are
+/// each other's neighbours and one project's session is one click away in the other. Resuming it
+/// used to fall back silently to the open project: verified in a real transcript, where one
+/// session id carries `cwd` changing from one project's worktree to another's mid-file and every
+/// tool call after the switch comes back "you haven't granted permissions to read from …".
+#[test]
+fn eval_23_a_session_from_another_project_is_refused_not_relocated() {
+    let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    let elsewhere = tempfile::tempdir().expect("tempdir");
+    let stream = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&session=abc-123&cwd={}&prompt={}",
+        urlencode(elsewhere.path().to_str().expect("utf8")),
+        urlencode("carry on")
+    ));
+    stop_daemon(&mut daemon);
+
+    assert!(
+        stream.contains("fatal"),
+        "another project's conversation was resumed here rather than refused — every path it \
+         already knows is unreadable, and what the person sees is the agent saying it has no \
+         access to a folder:\n{stream}"
+    );
+    assert!(
+        stream.contains("not the project open here"),
+        "the refusal did not say why, which is the half that makes it actionable:\n{stream}"
+    );
+}
+
 /// A stubbed project with extra files in place before the daemon starts.
 fn stubbed_project_with(
     files: &[(&str, &str)],

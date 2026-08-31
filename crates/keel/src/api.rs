@@ -425,6 +425,140 @@ fn system_prompt(repo: &Utf8Path) -> String {
     out
 }
 
+/// What went wrong, as one word that can be grouped on.
+///
+/// Ordered, and the order is the whole trick: "no conversation found" contains "not found", and
+/// a generic bucket that swallows the specific one is how a report stays useless.
+fn classify(stderr: &str) -> &'static str {
+    let s = stderr.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| s.contains(n));
+    if s.is_empty() {
+        "silent"
+    } else if has(&["no conversation found", "session id"]) {
+        "no-such-session"
+    } else if has(&[
+        "invalid api key",
+        "/login",
+        "unauthorized",
+        "authentication",
+        "oauth",
+        "expired",
+    ]) {
+        "auth"
+    } else if has(&[
+        "credit balance",
+        "usage limit",
+        "rate limit",
+        "quota",
+        "429",
+    ]) {
+        "limits"
+    } else if has(&["unknown option", "unexpected argument", "unrecognized"]) {
+        "bad-flag"
+    } else if has(&[
+        "econnrefused",
+        "enotfound",
+        "fetch failed",
+        "socket hang up",
+        "etimedout",
+    ]) {
+        "network"
+    } else if has(&[
+        "enoent",
+        "no such file",
+        "command not found",
+        "not installed",
+    ]) {
+        "missing"
+    } else {
+        "unclassified"
+    }
+}
+
+/// Strip what identifies a person or their work, keep what identifies the bug.
+///
+/// The same rule as `Telemetry.redact` on the app side, written without a regex crate because
+/// this workspace has none and one dependency for five patterns is not a trade worth making.
+/// Conservative by construction: a token is kept only when it cannot be a path, a URL, a quoted
+/// name, an address, an id or anything long enough to be a secret.
+fn redact(stderr: &str) -> String {
+    let line = stderr.lines().next_back().unwrap_or_default();
+    let mut out = String::new();
+    for token in line.split_whitespace() {
+        let bare = token.trim_matches(|c: char| c == ',' || c == '.' || c == ')' || c == '(');
+        let identifying = bare.starts_with('\'')
+            || bare.starts_with('"')
+            || bare.starts_with('~')
+            || bare.contains('/')
+            || bare.contains('\\')
+            || bare.contains('@')
+            || bare.chars().count() > 24
+            || (bare.chars().count() >= 8
+                && bare
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == '-' || c == '_'));
+        out.push_str(if identifying { "<x>" } else { bare });
+        out.push(' ');
+    }
+    out.trim().chars().take(200).collect()
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    /// Ten issues in Sentry saying "exit 1" and nothing else. The two answers that were
+    /// indistinguishable are the two most likely ones.
+    #[test]
+    fn a_failure_is_named_rather_than_counted() {
+        for (stderr, expected) in [
+            ("", "silent"),
+            (
+                "No conversation found with session ID: 9f2c-aa",
+                "no-such-session",
+            ),
+            ("Invalid API key · Please run /login", "auth"),
+            ("Credit balance is too low", "limits"),
+            (
+                "error: unknown option '--forward-subagent-text'",
+                "bad-flag",
+            ),
+            (
+                "FetchError: request failed, reason: ECONNREFUSED",
+                "network",
+            ),
+            ("env: node: No such file or directory", "missing"),
+            ("something nobody has seen before", "unclassified"),
+        ] {
+            assert_eq!(classify(stderr), expected, "for: {stderr}");
+        }
+    }
+
+    /// The reason it used to travel as nothing at all. A git error quotes branch names, a
+    /// filesystem error quotes paths, and neither may leave the machine — but the sentence
+    /// saying which failure it was is exactly what makes the report worth having.
+    #[test]
+    fn what_identifies_the_person_never_leaves_but_the_failure_does() {
+        let out = redact(
+            "fatal: a branch named 'keel/add-billing' already exists in /Users/anna/Dev/acme",
+        );
+        for leak in ["anna", "acme", "add-billing", "/Users", "keel/"] {
+            assert!(!out.contains(leak), "{leak} survived redaction: {out}");
+        }
+        assert!(
+            out.starts_with("fatal: a branch named"),
+            "the failure is gone: {out}"
+        );
+
+        // Bounded, because a stack trace pasted into an issue is not a report.
+        let huge = "x ".repeat(4_000);
+        assert!(redact(&huge).chars().count() <= 200);
+
+        // A session id is an id, not a word.
+        assert!(!redact("No conversation found with session ID: 9f2caa31-88").contains("9f2caa31"));
+    }
+}
+
 #[cfg(test)]
 mod prompt_tests {
     use super::*;
@@ -642,7 +776,33 @@ pub async fn chat(
         // A resumed session runs where it was started. Validated: the repository, a parent
         // within two levels, or a subdirectory — nowhere else.
         Ok(_) if query.cwd.is_some() && query.session.is_some() => {
-            state.session_dir(query.cwd.as_deref())
+            match state.session_dir_checked(query.cwd.as_deref()) {
+                Some(dir) => dir,
+                // Resuming it here would run another project's conversation against this
+                // project's files. Every path the agent already knows would be unreadable, and
+                // what the person sees is the agent saying it has no access to a folder — which
+                // is exactly the report that led here. Refuse, and say which project it belongs
+                // to rather than pretending.
+                None => {
+                    let where_from = query.cwd.clone().unwrap_or_default();
+                    let name = where_from
+                        .rsplit('/')
+                        .find(|p| !p.is_empty() && *p != ".")
+                        .unwrap_or("another project")
+                        .to_string();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(Ok(Event::default().event("fatal").data(format!(
+                                "That conversation was started in “{name}”, which is not the \
+                                 project open here. Open that project and resume it there — \
+                                 resuming it in this one would point it at files it has never \
+                                 seen."
+                            ))))
+                            .await;
+                    });
+                    return Sse::new(ReceiverStream::new(rx));
+                }
+            }
         }
         Ok(p) => p,
         Err(e) => {
@@ -751,6 +911,15 @@ pub async fn chat(
                 // refusal text either way, so it bought nothing and cost tokens every turn. The fix
                 // that works is in the UI, which says what an expansion refusal is.
                 ;
+
+            // A lane runs in `<repo>/.keel/worktrees/<name>`, and everything at the project root
+            // is then outside the agent's working directory — including `.keel/attachments`,
+            // where Keel puts the file the person just dragged into the chat. The agent asked to
+            // read it and was told it had no permission, in the one flow where the person had
+            // just handed it the file. Verified in a real transcript.
+            if cwd != repo {
+                command.arg("--add-dir").arg(&repo);
+            }
 
             if let Some(session) = &query.session {
                 command.arg("--resume").arg(session);
@@ -866,6 +1035,10 @@ pub async fn chat(
             });
         }
 
+        // Whether the turn said anything at all before it died. "Exited 1 having streamed 400
+        // lines" and "exited 1 without a word" are different bugs, and the report could not tell
+        // them apart.
+        let mut streamed = false;
         if let Some(stdout) = child.stdout.take() {
             let mut lines = BufReader::new(stdout).lines();
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
@@ -887,6 +1060,7 @@ pub async fn chat(
                         continue;
                     }
                 };
+                streamed = true;
                 if tx
                     .send(Ok(Event::default().event("msg").data(line)))
                     .await
@@ -908,18 +1082,41 @@ pub async fn chat(
         // handed `done` with a code it ignored, and drew an empty turn card. An exit of 0 is
         // silent as before — plenty of tools warn on stderr and succeed.
         if code != 0 {
-            // Every non-zero exit is reported, with or without stderr — the silent ones are
-            // exactly the cases nobody could explain afterwards. The code and the provider go;
-            // stderr does not, because it quotes paths and branch names.
+            let why = errors.lock().expect("stderr lock").trim().to_string();
+            // Every non-zero exit is reported. It used to travel as the provider and the code and
+            // nothing else, on the grounds that stderr quotes paths and branch names — which is
+            // true, and left ten identical issues saying "exit 1" with no way to tell what
+            // failed. So the *cause* goes instead: a name matched from the message, and the last
+            // line with the identifying parts taken out by the same rule `Telemetry.redact` uses
+            // on the app side. Sign-in and a spent balance are the two most likely answers here,
+            // and neither was distinguishable before.
+            let cause = classify(&why);
             sentry::with_scope(
                 |scope| {
                     scope.set_tag("provider", provider);
                     scope.set_tag("exit", code.to_string());
+                    scope.set_tag("cause", cause);
+                    scope.set_tag("streamed", streamed.to_string());
                 },
-                || sentry::capture_message("the agent exited non-zero", sentry::Level::Error),
+                || {
+                    sentry::capture_message(
+                        &format!("the agent exited non-zero: {cause}: {}", redact(&why)),
+                        sentry::Level::Error,
+                    )
+                },
             );
-            let why = errors.lock().expect("stderr lock").trim().to_string();
-            if !why.is_empty() {
+            if why.is_empty() {
+                // Silence used to be the one case the person was told nothing about: the app got
+                // `done` with a code it ignores and drew an empty turn card, which is what the
+                // whole `fatal` path exists to prevent.
+                let _ = tx
+                    .send(Ok(Event::default().event("fatal").data(format!(
+                        "`{provider}` exited with code {code} and printed nothing. Run \
+                         `{provider} -p hi` in a terminal — a sign-in that has expired or a spent \
+                         balance fails exactly like this and says so there."
+                    ))))
+                    .await;
+            } else {
                 let tail: String = why
                     .lines()
                     .rev()

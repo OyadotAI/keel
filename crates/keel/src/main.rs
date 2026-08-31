@@ -223,12 +223,24 @@ fn main() -> Result<()> {
     // code that knows to defer, so the guardrail that documents itself as never able to wedge the
     // agent wedged it completely. An old hook on disk invoking a new binary is the same shape.
     //
-    // Anything unparseable that was trying to be an approval prints nothing and exits 0, which
-    // defers to Claude Code's own permission check.
+    // Anything unparseable that was trying to be an approval exits 0, which defers to Claude
+    // Code's own permission check.
+    //
+    // It used to print nothing as well, and that half was wrong. Deferring means the allowlist
+    // decides alone: every command outside it is refused, no card is ever queued, and nobody
+    // learns that the hook is dead — it reads as "Keel keeps rejecting me" with no question to
+    // answer. `--cwd '<path>'` unquoted did exactly that to any project whose path had a space in
+    // it, and the report that reached us was a tester saying the agent had no access to a folder.
+    // One line on stderr is the difference between an hour and never.
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(e) => {
             if args.iter().any(|a| a == "approve") {
+                eprintln!(
+                    "keel: the approval hook could not read its own arguments, so this call is \
+                     being left to the allowlist. Anything outside it will be refused without \
+                     asking. Update Keel, or reopen the project."
+                );
                 return Ok(());
             }
             e.exit();
