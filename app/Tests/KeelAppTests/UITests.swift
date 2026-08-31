@@ -868,6 +868,25 @@ extension UITests {
         XCTAssertEqual(bucket("2027-01-01"), "Today", "a clock ahead of ours is still recent")
     }
 
+    /// A file card is created when the write *starts*, so its first read of the diff finds nothing
+    /// on disk and the daemon says so. The write landing is what has to make it read again — the
+    /// card used to keep that answer until the pane was rebuilt by navigating away and back.
+    func testAWriteLandingRefreshesTheDiffsOnScreen() {
+        let m = SessionModel(client: Client(port: 0)), t = Turn(prompt: "write a file")
+        m.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"lib/new.ts"}}]}}"#.utf8), into: t)
+        XCTAssertEqual(t.files, ["lib/new.ts"], "the card exists before the file does")
+
+        let tick = m.diffTick
+        m.record(Data(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"ok"}]}}"#.utf8), into: t)
+        XCTAssertGreaterThan(m.diffTick, tick, "the cards read again once the file is there")
+
+        // Every other result would be a refetch of every diff on screen for nothing.
+        m.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"lib/new.ts"}}]}}"#.utf8), into: t)
+        let after = m.diffTick
+        m.record(Data(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"ok"}]}}"#.utf8), into: t)
+        XCTAssertEqual(m.diffTick, after, "a read changes no file")
+    }
+
     /// An account in eight organisations gets a screen of headings, not three hundred rows — and
     /// the owner comes off `full_name`, which is the only place it is.
     func testCloneListGroupsByOwner() {

@@ -1143,6 +1143,12 @@ final class SessionModel: Identifiable {
         // Accepted work becomes a commit, so the tree stays small and every step is a place
         // to go back to.
         if mode != "plan" { await commitTurn(turn) }
+        // The diffs in the turn are read once, when their card appears — which for a file the
+        // agent is in the middle of writing is before there is anything to read, and the daemon
+        // rightly answered "this file is not on disk any more". Nothing then asked again, so a new
+        // file stayed at +0 −0 until the pane was rebuilt by navigating away and back. The tree is
+        // final here: gate run, design checked, commit made.
+        diffTick += 1
         Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
         reportTurn(turn)
         if !queued.isEmpty { start(queued.removeFirst()) }
@@ -1453,6 +1459,13 @@ final class SessionModel: Identifiable {
                 guard let id = b.tool_use_id else { continue }
                 let output = b.content?.flatText ?? ""
                 turn.finish(call: id, output: output, failed: b.is_error ?? false)
+                // A file card is drawn when the write *starts* — that is when the path is known —
+                // so its diff is read before the file exists, and the daemon truthfully answers
+                // that it is not on disk. Now the write has landed, so the cards read again. Keyed
+                // to write tools: every other result would be a refetch of everything for nothing.
+                if let name = turn.toolName(of: id), Turn.writeTools.contains(name) {
+                    diffTick += 1
+                }
                 noteRefusal(in: output, call: id, turn: turn)
                 // The write landed; the dev server is about to rebuild. Arm the page again so a
                 // slow HMR is still caught, and keep the bar up until the next call starts.
@@ -2642,7 +2655,8 @@ final class SessionModel: Identifiable {
         diffTick += 1
     }
 
-    /// Bumped when the working tree changed under a diff someone is looking at.
+    /// Bumped when the working tree changed under a diff someone is looking at: a stage, a
+    /// discard, a rewind, and the end of every turn.
     var diffTick = 0
 
     // MARK: - Rewind
