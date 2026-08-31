@@ -190,7 +190,7 @@ extension UITests {
         var surfaces: [(String, AnyView)] = [
             ("conversation", AnyView(ChatRail(model: m))),
             ("trace", AnyView(TurnStage(model: m))),
-            ("review", AnyView(ReviewPacketView(model: m, lanes: lanes))),
+            ("review", AnyView(ReviewPacketView(model: m))),
         ]
         for panel in SessionWindow.Panel.allCases {
             surfaces.append(("panel-\(panel.rawValue)", AnyView(SidePanel(panel: panel, model: m))))

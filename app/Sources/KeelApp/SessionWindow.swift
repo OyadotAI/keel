@@ -292,7 +292,7 @@ struct SessionWindow: View {
                         DiffSurface(model: model, path: path)
                     } else {
                         switch stage {
-                        case .review: ReviewPacketView(model: model, lanes: lanes)
+                        case .review: ReviewPacketView(model: model)
                         case .turn: TurnStage(model: model)
                         case .preview: PreviewSurface(model: model)
                         }
