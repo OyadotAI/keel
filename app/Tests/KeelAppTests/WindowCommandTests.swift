@@ -13,6 +13,12 @@ final class WindowCommandTests: XCTestCase {
         XCTAssertFalse(WindowCommand.acts(key: false, addressed: false, object: nil))
     }
 
+    /// A window that has not found itself yet keeps the old behaviour rather than swallowing the
+    /// command: ⌘↵ doing nothing on the first send is the worse of the two failures.
+    func testAWindowThatDoesNotKnowItselfStillActs() {
+        XCTAssertTrue(WindowCommand.acts(key: nil, addressed: false, object: nil))
+    }
+
     /// ⌘1–9 sends an Int. It is still a menu key, so it is still the key window's.
     func testAnIndexIsStillAMenuCommand() {
         XCTAssertFalse(WindowCommand.acts(key: false, addressed: true, object: 3))
