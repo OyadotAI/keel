@@ -24,7 +24,6 @@ struct Welcome: View {
     @State private var installing = false
     @State private var log = ""
     @State private var error: String?
-    @State private var starting = false
 
     struct ClaudeStatus: Decodable {
         var installed: Bool
@@ -66,20 +65,6 @@ struct Welcome: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(K.C.bg)
         .task { await refresh() }
-        .sheet(isPresented: $starting) {
-            StartProject(client: model.client) { path, brief, file in
-                starting = false
-                open(path)
-                if let file { model.attach(fileURL: file) }
-                if !brief.isEmpty {
-                    model.prompt = brief
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(file == nil ? 800 : 1800))
-                        model.send()
-                    }
-                }
-            }
-        }
     }
 
     private var claudeSection: some View {
@@ -142,8 +127,6 @@ struct Welcome: View {
 
             HStack(spacing: K.S.sm) {
                 Button("Open a folder…") { openFolder() }.buttonStyle(FilledButton())
-                Button("New project…") { starting = true }.buttonStyle(QuietButton())
-                Button("Clone from GitHub…") { starting = true }.buttonStyle(QuietButton())
             }
             .disabled(!ready)
             .opacity(ready ? 1 : 0.45)

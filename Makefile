@@ -1,10 +1,9 @@
-.PHONY: help build check fmt lint test scan clean
+.PHONY: help build check fmt lint test clean
 
 help:
 	@echo "build   compile the workspace"
 	@echo "check   fmt + clippy + tests, the gate everything must pass"
 	@echo "test    run tests"
-	@echo "scan    scan this repository with the freshly built binary"
 
 build:
 	cargo build
@@ -27,8 +26,6 @@ app-test:
 
 .PHONY: app-test
 
-scan: build
-	cargo run --quiet -- scan .
 
 clean:
 	cargo clean

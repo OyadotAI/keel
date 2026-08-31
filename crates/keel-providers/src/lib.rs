@@ -4,6 +4,5 @@
 //! keyless deploy path, so Keel provisions narrowly-scoped per-project API tokens and rotates them
 //! rather than asking the user for an account-wide token.
 
-pub mod cloudflare;
 pub mod credentials;
 pub mod github;

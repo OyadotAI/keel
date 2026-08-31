@@ -210,7 +210,6 @@ struct StateResponse {
     project_open: bool,
     /// Whether the welcome flow has ever been completed on this machine.
     onboarded: bool,
-    scan: keel_scanner::Report,
     workspace: keel_workspace::Workspace,
     policy: crate::policy::Policy,
 }
@@ -374,16 +373,9 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route(
             "/api/memory",
-            axum::routing::post(crate::review::api_memory),
+            axum::routing::post(crate::memory::api_memory),
         )
-        .route("/api/readiness/ignore", axum::routing::post(api_ignore))
         .route("/api/git/ignore", axum::routing::post(api_git_ignore))
-        .route("/api/review", get(crate::review::api_review))
-        .route(
-            "/api/review/save",
-            axum::routing::post(crate::review::api_review_save),
-        )
-        .route("/api/adopt", axum::routing::post(crate::review::api_adopt))
         .route("/api/git/stage-all", axum::routing::post(api_git_stage_all))
         .route(
             "/api/git/discard-all",
@@ -459,10 +451,6 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             axum::routing::post(crate::connect::connect_github),
         )
         .route(
-            "/api/connect/cloudflare",
-            axum::routing::post(crate::connect::connect_cloudflare),
-        )
-        .route(
             "/api/disconnect",
             axum::routing::post(crate::connect::disconnect),
         )
@@ -492,10 +480,6 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         )
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
-        .route(
-            "/api/aws/sso",
-            axum::routing::post(crate::aws::configure_sso),
-        )
         .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
         .route("/api/claude/install", get(crate::clitools::install_claude))
@@ -519,10 +503,6 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .route(
             "/api/pair/devices/{id}",
             axum::routing::delete(crate::pair::revoke),
-        )
-        .route(
-            "/api/project/new",
-            axum::routing::post(crate::project::create),
         )
         // Every request passes this, and for the loopback callers that are the only ones today
         // it is one `is_loopback()` and nothing else.
@@ -945,23 +925,6 @@ async fn api_git_ignore(
     .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
-#[derive(serde::Deserialize)]
-struct IgnoreBody {
-    id: String,
-    ignored: bool,
-    #[serde(default)]
-    why: String,
-}
-
-async fn api_ignore(
-    State(state): State<Arc<AppState>>,
-    Json(b): Json<IgnoreBody>,
-) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    crate::ignored::set(&state.repo(), &b.id, b.ignored, &b.why)
-        .map(|()| Json(true))
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
-}
-
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     let repo = state.repo();
     let prefs = crate::prefs::Prefs::load();
@@ -973,7 +936,6 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
             repo: String::new(),
             project_open: false,
             onboarded: prefs.onboarded,
-            scan: keel_scanner::Report::new(Vec::new()),
             workspace: keel_workspace::Workspace::default(),
             policy: crate::policy::Policy::default(),
         });
@@ -982,21 +944,8 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     // Re-read on every request. The developer is editing this repository in another window, and a
     // cached view of a tree that has moved on is worse than a slightly slower one.
     //
-    // Off the executor, because it is a full scan and a walk of every Claude Code session in the
-    // project — seconds on a large repository, during which nothing else Keel serves could answer.
-    let scanning = repo.clone();
-    let scan = blocking(
-        move || {
-            let report = keel_scanner::RepoContext::load(&scanning)
-                .map(|ctx| keel_scanner::scan(&ctx))
-                .unwrap_or_else(|_| keel_scanner::Report::new(Vec::new()));
-            // What the team set aside leaves the panel; the score and `keel scan` are untouched.
-            crate::ignored::apply(&scanning, report)
-        },
-        keel_scanner::Report::new(Vec::new()),
-    )
-    .await;
-
+    // Off the executor, because it walks every Claude Code session in the project — seconds on a
+    // large repository, during which nothing else Keel serves could answer.
     let discovering = repo.clone();
     let mut workspace = blocking(
         move || match keel_workspace::claude_home() {
@@ -1014,7 +963,6 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         repo: repo.to_string(),
         project_open: true,
         onboarded: prefs.onboarded,
-        scan,
         workspace,
         policy: crate::policy::Policy::load(&repo),
     })

@@ -313,7 +313,6 @@ final class Lanes {
         await refreshWorktrees()
         a.finishedOpening()
         a.offerSetup()
-        a.offerReview()
         // Every lane draws the same project chrome, so they share what the project says about
         // itself rather than each asking.
         for lane in lanes where lane.id != a.id {

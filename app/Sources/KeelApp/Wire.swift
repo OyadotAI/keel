@@ -9,14 +9,13 @@ enum Wire {
     struct State: Decodable, Sendable {
         var repo: String
         var projectOpen: Bool
-        var scan: Scan
         var workspace: Workspace
         var policy: Policy?
 
         enum CodingKeys: String, CodingKey {
             case repo
             case projectOpen = "project_open"
-            case scan, workspace, policy
+            case workspace, policy
         }
     }
 
@@ -36,42 +35,6 @@ enum Wire {
             case allowedProviders = "allowed_providers"
             case sources
         }
-    }
-
-    struct Scan: Decodable, Sendable {
-        var score: Int
-        var findings: [Finding]
-        var profile: Profile?
-        @DefaultEmpty var plan: [Phase]
-        /// Findings the team set aside; they are not in `findings`.
-        @DefaultEmpty var ignored: [String]
-    }
-
-    /// What the scanner thinks the repository is and where it runs.
-    struct Profile: Decodable, Sendable {
-        var template: String
-        var template_title: String
-        var like: String
-        var confidence: Int
-        @DefaultEmpty var signals: [String]
-        @DefaultEmpty var hosting: [String]
-        @DefaultEmpty var stack: [String]
-    }
-
-    /// One step of the road to production: a title, why, and the finding ids in it.
-    struct Phase: Decodable, Identifiable, Sendable {
-        var title: String
-        var why: String
-        @DefaultEmpty var findings: [String]
-        var id: String { title }
-    }
-
-    struct Finding: Decodable, Identifiable, Sendable {
-        var id: String
-        var severity: String
-        var title: String
-        var detail: String
-        var path: String?
     }
 
     struct Workspace: Decodable, Sendable {

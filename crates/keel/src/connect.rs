@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use camino::Utf8PathBuf;
-use keel_providers::{cloudflare, credentials, github};
+use keel_providers::{credentials, github};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -24,7 +24,6 @@ pub struct Connections {
     pub github: Option<github::Account>,
     /// True when the GitHub credential came from the `gh` CLI rather than one Keel stores.
     pub github_via_gh: bool,
-    pub cloudflare: Option<Vec<cloudflare::Account>>,
 }
 
 pub async fn status() -> Json<Connections> {
@@ -33,7 +32,6 @@ pub async fn status() -> Json<Connections> {
         claude: which_claude(),
         github: github::current().await,
         github_via_gh: !stored && credentials::github_from_gh_cli().is_some(),
-        cloudflare: cloudflare::current().await,
     })
 }
 
@@ -58,14 +56,6 @@ pub async fn connect_github(Json(body): Json<TokenBody>) -> ApiResult<github::Ac
     let account = github::verify(body.token.trim()).await.map_err(bad)?;
     credentials::store(credentials::Kind::GitHub, body.token.trim()).map_err(bad)?;
     Ok(Json(account))
-}
-
-pub async fn connect_cloudflare(
-    Json(body): Json<TokenBody>,
-) -> ApiResult<Vec<cloudflare::Account>> {
-    let accounts = cloudflare::verify(body.token.trim()).await.map_err(bad)?;
-    credentials::store(credentials::Kind::Cloudflare, body.token.trim()).map_err(bad)?;
-    Ok(Json(accounts))
 }
 
 #[derive(Deserialize)]

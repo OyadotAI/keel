@@ -592,11 +592,6 @@ final class SessionModel: Identifiable {
         }
         repoPath = other.repoPath
         sessions = other.sessions
-        findings = other.findings
-        // With the findings, not without them: the panel keys "has this been scanned" off `scan`,
-        // so a lane that adopted the findings alone said "Readiness not checked" above a list of
-        // findings it was already holding.
-        scan = other.scan
         workspace = other.workspace
         trusted = other.trusted
         gateCommand = other.gateCommand
@@ -838,7 +833,6 @@ final class SessionModel: Identifiable {
                             "provider": provider.queryValue])
             if !claudeModel.isEmpty { query["model"] = claudeModel }
             if let sessionId { query["session"] = sessionId }
-            if let system = nextSystem { query["system"] = system; nextSystem = nil }
 
             // Before the agent touches anything: what the tree looked like, so "restore to
             // before this turn" has something to restore to. A failure here is not a reason to
@@ -922,9 +916,6 @@ final class SessionModel: Identifiable {
         watchApprovals(false)
         await refreshGit()
         await refreshTree()
-        // The turn just changed the repository, and readiness is a reading of the repository.
-        // Without this the panel kept the findings from before the fix — including the one the
-        // person clicked "Fix this" on — until they went and pressed rescan themselves.
         await refreshState()
         await lanes?.refreshWorktrees()
         // The agent does not grade its own work.
@@ -1720,130 +1711,6 @@ final class SessionModel: Identifiable {
     /// deliberately never returns message bodies to a listing, and a native client is not a reason
     /// to change that.
     var sessions: [Wire.Session] = []
-    var findings: [Wire.Finding] = []
-    /// The whole scan: score, profile, plan. `findings` stays the list the badge counts.
-    var scan: Wire.Scan?
-
-    struct Adopted: Decodable { var written: [String]; var skipped: [String] }
-    struct ReviewPrompt: Decodable { var system: String; var evidence: String; var prompt: String }
-    /// System prompt for the next turn only: a persona and its evidence, consumed by `start`.
-    var nextSystem: String?
-
-    /// Write the reviewers and the production checklist into the project (never overwriting),
-    /// then rescan so the finding clears.
-    /// A finding's click is the fix, not a draft of it: the one Keel can write itself is
-    /// written; every other goes to the agent now, in a mode that may edit.
-    func fix(_ f: Wire.Finding) async {
-        if f.id == "agent/no-reviewers" { _ = await adoptPractices(); return }
-        mode = "acceptEdits"
-        prompt = "Fix this readiness finding: \(f.title)\n\n\(f.detail)"
-        send()
-    }
-
-    struct IgnoreBody: Encodable { var id: String; var ignored: Bool; var why: String }
-
-    /// Set a finding aside, or bring it back. Written to `.keel/ignored.json` — a decision
-    /// about the project, in the project, where the next person can argue with it.
-    func ignore(_ id: String, _ ignored: Bool) async {
-        await attempt {
-            _ = try await client.post("/api/readiness/ignore",
-                                      body: IgnoreBody(id: id, ignored: ignored, why: ""),
-                                      q(), as: Bool.self)
-        }
-        await refreshState()
-        Telemetry.track(ignored ? "finding_ignored" : "finding_restored", ["id": id])
-    }
-
-    func adoptPractices() async -> [String] {
-        var written: [String] = []
-        await attempt {
-            let a: Adopted = try await client.post("/api/adopt", body: Empty(), q(), as: Adopted.self)
-            written = a.written
-        }
-        await refreshState()
-        return written
-    }
-
-    /// Ask for the staff-engineer review: plan mode, so the turn reads and proposes and
-    /// changes nothing; the scan travels as evidence; the persona is the system prompt.
-    func requestReview() async {
-        // Never in the lane being worked in: a review is a second reader, and it gets its own
-        // tab. An empty lane is fine to use — nothing is displaced.
-        // Always its own lane, hidden until it has something: a tab that appears on its own
-        // and starts talking is what made the review look like an intruder.
-        let target: SessionModel = lanes?.reviewLane(beside: self) ?? self
-        await target.attempt {
-            let r: ReviewPrompt = try await target.client.get("/api/review", target.q())
-            target.mode = "plan"
-            target.nextSystem = r.system + r.evidence
-            target.prompt = r.prompt
-            target.send()
-            UserDefaults.standard.set(Date(), forKey: reviewKey)
-        }
-        lastReview = Date()
-    }
-
-    /// The lane holding the latest review: this one, or the hidden one beside it.
-    var reviewLane: SessionModel? {
-        if title == "Staff review" { return self }
-        return lanes?.lanes.last(where: { $0.title == "Staff review" })
-    }
-    /// Bring the review's lane forward as a tab.
-    func openReview() {
-        guard let lane = reviewLane, let lanes else { return }
-        lane.hidden = false
-        lanes.activeID = lane.id
-    }
-
-    /// Rewrite the agent instructions to the template standard, in a mode that may edit. The
-    /// same persona and evidence as the review, so the docs match what it found.
-    func fixDocs() async {
-        await attempt {
-            let r: ReviewPrompt = try await client.get("/api/review", q())
-            mode = "acceptEdits"
-            nextSystem = r.system + r.evidence
-            prompt = "Rewrite CLAUDE.md and AGENTS.md (and README.md if it misleads) so they are the documents an engineer joining tomorrow and an agent working unsupervised need — derived from the code, not from a template: the gate command and what it runs; a file map of every important directory and entry point; the request path in numbered steps; the invariants this codebase actually has, each with the test that guards it or a note that none does; how to extend it (add a route, a table, a job, a page — files to touch in order); how to run it locally and how it deploys; the ceilings and known problems, honestly. Keep anything true that is already there; delete anything false. Read the code before writing each section. Then run the gate."
-            send()
-        }
-    }
-
-    /// Save the review that just ran into docs/REVIEW.md.
-    func saveReview() async -> String? {
-        guard let text = reviewLane?.turns.last?.text, !text.isEmpty else { return nil }
-        var path: String?
-        await attempt { path = try await client.post("/api/review/save", body: SaveBody(text: text), q(), as: String.self) }
-        await refreshTree()
-        return path
-    }
-    struct SaveBody: Encodable { var text: String }
-
-    /// A visible rescan: the count after, so the click is seen to do something.
-    var scanning = false
-    func rescan() async {
-        scanning = true
-        await refreshState()
-        scanning = false
-        // A scan that could not run looks exactly like a scan that found nothing new: the panel
-        // keeps what it had and the click reads as a button that does nothing. Say so instead.
-        if let why = loadFailed { fail("The scan did not run: " + why, category: "scan") }
-        Telemetry.track("rescanned")
-    }
-
-    private var reviewKey: String { "keel.lastReview." + repoPath }
-    var lastReview: Date? {
-        get { UserDefaults.standard.object(forKey: reviewKey) as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: reviewKey) }
-    }
-    /// A review a day: when a project opens into a lane with nothing in it and the last review
-    /// is older than a day, it runs on its own. Never into a conversation already in use.
-    func offerReview() {
-        guard !repoPath.isEmpty, loaded else { return }
-        if let last = lastReview, Date().timeIntervalSince(last) < 86_400 { return }
-        if lanes?.lanes.contains(where: { $0.title == "Staff review" && $0.running }) == true { return }
-        Task { await requestReview() }
-    }
-    struct Empty: Encodable {}
-
     /// Plugins the scanner recommends for this repository that are not installed.
     ///
     /// Surfaced as a badge rather than left in a panel nobody opens: a recommendation you never
@@ -1994,8 +1861,6 @@ final class SessionModel: Identifiable {
         // switcher would be empty on a fresh install until you opened something a second time.
         if s.projectOpen, !s.repo.isEmpty { Recents.remember(s.repo) }
         sessions = s.workspace.sessions
-        findings = s.scan.findings
-        scan = s.scan
         workspace = s.workspace
         if let policy = s.policy {
             scopeFileLimit = policy.maxFiles

@@ -1698,11 +1698,8 @@ dependencies = [
  "clap",
  "futures-util",
  "ignore",
- "keel-generator",
  "keel-harness",
- "keel-mcp",
  "keel-providers",
- "keel-scanner",
  "keel-workspace",
  "keyring",
  "libc",
@@ -1724,16 +1721,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keel-generator"
-version = "0.2.54"
-dependencies = [
- "anyhow",
- "camino",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "keel-harness"
 version = "0.2.54"
 dependencies = [
@@ -1743,16 +1730,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "keel-mcp"
-version = "0.2.54"
-dependencies = [
- "anyhow",
- "camino",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1767,18 +1744,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "keel-scanner"
-version = "0.2.54"
-dependencies = [
- "anyhow",
- "camino",
- "ignore",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

@@ -2,11 +2,8 @@
 members = [
     "crates/keel",
     "crates/keel-harness",
-    "crates/keel-mcp",
-    "crates/keel-scanner",
     "crates/keel-workspace",
     "crates/keel-providers",
-    "crates/keel-generator",
 ]
 resolver = "3"
 
@@ -18,11 +15,8 @@ repository = "https://github.com/keel-dev/keel"
 
 [workspace.dependencies]
 keel-harness = { path = "crates/keel-harness" }
-keel-mcp = { path = "crates/keel-mcp" }
-keel-scanner = { path = "crates/keel-scanner" }
 keel-workspace = { path = "crates/keel-workspace" }
 keel-providers = { path = "crates/keel-providers" }
-keel-generator = { path = "crates/keel-generator" }
 
 anyhow = "1"
 thiserror = "2"

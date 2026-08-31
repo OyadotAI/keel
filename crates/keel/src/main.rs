@@ -8,18 +8,16 @@ mod agents;
 mod api;
 mod approve;
 mod askmcp;
-mod aws;
 mod clitools;
 mod connect;
 mod dev;
 mod fsops;
 mod gitroots;
 mod gui;
-mod ignored;
 mod mcp;
+mod memory;
 mod monitor;
 mod names;
-mod packs;
 mod pair;
 mod path;
 mod permissions;
@@ -27,12 +25,9 @@ mod plugins;
 mod policy;
 mod pr;
 mod prefs;
-mod project;
 mod render;
-mod review;
 mod serve;
 mod snapshot;
-mod stack;
 mod term;
 mod verify;
 mod worktree;
@@ -41,7 +36,6 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use keel_harness::quarantine;
-use keel_scanner::{RepoContext, scan};
 use keel_workspace::Workspace;
 
 #[derive(Parser)]
@@ -55,21 +49,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Audit a repository for agent- and production-readiness.
-    Scan {
-        /// Repository to scan. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: Utf8PathBuf,
-
-        /// Emit JSON instead of a rendered report.
-        #[arg(long)]
-        json: bool,
-
-        /// Exit non-zero when anything critical or high is outstanding, for CI.
-        #[arg(long)]
-        strict: bool,
-    },
-
     /// Show everything Claude Code knows about this repository.
     ///
     /// Sessions, skills, plugins, subagents and commands all shape how an agent behaves here, and
@@ -251,22 +230,6 @@ fn main() -> Result<()> {
         port: 7777,
         headless: false,
     }) {
-        Command::Scan { path, json, strict } => {
-            let ctx = RepoContext::load(&path)
-                .with_context(|| format!("reading repository at {path}"))?;
-            let report = scan(&ctx);
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                print!("{}", render::report(&report));
-            }
-
-            if strict && !report.is_shippable() {
-                std::process::exit(1);
-            }
-        }
-
         Command::Serve {
             path,
             port,

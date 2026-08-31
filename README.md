@@ -44,18 +44,19 @@ servers — visible and managed through `claude`'s own commands, with anything t
 repository* marked, because a project-scoped hook was written by whoever wrote the repo.
 
 Also: approvals answered in the conversation instead of a prompt that scrolled past, the project's
-own gate run after every turn with the failures parsed into clickable problems, a preview that can
-hold a login, and a readiness scan when you want to ship.
+own gate run after every turn with the failures parsed into clickable problems, background commands
+that outlive the turn and report back when they finish, and a preview that can hold a login.
 
-→ [**The whole thing, with the reasons**](docs/features.md) · [guardrails](docs/guardrails.md) ·
-[architecture](docs/architecture.md)
+→ [**The whole thing, with the reasons**](docs/features.md) · [the working agreement, and why each
+piece is the way it is](CLAUDE.md)
 
 ## Contributing
 
 Wanted. It is deliberately easy to work on.
 
 ```
-make check                # fmt, clippy -D warnings, tests — the whole gate, ~5s
+make check                # fmt, clippy -D warnings, tests — the whole gate
+make evals                # 23 tests against a real `claude`; run before any release
 cargo run -- serve .      # the IDE, on your own checkout
 ```
 
@@ -66,15 +67,12 @@ daemon owns repository, Git, terminal and agent effects; the Swift app owns the 
 |---|---|
 | `app/Sources/KeelApp` | Native task browser, evidence, review and terminal surfaces |
 | `keel` | Local daemon: HTTP surface, agent session, terminal and Git |
-| `keel-scanner` | Readiness checks. No network, no dependency on the rest |
 | `keel-workspace` | Reading Claude Code's own state. Read-only |
 | `keel-harness` | Supervising `claude`, and the trust quarantine |
-| `keel-providers` · `keel-generator` · `keel-mcp` | GitHub and Cloudflare · templates · the agent's tools |
+| `keel-providers` | GitHub: cloning and pull requests, credentials in the keychain |
 
 Good first PRs, each a genuinely small diff:
 
-- **A readiness check** — one function in `keel-scanner`, plus its `Fix`. A finding without a fix is
-  a bug: it turns the report into a lint run nobody acts on.
 - **A gate Keel doesn't know** — `verify::detect` is match arms in priority order. Deno, Gradle,
   Mix: one arm, one test.
 - **A CLI on the Connections screen** — `clitools::TOOLS` is a static table. An entry is an id, a

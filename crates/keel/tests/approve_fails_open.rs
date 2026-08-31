@@ -97,11 +97,11 @@ fn input_that_is_not_a_hook_payload_defers() {
 }
 
 /// The fail-open is scoped to the hook. A typo on an ordinary command still says so, or every
-/// mistyped `keel scan` would exit 0 and look like it worked.
+/// mistyped `keel workspace` would exit 0 and look like it worked.
 #[test]
 fn an_ordinary_command_still_reports_a_bad_argument() {
     let out = Command::new(env!("CARGO_BIN_EXE_keel"))
-        .args(["scan", "--not-a-real-flag"])
+        .args(["workspace", "--not-a-real-flag"])
         .output()
         .expect("could not run the keel binary");
     assert!(!out.status.success(), "a mistyped command exited 0");

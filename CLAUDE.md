@@ -1,48 +1,74 @@
 # Keel — working agreement
 
-Keel is a Claude Code IDE. It drives the user's own `claude` in their repository and makes the run
-visible: diffs as they are written, tool calls as one line each, a refused command as a question in
-the conversation, and the project's own checks run after every turn. The audience is people who
-already live in Claude Code and are tired of reading it through a terminal — so when a change is a
-choice between more surface and more visibility into what the agent just did, visibility wins.
+Keel is an ADE: an agentic development environment for product engineers, meant to replace the
+terminal you run Claude Code in. It drives the person's own `claude` in their repository and makes
+the run **visible** — diffs as they are written, tool calls one line each, a refused command as a
+question in the conversation, the project's own checks after every turn — and it **manages the
+git** around that: a worktree and a branch per conversation, a snapshot before every turn, an
+auto-commit after, and a pull request at the end.
 
-It also reads a repository and reports how ready it is for agent work and production, fixes what's
-missing, and scaffolds onto Cloudflare. That half stays out of the way of the first: a repository
-with no Cloudflare config is never asked about one.
+That is the whole product. Three things, done properly:
 
-**On "Cloudflare only".** That was the original line and it is no longer true. Keel reads a
-Kubernetes cluster, lists GKE clusters and can create one, and shows GitHub Actions runs. What
-survives of the original decision is the part that mattered: Keel does not *require* a cluster,
-does not put one in the golden path, and scaffolds new projects onto Cloudflare with no Kubernetes
-anywhere. The cluster surfaces are for repositories that already have one — read-mostly, and
-honest about cost where they are not.
+1. **Visibility.** What the agent did, while it does it, in a form you can review.
+2. **Git, fully managed.** Branches, worktrees, snapshots, commits, merges, PRs — nobody has to
+   be fluent in git to work this way, and nobody loses work to it.
+3. **Worktrees.** Several conversations at once, each with a checkout of its own.
+
+**Everything else has been deleted, on purpose.** The readiness scanner, the Cloudflare and
+Kubernetes scaffolds, 27 project templates, the staff-engineer repo review, the AWS surface — about
+35,000 lines. They were a second product wearing the first one's clothes, and the cost was not
+disk: it was that the working agreement described *them*, the invariants below stopped being true,
+and four bugs in a row shipped through the gap. Do not add a surface back because it would be
+easy. Add it back when someone using Keel for these three things cannot work without it.
+
 
 ## Non-negotiables
 
-These are enforced by tests. Changing any of them is a deliberate decision, not a refactor.
+Every one of these is asserted by a test, and every one of them is **true of the code that runs**.
+That sentence used to be false: #1 said the agent had no shell and every effect went through a
+`keel-mcp` tool, `keel-mcp` had no callers, and the struct whose unit tests asserted the flags was
+itself dead. A guarded invariant on unreachable code is worse than no invariant — it is a promise
+with a passing test and no subject. When one of these changes, change it here in the same commit.
 
-1. **The agent never gets a shell.** `--permission-mode dontAsk` + `--strict-mcp-config`; built-in
-   `Bash`/`Edit`/`Write` stay denied. Every effect passes through a `keel-mcp` tool.
-2. **`--bare` is never passed.** It would break subscription auth ("OAuth and keychain are never
-   read"). Because of that, repo `.claude/settings.json` hooks load — so `keel-harness::trust`
-   quarantines them *before* the first invocation.
-3. **Deploy tools take an explicit `env`, never a default.**
-4. **Dev and prod never share a stateful binding.**
-5. **Promotion redeploys the proven artifact**, never rebuilds.
-6. **Stop sends SIGINT**, not SIGTERM. SIGTERM abandons the turn.
-7. **Listing sessions never shows what was said.** `discover_sessions` runs constantly to populate
+1. **Keel drives the person's own `claude`, and `--bare` is never passed.** Bare mode never reads
+   OAuth credentials, so every subscription session would fail to authenticate. The price is that
+   the *repository's* own `.claude/settings.json` loads — so `keel-harness::trust` quarantines it,
+   and `.mcp.json` with it, **before every invocation**, not only at project open.
+2. **A refusable tool call is a question, and the turn waits for the answer.** Keel passes its own
+   `PreToolUse` hook in `--settings`, pointing at its own binary; the hook asks the running Keel,
+   Keel asks the person, and the call blocks until they answer. The lane's mode is `plan` or
+   `acceptEdits` — never `dontAsk`, never `--dangerously-skip-permissions`.
+3. **The hook fails open, and says so.** Keel unreachable, socket dropped, arguments it cannot
+   parse — every path exits 0 and defers to the allowlist. It also prints one line saying that,
+   because a hook that silently does nothing turns into "Keel keeps rejecting me" with no question
+   anywhere and no way to tell why.
+4. **The hook's command line is a shell line, so every interpolation is quoted.** Twice this has
+   shipped broken. See *The one hook Keel ships*.
+5. **Stop sends SIGINT**, not SIGTERM. SIGTERM abandons the turn, and the transcript is the record
+   Keel exists to show.
+6. **Listing sessions never shows what was said.** `discover_sessions` runs constantly to populate
    the switcher and returns titles, counts and timestamps only — reading a transcript to render a
    list is not licence to display it. `transcript()` is the separate, explicit path for opening one
    session the user asked for by name, and it rejects any id that could climb out of the project
    directory. Both asserted by test.
+7. **A conversation belongs to the project it was started in.** History lists sessions from a
+   shared parent directory, so two repositories under `~/Dev` are each other's neighbours.
+   `session_dir_checked` returns `None` for a session started outside the open project and the
+   turn is refused, naming the project — it used to fall back silently to the current repo, and
+   the agent came back holding a hundred paths it could no longer read.
 8. **A question belongs to one conversation.** `Pending` carries the `session_id` Claude Code
    already sends, and `/api/approve/poll?session=` partitions the queue rather than draining it.
-   Windows are per-session now; the old `mem::take` meant whichever polled first swallowed every
-   window's questions and the others timed out into a refusal nobody saw.
+   The old `mem::take` meant whichever window polled first swallowed every other window's
+   questions, and they timed out into refusals nobody saw.
 9. **"Allow once, this session" means that session.** `session_rules` is keyed by conversation, and
    a session-scoped rule with no conversation to belong to is refused rather than made global.
    Project rules and trust stay shared, because those are decisions about the repository.
-10. **Off-loopback requires a paired device.** Loopback stays unauthenticated — the `keel approve`
+10. **Permissions, trust and approvals read the project root, never a lane's checkout.** A lane
+    cannot carry a different allowlist than its repository, by construction: `AppState::checkout`
+    is never consulted on those paths.
+11. **A background command belongs to the daemon, not to the turn.** A turn is one `claude -p` and
+    the CLI kills its own background shells at teardown. See *Monitoring*.
+12. **Off-loopback requires a paired device.** Loopback stays unauthenticated — the `keel approve`
     hook and the local app depend on it — but any other address demands a bearer token, and Keel
     refuses to bind beyond 127.0.0.1 at all until something is paired. The check is at the bind,
     not in the settings UI, so a hand-edited `state.json` cannot open a port either.
@@ -53,10 +79,11 @@ The application is Swift (`app/`, SwiftPM, no `.xcodeproj` — same reasoning as
 nothing here needs Xcode's project format, and `xcodebuild` will not run until its licence is
 accepted). It spawns `keel serve` as a child process and talks to it over loopback.
 
-The split is the point. Everything that knows anything — the scanner, the workspace reader, the
-permission model, the approval hook — stays in Rust and stays independently runnable as `keel scan`,
-`keel workspace`, `keel serve`. Swift is the view layer. A rewrite that moved that logic into the
-app would have thrown away the product in order to change the window.
+The split is the point. Everything that knows anything — the workspace reader, the permission
+model, the approval hook, the git — stays in Rust and stays independently runnable as
+`keel workspace` and `keel serve`. Swift is the view layer, and it is **drifting**: `SessionModel`
+is 2,400 lines, drives 70 endpoints, and now polls background jobs, acks them and injects turns.
+Each of those was a small reasonable step. Put the next one in the daemon.
 
 **The centre of a window is the turn, not the chat.** Files changed, commands run with their output,
 the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already
@@ -202,9 +229,9 @@ in a browser shell, and a proxy breaks HMR.
 
 ## The one hook Keel ships
 
-`keel-harness::trust` quarantines a repository's `.claude/settings.json` and the scanner rates it
-Critical, because a hook there is a shell command that runs on the machine of whoever opens the
-repo. Keel then passes a `PreToolUse` hook of its own in `--settings`, and the two are not in
+`keel-harness::trust` quarantines a repository's `.claude/settings.json` and its `.mcp.json`,
+because a hook there is a shell command that runs on the machine of whoever opens the repo, and
+Keel opens repositories people did not write. Keel then passes a `PreToolUse` hook of its own in `--settings`, and the two are not in
 tension:
 
 - Keel's hook is in the settings Keel writes and passes on the command line. It is never read from
@@ -293,65 +320,34 @@ stops rather than substituting.
 
 ## Layout
 
-- `keel-scanner` — checks. Depends on nothing else in the workspace, touches no network. Keep it
-  that way: it ships before any credential exists.
-- `keel-harness` — `claude` supervision and trust quarantine.
-- `keel-mcp` — the tool surface.
-- `keel-providers` — GitHub, Cloudflare.
-- `keel-generator` — golden-path templates and workload placement.
-- `keel/monitor.rs` — background commands the daemon owns, so they outlive the turn.
+Four crates and an app. If a fifth is proposed, ask what it is that `keel` cannot hold.
+
+- `keel` — the daemon: the turn (`api.rs`), the approval hook and its queue (`approve.rs`), the
+  HTTP surface (`serve.rs`), lanes and worktrees (`worktree.rs`), snapshots (`snapshot.rs`), the
+  gate (`verify.rs`), the terminal (`term.rs`), the dev server (`dev.rs`), background jobs
+  (`monitor.rs`), permissions and trust (`permissions.rs`), pull requests (`pr.rs`).
+- `keel-harness` — quarantining the repository's own agent configuration before `claude` runs.
+  One file now: `invocation.rs` was deleted, because it built a command line nobody used while its
+  tests asserted invariants about it.
+- `keel-providers` — GitHub, for cloning and pull requests, with credentials in the keychain.
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
-- `app/` — the Swift macOS application. A client of the daemon, and nothing else.
+- `app/` — the Swift macOS application. A client of the daemon.
 
-**Gone on purpose:** `gcp.rs` and `infra.rs` (GKE, Kubernetes, GitHub Actions runs). The cluster
-surfaces were read-mostly and belonged to a different product than the one the agent loop is. What
-survived of `infra.rs` is `open_url`, which now lives beside `fsops::reveal` — the other handler
-whose whole job is asking the host to do something Keel deliberately will not.
+**Gone on purpose**, and not to be missed:
 
-## Two scaffolds
-
-`project.rs` lays down the Cloudflare golden path below. `stack.rs` lays down the production
-shape the team behind Keel actually runs — modelled on A2ABase: bun builds a Next.js standalone
-bundle that a slim Node image runs as a non-root user, Hono on Node the same way, Postgres and
-Redis from compose, nginx for the one-origin split locally, kustomize `base` + `dev`/`prod`
-overlays, secrets rendered from `backend/.env` (committed only as `.env.age`), and workflows that
-test, build to ghcr, decrypt, apply and roll only what changed. What the manifests insist on and
-why is in the generated `k8s/README.md`; the tests in `stack.rs` assert each rule. Both scaffolds
-are verified the same way: generate one, install, run its gate, build it. The Next 16 `eslint`
-key was caught that way, not by a string assertion.
-
-## What a new project looks like
-
-Three folders, because the halves have genuinely different constraints:
-
-- `frontend/` — Next.js + React, compiled to a Worker by OpenNext.
-- `backend/` — Hono, its own Worker.
-- `infra/` — the deploy script and the environment map.
-
-The frontend reaches the backend through a **service binding**, so the call never leaves
-Cloudflare and the backend needs no public route.
-
-**The seam is a type, not a document.** The API exports the type of its route table and the
-frontend builds its client from it — no generated SDK, no schema file. That is the whole reason
-both halves are TypeScript, and it is verified by deliberately asking for a field the API does not
-return and checking that the frontend stops compiling.
-
-That puts a shape requirement on the API: Hono infers the route table from one chained expression.
-Assigning routes to `app` one at a time still runs, still passes the API's own tests, and silently
-degrades every frontend call to `any`. It is a rule in the generated `CLAUDE.md` and a test here.
-
-**Go was tried and dropped.** Workers run JS, TS, Python and Rust, so a Go backend needs a
-Cloudflare Container or a second cloud. The container worked, but it brought manual instance
-counts, ephemeral disk and cold starts on wake — and none of that buys anything a Hono Worker
-does not already do for this template.
-
-Generated projects are verified by generating one and running its own gate, not by asserting on
-strings alone. Three bugs only that catches: `NextConfig` dropped `eslint` in Next 16; passing
-bindings to `app.request` drops Hono's typed-response overload, so `json()` widens in tests in a
-way it does not in the frontend; and, from the container version, `@cloudflare/containers` was on
-0.3.x rather than the version first written. Each would have shipped a project that fails its own
-first `make check`.
+- `keel-scanner`, `ignored.rs`, the Readiness panel and the scan block in every system prompt —
+  the repository-readiness product.
+- `packs/` (27 templates, 22,000 lines), `project.rs`, `stack.rs`, `keel-generator`, `templates/`,
+  `Templates.swift`, `NewProject.swift`, `Architecture.swift` — the scaffolding product.
+- `review.rs` — the staff-engineer repository review. Only `# something → CLAUDE.md` survived it,
+  as `memory.rs`. The **Review** tab in the window is a different thing: the current turn's own
+  packet, which stays.
+- `keel-mcp` — a tool surface with no callers, kept alive by a `Cargo.toml` line and a sentence in
+  this file.
+- `aws.rs`, `keel-providers::cloudflare`, `gcp.rs`, `infra.rs` — the cloud surfaces. What survived
+  is `open_url`, beside `fsops::reveal`: the two handlers whose whole job is asking the host to do
+  something Keel deliberately will not.
 
 ## The editor (gone)
 
@@ -366,26 +362,21 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 ## Conventions
 
 - Rust 2024, `cargo fmt`, `clippy -D warnings`. `make check` is the gate.
-- Every scanner finding must carry a `Fix`. A finding without one is a bug — it turns the report
-  into a lint run nobody acts on.
-- Check ids (`security/untrusted-agent-config`) are stable once shipped. Users and CI pin to them.
-- Scoring is a plain total so it is predictable. Corpus tests assert exact scores; if you change
-  penalties, that is a visible reviewed change.
-- Comments explain *why*, especially where a platform constraint drove the design. The Cloudflare
-  ceilings encoded here are the product's real asset.
-
-## Platform facts that drive the design
-
-- **Container disk is ephemeral** — resets to the image on every restart, `sleepAfter` 10 min
-  default. Durable state never goes there.
-- **D1 is single-writer at ~50 writes/sec.** Above that, Hyperdrive to a managed Postgres.
-- **KV is eventually consistent**, up to 60s propagation.
-- **Cloudflare has no OIDC/keyless deploy** as of Aug 2026 — scoped, rotated API tokens instead.
+- Comments explain *why*, especially where a platform constraint drove the design. That discipline
+  is the reason four bugs were diagnosable from the source alone; it is the most valuable thing in
+  this repository and it is not optional.
+- **A deletion is a better change than an addition.** Every surface here has to earn its place
+  against the three things in the first section.
+- **When behaviour changes, this file changes in the same commit.** The single worst thing that has
+  happened to this codebase is the working agreement describing a product that had been replaced.
 
 ## Verification
 
-`make check`. Dogfood with `make scan`, and against `../A2ABaseAI` for a repo with real CI and tests.
+`make check` — `cargo test` and `swift test`, including the app budgets and a real launch-and-quit
+cycle proving the daemon dies with the app.
 
-## Production
-
-The production checklist the reviewers enforce is in `docs/PRODUCTION.md`. It applies.
+`make evals` before every release. Twenty-three tests that drive a real `claude` against a real
+daemon: the turn, the hook, the gate, lanes, stop, rewind, monitored jobs, and the two path bugs
+that shipped. They cost a few cents and a minute. `keel approve` being handed an argument it did
+not accept is a fact about two files agreeing, and no unit test of either file could see it — a
+build that refused every `Bash` call shipped that way, twice.

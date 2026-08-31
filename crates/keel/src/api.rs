@@ -395,33 +395,6 @@ fn system_prompt(repo: &Utf8Path) -> String {
         );
     }
 
-    // The scan is Keel's own reading of this repository, and it is on screen next to the
-    // conversation. An agent that has to rediscover "there are no tests" wastes a turn on
-    // something the person is already looking at.
-    if let Ok(ctx) = keel_scanner::RepoContext::load(repo) {
-        let report = keel_scanner::scan(&ctx);
-        let blocking: Vec<_> = report
-            .findings
-            .iter()
-            .filter(|f| {
-                matches!(
-                    f.severity,
-                    keel_scanner::Severity::Critical | keel_scanner::Severity::High
-                )
-            })
-            .collect();
-        if !blocking.is_empty() {
-            out.push_str("\n## What Keel's scan already found\n\nUnfixed, and known:\n\n");
-            for f in blocking {
-                out.push_str(&format!("- {}\n", f.title));
-            }
-            out.push_str(
-                "\nDo not re-diagnose these. If your task is one of them, fix it; if it is not, \
-                 leave them alone and do not mention them again.\n",
-            );
-        }
-    }
-
     out
 }
 

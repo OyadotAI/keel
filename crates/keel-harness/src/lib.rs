@@ -9,8 +9,6 @@
 //! executes the *repository's* own `.claude/settings.json` hooks and `.mcp.json` servers with no
 //! trust prompt. See [`crate::trust`] — quarantine is not optional.
 
-pub mod invocation;
 pub mod trust;
 
-pub use invocation::{Environment, Invocation};
 pub use trust::{QuarantineReport, quarantine};

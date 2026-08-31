@@ -1,5 +1,10 @@
 # What Keel does, in detail
 
+Keel is an ADE for product engineers: it runs your own Claude Code, shows you everything it did,
+and manages the git around it — a branch and a worktree per conversation, a snapshot before every
+turn, a commit after, a pull request at the end. That is the whole product; the invariants behind
+it are in [CLAUDE.md](../CLAUDE.md), which is the one document that is kept true.
+
 The [README](../README.md) is the short version. This is everything, with the reasons.
 
 ## Seeing what it did
@@ -118,7 +123,7 @@ MCP servers (1)
 project-scoped hook was written by whoever wrote the repo, and Claude Code runs it without asking.
 Before any agent runs, Keel quarantines repository-supplied `.claude/settings.json`,
 `.claude/settings.local.json`, `.claude/hooks` and `.mcp.json`. See
-[`docs/guardrails.md`](docs/guardrails.md) for why that is not optional.
+[CLAUDE.md](../CLAUDE.md#the-one-hook-keel-ships) for why that is not optional.
 
 Each of these has a panel, and they are managed rather than listed:
 
@@ -171,62 +176,6 @@ and the pixel check says whether the source now matches.
 **No editor.** Keel shows what the agent changed as diffs you can comment on and rewind; editing a
 file is what the editor you already have is for.
 
-## Connecting the things you work with
-
-Setting up tooling is the part everyone does badly and nobody enjoys, so it is one screen.
-
-`gh`, `wrangler`, `gcloud`, `kubectl`, `docker` and `aws` each report three things: installed or
-not, signed in or not, and *who* — the account name, from the tool's own `whoami`, because "signed
-in" without a name is how you push to the wrong org. Anything missing installs with whichever
-package manager you actually have (brew, then bun, then npm — Wrangler's brew formula pulls node,
-so a bare machine gets both from one command), and **Install all** does the lot in one pass rather
-than making you discover the next missing tool when its button fails.
-
-Sign-in runs each tool's own login flow, streamed live, because those commands print things you
-have to act on. A device code is lifted out of the console and put in front of you: the code in
-large type with a **copy** button, and a button that opens the verification URL with `user_code`
-already in the query string, so the field arrives filled in. The pattern matched is the shape every
-device flow uses rather than GitHub's particular wording, so `gcloud` and `aws sso login` get the
-same treatment and a change to gh's phrasing does not quietly turn it off.
-
-AWS is the awkward one and is handled honestly: `aws sso login` needs a profile that already
-exists, and `aws configure sso` is an interactive prompt that cannot be driven from a subprocess.
-So Keel reads `~/.aws/config`, offers a profile picker when there are profiles, and says plainly
-what to run when there are none rather than firing a command destined to fail.
-
-**MCP servers** go through `claude mcp add`, with a form for http, SSE or stdio — headers, env
-vars, and a name checked before it is passed as an argument, because hyphens are legal in a name
-and `--transport` is therefore a valid one. **Plugins and skills** go through `claude plugin`
-against Claude Code's own marketplace catalog, with recommendations that depend on what is actually
-in the repository: the Cloudflare plugin only when there is a Wrangler config, `rust-analyzer-lsp`
-only when there is a `Cargo.toml`, each carrying the reason it is suggested. Everything installed
-this way is available in every session, not just in Keel — the result is identical to having typed
-the command yourself, which is the point.
-
-Where a token is genuinely needed it goes in the OS keychain and is sent only to its own API.
-
-## Shipping, when you want it
-
-Keel also reads a repository and says how ready it is — for an agent to work in, and for production.
-
-| Dimension | Question |
-|---|---|
-| Agent legibility | Can an agent understand this repo without guessing? |
-| Verifiability | Is there anything that would contradict an agent that thinks it's done? |
-| Workers compatibility | Will this actually run on Cloudflare? |
-| Runtime contract | Health checks, graceful shutdown, config, logging |
-| State placement | Is the data somewhere that can hold it? |
-| Environment hygiene | Are dev and prod genuinely separate? |
-| Deployability | CI, no committed secrets, reproducible builds |
-| Observability | Would you find out if it broke? |
-| Security | Dependencies, secrets, and untrusted agent config |
-
-Every finding carries a fix; a finding without one is a bug in the scanner. **New project**
-scaffolds from the golden path — two isolated environments, a health route, a test that can fail,
-CI — so a project Keel creates starts at 100/100 rather than at the findings every empty directory
-produces. None of this is in the way if all you want is the agent: a repository with no Cloudflare
-config is never asked about one.
-
 ## How the agent actually runs
 
 Keel spawns your `claude` in the repository with `--output-format stream-json`, an appended system
@@ -239,10 +188,11 @@ unreachable, socket dropped, nobody at the keyboard, and it exits 0 and defers t
 because a guardrail that can wedge the agent is one people turn off. It is passed on the command
 line and never read from the working tree, so nothing a repository contains can change it.
 
-Turns run in `plan` or `acceptEdits` (`⇧⇥` switches, the same gesture Claude Code uses). This is the
-IDE surface, not the locked-down one: the fully sandboxed path — no shell at all, every effect
-through a Keel MCP tool — is `keel-harness`, and [`docs/guardrails.md`](docs/guardrails.md) is
-honest about which is which.
+Turns run in `plan` or `acceptEdits` (`⇧⇥` switches, the same gesture Claude Code uses). There is
+no locked-down mode and no `dontAsk`: the agent has `Bash`, `Edit` and `Write`, and the hook above
+is what stands between them and your machine. A second, fully sandboxed path was described here for
+a long time; it had no callers, and saying so is the point of
+[CLAUDE.md's non-negotiables](../CLAUDE.md#non-negotiables).
 
 `--bare` is never passed, because bare mode never reads OAuth or the keychain and would break the
 subscription auth the whole design depends on.

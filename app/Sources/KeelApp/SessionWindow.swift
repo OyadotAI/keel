@@ -21,7 +21,6 @@ struct SessionWindow: View {
     @State private var terminalTitle = "shell"
     @State private var terminalCommand: String?
     @State private var paletteOpen = false
-    @State private var starting = false
     @State private var startingFeature = false
     @State private var showSettings = false
     /// How wide the record beside the conversation is. Yours to drag; remembered.
@@ -43,7 +42,7 @@ struct SessionWindow: View {
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
     /// 256pt rail and no room for any of them to have actions.
     enum Panel: String, CaseIterable, Identifiable {
-        case changes, git, files, sessions, readiness, monitors
+        case changes, git, files, sessions, monitors
         case skills, agents, mcp, hooks, plugins
         var id: String { rawValue }
 
@@ -53,7 +52,6 @@ struct SessionWindow: View {
             case .git: "arrow.triangle.branch"
             case .files: "folder"
             case .sessions: "clock.arrow.circlepath"
-            case .readiness: "checkmark.shield"
             case .monitors: "binoculars"
             case .skills: "sparkles"
             case .agents: "person.2"
@@ -68,7 +66,6 @@ struct SessionWindow: View {
             case .git: "Git"
             case .files: "Files"
             case .sessions: "History"
-            case .readiness: "Readiness"
             case .monitors: "Monitors"
             case .skills: "Skills"
             case .agents: "Subagents"
@@ -146,7 +143,7 @@ struct SessionWindow: View {
                 OpeningBar(name: o.name, stage: o.stage, done: false)
                     .transition(.move(edge: .top).combined(with: .opacity))
             } else if let name = model.justOpened {
-                OpeningBar(name: name, stage: "\(model.changes.count) changed · \(model.findings.count) findings", done: true)
+                OpeningBar(name: name, stage: "\(model.changes.count) changed", done: true)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             HStack(spacing: 0) {
@@ -202,34 +199,12 @@ struct SessionWindow: View {
         // `SidePanel` leaves the hierarchy when the panel is collapsed (⌘⇧E), and a sheet attached
         // to a view that is not in the hierarchy simply never appears: ⌘K → "Project setup" with
         // the panel closed set the state and drew nothing. The window is always there.
-        .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 })) { which in
-            switch which {
-            case .pr:
-                PullRequest(model: model) { model.sheet = nil }
-            case .skills:
-                SkillCatalog(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState(); await model.refreshSuggestions() }
-                }
-            case .subagent:
-                NewSubagent(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .mcp:
-                AddMCP(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .setup:
-                SetupSheet(model: model) { model.sheet = nil }
-            }
-        }
+        .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 }), content: panelSheet)
         .onReceive(NotificationCenter.default.publisher(for: .keelNewFeatureSheet)) { _ in
             // Only the window you are in: a sheet in every window at once is a modal maze.
             if pinned == nil { startingFeature = true }
         }
-        // A turn arriving while you are on the Designer or the readiness report is the case where
+        // A turn arriving while you are on the Designer is the case where
         // the record is written and never read. Marked unread there, and read the moment the Trace
         // is on the stage — however you got there, clicking the tab included.
         .onChange(of: model.turns.count) { if stage != .turn { traceUnread = true } }
@@ -238,25 +213,7 @@ struct SessionWindow: View {
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
-            paletteOpen: $paletteOpen, starting: $starting, panel: $panel))
-        .sheet(isPresented: $starting) {
-            StartProject(client: model.client) { path, brief, file in
-                starting = false
-                Task {
-                    await model.open(project: path)
-                    Recents.remember(path)
-                    await lanes.refreshShared()
-                    // A template's brief goes into the box, its file onto the strip, and the
-                    // first turn starts — "new project" ends with the agent working.
-                    if let file { model.attach(fileURL: file) }
-                    if !brief.isEmpty {
-                        model.prompt = brief
-                        try? await Task.sleep(for: .milliseconds(file == nil ? 100 : 1200))
-                        model.send()
-                    }
-                }
-            }
-        }
+            paletteOpen: $paletteOpen, panel: $panel))
     }
 
     @ViewBuilder
@@ -394,6 +351,34 @@ struct SessionWindow: View {
         return (p, s)
     }
 
+    /// The sheets the panels open. Extracted from the modifier chain rather than inlined: the
+    /// chain is long enough that the type-checker gives up on it, and "unable to type-check this
+    /// expression in reasonable time" is a compile error, not a warning.
+    @ViewBuilder
+    private func panelSheet(_ which: SessionModel.Sheet) -> some View {
+        switch which {
+        case .pr:
+            PullRequest(model: model) { model.sheet = nil }
+        case .skills:
+            SkillCatalog(client: model.client) {
+                model.sheet = nil
+                Task { await model.refreshState(); await model.refreshSuggestions() }
+            }
+        case .subagent:
+            NewSubagent(client: model.client) {
+                model.sheet = nil
+                Task { await model.refreshState() }
+            }
+        case .mcp:
+            AddMCP(client: model.client) {
+                model.sheet = nil
+                Task { await model.refreshState() }
+            }
+        case .setup:
+            SetupSheet(model: model) { model.sheet = nil }
+        }
+    }
+
     private var subtitle: String {
         let branch = model.branch ?? ""
         return model.trusted ? (branch.isEmpty ? "trusted" : branch + " · trusted") : branch
@@ -525,7 +510,7 @@ struct SessionWindow: View {
         switch stage {
         case .turn: return model.running
         case .preview: return model.editing != nil
-        case .review: return model.running && model.lastReview != nil
+        case .review: return model.running
         }
     }
 
@@ -582,7 +567,7 @@ struct ActivityRail: View {
                     label: p.title,
                     help: help(p),
                     badge: badge(p),
-                    badgeTone: p == .hooks || p == .readiness || p == .plugins ? K.C.warn : K.C.accent,
+                    badgeTone: p == .hooks || p == .plugins ? K.C.warn : K.C.accent,
                     selected: panel == p
                 ) {
                     withAnimation(K.M.quick) { panel = (panel == p) ? nil : p }
@@ -672,9 +657,6 @@ struct ActivityRail: View {
         // Git keeps the other number, because Git's own list *is* the uncommitted files: it is
         // the count of what a commit there would take.
         case .git: model.changes.count.nonZero
-        // Every finding, not only the blocking ones: a warning in the panel with no number on
-        // the icon read as a panel that had nothing to say.
-        case .readiness: model.findings.count.nonZero
         // Only what is still going. A finished job is history the moment it is reported, and a
         // number that never goes back down is a number people stop reading.
         case .monitors: model.monitors.count(where: \.running).nonZero
@@ -960,7 +942,6 @@ struct WindowEvents: ViewModifier {
     @Binding var showTerminal: Bool
     @Binding var terminalCommand: String?
     @Binding var paletteOpen: Bool
-    @Binding var starting: Bool
     @Binding var panel: SessionWindow.Panel?
     @State private var confirmingTrust = false
 
@@ -993,9 +974,6 @@ struct WindowEvents: ViewModifier {
                 // The two questions a feature starts with — which project, from which branch —
                 // instead of assuming the open one and wherever it is standing.
                 NotificationCenter.default.post(name: .keelNewFeatureSheet, object: nil)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .keelNewProject)) { _ in
-                starting = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .keelRunInTerminal)) { note in
                 // Open the terminal where you are — under Settings too, since that is where

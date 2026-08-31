@@ -1,93 +1,11 @@
-//! Rendering a scan report for a terminal.
+//! Rendering the workspace inventory for a terminal.
 //!
 //! Kept free of colour codes and cursor control so the output is equally readable when piped into a
-//! file or pasted into a chat — which is how the report is expected to travel.
+//! file or pasted into a chat. This is what `keel workspace` prints, and it is the reason the
+//! daemon's knowledge stays independently runnable rather than reachable only through the app.
 
-use keel_scanner::{Report, Severity};
 use std::fmt::Write as _;
 
-pub fn report(report: &Report) -> String {
-    let mut out = String::new();
-
-    let verdict = if report.is_shippable() {
-        "no blocking issues"
-    } else {
-        "not ready to deploy"
-    };
-    let _ = writeln!(out, "\nReadiness {}/100 — {verdict}\n", report.score);
-    if let Some(p) = &report.profile {
-        if p.template != "blank" {
-            let _ = writeln!(
-                out,
-                "Looks like: {} (like {}) · {}% · from {}",
-                p.template_title,
-                p.like,
-                p.confidence,
-                p.signals.join(", ")
-            );
-        }
-        if !p.hosting.is_empty() {
-            let hosts: Vec<&str> = p.hosting.iter().map(|h| h.name()).collect();
-            let _ = writeln!(out, "Runs on: {}", hosts.join(" + "));
-        }
-        if p.template != "blank" || !p.hosting.is_empty() {
-            let _ = writeln!(out);
-        }
-    }
-
-    if report.findings.is_empty() {
-        let _ = writeln!(out, "  Nothing to report.\n");
-        return out;
-    }
-
-    for (dimension, findings) in report.by_dimension() {
-        let _ = writeln!(out, "{}", dimension.label());
-        for finding in findings {
-            let _ = writeln!(out, "  [{}] {}", label(finding.severity), finding.title);
-            if let Some(path) = &finding.path {
-                let _ = writeln!(out, "        {path}");
-            }
-            let _ = writeln!(out, "        fix: {}", finding.fix.description());
-        }
-        let _ = writeln!(out);
-    }
-
-    if !report.plan.is_empty() {
-        let _ = writeln!(out, "The road to production, in order");
-        for (i, phase) in report.plan.iter().enumerate() {
-            let _ = writeln!(out, "  {}. {} — {}", i + 1, phase.title, phase.why);
-            for id in &phase.findings {
-                if let Some(f) = report.findings.iter().find(|f| f.id == *id) {
-                    let _ = writeln!(out, "       · {}", f.title);
-                }
-            }
-        }
-        let _ = writeln!(out);
-    }
-
-    let automatic = report.automatic_fixes().count();
-    if automatic > 0 {
-        let _ = writeln!(
-            out,
-            "{automatic} of {} findings can be fixed automatically — run `keel fix`.\n",
-            report.findings.len()
-        );
-    }
-
-    out
-}
-
-fn label(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Critical => "critical",
-        Severity::High => "high    ",
-        Severity::Medium => "medium  ",
-        Severity::Low => "low     ",
-        Severity::Info => "info    ",
-    }
-}
-
-/// Render the full workspace inventory.
 pub fn workspace(ws: &keel_workspace::Workspace) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "\n{}\n", ws.repo);
