@@ -6,6 +6,17 @@ import Foundation
 /// decode a whole response because the daemon grew a field is worse than one that ignores it.
 /// Every optional here is optional because the server can genuinely omit it.
 enum Wire {
+    /// The one response that must never fail to decode.
+    ///
+    /// Every panel in the window hangs off this, so a single unreadable field is not a missing
+    /// number — it is a window with no project, no repository and no sessions, which reads as
+    /// "Keel is broken" and is indistinguishable from the daemon being down.
+    ///
+    /// Written by hand for that reason. The file header already says a client that fails because
+    /// the daemon *grew* a field is worse than one that ignores it; the same has to hold when the
+    /// daemon *drops* one, and until now it did not. Removing `scan` from `/api/state` was enough
+    /// to blank every older app talking to a newer daemon — which is every app mid-update, and was
+    /// the state of this machine for an afternoon.
     struct State: Decodable, Sendable {
         var repo: String
         var projectOpen: Bool
@@ -16,6 +27,18 @@ enum Wire {
             case repo
             case projectOpen = "project_open"
             case workspace, policy
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            repo = (try? c.decodeIfPresent(String.self, forKey: .repo)) as? String ?? ""
+            // Absent reads as open, the same default `SessionModel.projectOpen` uses: showing the
+            // workbench with one empty panel is recoverable, and showing Welcome over somebody's
+            // open project is not.
+            projectOpen = ((try? c.decodeIfPresent(Bool.self, forKey: .projectOpen)) ?? true) ?? true
+            workspace = ((try? c.decodeIfPresent(Workspace.self, forKey: .workspace)) ?? nil)
+                ?? Workspace(sessions: [])
+            policy = (try? c.decodeIfPresent(Policy.self, forKey: .policy)) ?? nil
         }
     }
 

@@ -294,6 +294,30 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(p.rules.isEmpty, "monitoring must never write a permission rule")
     }
 
+    /// The daemon dropping a field must not blank the window.
+    ///
+    /// Removing `scan` from `/api/state` did exactly that to every app built before the removal:
+    /// `scan` was non-optional, the decode threw, and the window had no project, no repository and
+    /// no sessions — indistinguishable from the daemon being down. The header of `Wire.swift` had
+    /// always said a client that fails because the daemon *grew* a field is worse than one that
+    /// ignores it. This is the other half of that sentence.
+    func testStateSurvivesTheDaemonDroppingFields() throws {
+        let full = try decode(#"{"repo":"/r","project_open":true,"workspace":{"repo":"/r","sessions":[]}}"#, Wire.State.self)
+        XCTAssertEqual(full.repo, "/r")
+        XCTAssertTrue(full.projectOpen)
+        XCTAssertEqual(full.workspace.sessions.count, 0)
+
+        // Every field gone, including one the daemon has never had.
+        let bare = try decode(#"{}"#, Wire.State.self)
+        XCTAssertTrue(bare.projectOpen, "an absent project_open must not read as Welcome over somebody's open project")
+        XCTAssertEqual(bare.repo, "")
+        XCTAssertTrue(bare.workspace.sessions.isEmpty)
+
+        // And a field the app has never heard of is ignored, which was always true and must stay.
+        let extra = try decode(#"{"repo":"/r","project_open":true,"workspace":{"repo":"/r","sessions":[]},"scan":{"score":7,"findings":[]}}"#, Wire.State.self)
+        XCTAssertEqual(extra.repo, "/r")
+    }
+
     func testDiffLinesCarryBothLineNumbers() throws {
         let d = try decode(#"""
         {"path":"a.rs","untracked":false,"hunks":[{"header":"@@ -1 +1 @@","lines":[

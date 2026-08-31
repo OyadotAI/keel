@@ -369,6 +369,17 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
   against the three things in the first section.
 - **When behaviour changes, this file changes in the same commit.** The single worst thing that has
   happened to this codebase is the working agreement describing a product that had been replaced.
+- **The wire tolerates a field appearing *and* a field disappearing.** `Wire.swift` always said a
+  client that fails to decode because the daemon grew a field is worse than one that ignores it;
+  only half of that was implemented. Dropping `scan` from `/api/state` blanked every app built
+  before the removal — the window had no project, no repository and no sessions, which reads as
+  "Keel is broken" and is indistinguishable from the daemon being down. `Wire.State` now decodes by
+  hand and every field has a safe absence, `project_open` included: absent reads as *open*, because
+  a workbench with one empty panel is recoverable and Welcome over somebody's open project is not.
+  Any response the window cannot draw without gets the same treatment.
+- **One build at a time on a dev machine.** The app joins a daemon already answering on 7777 rather
+  than fighting it, so a `dist` build and an installed one share whichever daemon started first —
+  and before the rule above, the mismatched pair looked exactly like a bug in the app.
 
 ## Verification
 

@@ -16,7 +16,6 @@ struct ConnectionsSettings: View {
 
     struct Stored: Decodable {
         var github: JSONValue?
-        var cloudflare: JSONValue?
     }
 
     struct Tool: Decodable, Identifiable, Sendable {
@@ -102,13 +101,6 @@ struct ConnectionsSettings: View {
                              help: "A personal access token, kept in the login keychain. Only "
                                  + "needed for what `gh` cannot do for you.")
                     Hairline()
-                    TokenRow(client: client, label: "Cloudflare token",
-                             stored: stored?.cloudflare != nil,
-                             path: "/api/connect/cloudflare",
-                             help: "A scoped, rotatable API token, kept in the login keychain. "
-                                 + "Cloudflare has no keyless deploy, so this is the only way.")
-                    Hairline()
-                    AwsSso(client: client) { Task { await refresh() } }
                 }
             }
 
@@ -255,95 +247,6 @@ private struct TokenRow: View {
                 failed = false
                 token = ""
                 editing = false
-            } catch {
-                status = error.localizedDescription
-                failed = true
-            }
-        }
-    }
-}
-
-
-/// The one AWS login Keel can actually drive.
-///
-/// `aws configure` prompts for a key and a secret, which Keel hosts in a terminal rather than
-/// reimplementing. Identity Center is different: it is a form followed by a browser handshake the
-/// CLI runs itself, so it can be filled in here.
-private struct AwsSso: View {
-    let client: Client
-    let done: () -> Void
-
-    @State private var startURL = ""
-    @State private var ssoRegion = ""
-    @State private var account = ""
-    @State private var role = ""
-    @State private var profile = ""
-    @State private var status: String?
-    @State private var failed = false
-
-    struct Setup: Encodable {
-        var start_url: String
-        var sso_region: String
-        var account: String
-        var role: String
-        var profile: String
-        var region: String
-    }
-    struct Configured: Decodable { var profile: String }
-
-    @State private var open = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: K.S.sm) {
-            HStack(spacing: K.S.sm) {
-                Pill(text: "SSO", tone: .neutral).frame(width: 58, alignment: .leading)
-                Text("AWS Identity Center").font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
-                    .frame(width: 110, alignment: .leading)
-                Text(status ?? "writes a profile, then `aws sso login` signs in")
-                    .font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.faint).lineLimit(1)
-                Spacer(minLength: K.S.sm)
-                Button(open ? "Hide" : "Set up…") { withAnimation(K.M.quick) { open.toggle() } }
-                    .buttonStyle(QuietButton(tone: open ? K.C.dim : K.C.accent))
-            }
-            if open {
-                // Two columns, the labels inside the fields. Five stacked rows with a label
-                // column each was the tallest thing on the page.
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
-                          alignment: .leading, spacing: K.S.sm) {
-                    TextField("Start URL  (https://d-….awsapps.com/start)", text: $startURL).field()
-                    TextField("Identity Center region  (us-east-1)", text: $ssoRegion).field()
-                    TextField("Account id", text: $account).field()
-                    TextField("Role  (e.g. AdministratorAccess)", text: $role).field()
-                    TextField("Profile name  (keel)", text: $profile).field()
-                    HStack {
-                        Spacer()
-                        Button("Write profile and sign in") { configure() }
-                            .buttonStyle(QuietButton(tone: K.C.accent))
-                            .disabled(startURL.isEmpty || account.isEmpty || role.isEmpty)
-                    }
-                }
-                .font(K.F.small)
-                .padding(.leading, 58 + 110 + 2 * K.S.sm)
-            }
-        }
-        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .help("Keel writes a named AWS profile and signs in with `aws sso login`. It never asks "
-              + "for an access key and never stores one.")
-    }
-
-    private func configure() {
-        Task {
-            do {
-                let made: Configured = try await client.post(
-                    "/api/aws/sso",
-                    body: Setup(start_url: startURL,
-                                sso_region: ssoRegion.isEmpty ? "us-east-1" : ssoRegion,
-                                account: account, role: role,
-                                profile: profile.isEmpty ? "keel" : profile,
-                                region: ssoRegion.isEmpty ? "us-east-1" : ssoRegion))
-                status = "Profile `\(made.profile)` written. Sign in from the row above."
-                failed = false
-                done()
             } catch {
                 status = error.localizedDescription
                 failed = true
