@@ -96,19 +96,34 @@ impl AppState {
     /// The directory a session was launched from, when it is not the repository: a parent
     /// (at most two up, never home) or a subdirectory. Anything else is the repository.
     pub fn session_dir(&self, cwd: Option<&str>) -> Utf8PathBuf {
+        self.session_dir_checked(cwd).unwrap_or_else(|| self.repo())
+    }
+
+    /// The same question, with the refusal kept rather than swallowed.
+    ///
+    /// `None` means the session was started somewhere this project cannot reach — another
+    /// project's checkout, most often, because History lists sessions from a shared parent
+    /// directory and two repositories under `~/Dev` are each other's neighbours.
+    ///
+    /// Resuming one anyway is what `session_dir` used to do, quietly, by returning the current
+    /// repository: the conversation came back holding a hundred paths in a directory the agent
+    /// could no longer read, and every `Read` came back "you haven't granted permissions to read
+    /// from …". Verified in a real transcript — one session id, `cwd` changing from one project's
+    /// worktree to another's mid-file, and every tool call after the switch refused.
+    pub fn session_dir_checked(&self, cwd: Option<&str>) -> Option<Utf8PathBuf> {
         let repo = self.repo();
         let Some(cwd) = cwd.filter(|c| !c.is_empty()).map(Utf8PathBuf::from) else {
-            return repo;
+            return Some(repo);
         };
         let Ok(cwd) = cwd.canonicalize_utf8() else {
-            return repo;
+            return Some(repo);
         };
         let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
         let allowed = keel_workspace::session_dirs(&repo, &home)
             .into_iter()
             .any(|(d, scope)| scope != "below" && d == cwd)
             || cwd.starts_with(&repo);
-        if allowed { cwd } else { repo }
+        allowed.then_some(cwd)
     }
 
     /// Remember the agent process a conversation is running, so Stop has something to signal.
@@ -512,6 +527,7 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         // Every request passes this, and for the loopback callers that are the only ones today
         // it is one `is_loopback()` and nothing else.
         .layer(axum::middleware::from_fn(crate::pair::guard))
+        .layer(axum::middleware::from_fn(report_failures))
         .with_state(state);
 
     let (ip, reach) = bind_address();
@@ -532,6 +548,47 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
     .await
     .context("serving")?;
     Ok(())
+}
+
+/// Every failure the daemon returns, reported once, from one place.
+///
+/// Sixty handlers each returned `(StatusCode, String)` to the app and to nobody else, so the only
+/// evidence that a tester's Keel was failing was the tester saying so — and by then they have
+/// stopped trusting it. This is the cheapest possible fix for that: one layer, every route.
+///
+/// The matched route *pattern* travels, never the concrete path — `/api/pair/devices/{id}` would
+/// otherwise carry a device id — and the body never travels at all, because a handler's message
+/// quotes paths, branch names and the person's own text.
+async fn report_failures(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "unmatched".into());
+    let response = next.run(req).await;
+    let status = response.status();
+    if status.is_client_error() || status.is_server_error() {
+        sentry::with_scope(
+            |scope| {
+                scope.set_tag("route", &route);
+                scope.set_tag("status", status.as_u16().to_string());
+            },
+            || {
+                sentry::capture_message(
+                    &format!("{route} failed with {}", status.as_u16()),
+                    if status.is_server_error() {
+                        sentry::Level::Error
+                    } else {
+                        sentry::Level::Warning
+                    },
+                )
+            },
+        );
+    }
+    response
 }
 
 /// Where to listen, and what to say about it.
