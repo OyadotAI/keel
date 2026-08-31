@@ -792,6 +792,34 @@ final class SessionModel: Identifiable {
     /// the top of a 300-message transcript means scrolling for a while to reach it.
     var pinTick = 0
 
+    /// Everything that means "there is more below", as one value — for both panes that follow it.
+    ///
+    /// It lives here rather than in each pane because each pane had its own copy and each copy
+    /// missed something that grows: the conversation missed `thinking`, so a long reasoning block
+    /// scrolled out of sight, and the Trace missed the live call's output and its subagent's
+    /// rows, which is most of what a running turn produces. A count that does not change fires no
+    /// `onChange`, so the pane sat still under a stream you then had to scroll to by hand.
+    ///
+    /// Over-firing is harmless — a scroll to the end of a pane already at the end is a no-op —
+    /// so this is deliberately the union of both panes rather than two precise halves.
+    ///
+    /// Output is summed over every call rather than read off the last one, because results do not
+    /// arrive in the order the calls were made: three parallel `Read`s land newest-first as often
+    /// as not, and a token watching only the newest misses the two that grew the card. Counted in
+    /// `utf8`, which is O(1) on a native string — `count` walks characters, and this is evaluated
+    /// on every delta of a turn that can print megabytes.
+    var tailToken: String {
+        let last = turns.last
+        let printed = last?.calls.reduce(0) { n, c in
+            n + c.output.utf8.count + c.children.reduce(0) { $0 + $1.output.utf8.count }
+        } ?? 0
+        let nested = last?.calls.reduce(0) { $0 + $1.children.count } ?? 0
+        return [turns.count, last?.text.utf8.count ?? 0, last?.thinking.utf8.count ?? 0,
+                last?.calls.count ?? 0, last?.files.count ?? 0,
+                printed, nested, running ? 1 : 0]
+            .map(String.init).joined(separator: "-")
+    }
+
     func send() {
         var text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // Pins with notes are a request on their own; the box may stay empty. So is a pin you

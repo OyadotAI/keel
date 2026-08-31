@@ -21,11 +21,8 @@ struct TurnStage: View {
         let kind: Kind
     }
 
-    /// Everything that means "there is more to see at the bottom", as one value.
-    private var tailToken: String {
-        let last = model.turns.last
-        return "\(model.turns.count)-\(last?.calls.count ?? 0)-\(last?.files.count ?? 0)-\(model.running)"
-    }
+    /// The last time the pane followed, so a stream of deltas is not a stream of scrolls.
+    @State private var lastFollow = Date.distantPast
 
     /// Keep the live turn in view.
     ///
@@ -36,10 +33,17 @@ struct TurnStage: View {
     /// Deliberately not animated. This is a tail following a live stream, like a terminal, and an
     /// easing curve restarted every few hundred milliseconds is what "flaky" looks like. The
     /// explicit jump from the conversation still animates, because that one is a deliberate move.
-    private func follow(_ proxy: ScrollViewProxy) {
+    ///
+    /// Coalesced at 80ms, the same window the conversation uses: a running command prints faster
+    /// than a frame, and a scroll on every delta competes with the wheel. `force` is for the end
+    /// of a turn, the one update that has no next one to correct a short scroll.
+    private func follow(_ proxy: ScrollViewProxy, force: Bool = false) {
         // Only when nothing is deliberately focused: yanking the view while someone reads an
         // older turn is how a streaming pane becomes unusable.
         guard pinned, model.focusedTurn == nil, let id = rows.last?.id else { return }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastFollow) > 0.08 else { return }
+        lastFollow = now
         proxy.scrollTo(id, anchor: .bottom)
     }
 
@@ -95,13 +99,13 @@ struct TurnStage: View {
             // One handler on a compound token, not four on separate counts. Four meant a tool
             // call that also wrote a file fired two overlapping scroll animations, and the pane
             // visibly fought itself.
-            .onChange(of: tailToken) { follow(proxy) }
+            .onChange(of: model.tailToken) { follow(proxy) }
             .onChange(of: model.pinTick) {
                 pinned = true
                 if let id = rows.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .followsTail($pinned)
-            .onChange(of: model.running) { follow(proxy) }
+            .onChange(of: model.running) { follow(proxy, force: true) }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
                     JumpToLatest {
