@@ -860,3 +860,22 @@ extension UITests {
         XCTAssertLessThan(ms, 400, "opening a session with long prompts stalls the window")
     }
 }
+
+// MARK: - Renaming from History
+
+extension UITests {
+
+    /// The rename dialog is presented from the panel root, not from the row, because the list is
+    /// a lazy stack: with 158 sessions the zero-height view the alert used to hang off is never
+    /// built, and right-click → Rename… did nothing at all.
+    func testRenamingASessionIsAskedFromThePanelRoot() throws {
+        let source = try String(contentsOfFile: #filePath.replacingOccurrences(
+            of: "Tests/KeelAppTests/UITests.swift", with: "Sources/KeelApp/SidePanel.swift"),
+                                encoding: .utf8)
+        let panelBody = source.components(separatedBy: "// MARK: - Sessions")[0]
+        XCTAssertTrue(panelBody.contains("Rename feature"),
+                      "the alert belongs on SidePanel's root, outside the scroll view")
+        XCTAssertFalse(source.contains("Color.clear.frame(height: 0)"),
+                       "a dialog on a zero-height row of a lazy stack never presents")
+    }
+}
