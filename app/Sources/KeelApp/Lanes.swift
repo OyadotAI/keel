@@ -359,6 +359,19 @@ final class Lanes {
             return
         }
         let m = newLane(resuming: id)
+        // A session belongs to the checkout it ran in, and only `restore` knew that — it saves the
+        // name alongside the session id. Reopening the same conversation from History built a lane
+        // with no `worktree` at all, so every checkout-scoped request went to the project root
+        // instead: the file tree and the Changes panel showed the root's, and `/api/attach` wrote
+        // a pasted block into the root's `.keel/attachments`, leaving the `@path` in the prompt
+        // pointing at nothing the agent could read from its own checkout.
+        await refreshWorktrees()
+        if let cwd = (lanes.first?.sessions.first { $0.id == id })?.cwd,
+           cwd.contains("/.keel/worktrees/"),
+           let wt = worktrees.first(where: { (cwd as NSString).lastPathComponent == $0.name }) {
+            m.worktree = wt.name
+            m.isolated = true
+        }
         await m.open(session: id)
     }
 

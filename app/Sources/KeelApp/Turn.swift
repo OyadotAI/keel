@@ -395,3 +395,15 @@ enum JSONValue: Decodable, Sendable {
         }
     }
 }
+
+extension String {
+    /// Cut to a length a `Text` can afford to measure.
+    ///
+    /// `lineLimit` is not this. It caps the drawn height, and CoreText still encodes every
+    /// character to find out where the cap falls — reported as a 2,000 ms App Hang with
+    /// `TASCIIEncoder::Encode` under `LazyStack.measureEstimates`, because a lazy stack estimates
+    /// every row and a prompt is often a paste. Both panes draw a turn's prompt; both need this.
+    func capped(_ chars: Int) -> String {
+        count <= chars ? self : String(prefix(chars)) + "…"
+    }
+}
