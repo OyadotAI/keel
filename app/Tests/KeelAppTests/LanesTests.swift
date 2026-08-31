@@ -98,10 +98,13 @@ final class LanesTests: XCTestCase {
     func testClosingTheLastLaneStartsAFreshOne() {
         let l = lanes()
         let only = l.lanes[0]
+        only.repoPath = "/tmp/repo"
         l.close(only)
         XCTAssertEqual(l.lanes.count, 1)
         XCTAssertNotEqual(l.lanes[0].id, only.id)
         XCTAssertNotNil(l.activeID)
+        // In the same project: without this the window falls back to Welcome.
+        XCTAssertEqual(l.lanes[0].repoPath, "/tmp/repo")
     }
 
     func testConcurrentDetachedWindowsReserveDifferentPorts() async {
