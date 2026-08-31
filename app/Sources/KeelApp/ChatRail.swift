@@ -256,6 +256,13 @@ private struct ChatTurn: View {
     static let promptLines = 14
     static let promptChars = 800
 
+    /// The prompt as it is actually drawn. The comment below was right that `fixedSize` measures
+    /// every line whether or not it is on screen, and wrong that `lineLimit` stops it — see
+    /// `String.capped`.
+    private var shown: String {
+        expanded ? turn.prompt : turn.prompt.capped(Self.promptChars)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.half) {
             // Yours, on the right, in blue. Nothing above it: a message does not need a title.
@@ -276,7 +283,7 @@ private struct ChatTurn: View {
                         // lay out, 16 ms once the pastes stopped being measured whole: opening a
                         // long session was a visible stall, and every keystroke in the composer
                         // paid it again.
-                        Text(turn.prompt)
+                        Text(shown)
                             .font(K.F.body)
                             .foregroundStyle(K.C.text)
                             .textSelection(.enabled)
