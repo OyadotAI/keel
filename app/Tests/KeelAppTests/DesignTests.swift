@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 import XCTest
 @testable import KeelApp
 
@@ -195,6 +196,81 @@ final class DesignCheckTests: XCTestCase {
             return XCTFail("a closed pane is not a verdict")
         }
         XCTAssertTrue(why.contains("Designer was closed"), why)
+    }
+}
+
+/// The JSON viewer in the preview, run in a real web view against a real JSON document.
+///
+/// Asserting on the script's text would prove nothing: the only question is whether WebKit runs it
+/// on the document it is meant to and leaves every other document alone.
+@MainActor
+final class JSONViewTests: XCTestCase {
+
+    /// Load `body` as `mime` with the viewer installed, and answer one expression about the result.
+    private func inspect(_ body: String, mime: String, _ script: String) throws -> String {
+        let source = try XCTUnwrap(Resources.text("JSONView", "js"), "JSONView.js is missing")
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(
+            WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        let web = WKWebView(frame: .init(x: 0, y: 0, width: 400, height: 400), configuration: config)
+
+        let loaded = expectation(description: "loaded")
+        let delegate = Loaded { loaded.fulfill() }
+        web.navigationDelegate = delegate
+        web.load(Data(body.utf8), mimeType: mime, characterEncodingName: "utf-8",
+                 baseURL: URL(string: "http://localhost:3000/api/todos")!)
+        wait(for: [loaded], timeout: 10)
+
+        var answer = ""
+        let evaluated = expectation(description: "evaluated")
+        web.evaluateJavaScript(script) { value, _ in
+            answer = value.map { String(describing: $0) } ?? ""
+            evaluated.fulfill()
+        }
+        wait(for: [evaluated], timeout: 10)
+        return answer
+    }
+
+    private final class Loaded: NSObject, WKNavigationDelegate {
+        let done: () -> Void
+        init(done: @escaping () -> Void) { self.done = done }
+        func webView(_ web: WKWebView, didFinish navigation: WKNavigation!) { done() }
+    }
+
+    /// The one it is for: an API response is a tree with its keys and values apart, not one
+    /// unwrapped line of text.
+    func testAJSONResponseBecomesATree() throws {
+        let body = #"{"todos":[{"id":1,"done":false,"title":"ship it"}],"page":{"next":null}}"#
+        XCTAssertEqual(try inspect(body, mime: "application/json",
+                                   "document.body.hasAttribute('data-keel-json')"), "1")
+        XCTAssertEqual(try inspect(body, mime: "application/json",
+                                   "document.querySelectorAll('.k-key').length > 4"), "1")
+        XCTAssertEqual(try inspect(body, mime: "application/json",
+                                   "document.querySelector('.k-str').textContent"), "\"ship it\"")
+        // Everything drawn is Keel's, so the design canvas never reports the viewer as a region
+        // the agent changed.
+        XCTAssertEqual(
+            try inspect(body, mime: "application/json",
+                        "[...document.body.querySelectorAll('*')].every(e => e.hasAttribute('data-keel'))"),
+            "1")
+    }
+
+    /// An API that answers `text/plain` is still an API.
+    func testAPlainTextJSONBodyIsReadAsJSON() throws {
+        XCTAssertEqual(try inspect(#"[1,2,3]"#, mime: "text/plain",
+                                   "document.body.hasAttribute('data-keel-json')"), "1")
+    }
+
+    /// And the half that matters more: a page is a page. A viewer that rewrote an ordinary
+    /// document would have broken the preview it lives in.
+    func testAPageIsLeftAlone() throws {
+        XCTAssertEqual(try inspect("<h1>Hello</h1>", mime: "text/html",
+                                   "document.body.hasAttribute('data-keel-json')"), "0")
+        // A 404 served as JSON but written as prose parses as nothing, and is left as it arrived.
+        XCTAssertEqual(try inspect("Not Found", mime: "application/json",
+                                   "document.body.hasAttribute('data-keel-json')"), "0")
+        XCTAssertEqual(try inspect("Not Found", mime: "application/json",
+                                   "document.body.textContent.trim()"), "Not Found")
     }
 }
 

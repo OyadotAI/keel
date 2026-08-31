@@ -30,7 +30,7 @@ let package = Package(
             // The picker is JavaScript that runs inside someone else's page, so it ships as a
             // resource rather than a Swift string literal — escaping a hundred lines of JS into
             // source is how it stops being reviewable.
-            resources: [.copy("Picker.js")]
+            resources: [.copy("Picker.js"), .copy("JSONView.js")]
         ),
         // The fixtures are bytes captured from real `claude` runs — an auth failure as the CLI
         // actually emits it. A fixture written from memory passes while the app fails.
