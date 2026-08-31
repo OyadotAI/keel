@@ -17,6 +17,9 @@ struct ChatRail: View {
     /// Whether the view is following the stream. Scrolling up to read releases it — a pane that
     /// drags you back to the bottom mid-sentence is worse than one that never followed.
     @State private var pinned = true
+    /// The row the pane is held against. Written by the scroll view as you scroll, and by
+    /// `toBottom()` to put it back at the end.
+    @State private var anchor: String?
     @State private var lastFollow = Date.distantPast
 
     var body: some View {
@@ -75,64 +78,79 @@ struct ChatRail: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: K.S.xl) {
-                    if model.turns.isEmpty { hint }
-                    ForEach(Array(model.turns.enumerated()), id: \.element.id) { i, turn in
-                        ChatTurn(turn: turn, number: i + 1, model: model)
-                            .id("chat-\(turn.id)")
-                    }
-                    // An anchor at the very end: scrolling to the last turn stops at its top when
-                    // that turn is taller than the pane, which is exactly the case while a long
-                    // reply is streaming.
-                    Color.clear.frame(height: 1).id(Self.bottom)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: K.S.xl) {
+                // A pane with nothing in it says which of the reasons it is. It used to
+                // draw the "ask for a change" hint over a session that was still being read,
+                // and nothing at all if the read had left the lane empty.
+                if model.turns.isEmpty, !model.replaying { hint }
+                ForEach(Array(model.turns.enumerated()), id: \.element.id) { i, turn in
+                    ChatTurn(turn: turn, number: i + 1, model: model)
+                        .id("chat-\(turn.id)")
                 }
-                .padding(.horizontal, K.S.xxl)
-                .padding(.vertical, K.S.xl)
-                .frame(maxWidth: 800, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            // Watches the reply text as well as the tool calls. It only watched calls before, and
-            // a reply arrives as text deltas — so the pane sat still through the entire answer.
-            .onChange(of: tailToken) {
-                guard pinned else { return }
-                // Coalesced. A reply arrives as many small deltas, and calling `scrollTo` on each
-                // of them competes with the wheel and makes the pane feel like it is resisting.
-                let now = Date()
-                guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
-                lastFollow = now
-                proxy.scrollTo(Self.bottom, anchor: .bottom)
-            }
-            // A task, not an onChange: opening a session bumps `pinTick` before this pane
-            // exists, so the change had no listener and the transcript opened at the top.
-            // A task with that id runs on appear as well, after the rows have laid out.
-            .task(id: model.pinTick) {
-                pinned = true
-                try? await Task.sleep(for: .milliseconds(60))
-                proxy.scrollTo(Self.bottom, anchor: .bottom)
-            }
-            .followsTail($pinned)
-            // The end of a turn is the one update the coalescing window can swallow whole: the
-            // last delta arrives and there is no next one to correct the short scroll.
-            .onChange(of: model.running) {
-                guard pinned else { return }
-                proxy.scrollTo(Self.bottom, anchor: .bottom)
-            }
-            .overlay(alignment: .bottom) {
-                if !pinned && model.running {
-                    JumpToLatest {
-                        pinned = true
-                        withAnimation(K.M.settle) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
-                    }
-                    .transition(.opacity)
+            .scrollTargetLayout()
+            .padding(.horizontal, K.S.xxl)
+            .padding(.vertical, K.S.xl)
+            .frame(maxWidth: 800, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        // Held against a *row*, not against an offset. Every other way of saying "show me the
+        // end" — an anchor view and `scrollTo`, `defaultScrollAnchor(.bottom)`, a scroll to the
+        // bottom edge — resolves to a number computed from the estimated heights of rows the
+        // lazy stack has not measured, so a long session opened on a blank pane that you had to
+        // scroll up out of to find the conversation. Photographed, in `chat-long`. Pinned to the
+        // last turn instead, the scroll view keeps that row in view as the rows above it are
+        // measured and their heights change under it.
+        .scrollPosition(id: $anchor, anchor: .bottom)
+        // Watches the reply text as well as the tool calls. It only watched calls before, and
+        // a reply arrives as text deltas — so the pane sat still through the entire answer.
+        .onChange(of: tailToken) {
+            guard pinned else { return }
+            // Coalesced. A reply arrives as many small deltas, and scrolling on each of them
+            // competes with the wheel and makes the pane feel like it is resisting.
+            let now = Date()
+            guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
+            lastFollow = now
+            toBottom()
+        }
+        // A task, not an onChange: opening a session bumps `pinTick` before this pane exists,
+        // so the change had no listener and the transcript opened at the top. A task with that
+        // id runs on appear as well, after the rows have laid out.
+        .task(id: model.pinTick) {
+            pinned = true
+            toBottom()
+        }
+        .followsTail($pinned)
+        // The end of a turn is the one update the coalescing window can swallow whole: the
+        // last delta arrives and there is no next one to correct the short scroll.
+        .onChange(of: model.running) {
+            guard pinned else { return }
+            toBottom()
+        }
+        // In the middle of the pane, not as the first row of it: a line of small grey text
+        // at the top left of an empty transcript is a wait nobody sees, and the read it is
+        // reporting is the slowest one in the app.
+        .overlay {
+            if model.replaying, model.turns.isEmpty { openingNote }
+        }
+        .overlay(alignment: .bottom) {
+            if !pinned && model.running {
+                JumpToLatest {
+                    pinned = true
+                    withAnimation(K.M.settle) { toBottom() }
                 }
+                .transition(.opacity)
             }
         }
     }
 
-    private static let bottom = "chat-bottom"
+    /// To the end of the conversation: the last turn, held at the bottom of the pane.
+    private func toBottom() {
+        guard let last = model.turns.last else { return }
+        anchor = "chat-\(last.id)"
+    }
 
     /// Everything that means "there is more text below", as one value. Includes the reply length,
     /// which is what actually grows while an answer streams.
@@ -147,6 +165,16 @@ struct ChatRail: View {
     /// jobs are — and, when another lane is already editing, warns that they share one working
     /// tree. A lane can have a checkout of its own; this one chose not to, so the honest thing is
     /// to say so at the point where it matters rather than let two agents fight over the files.
+    /// While a transcript is being read. Slow on purpose — hundreds of messages off disk — and
+    /// the one wait in this pane long enough to look like a failure.
+    private var openingNote: some View {
+        VStack(spacing: K.S.md) {
+            ProgressView()
+            Text("Opening this session…").font(K.F.body).foregroundStyle(K.C.dim)
+        }
+        .transition(.opacity)
+    }
+
     private var hint: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             if model.isolated {
@@ -220,6 +248,13 @@ private struct ChatTurn: View {
     let model: SessionModel
     @State private var hovering = false
     @State private var copied: String?
+    @State private var expanded = false
+
+    /// How much of a pasted prompt is shown before it needs asking for. Lines for the display,
+    /// characters for whether to offer the button at all — a `lineLimit` cannot say whether it
+    /// truncated anything.
+    static let promptLines = 14
+    static let promptChars = 800
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.half) {
@@ -234,15 +269,31 @@ private struct ChatTurn: View {
             } else {
                 HStack(alignment: .bottom) {
                     Spacer(minLength: 64)
-                    Text(turn.prompt)
-                        .font(K.F.body)
-                        .foregroundStyle(K.C.text)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                        .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
-                        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
-                        .frame(maxWidth: 560, alignment: .trailing)
+                    VStack(alignment: .trailing, spacing: K.S.xs) {
+                        // Capped until asked. A prompt is often a paste — the largest in this
+                        // repository's own history is 80 KB — and `fixedSize` measures every line
+                        // of it whether or not it is on screen. Ninety-two turns took 264 ms to
+                        // lay out, 16 ms once the pastes stopped being measured whole: opening a
+                        // long session was a visible stall, and every keystroke in the composer
+                        // paid it again.
+                        Text(turn.prompt)
+                            .font(K.F.body)
+                            .foregroundStyle(K.C.text)
+                            .textSelection(.enabled)
+                            .lineLimit(expanded ? nil : Self.promptLines)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if turn.prompt.count > Self.promptChars {
+                            Button(expanded ? "Show less" : "Show all")
+                                { withAnimation(K.M.quick) { expanded.toggle() } }
+                                .buttonStyle(.plain)
+                                .font(K.F.micro)
+                                .foregroundStyle(K.C.accent)
+                        }
+                    }
+                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                    .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
+                    .frame(maxWidth: 560, alignment: .trailing)
                 }
             }
 

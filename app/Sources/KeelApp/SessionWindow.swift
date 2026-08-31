@@ -43,7 +43,11 @@ struct SessionWindow: View {
     /// servers, hooks and plugins into one "Workspace" panel meant five headings fighting for a
     /// 256pt rail and no room for any of them to have actions.
     enum Panel: String, CaseIterable, Identifiable {
-        case changes, git, files, sessions, readiness, monitors
+        // The rail is drawn in this order, so it is written in the order people reach for it:
+        // what you were just doing, what changed, what git makes of it, and what is still running.
+        // The reference panels come after the divider and are read far less often.
+        case sessions, changes, git, monitors
+        case files, readiness
         case skills, agents, mcp, hooks, plugins
         var id: String { rawValue }
 
@@ -80,7 +84,9 @@ struct SessionWindow: View {
 
         /// A separator after these, so the repository group and the agent-configuration group read
         /// as two sets rather than nine icons in a column.
-        var endsGroup: Bool { self == .monitors }
+        /// The divider sits after the panels about *this* project's work, before the ones that
+        /// are reference material about the machine's setup.
+        var endsGroup: Bool { self == .readiness }
     }
 
     /// The lane in focus. Every pane below draws this one; the rail shows all of them.

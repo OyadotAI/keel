@@ -527,11 +527,22 @@ final class SessionModel: Identifiable {
             }
         }
 
-        /// For the tab, where there is room for a badge and not for a sentence.
+        /// For the tab, where there is room for a badge and not for a sentence. Now the fallback
+        /// for [`ProviderMark`] when the icon file is not where it should be — a tab that says
+        /// nothing about which agent is behind it is worse than one that says it in four letters.
         var short: String {
             switch self {
             case .claude: "Claude"
             case .codex: "Codex"
+            }
+        }
+
+        /// The CLI's own icon, shipped in the app bundle. A tab identifies its agent the way a
+        /// browser tab identifies its site.
+        var iconResource: String {
+            switch self {
+            case .claude: "provider-claude"
+            case .codex: "provider-codex"
             }
         }
 
@@ -599,6 +610,13 @@ final class SessionModel: Identifiable {
             files = other.files
         }
         repoPath = other.repoPath
+        // With the data, not without it. Every panel keys "not yet" off `loaded`, and a lane that
+        // adopted 158 sessions and a scan while `loaded` stayed false drew "Reading…" over all of
+        // it — for good, because a new lane never calls `refreshState` and the refreshes that
+        // could set it are themselves guarded by it. It was every panel of every tab but the
+        // first, from the moment the tab opened.
+        loaded = other.loaded
+        loadFailed = other.loadFailed
         slashCommands = other.slashCommands
         sessions = other.sessions
         findings = other.findings
@@ -2223,12 +2241,25 @@ final class SessionModel: Identifiable {
     }
 
     /// Open an existing conversation in this window: replay what it did, then carry on.
+    /// A transcript is being read into this lane. The conversation pane says so instead of
+    /// drawing nothing. (`opening` is taken: that one is a project switch.)
+    var replaying = false
+
     func open(session id: String) async {
         sessionId = id
         let known = sessions.first { $0.id == id }
         title = known?.title ?? "Session " + id.prefix(8)
         sessionCwd = known?.elsewhere != nil ? known?.cwd : nil
-        turns.removeAll()
+        // Emptied only once there is something to put back.
+        //
+        // This used to `turns.removeAll()` here, two awaits before the replacement was ready —
+        // and a transcript is the one request that is genuinely slow, hundreds of messages read
+        // off disk. Anything that ended the task in between (a second open racing the first, the
+        // lane being replaced, a cancelled `.task`) left the pane empty for good, with no turn to
+        // draw and no reason on screen for why. Keeping the old conversation up while the new one
+        // loads is also the better answer when the read simply fails.
+        replaying = true
+        defer { replaying = false }
         // What the session actually said, and what it did to the repository — two different
         // endpoints, because the daemon deliberately keeps the listing away from the bodies.
         async let bodies: [Wire.Turn]? = try? client.get("/api/session", sq(["id": id]))
@@ -2261,6 +2292,7 @@ final class SessionModel: Identifiable {
             last.truncated = did.truncated
         }
         replayed.forEach { $0.finished = true; $0.replayed = true }
+        // The one assignment, at the end, on every path that got this far.
         turns = replayed
         pinTick += 1
     }

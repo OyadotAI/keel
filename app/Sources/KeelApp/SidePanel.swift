@@ -84,6 +84,8 @@ struct SessionsPanel: View {
     @State private var renaming: String?
     @State private var newTitle = ""
     @State private var query = ""
+    /// Which time buckets are unfolded. Today, until you say otherwise.
+    @State private var opened: Set<String> = ["Today"]
 
     private var visible: [Wire.Session] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,22 +111,21 @@ struct SessionsPanel: View {
             EmptyState(icon: "magnifyingglass", title: "Nothing matches",
                        "No past session mentions “\(query)”.")
         }
-        ForEach(groups, id: \.folder) { group in
-            // Only when there is more than one: a single header over every row names the project
-            // you are already in, which is the sort of label that makes a panel longer and no
-            // clearer. Open a parent folder and there are suddenly twelve, and then it is the
-            // only thing that tells them apart.
-            if groups.count > 1 {
-                HStack(spacing: K.S.xs) {
-                    Text(group.folder).sectionLabel().foregroundStyle(K.C.dim)
-                    Text("\(group.sessions.count)").font(K.F.micro).foregroundStyle(K.C.faint)
-                    Spacer()
-                }
-                .padding(.horizontal, K.S.md).padding(.top, K.S.sm)
-            }
+        ForEach(groups) { group in
+            // Today open, the rest folded. 158 sessions is a scroll bar with no landmarks in it;
+            // what you came for is nearly always from this morning, and the three other headers
+            // say where the rest went rather than hiding it. A search opens all of them, because
+            // a match inside a folded group is a search that looks broken.
+            PanelSection(title: group.label, count: group.sessions.count,
+                         open: Binding(get: { !query.isEmpty || opened.contains(group.label) },
+                                       set: { want in
+                                           if want { opened.insert(group.label) }
+                                           else { opened.remove(group.label) }
+                                       })) {
+            VStack(alignment: .leading, spacing: 0) {
             ForEach(group.sessions) { s in
                 PanelRow(name: s.title ?? String(s.id.prefix(8)),
-                         detail: detail(s, grouped: groups.count > 1),
+                         detail: detail(s),
                          selected: s.id == model.sessionId) {
                     // Resumed into its own lane, so opening an old session does not evict the one
                     // that is running.
@@ -133,6 +134,8 @@ struct SessionsPanel: View {
                 .contextMenu {
                     Button("Rename…") { renaming = s.id; newTitle = s.title ?? "" }
                 }
+            }
+            }
             }
         }
         // Rendered once, outside the loop: an alert per row is an alert per row.
@@ -149,46 +152,63 @@ struct SessionsPanel: View {
     }
 
     struct Group: Identifiable {
-        var folder: String
+        var label: String
         var sessions: [Wire.Session]
-        var id: String { folder }
+        var id: String { label }
     }
 
-    /// Sessions by the folder they ran in, most recently active folder first.
+    /// The four buckets, in the order they are shown. `nil` days fall in the last one.
+    static let buckets = ["Today", "This week", "This month", "Older"]
+
+    /// Sessions by when they last ran.
     ///
-    /// Open a parent folder — a monorepo, a client's directory — and History is every session
-    /// from every project under it, which was one flat list of two hundred and sixty rows where
-    /// nothing said which repository any of them belonged to.
+    /// It grouped by the folder each one ran in, which on a single repository is one header
+    /// reading `keel` over all 138 rows — a label for something you already know. When you go
+    /// looking in History you are looking for *the one from this morning*, so time is what the
+    /// headers should say. Which folder it ran in stays on the row that is not from here.
     private var grouped: [Group] {
-        var order: [String] = []
-        var byFolder: [String: [Wire.Session]] = [:]
+        // ISO days sort as strings, so the boundaries are three comparisons and no date parsing
+        // per row — this list redraws on every state refresh with hundreds of rows in it.
+        let now = Date.now
+        let today = Self.day(now)
+        let week = Self.day(now.addingTimeInterval(-7 * 86_400))
+        let month = Self.day(now.addingTimeInterval(-30 * 86_400))
+
+        var byBucket: [String: [Wire.Session]] = [:]
         for s in visible {
-            let key = folder(s)
-            if byFolder[key] == nil { order.append(key) }
-            byFolder[key, default: []].append(s)
+            byBucket[Self.bucket(String((s.lastActive ?? "").prefix(10)),
+                                 today: today, week: week, month: month), default: []].append(s)
         }
-        // `visible` is already most-recent-first, so first appearance is the folder's own recency.
-        return order.map { Group(folder: $0, sessions: byFolder[$0] ?? []) }
+        // `visible` is already most-recent-first, so each bucket is too.
+        return Self.buckets.compactMap { key in
+            byBucket[key].map { Group(label: key, sessions: $0) }
+        }
     }
 
-    /// Where a session ran, as a label: the path below this project when it is inside it, and the
-    /// folder's own name when it is somewhere else.
-    private func folder(_ s: Wire.Session) -> String {
-        let repo = model.repoPath
-        let here = (repo as NSString).lastPathComponent
-        guard let cwd = s.cwd, !cwd.isEmpty, cwd != repo else { return here.isEmpty ? "here" : here }
-        if cwd.hasPrefix(repo + "/") { return String(cwd.dropFirst(repo.count + 1)) }
-        return (cwd as NSString).lastPathComponent
+    /// Which bucket an ISO day falls in. A day Keel cannot read — missing, or a shape it does
+    /// not expect — is old rather than today: the top of the list is where you look for what you
+    /// just did, and a row with no date is not that.
+    static func bucket(_ day: String, today: String, week: String, month: String) -> String {
+        guard day.count == 10 else { return "Older" }
+        if day >= today { return "Today" }
+        if day >= week { return "This week" }
+        if day >= month { return "This month" }
+        return "Older"
+    }
+
+    /// `2026-08-31` for a date, the same shape the daemon sends.
+    static func day(_ d: Date) -> String {
+        String(d.formatted(.iso8601.year().month().day()).prefix(10))
     }
 
     /// One line under the title: how much was said, when, and — because resuming runs the agent
     /// there — whether it started somewhere other than this folder. It was three monospace
     /// fragments with no separators, reading `42 msg 09:14`.
-    private func detail(_ s: Wire.Session, grouped: Bool) -> String {
+    private func detail(_ s: Wire.Session) -> String {
         var parts = ["\(s.messages) message\(s.messages == 1 ? "" : "s")"]
         if let t = s.lastActive { parts.append(short(t)) }
-        // The group header already says where it ran; saying it again on every row is noise.
-        if !grouped, let from = s.elsewhere { parts.append("in \(from)/") }
+        // Now that the headers are dates, where it ran is only ever said here.
+        if let from = s.elsewhere { parts.append("in \(from)/") }
         return parts.joined(separator: " · ")
     }
 
@@ -198,8 +218,7 @@ struct SessionsPanel: View {
         let day = String(iso.prefix(10))
         // An `ISO8601DateFormatter` allocated per row, in a list that redraws on every state
         // refresh. `.iso8601` is a value type and free to make.
-        let today = Date.now.formatted(.iso8601.year().month().day()).prefix(10)
-        return day == today ? String(iso.dropFirst(11).prefix(5)) : day
+        return day == Self.day(.now) ? String(iso.dropFirst(11).prefix(5)) : day
     }
 }
 
