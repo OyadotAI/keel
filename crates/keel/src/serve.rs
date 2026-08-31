@@ -17,32 +17,56 @@ use axum::{
     http::header,
     routing::get,
 };
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub struct AppState {
-    repo: std::sync::RwLock<Utf8PathBuf>,
+    /// A `Mutex`, not an `RwLock`: every reader clones it immediately and holds it for
+    /// nanoseconds, so there is no reader concurrency to win — and `lock::Locked` exists for
+    /// `Mutex` alone, which is the rule that keeps a panic from bricking every later request.
+    repo: std::sync::Mutex<Utf8PathBuf>,
     /// Whether `repo` is a project someone chose, or the empty stand-in used before one is open.
     open: std::sync::atomic::AtomicBool,
     /// The port this Keel is serving on. The approval hook is spawned by `claude`, in a separate
     /// process, and this is how it finds its way back.
     port: std::sync::atomic::AtomicU16,
-    /// The agent process each conversation is currently running, so Stop can signal it.
+    /// The turn each conversation is currently running, so Stop can signal it — and so that
+    /// starting one can be refused.
     ///
     /// Keyed by conversation for the same reason the approval queue is: two lanes are two turns,
     /// and stopping one must not touch the other.
-    running: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    running: std::sync::Mutex<std::collections::HashMap<String, Turn>>,
+    /// Hands out a token per claim, so a turn that ends late releases its own slot and never a
+    /// newer turn's.
+    tokens: std::sync::atomic::AtomicU64,
+}
+
+/// One running turn: which checkout it is in, whether it can write to it, and what to signal.
+///
+/// The checkout and the flag are here because "one turn per lane" was never the whole invariant.
+/// The other half — one *writer* per working tree — was kept in one window's Swift array, and a
+/// window cannot see another window. Both halves live here now, in the only process that sees
+/// every window.
+struct Turn {
+    token: u64,
+    /// `None` until the child is spawned. The slot is reserved first so two requests arriving
+    /// together cannot both get past the check.
+    pid: Option<u32>,
+    checkout: Utf8PathBuf,
+    /// False for a plan turn, which writes nothing and may sit beside one that does.
+    writes: bool,
 }
 
 impl AppState {
     pub fn new(repo: Utf8PathBuf) -> Self {
         Self {
-            repo: std::sync::RwLock::new(repo),
+            repo: std::sync::Mutex::new(repo),
             open: std::sync::atomic::AtomicBool::new(true),
             port: std::sync::atomic::AtomicU16::new(7777),
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
+            tokens: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -50,10 +74,11 @@ impl AppState {
     /// that has since moved.
     pub fn empty() -> Self {
         Self {
-            repo: std::sync::RwLock::new(crate::prefs::no_project()),
+            repo: std::sync::Mutex::new(crate::prefs::no_project()),
             open: std::sync::atomic::AtomicBool::new(false),
             port: std::sync::atomic::AtomicU16::new(7777),
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
+            tokens: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -68,7 +93,7 @@ impl AppState {
     /// The repository currently open. Cloned rather than borrowed so no handler holds the lock
     /// across an await point.
     pub fn repo(&self) -> Utf8PathBuf {
-        self.repo.read().expect("repo lock poisoned").clone()
+        self.repo.locked().clone()
     }
 
     /// The checkout a request is about: the project, or one of its lane worktrees.
@@ -127,21 +152,76 @@ impl AppState {
         allowed.then_some(cwd)
     }
 
-    /// Remember the agent process a conversation is running, so Stop has something to signal.
-    pub fn mark_running(&self, lane: &str, pid: u32) {
-        self.running
-            .lock()
-            .expect("running lock poisoned")
-            .insert(lane.to_string(), pid);
+    /// Take the lane, and the right to write its checkout, for one turn.
+    ///
+    /// Both refusals were previously guarded only in `SessionModel.start`, which is one window's
+    /// view:
+    ///
+    /// * **Two turns in one lane** is two agents on one checkout with one of them invisible to
+    ///   Stop — `running` held one pid per lane and the second `insert` simply overwrote the
+    ///   first, so the first `claude` ran on with nothing left that could signal it.
+    /// * **Two writers in one working tree** is the multi-agent pillar's load-bearing constraint.
+    ///   Both of the things that end a turn are tree-wide — the auto-commit is `git add -A` and a
+    ///   rewind restores the whole tree — so whichever finishes first sweeps the other's
+    ///   half-written files into a commit labelled with the wrong prompt. Tearing a lane into its
+    ///   own window is a first-class gesture here, and the moment it is used the Swift check is
+    ///   looking at the wrong array.
+    ///
+    /// Returns the token that releases it.
+    pub fn claim(&self, lane: &str, checkout: &Utf8Path, writes: bool) -> Result<u64, String> {
+        let mut map = self.running.locked();
+        if map.contains_key(lane) {
+            return Err("This feature already has a turn running.".into());
+        }
+        if writes && map.values().any(|t| t.writes && t.checkout == checkout) {
+            return Err(
+                "Another feature is already editing this working tree — in this window or in                  another one. Two agents writing one checkout commit each other's half-finished                  files, so this turn has not started. Give this one its own branch, or wait for                  the other to finish."
+                    .into(),
+            );
+        }
+        let token = self
+            .tokens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        map.insert(
+            lane.to_string(),
+            Turn {
+                token,
+                pid: None,
+                checkout: checkout.to_owned(),
+                writes,
+            },
+        );
+        Ok(token)
     }
 
-    /// Forget it, but only if it is still the one we recorded: a turn that ends after the next one
-    /// has already started must not erase the new turn's pid.
-    pub fn clear_running(&self, lane: &str, pid: u32) {
+    /// Record the process, so Stop has something to signal.
+    pub fn started(&self, lane: &str, token: u64, pid: u32) {
+        if let Some(turn) = self.running.locked().get_mut(lane)
+            && turn.token == token
+        {
+            turn.pid = Some(pid);
+        }
+    }
+
+    /// Give the lane back, but only if it is still ours: a turn that ends after the next one has
+    /// started must not release the new turn's slot.
+    pub fn release(&self, lane: &str, token: u64) {
         let mut map = self.running.locked();
-        if map.get(lane) == Some(&pid) {
+        if map.get(lane).map(|t| t.token) == Some(token) {
             map.remove(lane);
         }
+    }
+
+    /// Whether any turn is currently allowed to write this checkout.
+    ///
+    /// Read by the auto-commit, which is `git add -A` in the whole tree: committing while another
+    /// lane's agent is mid-write is how one turn's commit comes to hold another turn's
+    /// half-finished files under the wrong message.
+    pub fn writer_in(&self, checkout: &Utf8Path) -> bool {
+        self.running
+            .locked()
+            .values()
+            .any(|t| t.writes && t.checkout == checkout)
     }
 
     /// Stop the turn in one conversation, the way ⌃C would.
@@ -151,13 +231,7 @@ impl AppState {
     /// record of what the agent did — losing it is losing the evidence Keel exists to show.
     /// Returns whether there was anything to signal.
     pub fn interrupt(&self, lane: &str) -> bool {
-        let Some(pid) = self
-            .running
-            .lock()
-            .expect("running lock poisoned")
-            .get(lane)
-            .copied()
-        else {
+        let Some(pid) = self.running.locked().get(lane).and_then(|t| t.pid) else {
             return false;
         };
         // The group, not the process: `claude` spawns the tools it runs, and a bare `kill(pid)`
@@ -168,7 +242,7 @@ impl AppState {
 
     pub fn set_repo(&self, path: Utf8PathBuf) {
         crate::prefs::Prefs::remember(&path);
-        *self.repo.write().expect("repo lock poisoned") = path;
+        *self.repo.locked() = path;
         self.open.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -194,6 +268,31 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for Checkout {
             .checkout(wt)
             .map(Checkout)
             .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    }
+}
+
+/// A claim that is given back however the turn ends.
+///
+/// The turn task has five ways out — a refusal, a failed spawn, a hung-up client, the child
+/// exiting, a panic — and releasing at each of them is a list that only has to be wrong once. A
+/// lane left claimed can never take another turn: the window looks idle and every send is
+/// refused, which is the "never stuck" failure with the worst shape, because nothing on screen
+/// says what is holding it.
+pub struct Held {
+    state: Arc<AppState>,
+    lane: String,
+    token: u64,
+}
+
+impl Held {
+    pub fn new(state: Arc<AppState>, lane: String, token: u64) -> Self {
+        Self { state, lane, token }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.state.release(&self.lane, self.token);
     }
 }
 
@@ -900,7 +999,14 @@ async fn api_git_act(
         move || {
             let first = crate::repo::git_act(&repo, &req.action, &req.path, req.hunk);
             match first {
-                Err(e) if e.contains("no such file") && root != repo => {
+                // Staging and unstaging only. `discard` and `discard-hunk` throw work away, and
+                // looking somewhere else for a file to throw away is not a helpful second guess —
+                // it is a different tree than the one the person is looking at.
+                Err(e)
+                    if e.contains("no such file")
+                        && root != repo
+                        && matches!(req.action.as_str(), "stage" | "unstage") =>
+                {
                     crate::repo::git_act(&root, &req.action, &req.path, req.hunk)
                 }
                 other => other,
@@ -1074,7 +1180,10 @@ mod tests {
     fn interrupt_stops_the_process_it_recorded() {
         let state = AppState::empty();
         let mut child = spawn_sleeper();
-        state.mark_running("lane-a", child.id());
+        let token = state
+            .claim("lane-a", Utf8Path::new("/tmp/a"), true)
+            .unwrap();
+        state.started("lane-a", token, child.id());
 
         assert!(state.interrupt("lane-a"), "nothing was signalled");
 
@@ -1093,8 +1202,12 @@ mod tests {
         let state = AppState::empty();
         let mut mine = spawn_sleeper();
         let mut theirs = spawn_sleeper();
-        state.mark_running("mine", mine.id());
-        state.mark_running("theirs", theirs.id());
+        let a = state.claim("mine", Utf8Path::new("/tmp/a"), true).unwrap();
+        let b = state
+            .claim("theirs", Utf8Path::new("/tmp/b"), true)
+            .unwrap();
+        state.started("mine", a, mine.id());
+        state.started("theirs", b, theirs.id());
 
         state.interrupt("mine");
         mine.wait()
@@ -1119,26 +1232,116 @@ mod tests {
         assert!(!state.interrupt("lane-a"));
 
         let mut child = spawn_sleeper();
-        let pid = child.id();
-        state.mark_running("lane-a", pid);
-        state.clear_running("lane-a", pid);
+        let token = state
+            .claim("lane-a", Utf8Path::new("/tmp/a"), true)
+            .unwrap();
+        state.started("lane-a", token, child.id());
+        state.release("lane-a", token);
         assert!(!state.interrupt("lane-a"));
         let _ = child.kill();
         let _ = child.wait();
     }
 
-    /// A turn that ends after the next one has started must not erase the new turn's pid, or the
-    /// second Stop finds nothing and the agent runs on.
+    /// A turn that ends after the next one has started must not release the new turn's slot, or
+    /// the second Stop finds nothing and the agent runs on.
     #[test]
     fn a_late_ending_turn_does_not_forget_the_new_one() {
         let state = AppState::empty();
-        state.mark_running("lane-a", 1234);
-        state.mark_running("lane-a", 5678);
-        state.clear_running("lane-a", 1234);
+        let lane = Utf8Path::new("/tmp/a");
+        let first = state.claim("lane-a", lane, true).unwrap();
+        state.release("lane-a", first);
+        let second = state.claim("lane-a", lane, true).unwrap();
+        state.started("lane-a", second, 5678);
 
+        state.release("lane-a", first);
         assert_eq!(
-            state.running.lock().unwrap().get("lane-a").copied(),
-            Some(5678)
+            state.running.locked().get("lane-a").and_then(|t| t.pid),
+            Some(5678),
+            "the finished turn released the running turn's slot"
+        );
+    }
+
+    /// Two `claude -p` in one lane is two agents on one checkout with one of them invisible to
+    /// Stop: `running` held a single pid per lane and the second registration simply overwrote
+    /// the first. The guard lived in `SessionModel.start`, which is one window's view.
+    #[test]
+    fn one_lane_takes_one_turn() {
+        let state = AppState::empty();
+        let lane = Utf8Path::new("/tmp/a");
+        let token = state.claim("lane-a", lane, true).unwrap();
+        assert!(
+            state.claim("lane-a", lane, true).is_err(),
+            "a second turn started in a lane that already had one"
+        );
+
+        state.release("lane-a", token);
+        assert!(
+            state.claim("lane-a", lane, true).is_ok(),
+            "the lane never became usable again"
+        );
+    }
+
+    /// The multi-agent pillar's load-bearing constraint, kept where every window can be seen.
+    ///
+    /// Both of the things that end a turn are tree-wide — the auto-commit is `git add -A`, a
+    /// rewind restores the whole tree — so two lanes writing one checkout means whichever
+    /// finishes first commits the other's half-written files under the wrong prompt. Tearing a
+    /// lane into its own window is a gesture this app offers, and it puts the two lanes in
+    /// different arrays, so the Swift check cannot see the pair it exists to refuse.
+    #[test]
+    fn one_working_tree_takes_one_writer() {
+        let state = AppState::empty();
+        let shared = Utf8Path::new("/tmp/project");
+        let held = state.claim("window-one", shared, true).unwrap();
+
+        assert!(
+            state.claim("window-two", shared, true).is_err(),
+            "two lanes are writing one working tree"
+        );
+        // A lane for reading and planning beside one that is editing is what a shared lane is
+        // for, and it writes nothing.
+        assert!(
+            state.claim("reader", shared, false).is_ok(),
+            "a plan turn was refused beside a writing one"
+        );
+        // Its own checkout is the whole point of a lane having one.
+        assert!(
+            state
+                .claim(
+                    "isolated",
+                    Utf8Path::new("/tmp/project/.keel/worktrees/x"),
+                    true
+                )
+                .is_ok(),
+            "a lane with its own checkout was refused"
+        );
+        assert!(
+            state.writer_in(shared),
+            "the auto-commit cannot see the writer"
+        );
+
+        state.release("window-one", held);
+        assert!(!state.writer_in(shared));
+        assert!(
+            state.claim("window-two", shared, true).is_ok(),
+            "the tree was never handed back"
+        );
+    }
+
+    /// Every way out of the turn task gives the lane back. A lane left claimed can take no
+    /// further turn, and nothing on screen says what is holding it.
+    #[test]
+    fn a_turn_that_ends_any_way_at_all_gives_the_lane_back() {
+        let state = Arc::new(AppState::empty());
+        let lane = Utf8Path::new("/tmp/a");
+        let token = state.claim("lane-a", lane, true).unwrap();
+        {
+            let _held = Held::new(state.clone(), "lane-a".into(), token);
+            assert!(state.claim("lane-a", lane, true).is_err());
+        }
+        assert!(
+            state.claim("lane-a", lane, true).is_ok(),
+            "the guard did not release the lane"
         );
     }
 }

@@ -5,12 +5,11 @@ use serde::Serialize;
 pub struct Policy {
     pub max_files: usize,
     pub require_isolation: bool,
-    /// Whether a *policy file* demanded isolation, as opposed to it being Keel's own default.
+    /// Whether a *policy file* demanded isolation, as opposed to the person having asked for it.
     ///
-    /// The distinction decides whether a failed `git worktree add` may fall back to the project.
-    /// `require_isolation` defaults to true for everybody and `tighten_from` can only ever raise
-    /// it, so without this flag every user looks like an organisation that mandated isolation —
-    /// and a customer whose worktree could not be created was simply blocked from working.
+    /// The distinction decides whether a failed `git worktree add` may fall back to the project:
+    /// a lane the person chose to isolate can run in the project and say so, a lane an
+    /// organisation mandated cannot.
     pub isolation_by_policy: bool,
     pub allowed_providers: Vec<String>,
     pub sources: Vec<String>,
@@ -20,7 +19,13 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             max_files: 8,
-            require_isolation: true,
+            // Keel's own default is *not* to force isolation — the person picks, per feature,
+            // in New Feature. It used to be `true`, and because `tighten_from` can only ever
+            // raise it there was no way back: every non-plan turn was flipped isolated at the
+            // last moment, so "Sharing the working tree" was offered in three places and
+            // produced an isolated lane, and the guard against two lanes writing one tree had
+            // nothing left to guard. Only a policy file raises this now.
+            require_isolation: false,
             isolation_by_policy: false,
             allowed_providers: vec!["claude".into(), "codex".into()],
             sources: vec!["Keel defaults".into()],
@@ -99,6 +104,7 @@ impl Parsed {
 mod tests {
     use super::*;
 
+    /// A repository cannot widen what the defaults or an organisation already decided.
     #[test]
     fn repository_policy_can_only_tighten_defaults() {
         let dir = tempfile::tempdir().unwrap();
@@ -106,13 +112,50 @@ mod tests {
         std::fs::create_dir(root.join(".keel")).unwrap();
         std::fs::write(
             root.join(".keel/policy.toml"),
-            "max_files = 20\nrequire_isolation = false\nallowed_providers = ['claude']\n",
+            "max_files = 20\nallowed_providers = ['claude']\n",
         )
         .unwrap();
         let policy = Policy::load(&root);
         assert_eq!(policy.max_files, 8);
-        assert!(policy.require_isolation);
         assert_eq!(policy.allowed_providers, ["claude"]);
+    }
+
+    /// Isolation is the person's choice per feature until a policy file takes it away, and a
+    /// repository cannot hand it back. Both halves matter: the first is why "Sharing the working
+    /// tree" exists at all, the second is what makes an organisation's mandate a mandate.
+    #[test]
+    fn isolation_is_a_choice_until_a_policy_demands_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir(root.join(".keel")).unwrap();
+
+        let plain = Policy::load(&root);
+        assert!(!plain.require_isolation, "Keel does not force isolation");
+        assert!(!plain.isolation_by_policy);
+
+        std::fs::write(root.join(".keel/policy.toml"), "require_isolation = true\n").unwrap();
+        let demanded = Policy::load(&root);
+        assert!(demanded.require_isolation);
+        assert!(
+            demanded.isolation_by_policy,
+            "a failed checkout must refuse rather than fall back to the project"
+        );
+
+        std::fs::write(
+            root.join(".keel/policy.toml"),
+            "require_isolation = false\n",
+        )
+        .unwrap();
+        let mut org = Policy {
+            require_isolation: true,
+            isolation_by_policy: true,
+            ..Default::default()
+        };
+        org.tighten_from(&root.join(".keel/policy.toml"), "repository policy");
+        assert!(
+            org.require_isolation,
+            "a repository cannot relax an organisation's mandate"
+        );
     }
 
     #[test]

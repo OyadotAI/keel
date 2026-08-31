@@ -623,43 +623,79 @@ pub async fn chat(
                 .data("reading the project")))
             .await;
 
+        // The lane, and the right to write its checkout, before anything is spawned.
+        //
+        // A caller with no lane of its own gets a key nothing else can collide with. It used to
+        // get `""`, which every lane-less caller shared: two of them overwrote each other's pid
+        // and only one could ever be stopped.
+        let lane = match query.lane.clone().filter(|l| !l.is_empty()) {
+            Some(lane) => lane,
+            None => {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                format!(
+                    "anon-{}",
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                )
+            }
+        };
+        // A plan turn writes nothing, so it may sit beside one that does — which is the whole
+        // point of a lane for reading beside a lane that is editing.
+        let writes = query.mode.as_deref() != Some("plan");
+        let token = match stopper.claim(&lane, &cwd, writes) {
+            Ok(token) => token,
+            Err(why) => {
+                let _ = tx.send(Ok(Event::default().event("fatal").data(why))).await;
+                return;
+            }
+        };
+        // Every path out of this task from here on releases it. `Guard` rather than a call at
+        // each `return`, because there are five of them and the sixth would be the bug: a lane
+        // left claimed is a lane that can never take another turn, which is the "never stuck"
+        // failure with the worst shape — the window looks idle and every send is refused.
+        let _lane_held = crate::serve::Held::new(stopper.clone(), lane.clone(), token);
+
         let provider = query.provider.as_deref().unwrap_or("claude");
         let mut command = if provider == "codex" {
             let mut command = Command::new("codex");
             command.current_dir(&cwd).arg("exec");
+            // The sandbox and the directory on *both* branches. They used to be on the first
+            // turn only, so every Codex turn after it ran with codex's own defaults: no `--cd`,
+            // so a lane's turn ran outside the lane's checkout, and no `--sandbox`, so `mode`
+            // stopped being enforced — including `plan`. A lane the window believed was planning
+            // is exempt from the guard against two writers on one tree, and was able to write.
+            //
+            // The system prompt stays on the first turn alone: a resumed conversation already has
+            // it, and `resume` takes the prompt as its argument.
+            let sandbox = match query.mode.as_deref() {
+                Some("acceptEdits") => "workspace-write",
+                _ => "read-only",
+            };
+            command
+                .arg("--json")
+                .arg("--color")
+                .arg("never")
+                .arg("--sandbox")
+                .arg(sandbox)
+                .arg("--cd")
+                .arg(&cwd);
             if let Some(session) = &query.session {
-                command
-                    .arg("resume")
-                    .arg("--json")
-                    .arg(session)
-                    .arg(&query.prompt);
+                command.arg("resume").arg(session).arg(&query.prompt);
             } else {
-                command
-                    .arg("--json")
-                    .arg("--color")
-                    .arg("never")
-                    .arg("--sandbox")
-                    .arg(match query.mode.as_deref() {
-                        Some("acceptEdits") => "workspace-write",
-                        _ => "read-only",
-                    })
-                    .arg("--cd")
-                    .arg(&cwd)
-                    .arg(
-                        match query
-                            .system
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                        {
-                            Some(extra) => format!(
-                                "{}\n\n{extra}\n\nTask:\n{}",
-                                system_prompt(&cwd),
-                                query.prompt
-                            ),
-                            None => format!("{}\n\nTask:\n{}", system_prompt(&cwd), query.prompt),
-                        },
-                    );
+                command.arg(
+                    match query
+                        .system
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        Some(extra) => format!(
+                            "{}\n\n{extra}\n\nTask:\n{}",
+                            system_prompt(&cwd),
+                            query.prompt
+                        ),
+                        None => format!("{}\n\nTask:\n{}", system_prompt(&cwd), query.prompt),
+                    },
+                );
             }
             command
         } else if provider == "claude" {
@@ -791,11 +827,10 @@ pub async fn chat(
             }
         };
 
-        // Registered before the first line is read, so a Stop arriving immediately still finds it.
-        let lane = query.lane.clone().unwrap_or_default();
+        // Recorded before the first line is read, so a Stop arriving immediately still finds it.
         let pid = child.id().unwrap_or(0);
         if pid != 0 {
-            stopper.mark_running(&lane, pid);
+            stopper.started(&lane, token, pid);
         }
 
         // Drained, always, and not only to report it.
@@ -873,14 +908,12 @@ pub async fn chat(
                     // reparented to init, with nothing left that knows it exists. That is the
                     // failure `BudgetTests` was written for, reached by a different door.
                     crate::signals::end_tree(pid);
-                    stopper.clear_running(&lane, pid);
                     return;
                 }
             }
         }
 
         let status = child.wait().await;
-        stopper.clear_running(&lane, pid);
         let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
 
         // A provider that failed and said why on stderr used to say it to nobody: the app was

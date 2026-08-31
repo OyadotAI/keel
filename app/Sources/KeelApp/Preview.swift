@@ -577,7 +577,19 @@ struct PreviewSurface: View {
 
     private var empty: some View {
         Group {
-            if let command = model.devDetected {
+            // Keel runs one dev server. Said, rather than shown as this lane's — a preview of
+            // another lane's worktree beside this lane's diff is the wrong page reviewed with
+            // confidence, and it is what the pixel check would photograph.
+            if let owner = model.devElsewhere {
+                EmptyState(
+                    icon: "rectangle.on.rectangle.slash",
+                    title: "The dev server belongs to \(owner)",
+                    "Keel runs one at a time, and it is serving that checkout — so a preview here "
+                    + "would show its code, not this feature's. Stop it there to run one for this "
+                    + "feature.",
+                    actionLabel: "Stop it and run one here"
+                ) { Task { await model.stopDev(); await model.startDev() } }
+            } else if let command = model.devDetected {
                 EmptyState(
                     icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
                     "Keel points the preview at whatever URL `\(command)` announces"

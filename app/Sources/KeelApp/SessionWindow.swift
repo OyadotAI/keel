@@ -541,8 +541,13 @@ struct SessionWindow: View {
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
             .background(K.C.surface)
+            // `.id(model.id)` tears the pane down on every lane switch, and the daemon spawns a
+            // fresh PTY per connection — so switching away and back gives a new shell with empty
+            // scrollback and whatever was running gone. Keying on the *checkout* instead means a
+            // switch between lanes on one tree keeps its shell, which is the common case; the
+            // header says what happened when it genuinely could not.
             TerminalPane(port: model.port, worktree: model.worktree, title: $terminalTitle, command: $terminalCommand)
-                .id(model.id)
+                .id(model.worktree ?? model.repoPath)
         }
         .frame(minHeight: 140, idealHeight: 220)
     }
@@ -898,8 +903,26 @@ struct ProjectMenu: View {
     /// The toolbar version: bigger, labelled, with the verb in it.
     var prominent = false
 
+    /// A feature checkout nobody has a tab on, being thrown away.
+    @State private var discarding: Wire.Worktree?
+    @State private var refusal: String?
+
     var body: some View {
         Menu {
+            // Before Recent, because these are this project's and they are the ones costing
+            // something. A closed tab leaves its branch and its checkout on disk on purpose, and
+            // until now nothing ever said which ones — so they accumulated, gigabytes each,
+            // findable only with `git worktree list`.
+            if let lanes = model.lanes, !lanes.orphans.isEmpty {
+                Section("Features with no tab") {
+                    ForEach(lanes.orphans) { checkout in
+                        Menu(Self.describe(checkout)) {
+                            Button("Reopen in a tab") { lanes.reopen(checkout) }
+                            Button("Discard…", role: .destructive) { discarding = checkout }
+                        }
+                    }
+                }
+            }
             Section("Recent") {
                 ForEach(Recents.paths.filter { $0 != model.repoPath }, id: \.self) { path in
                     Button((path as NSString).lastPathComponent) {
@@ -943,6 +966,42 @@ struct ProjectMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .hint("Project: \(model.repoPath). Click to switch, open another, or start a new one (⌘O)")
+        // Asks the daemon first, exactly as the rail's own discard does: it is the only thing that
+        // knows what is on the branch and what was never committed at all.
+        .alert("Discard this feature?", isPresented: Binding(get: { discarding != nil },
+                                                             set: { if !$0 { discarding = nil } })) {
+            Button("Discard", role: .destructive) {
+                guard let checkout = discarding, let lanes = model.lanes else { return }
+                Task {
+                    if let why = await lanes.discardCheckout(checkout, force: false) {
+                        refusal = why
+                    }
+                }
+            }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text(discarding.map { "\($0.branch) — its checkout and, if it is merged, its branch." }
+                 ?? "")
+        }
+        .alert("Not discarded", isPresented: Binding(get: { refusal != nil },
+                                                     set: { if !$0 { refusal = nil } })) {
+            Button("Discard anyway", role: .destructive) {
+                guard let checkout = discarding, let lanes = model.lanes else { return }
+                Task { _ = await lanes.discardCheckout(checkout, force: true) }
+            }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text(refusal ?? "")
+        }
+    }
+
+    /// One line per checkout: the branch, and what is on it that the project does not have.
+    private static func describe(_ checkout: Wire.Worktree) -> String {
+        var parts = [checkout.branch]
+        if checkout.ahead > 0 { parts.append("\(checkout.ahead) ahead") }
+        if checkout.dirty { parts.append("edited") }
+        if checkout.ahead == 0 && !checkout.dirty { parts.append("nothing on it") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -1087,7 +1146,9 @@ private struct LaneEvents: ViewModifier {
 
     /// Either a lane id (from a notification) or an index (from ⌘1–9).
     private func focus(_ object: Any?) {
-        let all = lanes.lanes
+        // What the rail draws. ⌘3 counting hidden lanes was off by one for every background
+        // review, and could land on a lane with no tab anywhere to show it was selected.
+        let all = lanes.shown
         if let n = object as? Int {
             if n < all.count { lanes.activeID = all[n].id }
         } else if let raw = object as? String, let id = UUID(uuidString: raw),
@@ -1098,7 +1159,7 @@ private struct LaneEvents: ViewModifier {
     }
 
     private func step(_ by: Int) {
-        let all = lanes.lanes
+        let all = lanes.shown
         guard !all.isEmpty, let i = all.firstIndex(where: { $0.id == lanes.activeID }) else { return }
         let n = (i + by + all.count) % all.count
         lanes.activeID = all[n].id

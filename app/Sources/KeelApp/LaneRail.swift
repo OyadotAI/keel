@@ -48,14 +48,16 @@ struct LaneTabs: View {
 
             // The empty run of the header asks the same question when clicked: an empty tab
             // strip in a browser makes a tab, and people click it expecting that.
-            Menu {
-                Text("Start a new feature?")
-                Button("On its own branch") { lanes.newLane(isolated: true) }
-                Button("Sharing the working tree") { lanes.newLane() }
+            // The same dialog as the button and ⌘N. It used to be a menu that made a lane on
+            // the spot, asking nothing — which is the split-button bug the note above says was
+            // fixed, reintroduced two lines below it. A feature started this way had no name, no
+            // base branch and whichever project happened to be open.
+            Button {
+                NotificationCenter.default.post(name: .keelNewLane, object: nil)
             } label: {
                 Color.clear.frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .buttonStyle(.plain)
             .hint("Click for a new feature")
             if lanes.runningCount > 0 {
                 Text("\(lanes.runningCount) running")
@@ -105,7 +107,11 @@ private struct LaneRow: View {
                                                   session: lane.sessionId,
                                                   title: lane.title))
         Telemetry.track("lane_detached", ["resumed": lane.sessionId != nil])
-        if lanes.lanes.count > 1 { lanes.close(lane) }
+        // Always, even when it is the only lane. It used to stay behind whenever it was, so both
+        // windows held the same conversation and both would `claude --resume` the same session id
+        // against one transcript. `close` refills an emptied list with a fresh lane, which is what
+        // a window with nothing in it should show anyway.
+        lanes.close(lane)
     }
 
     private var selected: Bool { lanes.activeID == lane.id }
@@ -177,15 +183,26 @@ private struct LaneRow: View {
                     lanes.activeID = lane.id
                     NotificationCenter.default.post(name: .keelReviewTask, object: nil)
                 }
-                Button("Finish task — merge into \(lanes.active.branch ?? "the project")…") {
+                Button("Finish task — merge into \(checkout?.base ?? "the project")…") {
+                    lanes.activeID = lane.id
                     message = lane.title
                     finishing = true
                 }
                 .disabled(!lane.readyToMerge)
+                // A greyed-out row that will not say why is the shape of a bug report. The
+                // sentence exists; it was only ever rendered in the pull-request sheet.
+                if let why = lane.mergeBlocker {
+                    Text(why).font(K.F.micro)
+                }
                 Button("Close tab, keep the branch") { lanes.close(lane) }
                 Button("Discard feature…", role: .destructive) {
+                    // Focused first. A refusal lands in `lane.lastError`, which renders only in
+                    // the *active* lane's composer — so discarding a background lane and being
+                    // refused showed nothing at all, anywhere.
+                    lanes.activeID = lane.id
                     Task {
-                        // Ask the daemon first: it knows how many commits are on the branch.
+                        // Ask the daemon first: it knows what is on the branch and what is not
+                        // committed at all.
                         if let why = await lanes.discard(lane, force: false) { discarding = why }
                     }
                 }
@@ -198,12 +215,16 @@ private struct LaneRow: View {
             Button("Commit and merge") { Task { await lanes.finish(lane, message: message) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(Lanes.finishBlurb(branch: checkout?.branch))
+            Text(Lanes.finishBlurb(checkout))
         }
         .alert("Discard this feature?", isPresented: Binding(get: { discarding != nil },
                                                           set: { if !$0 { discarding = nil } })) {
             Button("Discard anyway", role: .destructive) {
-                Task { _ = await lanes.discard(lane, force: true) }
+                // A forced discard that fails used to produce nothing at all — the tab stayed and
+                // nothing was said, which reads as the button not working.
+                Task {
+                    if let why = await lanes.discard(lane, force: true) { lane.lastError = why }
+                }
             }
             Button("Keep it", role: .cancel) {}
         } message: {

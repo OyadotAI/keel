@@ -66,6 +66,14 @@ final class SessionModel: Identifiable {
 
     var turns: [Turn] = []
     var running = false
+    /// The turn's stream has ended but the tree is not finished with.
+    ///
+    /// `endTurn` clears `running` first and only then runs the gate — minutes — and the
+    /// auto-commit, which is `git add -A` over the whole checkout. For that whole window the
+    /// lane did not count as writing, so a second shared lane could start and have its
+    /// half-written files committed under this lane's prompt. Read by `writingElsewhere`.
+    var settling = false
+
     /// When the stream last said anything; the working bar reads silence off it.
     var lastEventAt = Date()
     /// So the fresh-conversation retry happens once and cannot become a loop.
@@ -601,11 +609,17 @@ final class SessionModel: Identifiable {
         workspace = other.workspace
         trusted = other.trusted
         gateCommand = other.gateCommand
-        previewURL = other.previewURL
         previewWidth = other.previewWidth
         devDetected = other.devDetected
         devDir = other.devDir
-        devRunning = other.devRunning
+        // Not the running server: that belongs to one checkout, and this copied it to every lane
+        // — including the ones the block above deliberately excluded from `branch`, `changes` and
+        // `tree` because they have a checkout of their own. `refreshDev` asks for this lane.
+        if worktree == nil || worktree == other.worktree {
+            previewURL = other.previewURL
+            devRunning = other.devRunning
+            devElsewhere = other.devElsewhere
+        }
         missingSuggestions = other.missingSuggestions
         tools = other.tools
         projectOpenKnown = other.projectOpenKnown
@@ -623,25 +637,44 @@ final class SessionModel: Identifiable {
         self.id = id
     }
 
+    /// Why this feature cannot be merged yet, or `nil`.
+    ///
+    /// Judged from the branch where it can be, not from what this process happened to watch. Two
+    /// states used to be unreachable once entered:
+    ///
+    /// * **After a relaunch.** Every restored turn is marked `replayed`, so requiring an
+    ///   unreplayed one meant a lane holding a finished feature branch reported "no recorded
+    ///   implementation work" with Finish greyed out — for good, short of running another turn.
+    ///   The commits are on the branch either way, and the daemon already counts them.
+    /// * **After a failed gate that was later fixed.** This looped over *every* work turn and
+    ///   returned on the first failure, so turn 3 failing blocked the lane even once turn 7 had
+    ///   fixed it and passed. What the gate said about the code as it stands is the last one.
     var mergeBlocker: String? {
         if running { return "The agent is still working." }
+        if settling { return "The turn is still finishing — the gate, then the commit." }
         if !pending.isEmpty { return "The agent is waiting for a decision." }
         if isolated && worktree == nil { return "The isolated checkout is unavailable." }
         let work = turns.filter { $0.didWork && !$0.replayed }
-        if work.isEmpty { return "This task has no recorded implementation work." }
+        let checkout = lanes?.worktree(of: self)
+        if work.isEmpty {
+            // Commits on the branch, or files not yet committed, are work whether or not this
+            // process was running when they were made.
+            guard let checkout, checkout.ahead > 0 || checkout.dirty else {
+                return "This feature has no work on its branch yet."
+            }
+            return "The gate has not run since this feature was reopened, so nothing here has "
+                + "checked it. Send a turn — even an empty review — to run it."
+        }
         if editedThisSession.count > scopeFileLimit {
             return "Scope exceeded the approved \(scopeFileLimit)-file budget. Split or explicitly reduce the task before merging."
         }
-        for turn in work {
-            switch turn.gate {
-            case .passed: continue
-            case .failed: return "A project quality gate failed."
-            case .none(let reason): return "Quality could not be verified: \(reason)"
-            case .running: return "The project quality gate is still running."
-            case .notRun: return "A project quality gate has not run."
-            }
+        switch work[work.count - 1].gate {
+        case .passed: return nil
+        case .failed: return "The project's quality gate failed on the last turn."
+        case .none(let reason): return "Quality could not be verified: \(reason)"
+        case .running: return "The project quality gate is still running."
+        case .notRun: return "A project quality gate has not run."
         }
-        return nil
     }
 
     var readyToMerge: Bool { mergeBlocker == nil }
@@ -865,8 +898,32 @@ final class SessionModel: Identifiable {
                     }
                     turn.notIsolated = self.worktreeFailure ?? "the checkout could not be created"
                     self.worktreeFailure = nil
-                    self.lastError = nil; self.lastFix = nil
                     self.isolated = false
+                    // `makeWorktree` builds the right sentence and the right button for each of
+                    // the three causes — "Initialise git", "Make the first commit", "Run in the
+                    // project" — and this used to clear both, three lines later. What was left
+                    // was a footnote under a finished turn, after the fact, with nothing to
+                    // press. The turn still runs; the reason it is not isolated stays on screen.
+                    // This lane is now a writer on the shared tree, and the guard that refuses a
+                    // second one ran back when `isolated` was still true. Ask again with the
+                    // answer that is true now — the daemon refuses this too, but arriving as a
+                    // sentence with a button beats arriving as a `fatal`.
+                    if self.mode != "plan", let other = self.lanes?.writingElsewhere(than: self) {
+                        self.fail("The isolated checkout could not be made, and \(other) is "
+                                  + "editing the working tree this turn would fall back to. Two "
+                                  + "lanes writing one checkout commit each other's half-finished "
+                                  + "files, so this one has not started.",
+                                  category: "shared_tree",
+                                  fix: Fix(label: "Try its own branch again") {
+                                      self.isolated = true
+                                      self.start(turn.prompt)
+                                  })
+                        turn.finished = true
+                        self.running = false
+                        self.watchApprovals(false)
+                        self.releaseQueued()
+                        return
+                    }
                 }
                 // Stop pressed while git was copying the tree used to be ignored: `running` went
                 // false and the task carried on and started the agent anyway, so the turn people
@@ -961,6 +1018,10 @@ final class SessionModel: Identifiable {
     private func endTurn(_ turn: Turn) async {
         turn.finished = true
         running = false
+        // The composer is free — the agent has stopped talking — but the gate and the commit
+        // below still own the tree, so another lane must not start writing it yet.
+        settling = true
+        defer { settling = false }
         preparing = nil
         editing = nil
         watchApprovals(false)
@@ -1038,10 +1099,22 @@ final class SessionModel: Identifiable {
     /// Why the last checkout attempt failed, for the turn that then ran without one.
     private var worktreeFailure: String?
 
-    /// Create this lane's checkout, named from its title.
+    /// The branch name the person typed in New Feature, slugged. Empty means "name it for the
+    /// first message", which is what this always did.
+    var chosenName = ""
+
+    /// Create this lane's checkout, named from what was typed in New Feature or from its title.
     @discardableResult
     func makeWorktree() async -> Bool {
-        let name = Self.slug(title) + "-" + String(UUID().uuidString.prefix(3)).lowercased()
+        // A name somebody chose is used as it is. The three random characters are a collision
+        // breaker, not part of the name, so they are only added when the name is already taken —
+        // a branch called `keel/billing-retries` is one you can find in a `git log`, and
+        // `keel/billing-retries-e8e` is one you cannot.
+        let wanted = chosenName.isEmpty ? Self.slug(title) : chosenName
+        let taken = Set(lanes?.worktrees.map(\.name) ?? [])
+        let name = taken.contains(wanted)
+            ? wanted + "-" + String(UUID().uuidString.prefix(3)).lowercased()
+            : wanted
         do {
             let made: Wire.Worktree = try await client.post("/api/worktree/create",
                                                             body: WorktreeName(name: name, from: baseBranch))
@@ -1536,9 +1609,13 @@ final class SessionModel: Identifiable {
         /// The subdirectory it runs in, empty at the repository root.
         var detectedDir: String?
         var log: [String]?
+        /// The running server belongs to another checkout.
+        var elsewhere: Bool?
+        /// Which lane, when it does. Empty means the project itself.
+        var owner: String?
 
         enum CodingKeys: String, CodingKey {
-            case running, url, detected, log
+            case running, url, detected, log, elsewhere, owner
             case detectedDir = "detected_dir"
         }
     }
@@ -1597,22 +1674,47 @@ final class SessionModel: Identifiable {
 
     func refreshDev() async {
         guard let d: DevStatus = try? await client.get("/api/dev", q()) else { return }
-        devRunning = d.running
+        // Keel runs one dev server. When it is not this checkout's, this lane has no preview —
+        // showing the other one's would be reviewing another lane's code against this one's diff,
+        // and the design turn's pixel check would photograph it and report a verdict.
+        devElsewhere = d.elsewhere == true
+            ? (d.owner.flatMap { $0.isEmpty ? "the project" : $0 } ?? "another feature")
+            : nil
+        devRunning = d.running && !devIsElsewhere
         devDetected = d.detected
         devDir = d.detectedDir.flatMap { $0.isEmpty ? nil : $0 }
         devLog = d.log ?? []
-        if let u = d.url { previewURL = u }
+        if devIsElsewhere { previewURL = nil } else if let u = d.url { previewURL = u }
     }
+
+    /// The lane whose dev server is running, when it is not this one's.
+    var devElsewhere: String?
+    var devIsElsewhere: Bool { devElsewhere != nil }
 
     struct StartDev: Encodable { var command: String? }
 
     func startDev() async {
-        _ = try? await client.post("/api/dev/start", body: StartDev(command: nil), q(), as: DevStatus.self)
+        // The refusal used to be swallowed by `try?`, and then this spun for sixteen seconds
+        // under a "Starting…" sweep before falling to "Nothing to preview yet" — the same view
+        // you get when nothing was ever asked to start. The one thing the daemon knows and the
+        // person does not is *why*, so it is said.
+        do {
+            _ = try await client.post("/api/dev/start", body: StartDev(command: nil), q(),
+                                      as: DevStatus.self)
+        } catch {
+            lastError = error.localizedDescription
+            await refreshDev()
+            return
+        }
         // The URL appears in the server's own output a moment after it starts.
         for _ in 0..<40 {
             await refreshDev()
             if previewURL != nil { return }
             try? await Task.sleep(for: .milliseconds(400))
+        }
+        if previewURL == nil {
+            lastError = "The dev server started but has not announced a URL yet. Its output is "
+                + "in the preview pane."
         }
     }
 
@@ -1716,7 +1818,19 @@ final class SessionModel: Identifiable {
     private func watchApprovals(_ on: Bool) {
         approvalTask?.cancel()
         approvalTask = nil
-        guard on else { pending = []; return }
+        guard on else {
+            // Clearing the cards answered nothing. The hook is a process blocked on `/api/approve`
+            // and it waits the full four minutes before it gives up, so pressing Stop on a turn
+            // with a question on screen left the agent hanging with the screen showing nothing
+            // outstanding. Every card gets a decision on the way out.
+            let outstanding = pending
+            pending = []
+            // A plain deny, which the daemon turns into "Not approved. Say what you needed and
+            // stop" — the right thing to hear from a turn that is being interrupted. Not an
+            // `answer:` string, which is the shape of an AskUserQuestion reply.
+            for card in outstanding { answer(card, allow: false, scope: "once") }
+            return
+        }
         approvalTask = Task { [weak self, client] in
             // Weak, so a closed lane stops polling instead of living on inside its own task.
             while !Task.isCancelled {
@@ -1765,7 +1879,7 @@ final class SessionModel: Identifiable {
         pending.removeAll { $0.id == p.id }
         Telemetry.track("question_answered")
         let body = Answer(id: p.id, decision: "deny", rules: [], scope: "session",
-                          session: sessionId, answer: text)
+                          session: p.sessionId.isEmpty ? sessionId : p.sessionId, answer: text)
         Task { [client] in
             do {
                 _ = try await client.post("/api/approve/answer", body: body, as: Wire.Acked.self)
@@ -1777,8 +1891,14 @@ final class SessionModel: Identifiable {
 
     func answer(_ p: Wire.Pending, allow: Bool, scope: String) {
         pending.removeAll { $0.id == p.id }
+        // The question's own conversation, not this window's guess at it. A card can arrive
+        // before `system/init` has landed, and then `sessionId` is nil — which the daemon
+        // refuses for a session-scoped rule and used to drop on the floor, so "Allow once, this
+        // session" allowed the call and remembered nothing, and the next identical call asked
+        // again. `Wire.Pending` has carried the id all along.
+        let conversation = p.sessionId.isEmpty ? sessionId : p.sessionId
         let body = Answer(id: p.id, decision: allow ? "allow" : "deny",
-                          rules: p.rules, scope: scope, session: sessionId)
+                          rules: p.rules, scope: scope, session: conversation)
         Task { [client] in
             do {
                 _ = try await client.post("/api/approve/answer", body: body, as: Wire.Acked.self)
@@ -2480,7 +2600,7 @@ final class SessionModel: Identifiable {
         set { UserDefaults.standard.set(newValue, forKey: "keel.autoCommit") }
     }
 
-    struct CommitBody: Encodable { var message: String }
+    struct CommitBody: Encodable { var message: String; var automatic = false }
 
     /// Commit what this turn did, if the gate accepted it.
     ///
@@ -2504,7 +2624,8 @@ final class SessionModel: Identifiable {
             + (turn.gate == .notRun ? "were not run." : "passed.")
         do {
             let committed = try await client.post("/api/git/commit",
-                                                  body: CommitBody(message: subject + "\n\n" + body),
+                                                  body: CommitBody(message: subject + "\n\n" + body,
+                                                                   automatic: true),
                                                   q(), as: Bool.self)
             await refreshGit()
             // Only a commit that happened is this turn's; otherwise the footer would show the
@@ -2531,7 +2652,17 @@ final class SessionModel: Identifiable {
         }
     }
 
-    func diff(_ path: String) async -> Wire.Diff? {
-        try? await client.get("/api/git/diff", q(["path": path]))
+    /// The diff, or the reason there isn't one.
+    ///
+    /// This was `try?`, and the pane read `nil` as "this file matches HEAD — the change was
+    /// committed or undone". A daemon that is down, a checkout removed outside Keel and a refused
+    /// `?wt=` all arrived as that sentence: not a blank pane, which would at least look like a
+    /// failure, but a confident and wrong claim about the person's code.
+    func diff(_ path: String) async -> Result<Wire.Diff, Error> {
+        do {
+            return .success(try await client.get("/api/git/diff", q(["path": path])))
+        } catch {
+            return .failure(error)
+        }
     }
 }

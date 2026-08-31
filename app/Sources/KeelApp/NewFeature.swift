@@ -14,6 +14,7 @@ struct NewFeature: View {
 
     @State private var folder: String = ""
     @State private var branch: String = ""
+    @State private var name: String = ""
     @State private var isolated = true
     @State private var provider: SessionModel.Provider = .claude
     @State private var busy = false
@@ -47,6 +48,23 @@ struct NewFeature: View {
                 }
             }
 
+            // The one answer that becomes permanent, and the one the sheet never asked for.
+            // The branch was slugged from the first sixty characters of the first message, so
+            // typing "hi" made `keel/hi-e8e` and pasting a link made
+            // `keel/https-github-com-oyadota-c9e` — names nobody can read a `git log` by, and
+            // renaming a lane only ever renamed the tab.
+            if isolated {
+                field("Name") {
+                    TextField("named for your first message", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .font(K.F.small)
+                    if !SessionModel.slug(name).isEmpty {
+                        Text("Branch `keel/\(SessionModel.slug(name))`")
+                            .font(K.F.micro).foregroundStyle(K.C.faint)
+                    }
+                }
+            }
+
             field("Working tree") {
                 VStack(alignment: .leading, spacing: K.S.xs) {
                     Picker("", selection: $isolated) {
@@ -76,20 +94,31 @@ struct NewFeature: View {
                 .labelsHidden()
             }
 
-            if isolated, !branches.isEmpty, folder.isEmpty {
+            if isolated {
                 field("Branch from") {
-                    Picker("", selection: $branch) {
-                        Text("Where the project is now (\(model.branch ?? "HEAD"))").tag("")
-                        Divider()
-                        ForEach(branches, id: \.self) { b in Text(b).tag(b) }
+                    // Shown even when the project is being changed. It used to be hidden by a
+                    // `folder.isEmpty` guard — the branch list belongs to the project that is
+                    // open, not the one being chosen — so picking a different project silently
+                    // took away the choice this sheet exists to offer instead of saying why.
+                    if folder.isEmpty, !branches.isEmpty {
+                        Picker("", selection: $branch) {
+                            Text("Where the project is now (\(model.branch ?? "HEAD"))").tag("")
+                            Divider()
+                            ForEach(branches, id: \.self) { b in Text(b).tag(b) }
+                        }
+                        .labelsHidden().fixedSize()
+                    } else {
+                        Text(folder.isEmpty
+                             ? "This project has no branches yet — the feature starts at HEAD."
+                             : "Starts where that project is standing. Open it first to pick a "
+                               + "branch.")
+                            .font(K.F.micro).foregroundStyle(K.C.faint)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .labelsHidden().fixedSize()
                 }
             }
 
             HStack {
-                Text("The branch is named for your first message.")
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
                 Spacer()
                 Button("Cancel") { done() }.buttonStyle(QuietButton())
                 Button(busy ? "Starting…" : "Start") { start() }
@@ -126,6 +155,7 @@ struct NewFeature: View {
         let base = branch
         let wantsIsolation = model.policyRequiresIsolation ? true : isolated
         let selectedProvider = provider
+        let chosen = SessionModel.slug(name)
         let move = folder.isEmpty || folder == model.repoPath ? nil : folder
         done()
         Task {
@@ -137,6 +167,10 @@ struct NewFeature: View {
             let lane = lanes.newLane(isolated: wantsIsolation)
             lane.baseBranch = base.isEmpty ? nil : base
             lane.provider = selectedProvider
+            if !chosen.isEmpty {
+                lane.chosenName = chosen
+                lane.title = name.trimmingCharacters(in: .whitespaces)
+            }
         }
     }
 }

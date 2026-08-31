@@ -83,10 +83,15 @@ reader means using these, not re-deriving them.
   skipped, because stopping there leaves the pipe to fill and blocks the child mid-write; a reader
   that is actually broken must end the loop, because `continue` on an error that does not go away
   is a core at 100% inside a `tokio::spawn` nobody is watching.
-- **`SessionModel.start` owns "one turn per lane"** — four call sites each guarded `running` in
-  their own way, all correctly. But two `claude -p` in one lane is two agents on one checkout with
-  one of them invisible to Stop, and an invariant kept by convention at four sites is one refactor
-  from being kept at three.
+- **`AppState::claim` owns "one turn per lane" and "one writer per working tree"** — both used to
+  be kept in `SessionModel.start`, which is one window's array. Two `claude -p` in one lane is two
+  agents on one checkout with one of them invisible to Stop, and `mark_running` simply *overwrote*
+  the pid, so the first ran on with nothing left that could signal it. Two lanes writing one tree
+  is the multi-agent pillar's load-bearing constraint, and tearing a lane into its own window —
+  a gesture with a drag affordance and a menu item — put the pair in different arrays, so the
+  check could not see the case it existed to refuse. The daemon is the only process that sees
+  every window. A claim is reserved before the spawn and given back by `serve::Held` on drop,
+  because a lane left claimed can take no further turn and nothing on screen would say why.
 - **`Int(_: Double)` traps.** Not an exception — SIGTRAP, the whole app. Every number parsed out
   of a page (`Picked.short`) is clamped, because "the renderer always normalises that" is a
   promise about somebody else's code.
@@ -189,6 +194,11 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
     hook and the local app depend on it — but any other address demands a bearer token, and Keel
     refuses to bind beyond 127.0.0.1 at all until something is paired. The check is at the bind,
     not in the settings UI, so a hand-edited `state.json` cannot open a port either.
+11. **One turn per lane, one writer per working tree.** `AppState::claim`, in the daemon — not a
+    client. Both were kept in one window's Swift array and neither survived a second window, which
+    the tear-off-a-tab gesture produces on purpose. Appended rather than inserted: the numbers
+    above are pinned. Tests: `serve::tests::one_lane_takes_one_turn`,
+    `one_working_tree_takes_one_writer`.
 
 ## The Mac app and the daemon
 
@@ -250,23 +260,51 @@ named for the ask. Every checkout-scoped request carries `?wt=<name>`, resolved 
 
 - **Permissions, trust and approvals read the project root.** A lane cannot carry a different
   allowlist than its repository, by construction (`AppState::checkout` is never consulted there).
-- **`git branch -D` is run in exactly one place**, after the person has been shown the count of
-  commits it will lose. `finish` merges with `--no-ff` and deletes with `-d`; a dirty project or a
+- **`git branch -D` is run in exactly one place**, after the person has been shown what it will
+  lose — commits *and* uncommitted files, because `worktree remove --force` is what makes a dirty
+  checkout removable and counting commits alone let a lane with twenty unsaved files report
+  nothing to lose. `finish` merges with `--no-ff` and deletes with `-d`; a dirty project or a
   conflict refuses and leaves the lane untouched. Tests for each.
+- **A lane remembers where it came from**, in `branch.keel/<name>.keelbase`. Git owns that section
+  — it moves it on `branch -m` and removes it on `branch -d` — so it needs no cleanup and cannot
+  outlive its branch. Without it `finish` merged into whatever branch the project root happened to
+  be standing on, which put a lane cut from `release` onto `main`, and `ahead` was counted against
+  the wrong base, so the number a discard showed before throwing a branch away could be anything.
+- **`list` asks git, not the filesystem.** `read_dir` and `git worktree list` drift apart in both
+  directions: a checkout deleted outside Keel vanished from the app while git kept it registered,
+  and `worktree add` then refused that name forever with a message nothing in the app could reach
+  or clear. `prune` first, then parse — matching on the tail of each path, because git reports
+  resolved paths and on macOS the repository's own path very often is not one.
+- **Closing a lane leaves its checkout, and something says so.** The ✕ is labelled "the branch and
+  its checkout stay" and for a long time nothing ever listed what stayed: measured on this
+  repository, eight of them, 43 GB, three with no commits and no diff at all. `Lanes.orphans` is
+  the checkouts no open lane points at, and `ProjectMenu` offers Reopen and Discard on each.
 - `.worktreeinclude` (Claude Code's own file) lists what git leaves behind — `.env` and the like —
   and it is copied into the new checkout.
-- **One dev server.** `dev.rs` is global; the preview follows whichever lane started it. Ports are
-  not allocated per lane. Said in the UI rather than hidden.
+- **One dev server.** `dev.rs` is global and ports are not allocated per lane — a decision, not an
+  accident. What *was* an accident is that its state recorded no checkout, so `status` answered
+  "running", with that URL, to every lane: a lane opened the preview, saw green, and reviewed
+  another lane's rendering of another lane's worktree against its own diff — and the design turn's
+  pixel check then photographed an element served from the wrong tree and returned a verdict about
+  it. It records its checkout now and every other lane is told whose it is.
 
 **A shared lane is a reading lane.** `newLane(isolated:)` defaults to `false`, and "Sharing the
 working tree" is offered on purpose — a lane for reading and planning beside one that is editing is
-genuinely useful. What is *not* safe is two shared lanes both **writing**, because the two things
+genuinely useful. For a long time it was offered and did not exist: `policy::require_isolation`
+defaulted to `true` and `tighten_from` can only ever raise it, so every non-plan turn was flipped
+isolated at the last moment. The offer stood in three places, the guard against two writers had
+nothing left to guard, and this paragraph described something that was not there. Keel's own
+default forces nothing now; only a policy file raises it. What is *not* safe is two shared lanes both **writing**, because the two things
 that end a turn are tree-wide: auto-commit is `git add -A` in the checkout (`worktree::commit_one`)
 and rewind restores a whole tree. Whichever finishes first sweeps the other's half-written files
 into a commit labelled with the wrong prompt, and the second lane's own commit then shows less than
 it did. This is the multi-agent pillar's load-bearing constraint: concurrency that produces one
-confused working tree is worse than no concurrency, so anything that lets a second lane start
-*writing* in a tree another lane is writing needs to isolate it or refuse it, not hope.
+confused working tree is worse than no concurrency, so a second lane that would start *writing* in
+a tree another lane is writing is refused — by `AppState::claim`, in the daemon, where every window
+can be seen. `SessionModel.start` still asks first and its refusal is the readable one, with the
+"Give this one its own branch" button; the daemon's is the one that holds. The window covers the
+tail as well (`settling`), because `running` goes false the moment the stream ends and the gate and
+the auto-commit still own the tree after that.
 
 Beside that: `AskUserQuestion` is in `HOOKED_TOOLS` so a question holds the turn like a command
 does, and the answer travels back as a `deny` whose reason is the answer — never short-circuited

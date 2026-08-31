@@ -9,7 +9,7 @@
 
 use crate::lock::Locked;
 use axum::Json;
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -21,6 +21,15 @@ struct DevState {
     child: Option<Child>,
     url: Option<String>,
     command: Option<String>,
+    /// The checkout it was started in.
+    ///
+    /// One dev server for the whole daemon is a decision, not an accident — ports are not
+    /// allocated per lane. What was an accident is that nothing recorded *whose* it was, so
+    /// `status` answered "running", with that URL, to every lane. A lane with its own checkout
+    /// opened the preview, saw green, and reviewed another lane's rendering of another lane's
+    /// worktree against its own diff — and the design turn's pixel check then re-photographed an
+    /// element served from the wrong tree and returned a verdict about it.
+    checkout: Option<Utf8PathBuf>,
     /// Recent output, capped — a dev server left running all day should not grow without bound.
     log: Vec<String>,
 }
@@ -191,6 +200,13 @@ pub struct Status {
     pub running: bool,
     pub url: Option<String>,
     pub command: Option<String>,
+    /// True when the running server belongs to some other checkout than the one that asked.
+    /// The preview says so rather than passing it off as this lane's.
+    #[serde(default)]
+    pub elsewhere: bool,
+    /// The lane it is running in, or empty for the project itself. Only set when `elsewhere`.
+    #[serde(default)]
+    pub owner: String,
     /// What Keel would run, when nothing is running yet, and where.
     pub detected: Option<String>,
     /// The subdirectory the detected command runs in, empty at the repository root.
@@ -199,16 +215,35 @@ pub struct Status {
     pub log: Vec<String>,
 }
 
+/// The lane a checkout belongs to, for saying whose dev server this is.
+fn owner_of(checkout: &Utf8Path) -> String {
+    checkout
+        .as_str()
+        .rsplit_once(&format!("{}/", crate::worktree::DIR))
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_default()
+}
+
 pub async fn status(crate::serve::Checkout(repo): crate::serve::Checkout) -> Json<Status> {
     let found = detect(&repo);
     let s = state().locked();
+    let running = s.child.is_some();
+    // Whose it is decides what this lane is told. Answering "running" with a URL served from
+    // somewhere else is the one thing this must not do.
+    let elsewhere = running && s.checkout.as_deref().is_some_and(|c| c != repo);
     Json(Status {
-        running: s.child.is_some(),
-        url: s.url.clone(),
+        running,
+        url: if elsewhere { None } else { s.url.clone() },
         command: s.command.clone(),
+        elsewhere,
+        owner: if elsewhere {
+            s.checkout.as_deref().map(owner_of).unwrap_or_default()
+        } else {
+            String::new()
+        },
         detected: found.as_ref().map(|d| d.command.clone()),
         detected_dir: found.as_ref().map(|d| d.dir.clone()).unwrap_or_default(),
-        log: s.log.clone(),
+        log: if elsewhere { Vec::new() } else { s.log.clone() },
     })
 }
 
@@ -227,7 +262,20 @@ pub async fn start(
     {
         let s = state().locked();
         if s.child.is_some() {
-            return Err(bad("A dev server is already running. Stop it first.".into()));
+            let whose = match s.checkout.as_deref() {
+                Some(c) if c != repo => {
+                    let owner = owner_of(c);
+                    if owner.is_empty() {
+                        " for the project itself".to_string()
+                    } else {
+                        format!(" for “{owner}”")
+                    }
+                }
+                _ => String::new(),
+            };
+            return Err(bad(format!(
+                "A dev server is already running{whose}. Keel runs one at a time — stop it first."
+            )));
         }
     }
 
@@ -268,6 +316,7 @@ pub async fn start(
         let mut s = state().locked();
         s.child = Some(child);
         s.command = Some(command.clone());
+        s.checkout = Some(repo.clone());
         s.url = None;
         s.log.clear();
     }
@@ -280,6 +329,8 @@ pub async fn start(
         running: true,
         url: None,
         command: Some(command),
+        elsewhere: false,
+        owner: String::new(),
         detected: found.as_ref().map(|d| d.command.clone()),
         detected_dir: found.map(|d| d.dir).unwrap_or_default(),
         log: Vec::new(),
@@ -328,6 +379,7 @@ pub fn stop_now() {
     }
     s.child = None;
     s.url = None;
+    s.checkout = None;
 }
 
 #[cfg(test)]

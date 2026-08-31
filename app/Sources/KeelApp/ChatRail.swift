@@ -145,8 +145,8 @@ struct ChatRail: View {
     ///
     /// A second agent is only worth starting if it has its own job, so this says what the good
     /// jobs are — and, when another lane is already editing, warns that they share one working
-    /// tree. Keel has no worktree isolation on purpose; the honest thing is to say so at the point
-    /// where it matters rather than let two agents fight over the same files.
+    /// tree. A lane can have a checkout of its own; this one chose not to, so the honest thing is
+    /// to say so at the point where it matters rather than let two agents fight over the files.
     private var hint: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             if model.isolated {
@@ -154,23 +154,23 @@ struct ChatRail: View {
                      + "edit while the others do. Finish it from the rail to merge.")
                     .font(K.F.micro).foregroundStyle(K.C.dim)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if let lanes = model.lanes, lanes.lanes.count > 1 {
+            } else if let lanes = model.lanes, lanes.shown.count > 1 {
                 VStack(alignment: .leading, spacing: K.S.xs) {
                     Text("A second agent, on the same files")
                         .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
-                    Text(lanes.wouldOverlap
+                    Text(lanes.wouldOverlap(with: model)
                          ? "Another feature is editing right now. These share one working tree, so "
                            + "give this one reading or planning work — two agents writing the same "
                            + "files will overwrite each other."
                          : "These share one working tree. Good alongside work: reading, planning, "
                            + "reviewing what another feature just did, or resuming an old one.")
-                        .font(K.F.micro).foregroundStyle(lanes.wouldOverlap ? K.C.warn : K.C.dim)
+                        .font(K.F.micro).foregroundStyle(lanes.wouldOverlap(with: model) ? K.C.warn : K.C.dim)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(K.S.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    (lanes.wouldOverlap ? K.C.warn.wash : K.C.surface),
+                    (lanes.wouldOverlap(with: model) ? K.C.warn.wash : K.C.surface),
                     in: RoundedRectangle(cornerRadius: K.R.sm)
                 )
             }
@@ -197,7 +197,7 @@ struct ChatRail: View {
     /// Reading and planning first when another lane is writing, because those are the jobs that
     /// cannot collide.
     private var suggestions: [String] {
-        if model.lanes?.wouldOverlap == true {
+        if model.lanes?.wouldOverlap(with: model) == true {
             return ["Explain how this codebase is structured",
                     "Review the uncommitted changes and flag anything unfinished",
                     "Plan how to add a feature, without editing anything"]
