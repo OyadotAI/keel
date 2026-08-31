@@ -127,7 +127,7 @@ final class VisualCatalogTests: XCTestCase {
             """)]
         try capture(ChatRail(model: questioning), named: "conversation-question", in: directory)
 
-        try capture(ReviewPacketView(model: model, lanes: lanes), named: "review", in: directory)
+        try capture(ReviewPacketView(model: model), named: "review", in: directory)
         try capture(ChatRail(model: model), named: "conversation", in: directory)
         try capture(TurnStage(model: model), named: "trace", in: directory)
         for panel in SessionWindow.Panel.allCases {
