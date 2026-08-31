@@ -15,6 +15,7 @@
 //! Kept deliberately small: this is a list of processes with their output, not a scheduler. There
 //! is no cron here and no retry — a job runs once, and the person can stop it.
 
+use crate::lock::Locked;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
@@ -92,7 +93,7 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     let (out, err) = (child.stdout.take(), child.stderr.take());
 
     let id = {
-        let mut all = jobs().lock().expect("monitor lock");
+        let mut all = jobs().locked();
         // Sequential rather than random: `m3` is something a person can say out loud, and the
         // count only ever climbs within one daemon.
         let id = format!("m{}", all.len() + 1);
@@ -120,7 +121,7 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     let waiting = id.clone();
     tokio::spawn(async move {
         let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
-        let mut all = jobs().lock().expect("monitor lock");
+        let mut all = jobs().locked();
         if let Some(r) = all.iter_mut().find(|r| r.job.id == waiting) {
             r.job.finished = Some(now());
             r.job.exit = Some(code);
@@ -151,12 +152,13 @@ fn prune(all: &mut Vec<Run>) {
 async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
     let Some(pipe) = pipe else { return };
     let mut lines = BufReader::new(pipe).lines();
-    // `Err` is a non-UTF-8 byte, not EOF: stopping there leaves the pipe to fill, and a full
-    // pipe blocks the job mid-write. Same lesson as the agent's own stderr drain.
+    // Undecodable bytes are not EOF: stopping there leaves the pipe to fill, and a full pipe
+    // blocks the job mid-write. Same lesson as the agent's own stderr drain, and the same helper,
+    // which is also what keeps a genuinely broken reader from becoming a busy loop.
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                let mut all = jobs().lock().expect("monitor lock");
+        match crate::lines::next(&mut lines).await {
+            crate::lines::Next::Line(line) => {
+                let mut all = jobs().locked();
                 let Some(r) = all.iter_mut().find(|r| r.job.id == id) else {
                     return;
                 };
@@ -166,20 +168,33 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
                     r.job.log.drain(..len - MAX_LOG);
                 }
             }
-            Ok(None) => return,
-            Err(_) => continue,
+            crate::lines::Next::Skipped => continue,
+            crate::lines::Next::Done => return,
         }
     }
 }
 
+/// How much of a job's output travels. The app shows the last 40 lines in the panel and hands the
+/// last 80 to the conversation when the job finishes, so anything past this is copied out of the
+/// lock, serialised, sent and decoded on the main actor every two seconds in order to be dropped.
+/// `MAX_LOG` is what is *kept*; this is what is *shown*.
+const SHOWN: usize = 80;
+
 /// The jobs belonging to one conversation, newest first. Without a lane, every job — which is
 /// what a fresh window asks for before it has an id of its own.
 pub fn list(lane: Option<&str>) -> Vec<Job> {
-    let all = jobs().lock().expect("monitor lock");
+    let all = jobs().locked();
     let mut out: Vec<Job> = all
         .iter()
         .filter(|r| lane.is_none_or(|l| l.is_empty() || r.job.lane == l))
-        .map(|r| r.job.clone())
+        .map(|r| {
+            let mut job = r.job.clone();
+            let len = job.log.len();
+            if len > SHOWN {
+                job.log.drain(..len - SHOWN);
+            }
+            job
+        })
         .collect();
     out.reverse();
     out
@@ -204,7 +219,7 @@ pub struct IdBody {
 /// same reason: an interrupt lets what is running unwind and print why it ended.
 pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
     let pid = {
-        let all = jobs().lock().expect("monitor lock");
+        let all = jobs().locked();
         all.iter()
             .find(|r| r.job.id == body.id && r.job.running())
             .map(|r| r.pid)
@@ -213,7 +228,7 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
         return Json(false);
     };
     // Safety: a pid this process spawned, negated to reach the group it leads.
-    unsafe { libc::kill(-(pid as i32), libc::SIGINT) };
+    crate::signals::group(pid, libc::SIGINT);
     Json(true)
 }
 
@@ -224,16 +239,15 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
 /// A monitored `pnpm dev` that catches SIGINT and takes its time would be reparented to init and
 /// serve on the same port forever, which is precisely the orphan the app's own budget forbids.
 pub fn stop_all() {
-    let all = jobs().lock().expect("monitor lock");
+    let all = jobs().locked();
     for r in all.iter().filter(|r| r.job.running() && r.pid != 0) {
-        // Safety: a pid this process spawned, negated to reach the group it leads.
-        unsafe { libc::kill(-(r.pid as i32), libc::SIGKILL) };
+        crate::signals::group(r.pid, libc::SIGKILL);
     }
 }
 
 /// Mark a completion as delivered to the conversation.
 pub async fn api_ack(Json(body): Json<IdBody>) -> Json<bool> {
-    let mut all = jobs().lock().expect("monitor lock");
+    let mut all = jobs().locked();
     match all.iter_mut().find(|r| r.job.id == body.id) {
         Some(r) => {
             r.job.reported = true;

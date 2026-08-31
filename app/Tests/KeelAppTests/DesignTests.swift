@@ -663,3 +663,25 @@ final class RedactionTests: XCTestCase {
         XCTAssertLessThanOrEqual(Telemetry.redact(String(repeating: "x", count: 5000)).count, 300)
     }
 }
+
+/// Numbers parsed out of a page must not be able to crash the app.
+///
+/// `Int(_: Double)` traps outside `Int`'s range — SIGTRAP, not an exception — and every number in
+/// a CSS colour came from `getComputedStyle` on somebody else's page.
+@MainActor
+final class ColourParsingTests: XCTestCase {
+    func testAnOrdinaryColourStillReadsAsHex() {
+        XCTAssertEqual(Picked.short("rgb(59, 130, 246)"), "#3b82f6")
+    }
+
+    /// `-5` arrives as `5`: the splitter breaks on any non-digit, so the minus is a separator
+    /// rather than a sign. That is pre-existing and harmless for a computed colour, which has no
+    /// negative channels — it is asserted here so the next person does not read it as the clamp.
+    func testAnAbsurdNumberIsClampedRatherThanFatal() {
+        XCTAssertEqual(Picked.short("rgb(99999999999999999999999999, -5, 300)"), "#ff05ff")
+    }
+
+    func testSomethingThatIsNotAColourComesBackUnchanged() {
+        XCTAssertEqual(Picked.short("inherit"), "inherit")
+    }
+}

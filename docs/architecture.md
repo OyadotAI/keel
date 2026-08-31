@@ -6,11 +6,16 @@
 Keel.app                    # native SwiftUI task browser
 ├── app/Sources/KeelApp     # task, evidence, review and terminal UI
 └── keel                    # local Rust daemon on 127.0.0.1
+    ├── git / repo          # how git is run  /  what Keel asks it for
+    ├── agent               # spawning `claude`, streaming the turn
+    ├── tree / imports      # the file tree  /  which files import which
+    ├── serve               # the HTTP surface
+    │
     ├── keel-scanner        # readiness checks; no network or credentials
+    ├── keel-generator      # the templates: cloudflare, stack, packs. Pure; no HTTP, no git
     ├── keel-harness        # agent invocation and trust quarantine
     ├── keel-mcp            # typed tool surface over loopback
     ├── keel-providers      # GitHub and Cloudflare integrations
-    ├── keel-generator      # golden-path templates and workload placement
     └── keel-workspace      # reads Claude Code state; read-only
 ```
 
@@ -48,6 +53,24 @@ the same idea against a different CLI:
 | `mcp_server.py` — tools over MCP | `keel-mcp` |
 | `bridge.py` — events → `content`/`status`/`change` frames | `keel-harness::bridge` |
 | built-in tools disabled | `--permission-mode dontAsk` |
+
+## Nothing slow on a thread something is waiting on
+
+The audience notices a stalled frame, so the two rules that keep frames moving are architectural
+rather than incidental.
+
+**In the daemon, blocking work goes through `serve::blocking`.** It is `spawn_blocking` with a
+caller-supplied fallback for a panicking task. Every handler that shells out to git, walks a tree
+or scans a repository uses it, because axum's executor has a small worker pool and one 400 ms
+`git show` on it delays every other request the window has in flight — the approval poll and the
+chat stream included. A handler added without it will not fail a test; it will make the whole
+window feel intermittently slow, which is harder to trace and worse to live with.
+
+**In the app, the main actor draws and nothing else.** `SessionModel` is `@MainActor`, so anything
+expensive it does — decoding a multi-megabyte diff, measuring long text — is measured on the thread
+that has 16 ms. `approve::shown` truncating a command at 4,000 characters is that lesson already
+paid for: CoreText measuring an unbounded heredoc on the main thread was a two-second App Hang on
+the one surface that must appear instantly.
 
 ## Scanner independence
 

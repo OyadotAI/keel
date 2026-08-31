@@ -7,6 +7,7 @@
 //! The process is owned by Keel rather than by the agent: a dev server is long-running, and an
 //! agent tool call that never returns is a hang, not a feature.
 
+use crate::lock::Locked;
 use axum::Json;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
@@ -200,7 +201,7 @@ pub struct Status {
 
 pub async fn status(crate::serve::Checkout(repo): crate::serve::Checkout) -> Json<Status> {
     let found = detect(&repo);
-    let s = state().lock().expect("dev lock");
+    let s = state().locked();
     Json(Status {
         running: s.child.is_some(),
         url: s.url.clone(),
@@ -224,7 +225,7 @@ pub async fn start(
     let bad = |m: String| (axum::http::StatusCode::BAD_REQUEST, m);
 
     {
-        let s = state().lock().expect("dev lock");
+        let s = state().locked();
         if s.child.is_some() {
             return Err(bad("A dev server is already running. Stop it first.".into()));
         }
@@ -254,12 +255,17 @@ pub async fn start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
+        // Its own group. A dev server is never one process: `sh -c "pnpm dev"` becomes pnpm,
+        // which starts the framework, which starts workers — and it is the workers that hold the
+        // port. Without a group there is nothing to signal but the top of that, and Stop then
+        // reports success over a server that is still listening.
+        .process_group(0)
         .spawn()
         .map_err(|e| bad(e.to_string()))?;
 
     let (out, err) = (child.stdout.take(), child.stderr.take());
     {
-        let mut s = state().lock().expect("dev lock");
+        let mut s = state().locked();
         s.child = Some(child);
         s.command = Some(command.clone());
         s.url = None;
@@ -287,7 +293,7 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
     let mut lines = BufReader::new(pipe).lines();
 
     while let Ok(Some(line)) = lines.next_line().await {
-        let mut s = state().lock().expect("dev lock");
+        let mut s = state().locked();
         if s.url.is_none()
             && let Some(url) = find_url(&line)
         {
@@ -302,13 +308,26 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
 }
 
 pub async fn stop() -> Json<bool> {
-    let mut s = state().lock().expect("dev lock");
+    stop_now();
+    Json(true)
+}
+
+/// Stop the dev server, from anywhere — including the parent-death path, which is not async.
+///
+/// `watch_parent` already stopped the monitored jobs on the way out, with a comment saying "a dev
+/// server nobody can see and nobody can stop is worse than one that never started". The dev server
+/// this module owns is not a monitored job, so it was the one thing that comment names and did not
+/// cover: quitting Keel left it running, holding its port, with nothing on the machine that knew
+/// what it was.
+pub fn stop_now() {
+    let mut s = state().locked();
     if let Some(child) = s.child.as_mut() {
+        // The group, so the framework's workers go too — they are what holds the port.
+        crate::signals::end_tree(child.id().unwrap_or(0));
         let _ = child.start_kill();
     }
     s.child = None;
     s.url = None;
-    Json(true)
 }
 
 #[cfg(test)]

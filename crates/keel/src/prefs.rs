@@ -17,10 +17,6 @@ pub struct Prefs {
     /// Set once the welcome flow has been finished, so it never appears again.
     #[serde(default)]
     pub onboarded: bool,
-    /// The window's last logical size. An application that opens at the same default size every
-    /// morning, whatever you left it at, is one of the quieter ways software says it is not one.
-    #[serde(default)]
-    pub window: Option<(f64, f64)>,
     /// Who can reach this Keel: `loopback` (default), `lan`, or `tailscale`.
     ///
     /// Absent, unrecognised, or from an older file all read as `loopback`. Every way of failing to
@@ -79,14 +75,6 @@ impl Prefs {
         let mut prefs = Self::load();
         prefs.last_project = Some(project.to_owned());
         prefs.onboarded = true;
-        prefs.save();
-    }
-
-    /// Written when the window closes rather than on every resize — a drag is hundreds of events
-    /// and none of them are worth a write.
-    pub fn remember_window(width: f64, height: f64) {
-        let mut prefs = Self::load();
-        prefs.window = Some((width, height));
         prefs.save();
     }
 }

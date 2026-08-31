@@ -9,7 +9,7 @@ use crate::RepoContext;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 
-pub const CONFIG_FILES: &[&str] = &["wrangler.jsonc", "wrangler.json", "wrangler.toml"];
+const CONFIG_FILES: &[&str] = &["wrangler.jsonc", "wrangler.json", "wrangler.toml"];
 
 /// Every Wrangler config in the tree, not just the one at the root.
 ///

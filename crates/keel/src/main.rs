@@ -4,8 +4,8 @@
 //! useful with nothing connected, so it ships and is trusted before Keel is ever handed a cloud
 //! credential.
 
+mod agent;
 mod agents;
-mod api;
 mod approve;
 mod askmcp;
 mod aws;
@@ -13,13 +13,15 @@ mod clitools;
 mod connect;
 mod dev;
 mod fsops;
+mod git;
 mod gitroots;
-mod gui;
 mod ignored;
+mod imports;
+mod lines;
+mod lock;
 mod mcp;
 mod monitor;
 mod names;
-mod packs;
 mod pair;
 mod path;
 mod permissions;
@@ -29,11 +31,13 @@ mod pr;
 mod prefs;
 mod project;
 mod render;
+mod repo;
 mod review;
 mod serve;
+mod signals;
 mod snapshot;
-mod stack;
 mod term;
+mod tree;
 mod verify;
 mod worktree;
 
@@ -45,7 +49,11 @@ use keel_scanner::{RepoContext, scan};
 use keel_workspace::Workspace;
 
 #[derive(Parser)]
-#[command(name = "keel", version, about = "Make a repo shippable")]
+#[command(
+    name = "keel",
+    version,
+    about = "The daemon behind Keel, the agentic development environment"
+)]
 struct Cli {
     /// Absent when launched from the Dock, where a bundle's executable is run with no arguments.
     /// That is the application, so that is what a bare `keel` does.
@@ -94,7 +102,9 @@ enum Command {
         all: bool,
     },
 
-    /// Open the Keel IDE in a browser.
+    /// Run the daemon the Keel app talks to, on loopback.
+    ///
+    /// An HTTP surface, not a UI: the window is the Mac app, and this opens nothing.
     Serve {
         /// Repository to open. Defaults to the current directory.
         #[arg(default_value = ".")]
@@ -103,8 +113,12 @@ enum Command {
         #[arg(long, default_value_t = 7777)]
         port: u16,
 
-        /// Do not open a browser window.
-        #[arg(long)]
+        /// Accepted and ignored. `serve` never opens anything now — there is no page to open.
+        ///
+        /// Kept because clap exits 2 on a flag it does not know, and a `PreToolUse` hook reads a
+        /// non-zero exit as *block*; a daemon that refuses to start over a stale flag in somebody's
+        /// script is the silent failure this flag's own removal was meant to end.
+        #[arg(long, hide = true)]
         no_open: bool,
 
         /// Exit when the process that started this one goes away.
@@ -128,20 +142,6 @@ enum Command {
         /// `keel serve` in a terminal keeps meaning "this directory", because there it does.
         #[arg(long)]
         resume_last: bool,
-    },
-
-    /// Open Keel as an application, in its own window.
-    ///
-    /// What the macOS bundle runs, and what a bare `keel` does. Launched from the Dock there is no
-    /// working directory worth inferring a project from, so the last one is reopened — and on a
-    /// first run, the welcome screen is shown instead.
-    App {
-        #[arg(long, default_value_t = 7777)]
-        port: u16,
-
-        /// Serve without a window, and open a browser tab instead. For a machine with no display.
-        #[arg(long)]
-        headless: bool,
     },
 
     /// Answer a Claude Code `PreToolUse` hook by asking the running Keel.
@@ -247,10 +247,15 @@ fn main() -> Result<()> {
         }
     };
 
-    match cli.command.unwrap_or(Command::App {
-        port: 7777,
-        headless: false,
-    }) {
+    // No subcommand used to mean "open the window", which is not this binary's job any more —
+    // the window is the Mac app, and this is the daemon it drives. Help beats guessing.
+    let Some(command) = cli.command else {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+
+    match command {
         Command::Scan { path, json, strict } => {
             let ctx = RepoContext::load(&path)
                 .with_context(|| format!("reading repository at {path}"))?;
@@ -270,7 +275,7 @@ fn main() -> Result<()> {
         Command::Serve {
             path,
             port,
-            no_open,
+            no_open: _,
             exit_with_parent,
             sentry_dsn,
             resume_last,
@@ -299,12 +304,12 @@ fn main() -> Result<()> {
                 .build()
                 .context("starting the async runtime")?;
             if resume_last {
-                runtime.block_on(serve::run_app(port, false))?;
+                runtime.block_on(serve::run_app(port))?;
             } else {
                 let repo = path
                     .canonicalize_utf8()
                     .with_context(|| format!("resolving {path}"))?;
-                runtime.block_on(serve::run(repo, port, !no_open))?;
+                runtime.block_on(serve::run(repo, port))?;
             }
         }
 
@@ -341,20 +346,6 @@ fn main() -> Result<()> {
                         }
                     })
                 );
-            }
-        }
-
-        Command::App { port, headless } => {
-            if headless {
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .context("starting the async runtime")?
-                    .block_on(serve::run_app(port, true))?;
-            } else {
-                // Takes over this thread and never returns: AppKit's run loop has to be the main
-                // one, so the server is what moves to a thread, not the window.
-                gui::run(port)?;
             }
         }
 
@@ -411,12 +402,51 @@ fn watch_parent() {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let now = std::os::unix::process::parent_id();
             if now != original || now == 1 {
-                // The jobs Keel is monitoring are its children, and `exit` alone reparents them
-                // to init. A dev server nobody can see and nobody can stop is worse than one
-                // that never started.
+                // Everything Keel started is its child, and `exit` alone reparents all of it to
+                // init. A dev server nobody can see and nobody can stop is worse than one that
+                // never started — and for a long time that sentence was written here while the
+                // dev server was the one thing not in this list.
                 monitor::stop_all();
+                dev::stop_now();
                 std::process::exit(0);
             }
         }
     });
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    /// Everything that owns a child process is stopped when the parent dies.
+    ///
+    /// `watch_parent` is the only cleanup Keel gets: macOS has no `PR_SET_PDEATHSIG`, and
+    /// `applicationWillTerminate` runs on a ⌘Q and on nothing else. So a subsystem that spawns
+    /// processes and is not named there leaks every one of them to init on every quit, silently,
+    /// with nothing left on the machine that knows what they are.
+    ///
+    /// That is not hypothetical: `dev.rs` was missing from this list for its whole life, directly
+    /// under a comment reading "a dev server nobody can see and nobody can stop is worse than one
+    /// that never started". Verified before the fix — quitting Keel left the server holding its
+    /// port, and only `lsof` could find it.
+    ///
+    /// Read off the source, because there is no way to observe "was included in a shutdown that
+    /// ends in `exit(0)`" from inside the process it kills.
+    #[test]
+    fn the_parent_death_path_stops_everything_that_owns_a_process() {
+        let source = include_str!("main.rs");
+        let path = source
+            .split("fn watch_parent()")
+            .nth(1)
+            .expect("watch_parent is where a dying parent is noticed");
+
+        for (module, call) in [
+            ("monitor", "monitor::stop_all()"),
+            ("dev", "dev::stop_now()"),
+        ] {
+            assert!(
+                path.contains(call),
+                "`{module}` spawns child processes and `watch_parent` does not stop it: add \
+                 `{call}`. Every process it owns is otherwise reparented to init on quit."
+            );
+        }
+    }
 }

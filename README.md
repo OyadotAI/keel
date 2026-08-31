@@ -3,15 +3,24 @@
 <p align="center"><b>Ship agent-written code you can trust.</b></p>
 
 <p align="center">
-An open-source native macOS ADE that runs <i>your</i> Claude Code locally, isolates each task on its
-own branch and worktree, and shows the evidence required for a human merge decision.
+An open-source native macOS ADE for product engineers. It runs <i>your</i> Claude Code locally,
+isolates each task on its own branch and worktree, and shows the evidence required for a human
+merge decision.
+</p>
+
+<p align="center">
+Three things are the product: <b>visibility</b> into what the agent just did, <b>git management</b>
+that keeps the history mergeable, and <b>multi-agent</b> lanes that do not step on each other.
+Everything else is in service of those.
 </p>
 
 - **Local.** A macOS app talking to `127.0.0.1`. Your code never leaves the machine.
 - **Your Claude account.** It drives the `claude` you already have, so your subscription covers the
   agent. No API key, no second bill, no proxy.
-- **One task, one identity.** A tab binds the conversation, provider process, branch, worktree and
-  evidence. Failed isolation stops the task instead of falling back to the shared checkout.
+- **One task, one identity.** An isolated lane binds the conversation, provider process, branch,
+  worktree and evidence; when a policy demands isolation, failing to get a worktree stops the task
+  rather than falling back to the shared checkout. A lane can also be opened *sharing* the working
+  tree — for reading and planning beside one that is editing, which is what that mode is for.
 - **Nothing hidden.** Live diffs, tool calls, command intent, approvals and the project's own checks.
 - **Human-owned merge.** A review packet blocks merge when checks fail, evidence is missing or the
   change exceeds its approved scope.
@@ -28,7 +37,12 @@ make app && cp -R dist/Keel.app /Applications/
 ```
 
 Or grab `Keel.dmg` from a release — signed, notarised and stapled, so it opens with no warning and
-no network. CLI only: `cargo install --path crates/keel`, then `keel serve .`
+no network.
+
+The daemon runs on its own — `cargo install --path crates/keel`, then `keel serve . --no-open` —
+but it is an HTTP surface, not a UI. The window is the Mac app; there is no page to open. (Without
+`--no-open` it still opens a browser at `/`, which nothing serves any more. That is a bug, not a
+UI.)
 
 ## The tour
 
@@ -55,8 +69,9 @@ hold a login, and a readiness scan when you want to ship.
 Wanted. It is deliberately easy to work on.
 
 ```
-make check                # fmt, clippy -D warnings, tests — the whole gate, ~5s
-cargo run -- serve .      # the IDE, on your own checkout
+make check                       # fmt, clippy -D warnings, both test suites, the bundle budgets
+make app && open dist/Keel.app   # the ADE, on your own checkout
+cargo run -- serve . --no-open   # the daemon alone, to curl at
 ```
 
 **Native SwiftUI.** No Electron, browser shell, JavaScript build, bundler or `node_modules`. The Rust
@@ -79,9 +94,9 @@ Good first PRs, each a genuinely small diff:
   Mix: one arm, one test.
 - **A CLI on the Connections screen** — `clitools::TOOLS` is a static table. An entry is an id, a
   binary, and the args for version, whoami, install and login.
-- **Windows and Linux** — `keel serve` runs anywhere Rust does, and the window is `tao` + `wry`,
-  which build everywhere; only macOS has ever been tried. Running it elsewhere and fixing what
-  falls over is real, self-contained work.
+- **Windows and Linux** — `keel serve` runs anywhere Rust does; the window does not, because it is
+  SwiftUI and AppKit. Porting means a second front end against the same daemon, which is real,
+  self-contained work and the daemon was split out to make possible.
 
 The native app has unit and rendering tests for session restoration, streaming events, task
 isolation, diff rendering and interaction invariants.

@@ -2,6 +2,16 @@
 
 The [README](../README.md) is the short version. This is everything, with the reasons.
 
+Everything below is aimed at one person: a **product engineer** shipping features against a real
+codebase, fluent in git and diffs, who already lives in Claude Code and wants to stop reading it
+through a terminal. Three things are the product — visibility, git management, and several agents
+at once that stay legible — and a feature that does not serve one of them is not a feature here.
+
+They are also unforgiving, and reasonably so: an ADE that is slow, stuck or wrong about its own
+state costs more than it saves, and nobody files a bug about that — they just stop opening it. So
+the bar in [CLAUDE.md](../CLAUDE.md#the-bar) applies to every surface described here. Never slow,
+never stuck, never weird.
+
 ## Seeing what it did
 
 **Diffs, while they happen.** Every file the agent writes during a turn appears as a stacked diff in

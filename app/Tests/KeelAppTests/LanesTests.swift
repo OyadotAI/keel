@@ -194,3 +194,201 @@ final class LanePathTests: XCTestCase {
                        ".keel/worktrees/theirs/a.txt")
     }
 }
+
+/// Nothing typed is lost when a turn ends without running.
+///
+/// `endTurn` is the only place that drains `queued`, and Stop does not go through it. The composer
+/// kept saying "they run in order when this turn ends" about a turn that had ended, and the next
+/// send — taken as not-running — called `start` directly and stepped over them permanently.
+@MainActor
+final class QueuedTests: XCTestCase {
+    private func lane() -> SessionModel { SessionModel(client: Client(port: 0), port: 0) }
+
+    func testStopGivesQueuedMessagesBackToTheComposer() {
+        let m = lane()
+        m.running = true
+        m.prompt = "first"; m.send()
+        m.prompt = "second"; m.send()
+        XCTAssertEqual(m.queued, ["first", "second"], "both should be waiting on the turn")
+
+        m.stop()
+        XCTAssertTrue(m.queued.isEmpty, "the queue must not outlive the turn it was waiting on")
+        XCTAssertEqual(m.prompt, "first\n\nsecond")
+    }
+
+    func testWhatWasHalfTypedKeepsItsPlaceAfterThem() {
+        let m = lane()
+        m.running = true
+        m.prompt = "queued one"; m.send()
+        m.prompt = "still typing this"
+
+        m.stop()
+        XCTAssertEqual(m.prompt, "queued one\n\nstill typing this")
+    }
+
+    func testAnEmptyQueueLeavesTheComposerAlone() {
+        let m = lane()
+        m.running = true
+        m.prompt = "untouched"
+        m.stop()
+        XCTAssertEqual(m.prompt, "untouched")
+    }
+}
+
+/// Two lanes must not write one working tree.
+///
+/// Auto-commit is `git add -A` in the checkout, so whichever turn ends first commits the other's
+/// half-written files under its own prompt. Reproduced against the daemon before this guard: a
+/// commit named "lane A: add a.txt" containing lane B's b.txt.
+@MainActor
+final class SharedTreeTests: XCTestCase {
+    private func lanes() -> Lanes { Lanes(client: Client(port: 0), port: 0) }
+
+    func testASecondWritingLaneIsRefusedRatherThanRun() {
+        let l = lanes()
+        let first = l.lanes[0]
+        first.title = "the one already editing"
+        first.running = true
+
+        let second = l.newLane()
+        second.prompt = "change something else"
+        second.send()
+
+        XCTAssertFalse(second.running, "it must not start beside a lane writing the same tree")
+        XCTAssertNotNil(second.lastError)
+        XCTAssertTrue(second.lastError!.contains("the one already editing"), second.lastError!)
+        XCTAssertEqual(second.lastFix?.label, "Give this one its own branch")
+    }
+
+    func testALaneWithItsOwnBranchIsNotBlocked() {
+        let l = lanes()
+        l.lanes[0].running = true
+        XCTAssertNotNil(l.writingElsewhere(than: l.newLane()))
+
+        let isolated = l.newLane(isolated: true)
+        XCTAssertNotNil(l.writingElsewhere(than: isolated),
+                        "the other lane is still writing; it is this lane's isolation that saves it")
+        isolated.prompt = "on my own branch"
+        isolated.send()
+        XCTAssertTrue(isolated.queued.isEmpty && isolated.lastError == nil)
+    }
+
+    /// A plan turn writes nothing, so it is never the lane anyone has to wait for.
+    func testAPlanningLaneIsNotWriting() {
+        let l = lanes()
+        l.lanes[0].running = true
+        l.lanes[0].mode = "plan"
+        XCTAssertNil(l.writingElsewhere(than: l.newLane()))
+    }
+}
+
+
+/// One agent per lane, kept by the function that starts them.
+@MainActor
+final class OneTurnTests: XCTestCase {
+    /// `retryLast` guards `running` itself, so this asserts the guard *underneath* it: a lane that
+    /// is already running does not get a second provider process, whichever path asked for one.
+    func testARunningLaneQueuesInsteadOfStartingASecondAgent() {
+        let m = SessionModel(client: Client(port: 0), port: 0)
+        m.running = true
+        m.prompt = "the second thing"
+        m.send()
+
+        XCTAssertEqual(m.queued, ["the second thing"])
+        XCTAssertEqual(m.turns.count, 0, "no turn was opened for it")
+        XCTAssertTrue(m.running, "the turn already in flight is untouched")
+    }
+
+    /// And the ordinary path still runs: the guard is about `running`, not about being cautious.
+    func testAnIdleLaneStarts() {
+        let m = SessionModel(client: Client(port: 0), port: 0)
+        m.prompt = "the first thing"
+        m.send()
+        XCTAssertTrue(m.running)
+        XCTAssertEqual(m.turns.count, 1)
+        XCTAssertTrue(m.queued.isEmpty)
+        m.stop()
+    }
+}
+
+/// A lane that leaves the window takes everything it was running with it.
+@MainActor
+final class LaneShutdownTests: XCTestCase {
+    /// `newLane` hands back the spare empty lane rather than making a second one, so a test that
+    /// wants two lanes has to give the first a conversation first. Learned by writing it wrong.
+    private func twoLanes() -> (Lanes, SessionModel, SessionModel) {
+        let l = Lanes(client: Client(port: 0), port: 0)
+        let first = l.lanes[0]
+        first.sessionId = "already-talking"
+        let second = l.newLane()
+        XCTAssertNotEqual(first.id, second.id, "the second lane is a second lane")
+        return (l, first, second)
+    }
+
+    func testClosingALaneEndsItsBackgroundWatch() {
+        let (l, first, second) = twoLanes()
+        second.watchMonitors()
+        XCTAssertTrue(second.isWatchingMonitors, "the loop is up")
+
+        l.close(second)
+        XCTAssertFalse(second.isWatchingMonitors, "closing the lane must end it")
+        XCTAssertEqual(l.lanes.map(\.id), [first.id])
+    }
+
+    /// Switching project drops every lane but the one that did the switching, and the same
+    /// applies: their loops were polling for jobs in a project that is no longer open.
+    func testSwitchingProjectEndsTheDroppedLanesWatches() async {
+        let (l, dropped, keep) = twoLanes()
+        dropped.watchMonitors()
+        l.activeID = keep.id
+
+        await l.switchProject(to: "/tmp/keel-test-other")
+        XCTAssertFalse(dropped.isWatchingMonitors)
+        XCTAssertEqual(l.lanes.map(\.id), [keep.id])
+    }
+}
+
+/// The remembered slash commands are read back, not only written.
+///
+/// `loadCommands` said in its own doc comment that it existed "so the picker works before the
+/// first turn of a session, which is exactly when somebody reaches for `/`" — and nothing called
+/// it. The list was written to `UserDefaults` after every turn and never read, so `/` in a freshly
+/// opened project offered Keel's own single command and nothing else.
+@MainActor
+final class SlashCommandTests: XCTestCase {
+    private let repo = "/tmp/keel-test-commands"
+    private var key: String { "keel.slashCommands." + repo }
+
+    override func setUp() {
+        UserDefaults.standard.set(["/review", "/deploy"], forKey: key)
+    }
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    func testOpeningAProjectRestoresItsRememberedCommands() {
+        let m = SessionModel(client: Client(port: 0), port: 0)
+        XCTAssertTrue(m.slashCommands.isEmpty, "nothing is known before the project is")
+
+        m.repoPath = repo
+        m.loadCommands()
+        XCTAssertEqual(m.slashCommands, ["/review", "/deploy"])
+    }
+
+    /// What arrived from a running session wins; the cache is only for before that.
+    func testALiveListIsNotOverwrittenByTheCache() {
+        let m = SessionModel(client: Client(port: 0), port: 0)
+        m.repoPath = repo
+        m.slashCommands = ["/from-this-session"]
+        m.loadCommands()
+        XCTAssertEqual(m.slashCommands, ["/from-this-session"])
+    }
+
+    /// A second lane in the same window starts with what the first one knows.
+    func testANewLaneAdoptsTheCommandsTheProjectAlreadyHas() {
+        let l = Lanes(client: Client(port: 0), port: 0)
+        l.lanes[0].sessionId = "already-talking"
+        l.lanes[0].slashCommands = ["/review"]
+        XCTAssertEqual(l.newLane().slashCommands, ["/review"])
+    }
+}

@@ -6,6 +6,17 @@ import Foundation
 /// decode a whole response because the daemon grew a field is worse than one that ignores it.
 /// Every optional here is optional because the server can genuinely omit it.
 enum Wire {
+    /// A request with no body, and a response nobody reads.
+    ///
+    /// Most of the daemon's POSTs take nothing and answer `true`. That was seven separate
+    /// declarations of the same empty struct — `Nothing`, `Empty`, and four different `Ok`s,
+    /// three of them nested inside the function that used them. One name, so the next one is a
+    /// use rather than an eighth declaration.
+    struct None: Codable, Sendable {}
+
+    /// What the approval endpoint replies.
+    struct Acked: Decodable, Sendable { var ok: Bool }
+
     struct State: Decodable, Sendable {
         var repo: String
         var projectOpen: Bool

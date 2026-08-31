@@ -1038,15 +1038,15 @@ pub async fn api_adopt(
     let files: Vec<(&str, String)> = vec![
         (
             ".claude/agents/reviewer.md",
-            crate::project::REVIEWER_AGENT.to_string(),
+            keel_generator::cloudflare::REVIEWER_AGENT.to_string(),
         ),
         (
             ".claude/agents/security.md",
-            crate::stack::SECURITY_AGENT.to_string(),
+            keel_generator::stack::SECURITY_AGENT.to_string(),
         ),
         (
             ".claude/agents/reliability.md",
-            crate::stack::RELIABILITY_AGENT.to_string(),
+            keel_generator::stack::RELIABILITY_AGENT.to_string(),
         ),
         ("docs/PRODUCTION.md", production_md(&name, &report)),
     ];

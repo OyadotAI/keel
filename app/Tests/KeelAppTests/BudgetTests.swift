@@ -72,30 +72,55 @@ final class BudgetTests: XCTestCase {
     ///
     /// macOS has no `PR_SET_PDEATHSIG`, so nothing makes this true on its own — the app has to
     /// terminate the child, and only a launch/quit cycle can show that it did.
+    ///
+    /// It launches the bundle's executable directly rather than through `open`, on a port of its
+    /// own, and finds the daemon by *parent pid*. Every part of that is a skip this test used to
+    /// take instead of running:
+    ///
+    /// - It counted daemons machine-wide, so it skipped whenever one was already running — which
+    ///   is every developer with Keel open, i.e. everyone dogfooding, i.e. the whole audience for
+    ///   the result. Owning the pid means the machine's other Keels are none of its business.
+    /// - `open` hands the process to LaunchServices and returns nothing to identify it with, so
+    ///   the only way to quit it again was `pkill -f`, which would also have killed the
+    ///   developer's own app. `Process` gives a pid and `terminate()` sends SIGTERM to it alone —
+    ///   and SIGTERM is the case worth testing, because it is one of the three that skip
+    ///   `applicationWillTerminate`.
+    /// - "the app did not start a daemon here" was a skip. That is the failure, not a reason to
+    ///   stand down.
     func testTheDaemonDiesWithTheApp() throws {
         let bundle = try bundlePath()
-        let marker = bundle.appendingPathComponent("Contents/MacOS/keel").path
-        try XCTSkipUnless(processCount(matching: marker) == 0,
-                          "a bundled daemon is already running; not this test's to judge")
+        let daemonPath = bundle.appendingPathComponent("Contents/MacOS/keel").path
 
-        run("/usr/bin/open", [bundle.path])
-        defer { run("/usr/bin/pkill", ["-f", bundle.appendingPathComponent("Contents/MacOS/KeelApp").path]) }
+        // A port of its own, so this instance starts a daemon instead of attaching to the one the
+        // developer already has on 7777.
+        let app = Process()
+        app.executableURL = bundle.appendingPathComponent("Contents/MacOS/KeelApp")
+        var env = ProcessInfo.processInfo.environment
+        env["KEEL_PORT"] = String(Int.random(in: 7800...7899))
+        app.environment = env
+        app.standardOutput = FileHandle.nullDevice
+        app.standardError = FileHandle.nullDevice
+        try app.run()
+        defer { if app.isRunning { app.terminate() } }
 
-        var started = false
-        for _ in 0..<40 where !started {
+        let ours = { self.processes(matching: daemonPath).filter { $0.ppid == Int(app.processIdentifier) } }
+
+        var daemon: (pid: Int, ppid: Int)?
+        for _ in 0..<60 where daemon == nil {
             Thread.sleep(forTimeInterval: 0.25)
-            started = processCount(matching: marker) > 0
+            daemon = ours().first
         }
-        try XCTSkipUnless(started, "the app did not start a daemon here")
+        guard let daemon else {
+            return XCTFail("the app ran for 15s and never started a daemon of its own")
+        }
 
-        run("/usr/bin/pkill", ["-f", bundle.appendingPathComponent("Contents/MacOS/KeelApp").path])
-
-        var survivors = 1
-        for _ in 0..<20 where survivors > 0 {
+        app.terminate()
+        var alive = true
+        for _ in 0..<40 where alive {
             Thread.sleep(forTimeInterval: 0.25)
-            survivors = processCount(matching: marker)
+            alive = !processes(matching: daemonPath).filter { $0.pid == daemon.pid }.isEmpty
         }
-        XCTAssertEqual(survivors, 0, "the daemon outlived the app that spawned it")
+        XCTAssertFalse(alive, "daemon \(daemon.pid) outlived the app that spawned it")
     }
 
     private func run(_ path: String, _ args: [String]) {

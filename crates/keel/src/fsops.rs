@@ -1,6 +1,6 @@
 //! File operations the tree's context menu performs.
 //!
-//! Every path goes through [`crate::api::resolve`], so an operation can only reach inside the
+//! Every path goes through [`crate::tree::resolve`], so an operation can only reach inside the
 //! repository or the user's Claude config — the same boundary reads and writes already respect.
 //! A traversal bug here is worse than one in a read: it deletes.
 //!
@@ -98,7 +98,7 @@ pub async fn create(
     let parent = if req.parent.is_empty() || req.parent == "." {
         repo.canonicalize_utf8().map_err(bad)?
     } else {
-        crate::api::resolve_dir(&repo, &req.parent).map_err(bad)?
+        crate::tree::resolve_dir(&repo, &req.parent).map_err(bad)?
     };
 
     let target = parent.join(&req.name);
@@ -121,7 +121,7 @@ pub async fn rename(
     Json(req): Json<RenameRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
     valid_name(&req.name)?;
-    let from = crate::api::resolve(&repo, &req.path).map_err(bad)?;
+    let from = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
     if Some(&from) == repo.canonicalize_utf8().ok().as_ref() {
         return Err(bad("that is the repository itself"));
@@ -143,7 +143,7 @@ pub async fn delete(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
+    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
     // Deleting the repository from inside the IDE that has it open is never what was meant.
     if Some(&target) == repo.canonicalize_utf8().ok().as_ref() {
@@ -214,7 +214,7 @@ pub async fn stat(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<Stat>, (StatusCode, String)> {
-    let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
+    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
     if !target.is_dir() {
         return Ok(Json(Stat {
@@ -266,7 +266,7 @@ pub async fn reveal(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let target = crate::api::resolve(&repo, &req.path).map_err(bad)?;
+    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
     #[cfg(target_os = "macos")]
     let spawned = std::process::Command::new("open")

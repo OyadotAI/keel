@@ -46,11 +46,18 @@ struct Picked: Decodable {
     }
 
     /// `rgb(59, 130, 246)` → `#3b82f6`. A hex is what anyone reads a colour as.
+    ///
+    /// The clamp is not defensive tidiness. `Int(_: Double)` **traps** — SIGTRAP, the whole app
+    /// gone, no catch — for anything outside `Int`'s range, and every number here was parsed out
+    /// of a string the page handed us. `getComputedStyle` normalises `color` to a clamped
+    /// `rgb()`, which is why this has never fired; "the page cannot say that" is a promise about
+    /// somebody else's renderer, and it is not the sort of promise worth a crash if it is wrong.
     static func short(_ css: String) -> String {
         let numbers = css.split(whereSeparator: { !$0.isNumber && $0 != "." })
             .compactMap { Double($0) }
         guard numbers.count >= 3 else { return css }
-        return String(format: "#%02x%02x%02x", Int(numbers[0]), Int(numbers[1]), Int(numbers[2]))
+        let byte = { (d: Double) -> Int in d.isFinite ? Int(min(max(d, 0), 255)) : 0 }
+        return String(format: "#%02x%02x%02x", byte(numbers[0]), byte(numbers[1]), byte(numbers[2]))
     }
 
     /// The element, described — without an instruction, so several can share one.

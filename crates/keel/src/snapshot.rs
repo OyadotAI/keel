@@ -15,24 +15,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::serve::Checkout;
 
+/// Snapshot speaks to git in two ways: against an index of its own while building a tree, and
+/// against the repository's own for everything else.
 fn git(root: &Utf8Path, index: Option<&Utf8Path>, args: &[&str]) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("git");
-    cmd.current_dir(root).args(args);
-    if let Some(index) = index {
-        cmd.env("GIT_INDEX_FILE", index);
-    }
-    let out = cmd
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if why.is_empty() {
-            format!("git {} failed", args.join(" "))
-        } else {
-            why
-        })
+    match index {
+        Some(index) => crate::git::with_index(root, index, args),
+        None => crate::git::trimmed(root, args),
     }
 }
 
@@ -42,9 +30,20 @@ fn git(root: &Utf8Path, index: Option<&Utf8Path>, args: &[&str]) -> Result<Strin
 /// monorepo scale; past that, snapshot only the turn's touched paths.
 pub fn snapshot(root: &Utf8Path) -> Result<String, String> {
     let git_dir = git(root, None, &["rev-parse", "--git-dir"])?;
+    // Per *call*, not per process. It used to be `keel-index-{pid}`, and snapshots are not rare
+    // or serialised: one is taken at the start of every turn, and `restore` takes one of its own
+    // before it writes. Two of them at once in a shared working tree — two lanes, or a rewind
+    // beside a turn — meant the second `remove_file` deleted the first's index while its
+    // `add -A` was still writing it, and the first `write-tree` then photographed whatever the
+    // second had staged. The failure is silent and lands later, as a rewind that restores a tree
+    // that was never there.
+    let n = {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
     let index = root
         .join(git_dir)
-        .join(format!("keel-index-{}", std::process::id()));
+        .join(format!("keel-index-{}-{n}", std::process::id()));
     let _ = std::fs::remove_file(&index);
     let result = git(root, Some(&index), &["add", "-A", "--", "."])
         .and_then(|_| git(root, Some(&index), &["write-tree"]));
@@ -186,5 +185,36 @@ mod tests {
             restore(&root, &"0".repeat(40)).is_err(),
             "well-formed but absent"
         );
+    }
+
+    /// Snapshots taken at the same time must not photograph each other's index.
+    ///
+    /// One is taken at the start of every turn and one inside every `restore`, so with more than
+    /// one lane they overlap as a matter of course. With a per-process index name this failed
+    /// outright or returned a tree built from another caller's staging.
+    #[test]
+    fn concurrent_snapshots_of_one_tree_agree() {
+        let (_dir, root) = repo();
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+
+        let expected = snapshot(&root).expect("a baseline");
+        let results: Vec<Result<String, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let root = root.clone();
+                    scope.spawn(move || snapshot(&root))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for r in &results {
+            let tree = r.as_ref().expect("every snapshot must succeed");
+            assert_eq!(
+                tree, &expected,
+                "a snapshot saw another caller's index: {results:?}"
+            );
+        }
     }
 }

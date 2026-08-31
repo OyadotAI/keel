@@ -88,9 +88,8 @@ pub async fn create(
         };
 
         say(format!("$ git push -u origin {branch}")).await;
-        let mut push = Command::new("git");
-        push.current_dir(&repo)
-            .args(["push", "-u", "origin", &branch]);
+        let mut push = crate::git::tokio_command(&repo);
+        push.args(["push", "-u", "origin", &branch]);
         if crate::plugins::pipe(&mut push, &tx).await != 0 {
             let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
             return;
@@ -129,11 +128,9 @@ pub async fn create(
 /// repository with no commits — an unborn HEAD — which is the ordinary state one second after
 /// `git init`, and it was being reported as "this is not a git repository".
 fn branch_of(repo: &camino::Utf8Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .current_dir(repo)
-        .args(["branch", "--show-current"])
-        .output()
-        .ok()?;
+    let mut c = crate::git::command(repo);
+    c.args(["branch", "--show-current"]);
+    let out = crate::git::output(c).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -143,19 +140,17 @@ fn branch_of(repo: &camino::Utf8Path) -> Option<String> {
 
 /// Whether anything has been committed. False on an unborn HEAD.
 fn has_commits(repo: &camino::Utf8Path) -> bool {
-    std::process::Command::new("git")
-        .current_dir(repo)
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()
+    let mut c = crate::git::command(repo);
+    c.args(["rev-parse", "--verify", "HEAD"]);
+    crate::git::output(c)
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
 fn uncommitted(repo: &camino::Utf8Path) -> String {
-    std::process::Command::new("git")
-        .current_dir(repo)
-        .args(["status", "--porcelain"])
-        .output()
+    let mut c = crate::git::command(repo);
+    c.args(["status", "--porcelain"]);
+    crate::git::output(c)
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()

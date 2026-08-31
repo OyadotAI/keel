@@ -9,6 +9,7 @@
 //! developer's repositories, their Claude Code sessions and their cloud credentials, so reaching
 //! any of that from another machine is a decision, never a default.
 
+use crate::lock::Locked;
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
@@ -137,7 +138,7 @@ impl AppState {
     /// Forget it, but only if it is still the one we recorded: a turn that ends after the next one
     /// has already started must not erase the new turn's pid.
     pub fn clear_running(&self, lane: &str, pid: u32) {
-        let mut map = self.running.lock().expect("running lock poisoned");
+        let mut map = self.running.locked();
         if map.get(lane) == Some(&pid) {
             map.remove(lane);
         }
@@ -159,11 +160,9 @@ impl AppState {
         else {
             return false;
         };
-        // Negative pid signals the process *group*: `claude` spawns the tools it runs, and a bare
-        // `kill(pid)` leaves a `cargo test` it started alive and holding the terminal.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGINT);
-        }
+        // The group, not the process: `claude` spawns the tools it runs, and a bare `kill(pid)`
+        // leaves a `cargo test` it started alive and holding the terminal. See `crate::signals`.
+        crate::signals::group(pid, libc::SIGINT);
         true
     }
 
@@ -215,30 +214,20 @@ struct StateResponse {
     policy: crate::policy::Policy,
 }
 
-pub async fn run(repo: Utf8PathBuf, port: u16, open_browser: bool) -> Result<()> {
-    let launch = if open_browser {
-        Launch::Tab
-    } else {
-        Launch::None
-    };
-    serve(AppState::new(repo), port, launch).await
+pub async fn run(repo: Utf8PathBuf, port: u16) -> Result<()> {
+    serve(AppState::new(repo), port).await
 }
 
 /// Start with whatever was open last, or with nothing.
 ///
 /// This is how the application is launched from the Dock, where there is no working directory to
 /// infer a project from — the Finder hands a process `/` and it would be a strange thing to open.
-pub async fn run_app(port: u16, open_browser: bool) -> Result<()> {
+pub async fn run_app(port: u16) -> Result<()> {
     let state = match crate::prefs::Prefs::load().resume() {
         Some(project) => AppState::new(project),
         None => AppState::empty(),
     };
-    let launch = if open_browser {
-        Launch::Window
-    } else {
-        Launch::None
-    };
-    serve(state, port, launch).await
+    serve(state, port).await
 }
 
 /// Whether a Keel is already answering on this port.
@@ -280,52 +269,12 @@ fn already_running(port: u16) -> bool {
     body.starts_with("HTTP/1.") && body.contains("project_open")
 }
 
-/// Chromium-based browsers can open a page as a window with no tab strip, address bar or
-/// bookmarks. It costs nothing and it is the difference between Keel looking like an application
-/// and looking like a bookmark someone opened.
-const APP_MODE_BROWSERS: &[&str] = &[
-    "/Applications/Google Chrome.app",
-    "/Applications/Brave Browser.app",
-    "/Applications/Microsoft Edge.app",
-    "/Applications/Chromium.app",
-];
+// Nothing here opens a window any more, and nothing should. The page these used to open —
+// `Launch`, `open_ui` and a list of Chromium bundles to run in app mode — was deleted with `ui/`,
+// but the code that navigated to it was kept, so `keel serve` greeted you with a 404 and `keel
+// app` did the same inside a WKWebView. The daemon is an HTTP surface; the window is the Mac app.
 
-fn open_ui(url: &str, launch: Launch) {
-    match launch {
-        Launch::None => {}
-        // Failing to open a browser is never a reason to refuse to serve — the URL is printed.
-        Launch::Tab => {
-            let _ = open::that_detached(url);
-        }
-        Launch::Window => {
-            if let Some(app) = APP_MODE_BROWSERS
-                .iter()
-                .find(|p| std::path::Path::new(p).exists())
-                && std::process::Command::new("open")
-                    .args(["-na", app, "--args", &format!("--app={url}")])
-                    .spawn()
-                    .is_ok()
-            {
-                return;
-            }
-            let _ = open::that_detached(url);
-        }
-    }
-}
-
-/// How the window is opened.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Launch {
-    /// Nothing. `--no-open`, or a headless run.
-    None,
-    /// A tab in the default browser — what you want when you typed `keel serve` in a terminal.
-    Tab,
-    /// A chromeless window, so a Dock launch does not look like a bookmark. Falls back to a tab
-    /// when no Chromium-based browser is installed.
-    Window,
-}
-
-async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
+async fn serve(state: AppState, port: u16) -> Result<()> {
     state.port.store(port, std::sync::atomic::Ordering::Relaxed);
     let url = format!("http://127.0.0.1:{port}");
 
@@ -333,7 +282,6 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
     // with "address in use" behind an icon that then does nothing.
     if already_running(port) {
         println!("\n  Keel is already running — {url}\n");
-        open_ui(&url, launch);
         return Ok(());
     }
 
@@ -350,11 +298,11 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
             axum::routing::post(crate::names::rename),
         )
         .route("/api/raw", get(api_raw))
-        .route("/api/chat", get(crate::api::chat))
-        .route("/api/chat/stop", axum::routing::post(crate::api::stop))
+        .route("/api/chat", get(crate::agent::chat))
+        .route("/api/chat/stop", axum::routing::post(crate::agent::stop))
         .route(
             "/api/attach",
-            axum::routing::post(crate::api::attach)
+            axum::routing::post(crate::agent::attach)
                 // No route overrides axum's 2 MB default, which a phone screenshot clears easily.
                 // Scoped to this route: the limit exists for attachments, not for every handler.
                 .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)),
@@ -537,7 +485,6 @@ async fn serve(state: AppState, port: u16, launch: Launch) -> Result<()> {
         .with_context(|| format!("binding {addr} (is another keel already running?)"))?;
 
     println!("\n  Keel — {url}{reach}\n  Ctrl-C to stop\n");
-    open_ui(&url, launch);
 
     // `ConnectInfo` is what lets the guard tell a loopback caller from a stranger. Without it the
     // guard cannot answer its only question, so this is not an optional flourish.
@@ -563,14 +510,16 @@ async fn report_failures(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // No `MatchedPath` means no such route — a probe, a favicon, a stale client, a typo in a
+    // curl. That is the caller being wrong, not Keel failing, and reporting it means anything
+    // that touches the port fills the issue list with 404s nobody can act on.
     let route = req
         .extensions()
         .get::<axum::extract::MatchedPath>()
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "unmatched".into());
+        .map(|m| m.as_str().to_string());
     let response = next.run(req).await;
     let status = response.status();
-    if status.is_client_error() || status.is_server_error() {
+    if let (Some(route), true) = (route, status.is_client_error() || status.is_server_error()) {
         sentry::with_scope(
             |scope| {
                 scope.set_tag("route", &route);
@@ -628,8 +577,8 @@ fn bind_address() -> (Ipv4Addr, String) {
 /// repository takes seconds to minutes, and for all of it Keel served nothing at all — reported as
 /// the screen freezing after cloning a project. The same was true, less dramatically, of walking a
 /// large tree or running the scanner.
-async fn api_tree(Checkout(repo): Checkout) -> Json<Vec<crate::api::Node>> {
-    Json(blocking(move || crate::api::tree(&repo), Vec::new()).await)
+async fn api_tree(Checkout(repo): Checkout) -> Json<Vec<crate::tree::Node>> {
+    Json(blocking(move || crate::tree::tree(&repo), Vec::new()).await)
 }
 
 #[derive(serde::Deserialize)]
@@ -643,7 +592,7 @@ async fn api_importers(
 ) -> Json<Vec<String>> {
     Json(
         blocking(
-            move || crate::api::importers_of(&repo, &query.file),
+            move || crate::imports::importers_of(&repo, &query.file),
             Vec::new(),
         )
         .await,
@@ -665,10 +614,17 @@ where
 
 async fn api_raw(
     Checkout(repo): Checkout,
-    Query(query): Query<crate::api::FileQuery>,
+    Query(query): Query<crate::tree::FileQuery>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match crate::api::read_raw(&repo, &query.path) {
+    // Whatever the person clicked on: a screenshot, a PDF, a video the agent put in the tree.
+    // Reading it is a blocking read of an arbitrary number of bytes.
+    let read = blocking(
+        move || crate::tree::read_raw(&repo, &query.path),
+        Err("could not read that file".to_string()),
+    )
+    .await;
+    match read {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
         Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
     }
@@ -693,7 +649,18 @@ async fn api_session(
     } else {
         repo
     };
-    Json(keel_workspace::transcript(&dir, &home, &query.id))
+    // Off the executor. A transcript is a single `read_to_string` of an append-only JSONL file
+    // and then a `serde_json` parse of every line of it; the largest in this repository's own
+    // history is 33 MB. On the executor that is one of a handful of worker threads held for as
+    // long as it takes, and everything else the window has in flight — the approval poll, the
+    // chat stream — waits behind a click on "open this session".
+    Json(
+        blocking(
+            move || keel_workspace::transcript(&dir, &home, &query.id),
+            Vec::new(),
+        )
+        .await,
+    )
 }
 
 /// What one session changed and ran. Explicit, on a click — see `keel_workspace::session_work`.
@@ -708,20 +675,27 @@ async fn api_session_work(
     } else {
         repo
     };
-    Json(keel_workspace::session_work(&dir, &home, &query.id))
+    // Same file, same reason as `api_session`.
+    Json(
+        blocking(
+            move || keel_workspace::session_work(&dir, &home, &query.id),
+            Default::default(),
+        )
+        .await,
+    )
 }
 
-async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::api::GitStatus> {
-    Json(blocking(move || crate::api::git_status(&repo), Default::default()).await)
+async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {
+    Json(blocking(move || crate::repo::git_status(&repo), Default::default()).await)
 }
 
 async fn api_git_diff(
     Checkout(repo): Checkout,
-    Query(query): Query<crate::api::FileQuery>,
-) -> Json<crate::api::DiffResponse> {
+    Query(query): Query<crate::tree::FileQuery>,
+) -> Json<crate::repo::DiffResponse> {
     Json(
         blocking(
-            move || crate::api::git_diff(&repo, &query.path),
+            move || crate::repo::git_diff(&repo, &query.path),
             Default::default(),
         )
         .await,
@@ -750,15 +724,21 @@ fn twenty() -> usize {
 async fn api_git_log(
     Checkout(repo): Checkout,
     Query(q): Query<LogQuery>,
-) -> Json<Vec<crate::api::Commit>> {
-    Json(blocking(move || crate::api::git_log(&repo, q.n.min(100)), Vec::new()).await)
-}
-
-async fn api_git_branches(Checkout(repo): Checkout) -> Json<crate::api::Branches> {
+) -> Json<Vec<crate::repo::Commit>> {
     Json(
         blocking(
-            move || crate::api::git_branches(&repo),
-            crate::api::Branches {
+            move || crate::repo::git_log(&repo, q.n.min(100)),
+            Vec::new(),
+        )
+        .await,
+    )
+}
+
+async fn api_git_branches(Checkout(repo): Checkout) -> Json<crate::repo::Branches> {
+    Json(
+        blocking(
+            move || crate::repo::git_branches(&repo),
+            crate::repo::Branches {
                 current: None,
                 local: Vec::new(),
                 remote: Vec::new(),
@@ -782,7 +762,7 @@ async fn api_git_branch(
     Json(b): Json<BranchBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_branch_act(&repo, &b.action, &b.name),
+        move || crate::repo::git_branch_act(&repo, &b.action, &b.name),
         Err("timed out".into()),
     )
     .await
@@ -801,7 +781,7 @@ async fn api_git_remote(
     Json(b): Json<RemoteBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_remote_act(&repo, &b.action, b.url.as_deref()),
+        move || crate::repo::git_remote_act(&repo, &b.action, b.url.as_deref()),
         Err("timed out".into()),
     )
     .await
@@ -813,7 +793,7 @@ async fn api_git_discard_all(
     Checkout(repo): Checkout,
 ) -> Result<Json<(u32, u32)>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_discard_all(&repo),
+        move || crate::repo::git_discard_all(&repo),
         Err("timed out".into()),
     )
     .await
@@ -831,7 +811,7 @@ async fn api_git_stage_all(
     Json(b): Json<StageAllBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_stage_all(&repo, b.stage),
+        move || crate::repo::git_stage_all(&repo, b.stage),
         Err("timed out".into()),
     )
     .await
@@ -844,7 +824,7 @@ async fn api_git_commit_staged(
     Json(b): Json<crate::worktree::CommitBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_commit_staged(&repo, &b.message),
+        move || crate::repo::git_commit_staged(&repo, &b.message),
         Err("timed out".into()),
     )
     .await
@@ -860,9 +840,9 @@ struct ShaQuery {
 async fn api_git_commit_diff(
     Checkout(repo): Checkout,
     Query(q): Query<ShaQuery>,
-) -> Result<Json<Vec<crate::api::DiffResponse>>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Vec<crate::repo::DiffResponse>>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_commit_diff(&repo, &q.sha),
+        move || crate::repo::git_commit_diff(&repo, &q.sha),
         Err("timed out".into()),
     )
     .await
@@ -873,17 +853,20 @@ async fn api_git_commit_diff(
 async fn api_git_push(
     Checkout(repo): Checkout,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
-    blocking(move || crate::api::git_push(&repo), Err("timed out".into()))
-        .await
-        .map(Json)
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    blocking(
+        move || crate::repo::git_push(&repo),
+        Err("timed out".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_git_uncommit(
     Checkout(repo): Checkout,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_uncommit(&repo),
+        move || crate::repo::git_uncommit(&repo),
         Err("timed out".into()),
     )
     .await
@@ -894,10 +877,13 @@ async fn api_git_uncommit(
 async fn api_git_init(
     Checkout(repo): Checkout,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    blocking(move || crate::api::git_init(&repo), Err("timed out".into()))
-        .await
-        .map(|()| Json(true))
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    blocking(
+        move || crate::repo::git_init(&repo),
+        Err("timed out".into()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 async fn api_git_act(
@@ -912,10 +898,10 @@ async fn api_git_act(
     let root = state.repo();
     blocking(
         move || {
-            let first = crate::api::git_act(&repo, &req.action, &req.path, req.hunk);
+            let first = crate::repo::git_act(&repo, &req.action, &req.path, req.hunk);
             match first {
                 Err(e) if e.contains("no such file") && root != repo => {
-                    crate::api::git_act(&root, &req.action, &req.path, req.hunk)
+                    crate::repo::git_act(&root, &req.action, &req.path, req.hunk)
                 }
                 other => other,
             }
@@ -937,7 +923,7 @@ async fn api_git_ignore(
     Json(b): Json<GitIgnoreBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::api::git_ignore_path(&repo, &b.path),
+        move || crate::repo::git_ignore_path(&repo, &b.path),
         Err("timed out".into()),
     )
     .await
@@ -957,9 +943,16 @@ async fn api_ignore(
     State(state): State<Arc<AppState>>,
     Json(b): Json<IgnoreBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    crate::ignored::set(&state.repo(), &b.id, b.ignored, &b.why)
-        .map(|()| Json(true))
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+    // A small file, but a read-modify-write of one all the same, and the rule is the rule: no
+    // filesystem on the executor. The next one to be added here will be small too.
+    let repo = state.repo();
+    blocking(
+        move || crate::ignored::set(&repo, &b.id, b.ignored, &b.why),
+        Err("could not record that".to_string()),
+    )
+    .await
+    .map(|()| Json(true))
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
@@ -1022,6 +1015,46 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
 
 #[cfg(test)]
 mod tests {
+    /// Every route handler here keeps its blocking work off the executor.
+    ///
+    /// This is the rule with the worst failure mode of any in the file, because breaking it fails
+    /// no other test: axum's executor has a small worker pool, so one handler that shells out to
+    /// git or reads a transcript on it delays *every other request the window has in flight* —
+    /// the approval poll and the chat stream included. What that looks like is a window that is
+    /// intermittently slow for reasons nobody can reproduce, which is the exact complaint this
+    /// codebase is trying to stop hearing.
+    ///
+    /// Read off the source rather than the behaviour, because there is no way to observe "did not
+    /// occupy a worker" from a test. A handler that genuinely touches nothing outside memory can
+    /// say so with `// no-blocking:` and a reason.
+    #[test]
+    fn every_handler_keeps_blocking_work_off_the_executor() {
+        let source = include_str!("serve.rs");
+        let body = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+
+        let mut offenders = Vec::new();
+        for part in body.split("\nasync fn ").skip(1) {
+            let name = part
+                .split(['(', '<', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if !name.starts_with("api_") {
+                continue;
+            }
+            if part.contains("blocking(") || part.contains("// no-blocking:") {
+                continue;
+            }
+            offenders.push(name);
+        }
+        assert!(
+            offenders.is_empty(),
+            "these handlers do their work on the executor: {offenders:?}. \
+             Wrap it in `blocking(…)`, or say `// no-blocking: <reason>` if it truly only \
+             touches memory."
+        );
+    }
+
     use super::*;
     use std::os::unix::process::CommandExt;
 

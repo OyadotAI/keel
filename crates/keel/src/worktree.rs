@@ -41,20 +41,7 @@ fn branch_of(name: &str) -> String {
     format!("keel/{name}")
 }
 
-fn git(root: &Utf8Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if out.status.success() {
-        Ok(stdout)
-    } else {
-        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if why.is_empty() { stdout } else { why })
-    }
-}
+use crate::git::trimmed as git;
 
 #[derive(Serialize, Clone)]
 pub struct Worktree {
@@ -269,7 +256,13 @@ fn commit_one(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     {
         return Ok(false);
     }
-    git(checkout, &["commit", "-q", "-m", message]).map(|_| true)
+    // `crate::git::AUTOMATIC` and `--no-verify`: this is Keel's checkpoint, not the person's
+    // commit. See the note on `AUTOMATIC` for why running the repository's own `pre-commit` hook
+    // after every turn is both slow and a thing nobody asked for. `git_commit_staged`, which is
+    // the button, keeps its hooks.
+    let mut args = crate::git::AUTOMATIC.to_vec();
+    args.extend_from_slice(&["commit", "-q", "--no-verify", "-m", message]);
+    git(checkout, &args).map(|_| true)
 }
 
 /// Merge the lane into the project's branch and remove the checkout.
@@ -600,5 +593,46 @@ mod tests {
         discard(&root, "feature", true).unwrap();
         assert!(!path.exists());
         assert!(git(&root, &["rev-parse", "--verify", "keel/feature"]).is_err());
+    }
+
+    /// The automatic commit does not run the repository's hooks; the button does.
+    ///
+    /// A `pre-commit` hook is arbitrary code the repository's author wrote, and auto-commit runs
+    /// after every accepted turn on Keel's own initiative. Measured with a `sleep 8` hook: 8.4s
+    /// per turn before, 0.07s after. A commit the person asked for is a different act and keeps
+    /// its hooks.
+    #[test]
+    fn the_automatic_commit_skips_the_repositorys_hooks() {
+        let (_dir, root) = repo();
+        std::fs::write(
+            root.join(".git/hooks/pre-commit"),
+            "#!/bin/sh\ntouch \"$(git rev-parse --show-toplevel)/hook-ran\"\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                root.join(".git/hooks/pre-commit"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        assert!(commit_all(&root, "an automatic checkpoint").unwrap());
+        assert!(
+            !root.join("hook-ran").exists(),
+            "the repository's pre-commit hook ran inside Keel's automatic commit"
+        );
+
+        // The explicit one is the person's own act, and keeps every hook the repository has.
+        std::fs::write(root.join("c.txt"), "three\n").unwrap();
+        git(&root, &["add", "-A"]).unwrap();
+        crate::repo::git_commit_staged(&root, "a commit the person asked for").unwrap();
+        assert!(
+            root.join("hook-ran").exists(),
+            "an explicit commit must still run the repository's hooks"
+        );
     }
 }

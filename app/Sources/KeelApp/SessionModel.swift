@@ -591,6 +591,7 @@ final class SessionModel: Identifiable {
             files = other.files
         }
         repoPath = other.repoPath
+        slashCommands = other.slashCommands
         sessions = other.sessions
         findings = other.findings
         // With the findings, not without them: the panel keys "has this been scanned" off `scan`,
@@ -764,9 +765,50 @@ final class SessionModel: Identifiable {
         start(text)
     }
 
+    /// One turn at a time, per lane — enforced here rather than at the call sites.
+    ///
+    /// Four places call this, and each guarded `running` in its own way: `send` queues instead,
+    /// `retryLast` has a `guard !running`, `deliver` branches, `endTurn` calls it only after
+    /// setting `running` false. Every one of them is correct today. But the invariant they are
+    /// each half of is *this function's* — a second `claude -p` in one lane means two agents
+    /// editing one checkout with one of them untracked by Stop, which is the same corruption as
+    /// two lanes on one tree and harder to see. An invariant kept by convention at four call
+    /// sites is one refactor from being kept at three.
+    ///
+    /// The prompt is not dropped: it goes where a prompt sent during a turn always goes.
     private func start(_ text: String) {
+        guard !running else {
+            queued.append(text)
+            return
+        }
+        // Belt and braces on the same invariant: whatever the last turn left behind is finished
+        // with, and a cancelled task that is somehow still running must not outlive its lane.
+        streamTask?.cancel()
         guard allowedProviders.contains(provider.queryValue) else {
             lastError = "\(provider.rawValue) is not allowed by the active team policy."
+            releaseQueued()
+            return
+        }
+        // Two lanes writing one working tree is the one kind of concurrency Keel will not run.
+        //
+        // Both of the things that end a turn are tree-wide: auto-commit is `git add -A` in the
+        // checkout, and rewind restores a whole tree. So whichever turn finishes first sweeps the
+        // other's half-written files into a commit labelled with the wrong prompt, and the second
+        // lane's own commit then shows less than it did — reproducibly, with nothing on screen
+        // saying it happened. Reading and planning beside a lane that is editing is exactly what a
+        // shared lane is for; writing beside one is not.
+        //
+        // Said rather than guessed. Silently moving the work onto a branch would be a surprise
+        // about where it landed, and this audience would rather be told and handed the button.
+        if mode != "plan", !isolated, let other = lanes?.writingElsewhere(than: self) {
+            fail("\(other) is editing this working tree. Two lanes writing the same checkout "
+                 + "commit each other's half-finished files, so this one has not started.",
+                 category: "shared_tree",
+                 fix: Fix(label: "Give this one its own branch") {
+                     self.isolated = true
+                     self.start(text)
+                 })
+            releaseQueued()
             return
         }
         if mode != "plan", policyRequiresIsolation { isolated = true }
@@ -818,6 +860,7 @@ final class SessionModel: Identifiable {
                         turn.finished = true
                         running = false
                         watchApprovals(false)
+                        self.releaseQueued()
                         return
                     }
                     turn.notIsolated = self.worktreeFailure ?? "the checkout could not be created"
@@ -831,6 +874,7 @@ final class SessionModel: Identifiable {
                 if Task.isCancelled || !self.running {
                     turn.finished = true
                     watchApprovals(false)
+                    self.releaseQueued()
                     return
                 }
             }
@@ -843,7 +887,7 @@ final class SessionModel: Identifiable {
             // Before the agent touches anything: what the tree looked like, so "restore to
             // before this turn" has something to restore to. A failure here is not a reason to
             // refuse the turn — there is simply no rewind for it, and the menu says so by absence.
-            if let snap: Snapshot = try? await client.post("/api/git/snapshot", body: Nothing(),
+            if let snap: Snapshot = try? await client.post("/api/git/snapshot", body: Wire.None(),
                                                             q(), as: Snapshot.self) {
                 turn.snapshot = snap.tree
             }
@@ -940,6 +984,24 @@ final class SessionModel: Identifiable {
         if !queued.isEmpty { start(queued.removeFirst()) }
     }
 
+    /// Give back whatever was queued behind a turn that ended without running it.
+    ///
+    /// `endTurn` is the only place that drains `queued`, and there are four ways a turn can end
+    /// without reaching it: Stop, a policy that demands an isolation the checkout could not give,
+    /// a provider the policy forbids, and a cancel while git was still copying the tree. Each of
+    /// those left the composer's own promise — "N queued — they run in order when this turn ends"
+    /// — pointing at a turn that had already ended, and because `running` was false by then the
+    /// next thing typed went straight to `start` and stepped over them for good.
+    ///
+    /// Back into the composer rather than into the next turn: the person stopped, or Keel refused,
+    /// and neither is a reason to run something they have not looked at since. Nothing is lost and
+    /// nothing runs unasked.
+    private func releaseQueued() {
+        guard !queued.isEmpty else { return }
+        prompt = (queued + [prompt]).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        queued.removeAll()
+    }
+
     /// Interrupt the turn — SIGINT to the agent's process group, the way ⌃C does it.
     ///
     /// The interrupt goes first and the stream is dropped after. Cancelling the stream on its own
@@ -951,7 +1013,7 @@ final class SessionModel: Identifiable {
         let lane = id.uuidString
         Task { [client] in
             do {
-                _ = try await client.post("/api/chat/stop", body: Nothing(), ["lane": lane],
+                _ = try await client.post("/api/chat/stop", body: Wire.None(), ["lane": lane],
                                           as: Stopped.self)
             } catch {
                 // Worth saying: the person pressed Stop and the agent may still be running.
@@ -963,6 +1025,7 @@ final class SessionModel: Identifiable {
         running = false
         preparing = nil
         watchApprovals(false)
+        releaseQueued()
     }
 
     struct Stopped: Decodable { var stopped: Bool }
@@ -1544,7 +1607,6 @@ final class SessionModel: Identifiable {
     struct StartDev: Encodable { var command: String? }
 
     func startDev() async {
-        struct Ok: Decodable {}
         _ = try? await client.post("/api/dev/start", body: StartDev(command: nil), q(), as: DevStatus.self)
         // The URL appears in the server's own output a moment after it starts.
         for _ in 0..<40 {
@@ -1559,6 +1621,8 @@ final class SessionModel: Identifiable {
     /// Commands Keel is running for this conversation, newest first.
     var monitors: [Wire.Job] = []
     private var monitorTask: Task<Void, Never>?
+    /// Whether the background-job loop is up. For the test that asserts closing a lane ends it.
+    var isWatchingMonitors: Bool { monitorTask != nil }
 
     /// Started with the first turn and never cancelled while the lane lives.
     ///
@@ -1580,14 +1644,36 @@ final class SessionModel: Identifiable {
                         self.deliver(job)
                     }
                 }
-                try? await Task.sleep(for: .seconds(2))
+                // Two seconds while there is something to watch, fifteen when there is not. The
+                // loop is per lane and never ends, so at the flat rate a window with four lanes
+                // and no jobs still asked the daemon 172,800 times a day for the same empty list.
+                //
+                // `running` is in the condition and not just the job list: a job can only be
+                // created by the agent, so a turn in flight is the window in which one can
+                // appear, and without it a job approved during a slow tick would take fifteen
+                // seconds to show up — trading a real delay for traffic nobody was paying for.
+                let watching = self.running || self.monitors.contains { $0.running }
+                try? await Task.sleep(for: .seconds(watching ? 2 : 15))
             }
         }
     }
 
+    /// The lane is gone from the window. Everything it had running stops.
+    ///
+    /// `stop()` deliberately leaves `monitorTask` alone — a background job outlives the turn that
+    /// asked for it, so the loop that notices it finishing has to outlive the turn too. It does
+    /// not have to outlive the *lane*. Until this existed the only thing that ended that loop was
+    /// the model being deallocated, which is true eventually and is not a lifetime anyone here
+    /// controls: SwiftUI decides when it lets go of a view's model, and "it stops polling at some
+    /// point after you close the tab" is not a thing to leave to inference.
+    func closed() {
+        stop()
+        monitorTask?.cancel()
+        monitorTask = nil
+    }
+
     private func ack(_ job: Wire.Job) async {
         struct Id: Encodable { var id: String }
-        struct Ok: Decodable {}
         _ = try? await client.post("/api/monitors/ack", body: Id(id: job.id), as: Bool.self)
     }
 
@@ -1671,6 +1757,9 @@ final class SessionModel: Identifiable {
         var answer: String = ""
     }
 
+    /// What `/api/approve/answer` replies. Declared once, beside the call, rather than twice
+    /// inside the two `Task` bodies that used it.
+    /// (`Wire.Acked` lives with the rest of the wire types.)
     /// Answer a question. The text is what the agent reads as the tool's result.
     func answer(_ p: Wire.Pending, text: String) {
         pending.removeAll { $0.id == p.id }
@@ -1678,9 +1767,8 @@ final class SessionModel: Identifiable {
         let body = Answer(id: p.id, decision: "deny", rules: [], scope: "session",
                           session: sessionId, answer: text)
         Task { [client] in
-            struct Ok: Decodable { var ok: Bool }
             do {
-                _ = try await client.post("/api/approve/answer", body: body, as: Ok.self)
+                _ = try await client.post("/api/approve/answer", body: body, as: Wire.Acked.self)
             } catch {
                 self.answerFailed(p, error)
             }
@@ -1692,9 +1780,8 @@ final class SessionModel: Identifiable {
         let body = Answer(id: p.id, decision: allow ? "allow" : "deny",
                           rules: p.rules, scope: scope, session: sessionId)
         Task { [client] in
-            struct Ok: Decodable { var ok: Bool }
             do {
-                _ = try await client.post("/api/approve/answer", body: body, as: Ok.self)
+                _ = try await client.post("/api/approve/answer", body: body, as: Wire.Acked.self)
             } catch {
                 self.answerFailed(p, error)
                 return
@@ -1757,7 +1844,7 @@ final class SessionModel: Identifiable {
     func adoptPractices() async -> [String] {
         var written: [String] = []
         await attempt {
-            let a: Adopted = try await client.post("/api/adopt", body: Empty(), q(), as: Adopted.self)
+            let a: Adopted = try await client.post("/api/adopt", body: Wire.None(), q(), as: Adopted.self)
             written = a.written
         }
         await refreshState()
@@ -1842,7 +1929,6 @@ final class SessionModel: Identifiable {
         if lanes?.lanes.contains(where: { $0.title == "Staff review" && $0.running }) == true { return }
         Task { await requestReview() }
     }
-    struct Empty: Encodable {}
 
     /// Plugins the scanner recommends for this repository that are not installed.
     ///
@@ -1990,6 +2076,12 @@ final class SessionModel: Identifiable {
         loaded = true
         projectOpenKnown = s.projectOpen
         repoPath = s.repo
+        // The remembered list is keyed by project, so this is the first moment it can be read —
+        // and reading it is the whole point of having written it. `loadCommands` existed, said in
+        // its own doc comment that it was there "so the picker works before the first turn", and
+        // was called from nowhere: `/` in a freshly opened project offered Keel's own one command
+        // and nothing else until a turn had run and the `init` record arrived.
+        loadCommands()
         // A project resumed from prefs was never seen by this app's own recents list, so the
         // switcher would be empty on a fresh install until you opened something a second time.
         if s.projectOpen, !s.repo.isEmpty { Recents.remember(s.repo) }
@@ -2075,7 +2167,6 @@ final class SessionModel: Identifiable {
 
     struct PathBody: Encodable { var path: String }
     struct RenameBody: Encodable { var path: String; var name: String }
-    struct CreateBody: Encodable { var path: String; var kind: String }
     struct PathReply: Decodable { var path: String }
 
     /// Show a file in the Finder.
@@ -2337,7 +2428,7 @@ final class SessionModel: Identifiable {
     var discarded: String?
     func discardAll() async {
         var counts = [0, 0]
-        await git("discard") { counts = try await client.post("/api/git/discard-all", body: Nothing(), q(), as: [Int].self) }
+        await git("discard") { counts = try await client.post("/api/git/discard-all", body: Wire.None(), q(), as: [Int].self) }
         await refreshState()
         discarded = lastError == nil ? "Discarded \(counts[0]) modified, \(counts[1]) new → Trash" : nil
         Telemetry.track("discarded_all")
@@ -2374,7 +2465,7 @@ final class SessionModel: Identifiable {
         pushing = true
         defer { pushing = false }
         do {
-            _ = try await client.post("/api/git/push", body: Nothing(), q(), as: String.self)
+            _ = try await client.post("/api/git/push", body: Wire.None(), q(), as: String.self)
             lastError = nil; lastFix = nil
             Telemetry.track("pushed")
         } catch { lastError = "Push failed: " + error.localizedDescription }
@@ -2424,26 +2515,15 @@ final class SessionModel: Identifiable {
         }
     }
 
-    private func gateName(_ g: Turn.Gate) -> String {
-        switch g {
-        case .passed: "passed"
-        case .failed: "failed"
-        case .none: "no_gate"
-        case .notRun, .running: "not_run"
-        }
-    }
-
     /// Take the last commit apart, keeping its changes. `--soft` on the daemon's side.
     func uncommit() async {
-        await attempt { _ = try await client.post("/api/git/uncommit", body: Nothing(), q(), as: Bool.self) }
+        await attempt { _ = try await client.post("/api/git/uncommit", body: Wire.None(), q(), as: Bool.self) }
         await refreshGit()
     }
 
-    struct Nothing: Encodable {}
-
     func gitInit() async -> String? {
         do {
-            _ = try await client.post("/api/git/init", body: Nothing(), q(), as: Bool.self)
+            _ = try await client.post("/api/git/init", body: Wire.None(), q(), as: Bool.self)
             await refreshGit()
             return nil
         } catch {

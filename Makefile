@@ -21,8 +21,12 @@ test:
 	cargo test
 
 # The Swift half of the gate: the stream parser, and the budgets from the plan that can actually
-# fail — orphaned agent processes, a second daemon, a bundle that grew.
-app-test:
+# fail — a daemon that outlives its app, a bundle that grew, resources the packaging script forgot.
+#
+# It depends on `app` because those three budgets measure the *bundle*. Without one they skipped
+# themselves and the gate went green anyway, which is the failure mode this repository has already
+# paid for once: a budget that cannot fail reads as proof.
+app-test: app
 	swift test --package-path app
 
 .PHONY: app-test
