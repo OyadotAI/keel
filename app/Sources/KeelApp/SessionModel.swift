@@ -2324,6 +2324,21 @@ final class SessionModel: Identifiable {
                         input: ["command": .string(c.subject)])
                 t.finish(call: "replay-\(i)", output: c.output, failed: c.error)
             }
+            // The footer strip — time, tokens, what share came from cache. It is the same data a
+            // live turn shows and it was in the transcript all along; a session opened from
+            // History simply had nothing to put there.
+            for s in did.spent ?? [] {
+                let t = turn(s.turn)
+                let tokens = Turn.Tokens(input: s.input, output: s.output,
+                                         cacheRead: s.cacheRead, cacheWrite: s.cacheWrite)
+                if tokens.total > 0 { t.tokens = tokens }
+                // Only when the two ends are genuinely apart: a turn with one record would
+                // otherwise report 0s, which is a measurement nobody made.
+                if let from = Self.moment(s.started), let to = Self.moment(s.ended),
+                   to > from {
+                    t.durationMS = Int(to.timeIntervalSince(from) * 1000)
+                }
+            }
             replayed[replayed.count - 1].truncated = did.truncated
         }
         replayed.forEach { $0.finished = true; $0.replayed = true }
@@ -2335,6 +2350,9 @@ final class SessionModel: Identifiable {
     struct SessionWork: Decodable {
         var files: [File]
         var calls: [Call]
+        /// Optional so an older daemon's reply still decodes: a hard failure here loses the
+        /// files and the calls too, and the footer is not worth that.
+        var spent: [Spend]?
         var truncated: Bool
         /// The index of the turn that ran it, into the replayed conversation.
         struct File: Decodable {
@@ -2348,6 +2366,32 @@ final class SessionModel: Identifiable {
             var error: Bool
             var turn: Int
         }
+        /// What one turn took, from the transcript's own `usage` records and timestamps. No cost:
+        /// the CLI no longer writes one, and a figure Keel worked out from a price list would look
+        /// exactly like the measured one beside it.
+        struct Spend: Decodable {
+            var turn: Int
+            var input: Int
+            var output: Int
+            var cacheRead: Int
+            var cacheWrite: Int
+            var started: String
+            var ended: String
+
+            enum CodingKeys: String, CodingKey {
+                case turn, input, output, started, ended
+                case cacheRead = "cache_read"
+                case cacheWrite = "cache_write"
+            }
+        }
+    }
+
+    /// ISO-8601 as the transcript writes it, with and without fractional seconds — a formatter
+    /// configured for one rejects the other, which reads as a turn that took no time at all.
+    nonisolated static func moment(_ text: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
     /// Whether this project is trusted, which the window says out loud for as long as it is true.

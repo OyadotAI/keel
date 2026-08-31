@@ -303,6 +303,28 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(w.mcpServers[0].fromRepo)
     }
 
+    /// What a replayed turn spends travels in snake_case, and its timestamps arrive in both the
+    /// shapes the CLI writes. A miss on either is silent: the footer simply does not draw, which
+    /// is the state a session opened from History was already in.
+    func testAReplayedTurnsSpendDecodesIncludingItsCacheSplit() throws {
+        let work = try decode(#"""
+        {"files":[],"calls":[],"truncated":false,"spent":[
+          {"turn":0,"input":10,"output":5,"cache_read":900,"cache_write":100,
+           "started":"2026-01-01T10:00:00.000Z","ended":"2026-01-01T10:00:41.000Z"}]}
+        """#, SessionModel.SessionWork.self)
+        let spend = try XCTUnwrap(work.spent?.first)
+        XCTAssertEqual([spend.cacheRead, spend.cacheWrite], [900, 100])
+
+        let from = try XCTUnwrap(SessionModel.moment(spend.started))
+        let to = try XCTUnwrap(SessionModel.moment(spend.ended))
+        XCTAssertEqual(to.timeIntervalSince(from), 41)
+        // The other shape, from a transcript written without fractional seconds.
+        XCTAssertNotNil(SessionModel.moment("2026-01-01T10:00:00Z"))
+        // An older daemon that sends none of this still replays the files and the calls.
+        XCTAssertNil(try decode(#"{"files":[],"calls":[],"truncated":false}"#,
+                                SessionModel.SessionWork.self).spent)
+    }
+
     /// The two shapes the monitoring feature travels in. A field renamed on the daemon side
     /// leaves the panel empty and the completion never reaches the conversation, and both
     /// failures are silent — the job still runs, nobody is told anything.
