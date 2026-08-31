@@ -12,6 +12,8 @@ struct SessionWindow: View {
     var app: AppModel? = nil
     /// History, not Changes. A window opens onto a project you have worked in before, and the
     /// first question is which conversation to carry on — Changes is empty until a turn runs.
+    /// The window this is, so a menu key acts in one window rather than in all of them.
+    @State private var here = WindowHere()
     @State private var panel: Panel? = .sessions
     @State private var stage: Stage = .turn
     /// A turn ran while the person was looking at something else. The Trace tab keeps moving until
@@ -104,6 +106,7 @@ struct SessionWindow: View {
         .animation(K.M.quick, value: model.justOpened)
         .animation(K.M.quick, value: model.loaded)
         .background(K.C.bg)
+        .windowCommands(here)
         .task {
             await lanes.refreshShared()
             // Restore once the project is known: the saved lanes are keyed by it.
@@ -1489,8 +1492,7 @@ struct BranchMenu: View {
 ///
 /// `SessionWindow.pinned` used to stand in for "the main window" and the sheet was guarded on it,
 /// but nothing has passed it since a detached window got its own `Lanes` — the guard was reading a
-/// parameter no caller sets. `controlActiveState` is `.key` in exactly one window and is told so by
-/// AppKit, so it cannot go quietly stale the same way.
+/// parameter no caller sets. Asking AppKit which window is key cannot go quietly stale that way.
 ///
 /// `addressed: true` is for the commands that also arrive from a click on a system notification,
 /// which names its lane by id: that one belongs to whichever window holds that lane, key or not.
@@ -1499,22 +1501,59 @@ extension View {
                          perform act: @escaping (Notification) -> Void) -> some View {
         modifier(WindowCommand(name: name, addressed: addressed, act: act))
     }
+
+    /// Put this at the root of a window so the commands inside it know which window they are in.
+    func windowCommands(_ here: WindowHere) -> some View {
+        background(WindowFinder(here: here)).environment(here)
+    }
+}
+
+/// Which `NSWindow` a view is in, and whether the person is typing into it.
+///
+/// Not `controlActiveState`: an attached sheet takes key away from its parent, so a window with
+/// the "New feature" sheet up reads as merely active — and ⌘. would have stopped no turn while
+/// the sheet a person opened by accident was on screen. That is the "every wait ends" rule losing
+/// to a modal. The sheet is part of the window it is attached to, so it counts as being here.
+@MainActor @Observable final class WindowHere {
+    var window: NSWindow?
+
+    var isKey: Bool {
+        guard let mine = window, let key = NSApp.keyWindow else { return false }
+        return key === mine || key.sheetParent === mine || mine.attachedSheet === key
+    }
+}
+
+/// A zero-size `NSView` whose only job is to report the window it landed in. SwiftUI has no
+/// environment value for the window itself, and every route to one goes through AppKit.
+private struct WindowFinder: NSViewRepresentable {
+    let here: WindowHere
+
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        // `view.window` is nil until the view is in the hierarchy, which is after this call.
+        DispatchQueue.main.async { [here] in here.window = view.window }
+    }
 }
 
 struct WindowCommand: ViewModifier {
     let name: Notification.Name
     let addressed: Bool
     let act: (Notification) -> Void
-    @Environment(\.controlActiveState) private var active
+    @Environment(WindowHere.self) private var here: WindowHere?
 
     /// A lane id is a String; ⌘1–9 sends an Int and a menu key sends nothing.
-    static func acts(key: Bool, addressed: Bool, object: Any?) -> Bool {
-        key || (addressed && object is String)
+    ///
+    /// `key` is nil in a window that has not found itself yet — one frame at launch, and any
+    /// preview or test that renders a pane on its own. Acting there is the old behaviour and the
+    /// safe end of the trade: a command that runs twice beats ⌘↵ doing nothing on the first send.
+    static func acts(key: Bool?, addressed: Bool, object: Any?) -> Bool {
+        (key ?? true) || (addressed && object is String)
     }
 
     func body(content: Content) -> some View {
         content.onReceive(NotificationCenter.default.publisher(for: name)) { note in
-            guard Self.acts(key: active == .key, addressed: addressed, object: note.object) else {
+            guard Self.acts(key: here?.isKey, addressed: addressed, object: note.object) else {
                 return
             }
             act(note)
