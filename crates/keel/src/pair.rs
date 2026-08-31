@@ -17,6 +17,7 @@
 //! - Binding off-loopback at all is refused unless a device has been paired, so a misconfigured
 //!   Keel cannot be reachable by a stranger before it is reachable by its owner.
 
+use crate::lock::Locked;
 use axum::{
     Json,
     extract::{ConnectInfo, Path, Request},
@@ -121,7 +122,7 @@ pub async fn begin() -> Result<Json<CodeView>, (StatusCode, String)> {
     let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % 1_000_000;
     let code = format!("{n:06}");
 
-    *pending().lock().expect("pairing lock") = Some(PendingCode {
+    *pending().locked() = Some(PendingCode {
         code: code.clone(),
         expires: std::time::Instant::now() + CODE_LIFETIME,
         attempts: 0,
@@ -158,7 +159,7 @@ pub async fn complete(
     };
 
     {
-        let mut slot = pending().lock().expect("pairing lock");
+        let mut slot = pending().locked();
         let Some(p) = slot.as_mut() else {
             return Err(refused());
         };

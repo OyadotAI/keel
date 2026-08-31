@@ -219,7 +219,18 @@ final class AppModel {
     private var started = false
     let pairing: PairingModel
 
-    init(port: UInt16 = 7777) {
+    /// 7777, unless `KEEL_PORT` says otherwise.
+    ///
+    /// Not a preference — nothing in the UI sets it. It exists so a second Keel can be launched
+    /// beside a running one without attaching to its daemon, which is what `BudgetTests` needs to
+    /// prove the daemon dies with the app: the version of that test which counted daemons
+    /// globally had to skip itself whenever a developer had Keel open, so it never ran for anyone
+    /// dogfooding, and a budget that cannot fail reads as proof.
+    static var defaultPort: UInt16 {
+        ProcessInfo.processInfo.environment["KEEL_PORT"].flatMap(UInt16.init) ?? 7777
+    }
+
+    init(port: UInt16 = AppModel.defaultPort) {
         daemon = Daemon(port: port)
         let c = Client(port: port)
         client = c
@@ -305,7 +316,6 @@ final class AppModel {
     /// which downgrades to loopback when nothing is paired or Tailscale is down. Reading the
     /// setting here would advertise a machine that quietly refused to listen.
     private func advertiseIfReachable() async {
-        struct Devices: Decodable {}
         let devices: [PairingModel.Device] = (try? await client.get("/api/pair/devices")) ?? []
         guard !devices.isEmpty else { return }
         let state: Wire.State? = try? await client.get("/api/state")

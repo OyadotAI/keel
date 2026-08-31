@@ -29,10 +29,9 @@ pub struct Root {
 /// project. Keel then showed the ancestor's branch and its changes, with every path relative to a
 /// root the person had not opened. A blank panel is a bad answer; the wrong repository is worse.
 pub fn is_root(dir: &Utf8Path) -> bool {
-    let out = std::process::Command::new("git")
-        .current_dir(dir)
-        .args(["rev-parse", "--show-toplevel"])
-        .output();
+    let mut c = crate::git::command(dir);
+    c.args(["rev-parse", "--show-toplevel"]);
+    let out = crate::git::output(c);
     let Ok(out) = out else { return false };
     if !out.status.success() {
         return false;
@@ -214,7 +213,7 @@ mod tests {
         std::fs::write(root.join("backend/api.ts"), "x").unwrap();
         std::fs::write(root.join("frontend/page.tsx"), "y").unwrap();
 
-        let status = crate::api::git_status(&root);
+        let status = crate::repo::git_status(&root);
         assert!(
             status.is_repo,
             "the folder is versioned, just not at its top"
@@ -238,7 +237,7 @@ mod tests {
         repo(&root);
         std::fs::write(root.join("a.txt"), "x").unwrap();
 
-        let status = crate::api::git_status(&root);
+        let status = crate::repo::git_status(&root);
         assert!(status.is_repo);
         assert!(status.branch.is_some(), "the one branch is still named");
         assert_eq!(
@@ -425,7 +424,7 @@ mod tests {
             assert_eq!(found, shape.repos, "repositories for {}", shape.name);
 
             // 2. Status always answers, and never claims to be a repository when it is not.
-            let status = crate::api::git_status(&root);
+            let status = crate::repo::git_status(&root);
             assert_eq!(
                 status.is_repo, shape.versioned,
                 "is_repo for {}",

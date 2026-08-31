@@ -1,28 +1,171 @@
 # Keel — working agreement
 
-Keel is a Claude Code IDE. It drives the user's own `claude` in their repository and makes the run
-visible: diffs as they are written, tool calls as one line each, a refused command as a question in
-the conversation, and the project's own checks run after every turn. The audience is people who
-already live in Claude Code and are tired of reading it through a terminal — so when a change is a
-choice between more surface and more visibility into what the agent just did, visibility wins.
+Keel is an **ADE** — an agentic development environment. It drives the user's own `claude` in their
+repository and makes the run visible: diffs as they are written, tool calls as one line each, a
+refused command as a question in the conversation, and the project's own checks run after every
+turn.
+
+**Who it is for.** Product engineers. People who ship features against a real codebase every day,
+who already live in Claude Code, and who are tired of reading it through a terminal. They are
+fluent: they know git, they read diffs, they will notice a wrong `--no-ff`. They are not looking
+for a tool that hides the machine from them — they are looking for one that shows the machine
+faster than a terminal can.
+
+Three things are the product. Everything else is in service of them:
+
+1. **Visibility.** What the agent just did, on screen, without asking. A turn is one reviewable
+   artifact: the files, the commands with their output, the gate's verdict, the duration, the cost.
+2. **Git management.** A lane is a branch is a worktree is a review packet. Keel's job is to keep
+   the history clean enough that a person can merge it without reconstructing what happened.
+3. **Multi-agent.** Several lanes at once, each one legible on its own, none of them stepping on
+   another. Concurrency that produces one confused working tree is worse than no concurrency.
 
 It also reads a repository and reports how ready it is for agent work and production, fixes what's
 missing, and scaffolds onto Cloudflare. That half stays out of the way of the first: a repository
 with no Cloudflare config is never asked about one.
 
-**On "Cloudflare only".** That was the original line and it is no longer true. Keel reads a
-Kubernetes cluster, lists GKE clusters and can create one, and shows GitHub Actions runs. What
-survives of the original decision is the part that mattered: Keel does not *require* a cluster,
-does not put one in the golden path, and scaffolds new projects onto Cloudflare with no Kubernetes
-anywhere. The cluster surfaces are for repositories that already have one — read-mostly, and
-honest about cost where they are not.
+**On "Cloudflare only".** That was the original line and it is no longer true, and the retreat has
+gone further than the note used to admit: `gcp.rs` and `infra.rs` are deleted, so there is no GKE
+listing, no cluster reader and no Actions surface any more. What survives is the part that
+mattered: Keel does not require a cluster, does not put one in the golden path, and scaffolds new
+projects onto Cloudflare with no Kubernetes anywhere.
+
+## The bar
+
+The audience is picky, and their pickiness is rational: an ADE sits between them and their work all
+day, so a tool that is slow, stuck or wrong about its own state costs them more than it saves. They
+do not file bugs about it. They stop opening it.
+
+So these are product requirements, not polish, and a change that trades one of them for a feature
+is the wrong trade:
+
+- **Never slow.** Every surface a person looks at more than once a minute — the diff list, the
+  turn, the lane rail, the status bar — renders from data already in hand. Work that takes longer
+  than a frame goes off the executor (`serve::blocking`) or off the main actor, and anything
+  unbounded gets a cap before it gets a spinner. A 30,000-line lockfile is a normal thing for an
+  agent to write; it must not be a normal thing for Keel to choke on.
+- **Never stuck.** Every wait ends. Every request has a finite timeout (`Client.ordinary`, 90s;
+  the chat stream is the one deliberate exception and it is the one thing that legitimately runs
+  for minutes). Every state that can be entered can be left: a turn that ends by any path — done,
+  stopped, refused by policy, cancelled mid-checkout — leaves the lane in the same state a
+  finished turn does, including draining what was queued behind it. A queue that says "these run
+  when this turn ends" must be emptied by *every* way a turn can end, not by the happy one.
+- **Never weird.** Keel never shows a thing it cannot explain. A blank pane says which of the
+  reasons it is. A command that will be refused says so before it is refused. A window that opens
+  onto nothing is not a smaller bug than a crash — it is a larger one, because a crash at least
+  gets reported.
+
+The reporting in "What reports itself" exists because of this section: the failures that cost
+trust are the quiet ones, so they are made loud to us and never to the person.
+
+### Where the bar is kept, rather than remembered
+
+Each of these was a class of bug found in more than one place, so each is now one function that
+the call sites cannot get wrong individually. Adding a thirty-first `Mutex` or a fourth pipe
+reader means using these, not re-deriving them.
+
+- **`lock::Locked::locked()`** — never `.lock().expect()`. A panic in a critical section poisons
+  its mutex permanently, so one panic in `approve` costs not one approval but every approval for
+  the life of the process, arriving as a turn that stopped and never asked anything. `locked()`
+  recovers the data, clears the poison and reports the panic. Data that is recoverably wrong beats
+  a queue nobody can ever read again.
+- **`git::command()`** — never `Command::new("git")`. A bare git is an interactive program that
+  has not asked you anything *yet*: an askpass helper or `gpg-agent` puts up a window and waits on
+  it forever, and the request behind it is a `spawn_blocking` thread that waits with it. There
+  were three git helpers in three files and none of them said no.
+- **`git::AUTOMATIC` + `--no-verify` on the automatic commit** — the auto-commit is Keel's
+  checkpoint, not the person's commit. A repository's `pre-commit` hook is arbitrary code by the
+  same author `.claude/settings.json` hooks are quarantined for, it runs on Keel's initiative
+  after every turn, it has no ceiling (8.4s measured with a trivial hook; `lint-staged` is tens of
+  seconds), and it re-runs the checks the gate already ran and showed. The explicit commit keeps
+  its hooks, because that one is an act the person chose.
+- **`lines::next()`** — never `Err(_) => continue` on `next_line()`. Undecodable bytes must be
+  skipped, because stopping there leaves the pipe to fill and blocks the child mid-write; a reader
+  that is actually broken must end the loop, because `continue` on an error that does not go away
+  is a core at 100% inside a `tokio::spawn` nobody is watching.
+- **`SessionModel.start` owns "one turn per lane"** — four call sites each guarded `running` in
+  their own way, all correctly. But two `claude -p` in one lane is two agents on one checkout with
+  one of them invisible to Stop, and an invariant kept by convention at four sites is one refactor
+  from being kept at three.
+- **`Int(_: Double)` traps.** Not an exception — SIGTRAP, the whole app. Every number parsed out
+  of a page (`Picked.short`) is clamped, because "the renderer always normalises that" is a
+  promise about somebody else's code.
+- **`git::output()`** — every synchronous git runs under a 60-second ceiling, with both pipes
+  drained on threads. The drain is not tidiness: polling `try_wait` while a chatty command fills a
+  64 KB pipe buffer deadlocks, and `git log` on a real repository is well past 64 KB. The ceiling
+  is set against `Client.ordinary` (90s) rather than against git — a git still running at 60 will
+  not produce a result anyone sees, so failing with the command named beats the window's own
+  timeout with nothing in it.
+- **The snapshot index is per call, not per process.** `keel-index-{pid}` was shared by every
+  concurrent `snapshot()`, and one is taken at the start of every turn plus one inside every
+  `restore`. Two at once meant the second `remove_file` deleted the first's index mid-`add`, and
+  the first `write-tree` photographed the second's staging. It fails silently and lands later, as
+  a rewind to a tree that never existed. `concurrent_snapshots_of_one_tree_agree` fails 3/3 on the
+  old name.
+- **Nothing unbounded reaches the app.** `MAX_DIFF_LINES` (3,000, cutting *inside* a hunk — a
+  prefix's line numbers are as true as they were, and a newly written file is one hunk holding all
+  of it) took a lockfile diff from 3.83 MB to 380 KB. `monitor::SHOWN` (80) sends what the UI
+  reads instead of all 400 lines it keeps.
+- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor`** — reads the source and
+  fails on any `api_*` handler that does its work inline. This is the rule with the worst failure
+  mode in the file, because breaking it fails no other test: axum's pool is small, so one handler
+  reading a 33 MB transcript holds up the approval poll and the chat stream, and what that looks
+  like is a window that is intermittently slow for reasons nobody can reproduce. A handler that
+  genuinely only touches memory says `// no-blocking: <reason>`.
+- **Summaries are cached against length and mtime** (`keel-workspace::sessions`). `/api/state`
+  runs on every panel and every turn end and re-read the whole project's history each time — 151
+  sessions, 127 MB, 240 ms — for a list of titles. Transcripts are append-only, so length and
+  mtime together identify one that has not changed. 140 ms → 18 ms warm.
+- **A refusal is a prompt.** The agent is Claude Code with its own judgement, so a refusal that
+  gives advice it can tell is wrong will be routed around — and the route it finds is the one that
+  breaks the design. `NO_MONITOR` was one sentence for two different situations ("they said no"
+  and "nobody answered in four minutes") and its advice, *run it in the foreground instead*, is
+  impossible for the thing people background most: a dev server never exits, so foregrounding it
+  means Claude Code's own `Bash` timeout kills it having produced nothing. Reported verbatim from
+  a real turn: *"my background launch was refused. Starting it detached:"*. That is not the model
+  being worse in the IDE. So a refusal now says which of the two happened, points at the dev
+  server Keel already runs when that is what the command is, and closes the door explicitly —
+  and `is_background` reads the *command* as well as the flag, because `nohup`, `setsid`,
+  `disown` and a trailing `&` were an unguarded way past the whole of `monitor.rs`.
+- **`signals::group` / `signals::end_tree`** — never `Child::start_kill()`, never a hand-written
+  `libc::kill(-pid)`. Every child Keel spawns leads a process group because `claude` is not a leaf:
+  a turn's real tree is `claude` with a `cargo test` under it, and a dev server is `sh` → pnpm →
+  the framework → the workers that actually hold the port. Signalling the pid ends the top of that
+  and leaves the rest standing, reparented to init, invisible. The negation appeared by hand in
+  three places and the fourth got it wrong — the SSE disconnect path, which runs whenever a window
+  or lane closes, called `start_kill()` four files away from the comment explaining why that is
+  wrong. `ending_a_tree_takes_all_of_it` fails on the old form.
+- **Everything that owns a process is in `watch_parent`.** It is the only cleanup Keel gets —
+  macOS has no `PR_SET_PDEATHSIG` and `applicationWillTerminate` runs on ⌘Q and nothing else. The
+  dev server was missing from it for its whole life, directly beneath a comment reading "a dev
+  server nobody can see and nobody can stop is worse than one that never started"; measured before
+  the fix, quitting Keel left it holding port 8791 with only `lsof` able to find it.
+  `the_parent_death_path_stops_everything_that_owns_a_process` names the list.
+- **A function nobody calls is a question, not a deletion.** A sweep for unreferenced Swift
+  declarations turned up `loadCommands()`, whose own doc comment said it existed "so the picker
+  works before the first turn of a session, which is exactly when somebody reaches for `/`" — and
+  nothing called it. The list was written to `UserDefaults` after every turn and read back never,
+  so `/` in a freshly opened project offered Keel's one own command and nothing else. Deleting it
+  would have removed the evidence that the feature was broken. Check which it is first.
+- **`SessionModel.closed()` for a lane leaving the window.** `stop()` deliberately leaves the
+  background-job loop running, which is right when a turn ends and wrong when the lane does.
+  Before this the only thing that ended it was the model being deallocated, and when SwiftUI lets
+  go of a view's model is not a lifetime anyone here controls.
 
 ## Non-negotiables
 
 These are enforced by tests. Changing any of them is a deliberate decision, not a refactor.
 
-1. **The agent never gets a shell.** `--permission-mode dontAsk` + `--strict-mcp-config`; built-in
-   `Bash`/`Edit`/`Write` stay denied. Every effect passes through a `keel-mcp` tool.
+1. **No effect reaches the machine without a decision.** Two surfaces enforce this and they are
+   not the same, so say which you mean. `keel-harness::invocation` is the locked one —
+   `--permission-mode dontAsk` + `--strict-mcp-config`, built-in `Bash`/`Edit`/`Write` denied,
+   every effect through a `keel-mcp` tool — and it is what `docs/guardrails.md` describes. **The
+   chat panel does not use it yet** (`agent::chat`, `--permission-mode acceptEdits` or `plan`): there
+   the decision is Keel's own `PreToolUse` hook plus the allowlist, which is a real gate but a
+   different one. Do not write prose claiming the locked surface for the shipping path until
+   `keel-mcp` has a server behind its catalog and the spawn switches to `Invocation::args()`.
+   Tests: `invocation::tests::locks_the_tool_surface` for the first, `approve::tests::*` for the
+   second.
 2. **`--bare` is never passed.** It would break subscription auth ("OAuth and keychain are never
    read"). Because of that, repo `.claude/settings.json` hooks load — so `keel-harness::trust`
    quarantines them *before* the first invocation.
@@ -89,11 +232,20 @@ It was deleted only once the Swift app could do what it did. What is deliberatel
 over: file editing (there is no editor), and `/api/browse` and `/api/open-url`, which `NSOpenPanel`
 and `NSWorkspace` do better natively.
 
+**What the deletion left behind is a "never weird" violation.** Nothing served `/` any more, but
+the two things that *open* `/` were kept: `serve::open_ui` still opens a browser tab unless
+`--no-open` is passed, and `gui.rs` — 180 lines, plus `tao`, `wry` and `muda` — still builds a
+WKWebView window and points it there. So `keel serve .`, the command this file's own Contributing
+note recommends, greets you with a blank 404, and `keel app` does the same in a native frame. A
+window onto nothing is the exact failure the bar names, and it survived because deleting the thing
+a route served is not the same edit as deleting the code that navigates to it. The fix is a
+deletion, not a route.
+
 ## Lanes and worktrees
 
-A lane is one conversation in the window; ⌘N gives it a checkout of its own under
-`.keel/worktrees/<name>` on branch `keel/<name>`, created on the first send so the branch is named
-for the ask. Every checkout-scoped request carries `?wt=<name>`, resolved by one extractor
+A lane is one conversation in the window. **"On its own branch"** gives it a checkout of its own
+under `.keel/worktrees/<name>` on branch `keel/<name>`, created on the first send so the branch is
+named for the ask. Every checkout-scoped request carries `?wt=<name>`, resolved by one extractor
 (`serve::Checkout`); the handlers that do not take it are the point:
 
 - **Permissions, trust and approvals read the project root.** A lane cannot carry a different
@@ -105,6 +257,16 @@ for the ask. Every checkout-scoped request carries `?wt=<name>`, resolved by one
   and it is copied into the new checkout.
 - **One dev server.** `dev.rs` is global; the preview follows whichever lane started it. Ports are
   not allocated per lane. Said in the UI rather than hidden.
+
+**A shared lane is a reading lane.** `newLane(isolated:)` defaults to `false`, and "Sharing the
+working tree" is offered on purpose — a lane for reading and planning beside one that is editing is
+genuinely useful. What is *not* safe is two shared lanes both **writing**, because the two things
+that end a turn are tree-wide: auto-commit is `git add -A` in the checkout (`worktree::commit_one`)
+and rewind restores a whole tree. Whichever finishes first sweeps the other's half-written files
+into a commit labelled with the wrong prompt, and the second lane's own commit then shows less than
+it did. This is the multi-agent pillar's load-bearing constraint: concurrency that produces one
+confused working tree is worse than no concurrency, so anything that lets a second lane start
+*writing* in a tree another lane is writing needs to isolate it or refuse it, not hope.
 
 Beside that: `AskUserQuestion` is in `HOOKED_TOOLS` so a question holds the turn like a command
 does, and the answer travels back as a `deny` whose reason is the answer — never short-circuited
@@ -293,16 +455,40 @@ stops rather than substituting.
 
 ## Layout
 
+Everything below `keel` is a library with no web framework in it, and the direction of that
+dependency is the point: the daemon knows about them, none of them knows about the daemon.
+
 - `keel-scanner` — checks. Depends on nothing else in the workspace, touches no network. Keep it
   that way: it ships before any credential exists.
+- `keel-generator` — the templates. `cloudflare` (the three-folder golden path), `stack` (the
+  container/kustomize production shape) and `packs` (working code laid over either), plus the
+  workload placement rules. Pure functions from a project name to a list of files: no HTTP, no
+  tokio, no git.
 - `keel-harness` — `claude` supervision and trust quarantine.
 - `keel-mcp` — the tool surface.
 - `keel-providers` — GitHub, Cloudflare.
-- `keel-generator` — golden-path templates and workload placement.
-- `keel/monitor.rs` — background commands the daemon owns, so they outlive the turn.
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
   hooks, MCP servers). Read-only, and never surfaces session message bodies.
 - `app/` — the Swift macOS application. A client of the daemon, and nothing else.
+
+Inside `keel` itself, one module is one thing:
+
+- `git` — how a git is *run*: the non-interactive environment, the 60-second ceiling, the drained
+  pipes, and what a failed one says. `repo` — what Keel asks git *for*: status, diffs, branches,
+  log, staging. The layering is worth keeping; the four near-identical `git()` helpers that used
+  to be scattered across four files had quietly drifted apart.
+- `agent` — spawning `claude` for a turn and streaming what it says. `tree` — the file tree and
+  reading one file. `imports` — which files import which. These three plus `repo` were one 2,852-
+  line `api.rs`, which is how a module ends up meaning nothing.
+- `monitor` — background commands the daemon owns, so they outlive the turn.
+- `lock`, `lines` — the two shared primitives from "Where the bar is kept".
+
+**Where things were, and why they moved.** `keel` was 41,475 lines and more than half of it was
+static template text: `packs/` alone is 22,000 lines that depend on nothing at all, sitting beside
+the HTTP server and the agent supervisor, while `keel-generator` — the crate this file already
+said owned the templates — was seventy-six lines. Moving them made the documentation true and cut
+the daemon to 17,000 lines. The rule it leaves behind: **a template is data, and data does not
+live in the crate that serves it.**
 
 **Gone on purpose:** `gcp.rs` and `infra.rs` (GKE, Kubernetes, GitHub Actions runs). The cluster
 surfaces were read-mostly and belonged to a different product than the one the agent loop is. What
@@ -311,13 +497,13 @@ whose whole job is asking the host to do something Keel deliberately will not.
 
 ## Two scaffolds
 
-`project.rs` lays down the Cloudflare golden path below. `stack.rs` lays down the production
+`keel_generator::cloudflare` lays down the golden path below. `keel_generator::stack` lays down the production
 shape the team behind Keel actually runs — modelled on A2ABase: bun builds a Next.js standalone
 bundle that a slim Node image runs as a non-root user, Hono on Node the same way, Postgres and
 Redis from compose, nginx for the one-origin split locally, kustomize `base` + `dev`/`prod`
 overlays, secrets rendered from `backend/.env` (committed only as `.env.age`), and workflows that
 test, build to ghcr, decrypt, apply and roll only what changed. What the manifests insist on and
-why is in the generated `k8s/README.md`; the tests in `stack.rs` assert each rule. Both scaffolds
+why is in the generated `k8s/README.md`; the tests in `keel_generator::stack` assert each rule. Both scaffolds
 are verified the same way: generate one, install, run its gate, build it. The Next 16 `eslint`
 key was caught that way, not by a string assertion.
 

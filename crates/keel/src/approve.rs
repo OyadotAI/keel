@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::lock::Locked;
 use crate::serve::AppState;
 
 /// How long the agent may be held. Claude Code's own hook timeout is set alongside this and must
@@ -390,19 +391,16 @@ pub async fn ask(
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    waiters()
-        .lock()
-        .expect("waiters lock")
-        .insert(id.clone(), tx);
-    queue().lock().expect("queue lock").push(pending);
+    waiters().locked().insert(id.clone(), tx);
+    queue().locked().push(pending);
 
     // A person who walked away must not leave the agent wedged. Timing out falls back to the
     // allowlist, which will refuse it — the same outcome as before, reached without hanging.
     match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(decision)) => Ok(Json(decision)),
         _ => {
-            waiters().lock().expect("waiters lock").remove(&id);
-            queue().lock().expect("queue lock").retain(|p| p.id != id);
+            waiters().locked().remove(&id);
+            queue().locked().retain(|p| p.id != id);
             // A question nobody answered in four minutes is the signature of "stuck on
             // thinking" — the tool name goes to Sentry, never the command.
             sentry::with_scope(
@@ -426,12 +424,75 @@ pub async fn ask(
 }
 
 /// A `Bash` call the agent wants to leave running behind it.
+///
+/// Two ways to ask for that, and only one of them is a parameter. The other is the shell, and it
+/// is the one the agent reaches for the moment the first is refused: `nohup … &`, `setsid`,
+/// `disown`, a bare trailing `&`. Reported by a person watching a turn say *"my background launch
+/// was refused. Starting it detached:"* — which is a reasonable move against the refusal it had
+/// just been given, and which walked straight past the whole of `monitor.rs`. A command detached
+/// in the text is spawned by `claude`, inside `claude`'s process group, and is killed or orphaned
+/// when the turn ends; nothing delivers its output to anyone.
+///
+/// So both spellings ask the same question.
 pub fn is_background(tool: &str, input: &serde_json::Value) -> bool {
-    tool == "Bash"
-        && input
-            .get("run_in_background")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
+    if tool != "Bash" {
+        return false;
+    }
+    if input
+        .get("run_in_background")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    input
+        .get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(detaches)
+}
+
+/// Whether a shell command puts something behind it.
+///
+/// Conservative on purpose: a false positive costs one card the person answers "no" to, and a
+/// false negative costs an invisible process nobody can stop. Quoted text is dropped first so
+/// `echo "a & b"` is not a detach, and `&&`, `&>` and `>&` are excluded because none of them
+/// background anything.
+fn detaches(command: &str) -> bool {
+    let mut bare = String::with_capacity(command.len());
+    let (mut single, mut double) = (false, false);
+    for c in command.chars() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            _ if single || double => {}
+            _ => bare.push(c),
+        }
+    }
+
+    for word in bare.split_whitespace() {
+        if matches!(word, "nohup" | "setsid" | "disown") {
+            return true;
+        }
+    }
+
+    let b = bare.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c != b'&' {
+            continue;
+        }
+        let before = i.checked_sub(1).map(|j| b[j]);
+        let after = b.get(i + 1).copied();
+        // `&&` (either side of it), `&>` and `>&` are redirection and control flow, not a job.
+        if before == Some(b'&')
+            || after == Some(b'&')
+            || after == Some(b'>')
+            || before == Some(b'>')
+        {
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 /// Ask whether Keel should monitor it, and either start it or say why it did not.
@@ -467,27 +528,24 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    waiters()
-        .lock()
-        .expect("waiters lock")
-        .insert(id.clone(), tx);
-    queue().lock().expect("queue lock").push(pending);
+    waiters().locked().insert(id.clone(), tx);
+    queue().locked().push(pending);
 
-    let said_yes = match tokio::time::timeout(WAIT, rx).await {
-        Ok(Ok(d)) => d.decision == "allow",
-        // Nobody answered, or nobody was there. Falls back to the foreground, which is the
-        // behaviour that at least finishes inside the turn.
+    let answered = match tokio::time::timeout(WAIT, rx).await {
+        Ok(Ok(d)) => Some(d.decision == "allow"),
+        // Nobody answered, or nobody was there — which is not the same as being told no, and used
+        // to arrive as the same sentence.
         _ => {
-            waiters().lock().expect("waiters lock").remove(&id);
-            queue().lock().expect("queue lock").retain(|p| p.id != id);
-            false
+            waiters().locked().remove(&id);
+            queue().locked().retain(|p| p.id != id);
+            None
         }
     };
 
-    if !said_yes {
+    if answered != Some(true) {
         return Decision {
             decision: "deny".into(),
-            reason: NO_MONITOR.into(),
+            reason: not_monitored(&state.repo(), &command, answered.is_none()),
         };
     }
 
@@ -512,7 +570,8 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
             Decision {
                 decision: "deny".into(),
                 reason: format!(
-                    "Keel could not start that as a background job ({e}). {NO_MONITOR}"
+                    "Keel agreed to watch this and then could not start it ({e}). {}",
+                    not_monitored(&state.repo(), &command, false)
                 ),
             }
         }
@@ -522,9 +581,64 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
 /// The tool name a monitor request travels under, so the app can draw the right card.
 pub const MONITOR: &str = "MonitorRequest";
 
-const NO_MONITOR: &str = "Not monitored. A command you background yourself is killed the moment \
-     this turn ends and no completion ever reaches you, so run it in the foreground instead and \
-     report what it said in this turn.";
+/// What to say when Keel is not going to watch it.
+///
+/// The sentence this replaces was one sentence for two different situations, and its advice —
+/// "run it in the foreground instead" — is impossible for the single most common thing anyone
+/// backgrounds. A dev server never exits, so foregrounding it means Claude Code's own `Bash`
+/// timeout kills it a minute or two in, having produced nothing. An agent told to do that will
+/// correctly decide not to, and the only move left is to detach it by hand: reported verbatim as
+/// *"my background launch was refused. Starting it detached:"*. That is not the model being
+/// careless in the IDE; it is the model routing around advice it was right to reject, into the
+/// one behaviour this whole subsystem exists to prevent.
+///
+/// So: say which of the two happened, name the thing that actually works, and close the door the
+/// agent would otherwise find on its own.
+fn not_monitored(repo: &camino::Utf8Path, command: &str, timed_out: bool) -> String {
+    let mut out = String::from(if timed_out {
+        "Not started: nobody answered the question about this within four minutes, so Keel did \
+         not run it. Nobody said no — the person may simply have been away from the window."
+    } else {
+        "Not started: the person said no to Keel watching this."
+    });
+
+    // A dev server is what this refusal is nearly always about, and Keel has one. Saying so here
+    // rather than only in the system prompt matters, because here is where the agent is looking.
+    if let Some(dev) = crate::dev::detect(repo)
+        && looks_like(&dev.command, command)
+    {
+        out.push_str(
+            "\n\nThis looks like the project's dev server, which Keel runs itself: the person \
+             starts it from the Designer tab and the preview follows whatever URL it announces. \
+             Ask them to start it rather than starting one of your own — a second server on the \
+             same port fails, and one they cannot see is worse.",
+        );
+    } else {
+        out.push_str(
+            "\n\nIf it finishes on its own, run it in the foreground and report what it said. If \
+             it does not — a server, a watcher, a tail — there is nothing useful you can do with \
+             it in this turn; say so and ask the person how they want it run.",
+        );
+    }
+
+    out.push_str(
+        "\n\nDo not detach it instead. `nohup`, `setsid`, `disown` and a trailing `&` all reach \
+         the same question and get the same answer, and a shell that escapes it is killed when \
+         this turn ends or left running with nothing on the machine that knows what it is.",
+    );
+    out
+}
+
+/// Whether a command is the project's dev server, allowing for the ways it gets spelled.
+fn looks_like(dev: &str, command: &str) -> bool {
+    let tail = |s: &str| {
+        s.split_whitespace()
+            .last()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    command.contains(dev) || (!dev.is_empty() && tail(dev) == tail(command))
+}
 
 #[derive(Deserialize)]
 pub struct PollQuery {
@@ -550,7 +664,7 @@ pub struct PollQuery {
 /// belonging to another window, which then waited out the full four minutes and failed open. A
 /// caller with no session of its own, such as the CLI, passes nothing and still gets everything.
 pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
-    let mut queue = queue().lock().expect("queue lock");
+    let mut queue = queue().locked();
 
     if q.all {
         return Json(std::mem::take(&mut *queue));
@@ -652,7 +766,7 @@ pub async fn answer(
         }
     };
 
-    match waiters().lock().expect("waiters lock").remove(&body.id) {
+    match waiters().locked().remove(&body.id) {
         Some(tx) => {
             let _ = tx.send(decision);
             Ok(Json(serde_json::json!({ "ok": true })))
@@ -701,6 +815,108 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+
+    /// Detaching in the shell is the same request as `run_in_background`, and reaches the same
+    /// question.
+    ///
+    /// From a real turn: *"my background launch was refused. Starting it detached:"*. The flag
+    /// was the only thing checked, so the second attempt walked past `monitor.rs` entirely and
+    /// became a process `claude` spawned, in `claude`'s group, killed or orphaned at turn end.
+    #[test]
+    fn a_command_detached_in_the_shell_is_a_background_command() {
+        let bash = |c: &str| serde_json::json!({ "command": c });
+        for command in [
+            "pnpm dev &",
+            "nohup pnpm dev &",
+            "nohup python -m http.server",
+            "setsid ./run.sh",
+            "npm start & disown",
+            "cargo watch -x test &",
+        ] {
+            assert!(
+                is_background("Bash", &bash(command)),
+                "not caught: {command}"
+            );
+        }
+    }
+
+    /// And the things that merely contain an ampersand are not. A false positive is one card
+    /// nobody asked for, and `&&` is in half the commands an agent writes.
+    #[test]
+    fn ordinary_commands_are_not_detaching() {
+        let bash = |c: &str| serde_json::json!({ "command": c });
+        for command in [
+            "make check && make build",
+            "cargo test 2>&1 | tail",
+            "grep -r 'a & b' .",
+            "ls -la",
+            "npm run build &> out.log",
+        ] {
+            assert!(
+                !is_background("Bash", &bash(command)),
+                "false positive: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_flag_is_still_the_ordinary_way_to_ask() {
+        assert!(is_background(
+            "Bash",
+            &serde_json::json!({ "command": "make check", "run_in_background": true })
+        ));
+        assert!(!is_background(
+            "Edit",
+            &serde_json::json!({ "command": "pnpm dev &" })
+        ));
+    }
+
+    /// "Nobody answered" and "they said no" are different things and now say so.
+    #[test]
+    fn a_refusal_nobody_gave_is_not_reported_as_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+        let timed_out = not_monitored(repo, "pnpm dev", true);
+        assert!(timed_out.contains("nobody answered"), "{timed_out}");
+        assert!(
+            timed_out.contains("Nobody said no"),
+            "a timeout must not read as a decision: {timed_out}"
+        );
+        assert!(not_monitored(repo, "pnpm dev", false).contains("the person said no"));
+    }
+
+    /// And neither of them leaves the door open that the agent walked through.
+    #[test]
+    fn the_refusal_closes_the_door_it_used_to_leave_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8Path::from_path(dir.path()).unwrap();
+        for timed_out in [true, false] {
+            let text = not_monitored(repo, "pnpm dev", timed_out);
+            assert!(text.contains("Do not detach it"), "{text}");
+            assert!(text.contains("nohup"), "name the spellings: {text}");
+        }
+    }
+
+    /// When the command is the project's own dev server, say the thing that works instead of
+    /// "run it in the foreground", which for a server is advice no agent should take.
+    #[test]
+    fn a_dev_server_is_pointed_at_the_one_keel_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::write(
+            repo.join("package.json"),
+            r#"{"name":"x","scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+        let detected = crate::dev::detect(&repo).expect("a dev script is a dev server");
+
+        let text = not_monitored(&repo, &detected.command, false);
+        assert!(text.contains("Designer tab"), "{text}");
+        assert!(!not_monitored(&repo, "gh run watch 123", false).contains("Designer tab"));
+    }
+
     /// The queue is a process-wide static, and the tests that touch it run in parallel.
     pub(crate) async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
         static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -907,8 +1123,6 @@ pub(crate) mod tests {
         );
         assert!(q.lock().unwrap().is_empty());
     }
-
-    use super::*;
 
     fn pending(id: &str, session: &str) -> Pending {
         Pending {

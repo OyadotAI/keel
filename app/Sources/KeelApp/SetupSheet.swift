@@ -70,7 +70,6 @@ struct SetupSheet: View {
         return out
     }
 
-    private static func done_(_ m: SessionModel) { m.sheet = nil; m.focusComposerTick += 1 }
 
     private var items: [Item] {
         Self.items(for: model) { openSettings = true; done(); NotificationCenter.default.post(name: .keelSettings, object: nil) }

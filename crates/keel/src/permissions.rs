@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::lock::Locked;
 use crate::serve::AppState;
 
 /// Rules approved only for as long as this Keel process lives, keyed by the conversation that
@@ -173,7 +174,7 @@ pub fn defaults(repo: &Utf8Path) -> Vec<String> {
 pub fn effective(repo: &Utf8Path, session: Option<&str>) -> Vec<String> {
     let mut all: BTreeSet<String> = load(repo);
     if let Some(session) = session
-        && let Some(rules) = session_rules().lock().expect("rules lock").get(session)
+        && let Some(rules) = session_rules().locked().get(session)
     {
         all.extend(rules.iter().cloned());
     }
@@ -429,7 +430,7 @@ pub async fn remove(
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
     if body.scope == "session" {
         if let Some(session) = body.session.as_deref()
-            && let Some(rules) = session_rules().lock().expect("rules lock").get_mut(session)
+            && let Some(rules) = session_rules().locked().get_mut(session)
         {
             rules.remove(&body.rule);
         }

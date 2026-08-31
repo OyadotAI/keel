@@ -1,9 +1,21 @@
-//! Golden-path generation.
+//! Golden-path generation: the templates, and where a workload is allowed to run.
 //!
-//! The templates here are the product's real asset. Not the code an agent can write from a prompt —
+//! This crate holds the product's real asset and nothing else — no HTTP, no tokio, no git. It
+//! used to hold only `Workload`/`Target`, seventy-six lines, while the 24,000 lines of template
+//! it is *documented* to own sat inside the daemon crate beside the agent supervisor and the git
+//! client. That is backwards twice over: the daemon was more than half template text by volume,
+//! and the templates could not be built or tested without building a web server.
+//!
+//! Everything here is a pure function from a project name to a list of files.
+
+//! The templates are the product's real asset. Not the code an agent can write from a prompt —
 //! the accumulated operational knowledge it cannot: D1's write ceiling, KV's propagation delay,
 //! Durable Objects' single-writer semantics, and the fact that Cloudflare Container disk is
 //! ephemeral and resets to the image on every restart.
+
+pub mod cloudflare;
+pub mod packs;
+pub mod stack;
 
 /// A workload's shape, which determines where it is allowed to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

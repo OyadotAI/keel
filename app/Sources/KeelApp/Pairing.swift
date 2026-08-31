@@ -24,13 +24,11 @@ final class PairingModel {
     func refresh() async {
         devices = (try? await client.get("/api/pair/devices")) ?? []
     }
-
-    struct Empty: Encodable {}
     struct CodeView: Decodable { var code: String; var expires_in: Int }
 
     func begin() async {
         do {
-            let v: CodeView = try await client.post("/api/pair/begin", body: Empty())
+            let v: CodeView = try await client.post("/api/pair/begin", body: Wire.None())
             code = v.code
             error = nil
             // The code dies on its own after two minutes; the UI should stop showing it then, or

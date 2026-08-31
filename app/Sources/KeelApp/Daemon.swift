@@ -56,7 +56,7 @@ final class Daemon {
         // has no `PR_SET_PDEATHSIG` for the child to notice with. So the daemon watches instead.
         // `--resume-last` because a Finder launch has no working directory worth inferring a
         // project from: it is `/`, and the default would open the whole filesystem as a repo.
-        p.arguments = ["serve", "--port", String(port), "--no-open", "--exit-with-parent"]
+        p.arguments = ["serve", "--port", String(port), "--exit-with-parent"]
         // Only the first window infers a project from the last one; a second window is told
         // which repository it is for.
         if resumeLast { p.arguments! += ["--resume-last"] }

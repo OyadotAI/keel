@@ -387,6 +387,18 @@ fn dir_of(_project: &Utf8Path, _home: &Utf8Path, repo: &Utf8Path, scope: &str) -
 /// no message content. A line that fails to parse is skipped rather than aborting the file — a
 /// truncated tail from a session killed mid-write should not hide the whole conversation.
 fn parse_session(path: &Utf8Path) -> Option<Session> {
+    // Transcripts are append-only, and `discover_sessions` runs on every `/api/state` — which is
+    // every panel that opens and every turn that ends. Re-reading and JSON-parsing the whole
+    // project's history each time is work with a known answer: measured on this repository, 151
+    // sessions and 127 MB of JSONL, 240 ms per call for a list of titles and timestamps. Length
+    // and mtime together identify a file that has not been appended to since, which is the case
+    // for all but the one session actually in use.
+    let stat = std::fs::metadata(path).ok()?;
+    let stamp = (stat.len(), stat.modified().ok()?);
+    if let Some(hit) = cache().get(path, stamp) {
+        return Some(hit);
+    }
+
     let contents = std::fs::read_to_string(path).ok()?;
     let id = path.file_stem()?.to_string();
 
@@ -435,7 +447,46 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
         }
     }
 
+    cache().put(path, stamp, &session);
     Some(session)
+}
+
+/// Summaries that are still true, keyed by the file and the moment it was last written.
+///
+/// Deliberately small in what it promises: a file whose length *and* mtime are unchanged has not
+/// been appended to, and a transcript is only ever appended to. Anything else — a file rewritten
+/// in place to exactly its old length within the same mtime tick — reads stale, which is a
+/// session list one refresh behind rather than a wrong answer.
+struct Cache(std::sync::Mutex<std::collections::HashMap<Utf8PathBuf, (Stamp, Session)>>);
+type Stamp = (u64, std::time::SystemTime);
+
+fn cache() -> &'static Cache {
+    static C: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    C.get_or_init(|| Cache(std::sync::Mutex::new(std::collections::HashMap::new())))
+}
+
+impl Cache {
+    /// A poisoned lock here must not take the session list down with it: this crate is the one
+    /// that "degrades to an empty list" rather than failing, and a cache is the last thing worth
+    /// a panic. (`crate::lock::Locked` lives in `keel`, and `keel-workspace` depends on nothing
+    /// in the workspace on purpose.)
+    fn get(&self, path: &Utf8Path, stamp: Stamp) -> Option<Session> {
+        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(path)
+            .filter(|(seen, _)| *seen == stamp)
+            .map(|(_, session)| session.clone())
+    }
+
+    fn put(&self, path: &Utf8Path, stamp: Stamp, session: &Session) {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        // A daemon that has been open all day across several projects should not grow a map
+        // forever. Emptying it is the whole eviction policy: the next call rebuilds what it needs
+        // and nothing else, which is cheaper to reason about than an LRU nobody will tune.
+        if map.len() > 2_000 {
+            map.clear();
+        }
+        map.insert(path.to_owned(), (stamp, session.clone()));
+    }
 }
 
 #[cfg(test)]
@@ -674,5 +725,46 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
         assert!(discover_sessions(Utf8Path::new("/nope"), &home).is_empty());
+    }
+
+    /// The cache must not outlive the truth: a transcript that grew is read again.
+    ///
+    /// Transcripts are appended to constantly — the session you are in the middle of grows with
+    /// every message — so a cache that missed an append would freeze the switcher on a message
+    /// count and a timestamp from whenever the daemon started.
+    #[test]
+    fn an_appended_transcript_is_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("s.jsonl").to_path_buf()).unwrap();
+
+        let line = |ts: &str| {
+            format!(
+                r#"{{"type":"user","cwd":"/x","timestamp":"{ts}","message":{{"content":"hi"}}}}"#
+            )
+        };
+        std::fs::write(&path, format!("{}\n", line("2026-01-01T00:00:00Z"))).unwrap();
+        let first = parse_session(&path).unwrap();
+        assert_eq!(first.messages, 1);
+
+        // Same call, no change on disk: the summary comes back identical.
+        assert_eq!(parse_session(&path).unwrap().messages, 1);
+
+        // Appended. Length differs, so the stamp differs, so it is parsed again.
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                line("2026-01-01T00:00:00Z"),
+                line("2026-01-01T00:05:00Z")
+            ),
+        )
+        .unwrap();
+        let second = parse_session(&path).unwrap();
+        assert_eq!(second.messages, 2, "the append was missed");
+        assert_eq!(
+            second.last_active.as_deref(),
+            Some("2026-01-01T00:05:00Z"),
+            "and the clock moved with it"
+        );
     }
 }

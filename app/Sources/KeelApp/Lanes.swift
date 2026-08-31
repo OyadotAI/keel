@@ -128,7 +128,11 @@ final class Lanes {
     /// checkout is cleared because that belonged to the old repository.
     func switchProject(to repo: String) async {
         let keep = active
-        for lane in lanes where lane.id != keep.id { lane.stop() }
+        // `closed()`, not `stop()`: these lanes are being dropped from the window, so their
+        // background-job loops go with them. `stop()` deliberately leaves that loop running,
+        // which is right when a turn ends and wrong when the lane does — otherwise a discarded
+        // lane keeps polling for jobs, in a project that is no longer open.
+        for lane in lanes where lane.id != keep.id { lane.closed() }
         keep.worktree = nil
         keep.isolated = false
         lanes = [keep]
@@ -275,8 +279,16 @@ final class Lanes {
         await m.open(session: id)
     }
 
+    /// A lane other than this one that is running a turn which can write the shared working tree.
+    ///
+    /// Only unisolated, non-plan lanes count: a lane with a worktree of its own writes somewhere
+    /// else, and a plan turn writes nothing at all.
+    func writingElsewhere(than lane: SessionModel) -> String? {
+        lanes.first { $0.id != lane.id && $0.running && !$0.isolated && $0.mode != "plan" }?.title
+    }
+
     func close(_ model: SessionModel) {
-        model.stop()
+        model.closed()
         lanes.removeAll { $0.id == model.id }
         // A window with no lane has nothing to show, so closing the last one starts a fresh one
         // rather than leaving an empty frame.

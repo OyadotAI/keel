@@ -8,6 +8,7 @@
 //! shaped exactly like `AskUserQuestion`'s.
 
 use crate::approve::{Pending, WAIT, queue, waiters};
+use crate::lock::Locked;
 use crate::serve::AppState;
 use axum::{Json, extract::Query, extract::State};
 use serde::Deserialize;
@@ -105,7 +106,7 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
         .lock()
         .expect("waiters lock")
         .insert(id.clone(), tx);
-    queue().lock().expect("queue lock").push(pending);
+    queue().locked().push(pending);
     match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(decision)) => Ok(decision
             .reason
@@ -113,8 +114,8 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
             .map(|(_, a)| a.to_string())
             .unwrap_or(decision.reason)),
         _ => {
-            waiters().lock().expect("waiters lock").remove(&id);
-            queue().lock().expect("queue lock").retain(|p| p.id != id);
+            waiters().locked().remove(&id);
+            queue().locked().retain(|p| p.id != id);
             Err("nobody answered within the time allowed; proceed with your best judgement and say what you assumed".into())
         }
     }
