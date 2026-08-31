@@ -41,11 +41,23 @@ actor Client {
         return req
     }
 
+    /// `URLQueryItem` percent-encodes `%` and space but leaves `+` alone, because `+` is a legal
+    /// character in a query string. The daemon reads the query with axum's `Query`, which is
+    /// `serde_urlencoded` — form semantics, where `+` *means* space. So a prompt of
+    /// `date +%H` went on the wire as `date%20+%25H` and reached `claude` as `date  %H`: two
+    /// spaces, no error, no sign anything had happened. Every query is built through here so the
+    /// fix covers `C++`, `\d+` and the rest, not just the prompt that exposed it.
+    static func encode(_ query: [String: String], into c: inout URLComponents) {
+        guard !query.isEmpty else { return }
+        c.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // Safe as a blind replacement: URLComponents writes a space as `%20`, never as `+`, so
+        // every `+` left in the encoded query is a literal one.
+        c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+    }
+
     private func url(_ path: String, _ query: [String: String] = [:]) -> URL {
         var c = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty {
-            c.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        }
+        Self.encode(query, into: &c)
         return c.url!
     }
 
@@ -97,7 +109,7 @@ actor Client {
             let task = Task {
                 do {
                     var c = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-                    if !query.isEmpty { c.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
+                    Client.encode(query, into: &c)
                     var req = URLRequest(url: c.url!)
                     req.setValue("text/event-stream", forHTTPHeaderField: "accept")
                     let (bytes, response) = try await session.bytes(for: req)
