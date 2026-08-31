@@ -16,6 +16,9 @@ enum ChangeTree {
         let isDir: Bool
         var children: [Node] = []
         var change: Wire.Change?
+        /// A folder the daemon folded because the tree was too big to list: it has no children to
+        /// show and nothing to expand, and the row says so rather than reading as an empty folder.
+        var folded = false
         /// A collapsed directory can share its path with a file sibling; the kind keeps them apart.
         var id: String { (isDir ? "d:" : "f:") + path }
 
@@ -50,8 +53,9 @@ enum ChangeTree {
                     cursor = node
                 }
             }
-            cursor.children.append(
-                Node(name: file, path: change.path, isDir: false, change: change))
+            let leaf = Node(name: file, path: change.path, isDir: change.dir, change: change)
+            leaf.folded = change.dir
+            cursor.children.append(leaf)
         }
 
         sort(root)
@@ -77,7 +81,11 @@ enum ChangeTree {
                 name += "/" + only.name
                 current = only
             }
-            let merged = Node(name: name, path: current.path, isDir: true)
+            let merged = Node(name: name, path: current.path, isDir: true,
+                              change: current.change)
+            // Carried, not rebuilt: a folded folder has no children to walk into, so a merged node
+            // that forgot the flag drew it as an ordinary empty folder with a chevron on it.
+            merged.folded = current.folded
             merged.children = collapse(current.children)
             return merged
         }
@@ -426,21 +434,29 @@ struct ChangeRow: View {
                     Image(systemName: open ? "chevron.down" : "chevron.right")
                         .font(K.F.ui(7, .bold))
                         .foregroundStyle(K.C.faint).frame(width: 8)
+                        .opacity(node.folded ? 0 : 1)
                     Image(systemName: "folder")
                         .font(K.F.tiny).foregroundStyle(K.C.faint).frame(width: 11)
                     Text(node.name)
                         .font(K.F.codeSmall).foregroundStyle(K.C.dim)
                         .lineLimit(1).truncationMode(.head)
                     Spacer(minLength: K.S.xs)
-                    Text("\(node.fileCount)")
+                    // A folded folder has no count to give — the daemon never listed what is in
+                    // it — so it says what it is instead of claiming zero files.
+                    Text(node.folded ? "untracked" : "\(node.fileCount)")
                         .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                 }
                 .padding(.leading, CGFloat(depth) * 10)
             } action: {
+                guard !node.folded else { return }
                 withAnimation(K.M.quick) { open.toggle() }
             }
+            .help(node.folded
+                  ? "\(node.path) — untracked, and too big to list. Add it to .gitignore if it "
+                    + "should not be in git."
+                  : node.path)
 
-            if open {
+            if open, !node.folded {
                 ForEach(node.children) { child in
                     ChangeRow(node: child, depth: depth + 1, model: model)
                 }

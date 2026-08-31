@@ -72,7 +72,7 @@ struct KeelApp: App {
             }
             CommandGroup(replacing: .newItem) {
                 NewSessionCommand()
-                Button("New Project…") {
+                Button(Flags.scaffolding ? "New Project…" : "Clone from GitHub…") {
                     NotificationCenter.default.post(name: .keelNewProject, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])

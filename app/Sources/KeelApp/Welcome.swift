@@ -25,6 +25,8 @@ struct Welcome: View {
     @State private var log = ""
     @State private var error: String?
     @State private var starting = false
+    /// A git repository with no `CLAUDE.md`, waiting on the answer to the dialog below.
+    @State private var uninitialised: String?
 
     struct ClaudeStatus: Decodable {
         var installed: Bool
@@ -71,6 +73,28 @@ struct Welcome: View {
         }
         .safeAreaInset(edge: .bottom) { footer }
         .task { await refresh() }
+        .confirmationDialog("Set Claude up in this project?",
+                            isPresented: .init(get: { uninitialised != nil },
+                                               set: { if !$0 { uninitialised = nil } }),
+                            titleVisibility: .visible) {
+            Button("Set it up") {
+                guard let path = uninitialised else { return }
+                uninitialised = nil
+                finishOpening(path, initialise: true)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Open without it") {
+                guard let path = uninitialised else { return }
+                uninitialised = nil
+                finishOpening(path, initialise: false)
+            }
+            Button("Cancel", role: .cancel) { uninitialised = nil }
+        } message: {
+            Text("This repository has no CLAUDE.md, so the agent starts with nothing about the "
+                 + "project — how to build it, what the gate is, which files matter. Recommended: "
+                 + "Keel opens it and runs `/init`, which reads the repository and writes one. It "
+                 + "is a normal turn, so you see it and can rewind it.")
+        }
         .sheet(isPresented: $starting) {
             StartProject(client: model.client) { path, brief, file in
                 starting = false
@@ -190,7 +214,8 @@ struct Welcome: View {
         }
     }
 
-    /// Three ways in, weighted. Opening a folder is what nearly everybody is here to do, so it is
+    /// Two ways in, weighted (three with scaffolding flagged on). Opening a folder is what nearly
+    /// everybody is here to do, so it is
     /// the one that is filled; the other two are the same size and quieter rather than smaller,
     /// because a row of three different-sized buttons reads as one button and two mistakes.
     private var actions: some View {
@@ -208,8 +233,10 @@ struct Welcome: View {
                            detail: "A repository already on this disk", primary: true) {
                     openFolder()
                 }
-                ActionTile(icon: "wand.and.stars", title: "New project",
-                           detail: "Scaffolded, with its own gate") { starting = true }
+                if Flags.scaffolding {
+                    ActionTile(icon: "wand.and.stars", title: "New project",
+                               detail: "Scaffolded, with its own gate") { starting = true }
+                }
                 ActionTile(icon: "arrow.down.circle.fill", title: "Clone from GitHub",
                            detail: "Bring one down and open it") { starting = true }
             }
@@ -347,12 +374,47 @@ struct Welcome: View {
         open(url.path)
     }
 
+    /// Open a folder, refusing one git does not manage and offering to initialise Claude in one it
+    /// has never been run in.
+    ///
+    /// The git check is repeated here so the refusal names the folder the person just picked
+    /// instead of arriving as an HTTP error; `open_repo` is the one that holds, because recents and
+    /// the project menu open by other routes.
+    ///
+    /// The `/init` is asked for rather than assumed. It is a turn — it costs tokens, it writes a
+    /// file into their repository, and a person who keeps their instructions in `AGENTS.md` or a
+    /// `.claude` directory has not made a mistake. Asked before the open, not after, because the
+    /// welcome screen is gone the moment the project is open and a dialog on a dismissed view is a
+    /// dialog nobody sees.
     private func open(_ path: String) {
+        let git = (path as NSString).appendingPathComponent(".git")
+        guard FileManager.default.fileExists(atPath: git) else {
+            error = "\((path as NSString).lastPathComponent) is not a git repository. Keel works "
+                  + "with git-managed folders only — run `git init` in it first, or open one that "
+                  + "is already tracked."
+            return
+        }
+        let claudeMd = (path as NSString).appendingPathComponent("CLAUDE.md")
+        if !FileManager.default.fileExists(atPath: claudeMd) {
+            uninitialised = path
+            return
+        }
+        finishOpening(path, initialise: false)
+    }
+
+    private func finishOpening(_ path: String, initialise: Bool) {
         Task {
             do {
                 try await model.openProject(path)
                 Recents.remember(path)
                 onOpened()
+                if initialise {
+                    // Claude Code's own `/init`, sent verbatim — it resolves the command itself,
+                    // and this is the first thing the person would type anyway.
+                    model.prompt = "/init"
+                    try? await Task.sleep(for: .milliseconds(800))
+                    model.send()
+                }
             } catch {
                 self.error = error.localizedDescription
             }

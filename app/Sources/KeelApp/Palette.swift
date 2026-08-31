@@ -68,12 +68,12 @@ struct Palette: View {
         // Every panel and every stage. Nine of the ten panels and all three stages were reachable
         // only by clicking their icon — no shortcut, no menu item, and nothing here. In a
         // nine-icon rail that was the largest block of mouse-only surface in the app.
-        for panel in SessionWindow.Panel.allCases {
+        for panel in SessionWindow.Panel.shown {
             out.append(Item(title: panel.title, detail: "panel") {
                 NotificationCenter.default.post(name: .keelShowPanel, object: panel.rawValue)
             })
         }
-        for stage in SessionWindow.Stage.allCases {
+        for stage in SessionWindow.Stage.shown {
             out.append(Item(title: stage.rawValue, detail: "stage") {
                 NotificationCenter.default.post(name: .keelShowStage, object: stage.rawValue)
             })

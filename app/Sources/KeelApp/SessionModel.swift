@@ -606,6 +606,7 @@ final class SessionModel: Identifiable {
             isRepo = other.isRepo
             repos = other.repos
             changes = other.changes
+            changesCollapsed = other.changesCollapsed
             tree = other.tree
             files = other.files
         }
@@ -2164,8 +2165,13 @@ final class SessionModel: Identifiable {
     }
     /// A review a day: when a project opens into a lane with nothing in it and the last review
     /// is older than a day, it runs on its own. Never into a conversation already in use.
+    ///
+    /// Behind `Flags.readiness` with the rest of the report. It is a turn Keel starts by itself —
+    /// it costs tokens and it opens a lane — and with the Readiness panel hidden there is nowhere
+    /// to read what it found or to ask for another. Work nobody can see the result of is the
+    /// wrong half of the feature to leave running.
     func offerReview() {
-        guard !repoPath.isEmpty, loaded else { return }
+        guard Flags.readiness, !repoPath.isEmpty, loaded else { return }
         if let last = lastReview, Date().timeIntervalSince(last) < 86_400 { return }
         if lanes?.lanes.contains(where: { $0.title == "Staff review" && $0.running }) == true { return }
         Task { await requestReview() }
@@ -2687,6 +2693,8 @@ final class SessionModel: Identifiable {
     var repos: [Wire.Repo] = []
     /// The folder is a workspace of repositories rather than one project.
     var isWorkspace: Bool { repos.count > 1 || (repos.count == 1 && !repos[0].dir.isEmpty) }
+    /// `changes` is a folded, capped view of a working tree with thousands of files in it.
+    var changesCollapsed = false
 
     func refreshGit() async {
         if let s: Wire.GitStatus = try? await client.get("/api/git/status", q()) {
@@ -2694,6 +2702,7 @@ final class SessionModel: Identifiable {
             branch = s.branch
             changes = s.changes
             repos = s.repos
+            changesCollapsed = s.collapsed
         }
         commits = (try? await client.get("/api/git/log", q(["n": "20"]))) ?? []
     }

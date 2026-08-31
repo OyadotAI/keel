@@ -19,6 +19,9 @@ pub struct Change {
     /// Human label for the status.
     pub label: String,
     pub staged: bool,
+    /// A whole untracked directory, reported as one row because listing its files would be tens of
+    /// thousands of them. Nothing below it has been read, so it has no diff to open.
+    pub dir: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -33,6 +36,10 @@ pub struct GitStatus {
     /// each its own repository — which is the shape that used to report nothing at all.
     #[serde(default)]
     pub repos: Vec<RepoStatus>,
+    /// True when this list is not the whole working tree: the untracked files were folded into
+    /// their directories, and the list cut at `MAX_CHANGES`. The app says so; a list that is
+    /// silently not the whole list is the "never weird" failure.
+    pub collapsed: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -515,11 +522,13 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
     // to the folder the person actually opened.
     let mut repos = Vec::new();
     let mut all = Vec::new();
+    let mut collapsed = false;
     for root_dir in &found {
         let mut status = git_status_in(&root.join(&root_dir.dir));
         for change in &mut status.changes {
             change.path = format!("{}/{}", root_dir.dir, change.path);
         }
+        collapsed |= status.collapsed;
         all.extend(status.changes.clone());
         repos.push(RepoStatus {
             dir: root_dir.dir.clone(),
@@ -527,6 +536,10 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
             changes: status.changes,
         });
     }
+    // The merged list obeys the same ceiling as one repository's: five repositories each just
+    // under it is still five thousand rows in one rail.
+    collapsed |= all.len() > MAX_CHANGES;
+    all.truncate(MAX_CHANGES);
     GitStatus {
         // True: this folder *is* versioned, just not at its top. Reporting false here is what put
         // "Initialise a repository" in front of people whose repositories already existed.
@@ -534,7 +547,57 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
         branch: None,
         changes: all,
         repos,
+        collapsed,
     }
+}
+
+/// Where a working tree stops being something a person reads file by file.
+///
+/// Measured: a repository whose `node_modules` is not ignored answers `-uall` with tens of
+/// thousands of entries, and `ChangeTree.build` scans a directory's children once per file it
+/// adds to it — quadratic, on the main thread, with a 256pt rail to draw it in. Nothing unbounded
+/// reaches the app; above this the untracked files are folded back into their directories.
+const MAX_CHANGES: usize = 1_000;
+
+/// Directories whose contents belong to a package manager rather than to the person.
+///
+/// Untracked entries under these are dropped outright. They are never work anyone is reviewing —
+/// they are what a missing `.gitignore` line looks like — and a single one of them is the whole
+/// budget above. Tracked changes under them are kept: a repository that commits its `vendor/` is
+/// making a deliberate choice, and hiding a real modification is a worse failure than a long list.
+const DEPENDENCIES: [&str; 9] = [
+    "node_modules",
+    "bower_components",
+    ".pnpm-store",
+    ".yarn",
+    ".venv",
+    "venv",
+    "site-packages",
+    "Pods",
+    ".gradle",
+];
+
+fn is_dependency(path: &str) -> bool {
+    path.split('/').any(|seg| DEPENDENCIES.contains(&seg))
+}
+
+/// One porcelain entry — `XY path`, NUL-separated upstream — as a `Change`.
+fn parse_entry(entry: &str) -> Option<Change> {
+    if entry.len() <= 3 {
+        return None;
+    }
+    let (status, path) = entry.split_at(2);
+    let path = path.trim_start();
+    Some(Change {
+        staged: !status.starts_with([' ', '?']),
+        // A submodule still arrives with a trailing slash, and nothing downstream should have to
+        // know that — but an untracked *directory* does too, and that one is worth knowing about,
+        // so it is recorded before the slash is trimmed.
+        dir: path.ends_with('/'),
+        path: path.trim_end_matches('/').to_string(),
+        status: status.to_string(),
+        label: label_for(status).to_string(),
+    })
 }
 
 fn git_status_in(root: &Utf8Path) -> GitStatus {
@@ -549,28 +612,36 @@ fn git_status_in(root: &Utf8Path) -> GitStatus {
     let branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|b| b.trim().to_string());
 
     // NUL-separated so paths containing spaces or quotes survive intact.
-    let changes = raw
+    let mut changes: Vec<Change> = raw
         .split('\0')
-        .filter(|entry| entry.len() > 3)
-        .map(|entry| {
-            let (status, path) = entry.split_at(2);
-            let staged = !status.starts_with([' ', '?']);
-            Change {
-                // A submodule still arrives with a trailing slash, and nothing downstream should
-                // have to know that.
-                path: path.trim_start().trim_end_matches('/').to_string(),
-                status: status.to_string(),
-                label: label_for(status).to_string(),
-                staged,
-            }
-        })
+        .filter_map(parse_entry)
+        .filter(|c| c.staged || !is_dependency(&c.path))
         .collect();
+
+    // Still too many, so ask git the collapsed question instead: one row per untracked directory,
+    // which is the answer a person can actually read. The second `git` costs a few milliseconds
+    // and only on the trees that would otherwise have hung the window.
+    let mut collapsed = false;
+    if changes.len() > MAX_CHANGES {
+        collapsed = true;
+        changes = git(root, &["status", "--porcelain=v1", "-z"])
+            .unwrap_or_default()
+            .split('\0')
+            .filter_map(parse_entry)
+            .filter(|c| c.staged || !is_dependency(&c.path))
+            .collect();
+        // A tree with more than a thousand *tracked* modifications is a merge or a generated
+        // commit, and folding untracked directories does nothing for it. Cut the list rather than
+        // send it: the count above the list is the whole number either way.
+        changes.truncate(MAX_CHANGES);
+    }
 
     GitStatus {
         is_repo: true,
         branch,
         changes,
         repos: Vec::new(),
+        collapsed,
     }
 }
 
@@ -578,6 +649,97 @@ fn git_status_in(root: &Utf8Path) -> GitStatus {
 mod git_tests {
     use super::*;
     use camino::Utf8PathBuf;
+
+    /// A `node_modules` nobody ignored is what turned the Changes panel into a hang: `-uall`
+    /// answers with every file under it, and the tree the app builds from that scans a folder's
+    /// children once per file added to it.
+    #[test]
+    fn an_unignored_dependency_folder_does_not_reach_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("README.md"), "hi").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "seed"]);
+
+        std::fs::create_dir_all(root.join("node_modules/left-pad")).unwrap();
+        for i in 0..1_200 {
+            std::fs::write(root.join(format!("node_modules/left-pad/{i}.js")), "x").unwrap();
+        }
+        std::fs::write(root.join("src.rs"), "fn main() {}").unwrap();
+
+        let status = git_status(&root);
+        assert!(
+            !status.collapsed,
+            "the dependency folder is dropped, so nothing needed folding"
+        );
+        assert!(
+            status
+                .changes
+                .iter()
+                .all(|c| !c.path.contains("node_modules")),
+            "{:?}",
+            status.changes.iter().map(|c| &c.path).collect::<Vec<_>>()
+        );
+        assert!(
+            status.changes.iter().any(|c| c.path == "src.rs"),
+            "the person's own untracked file is still listed"
+        );
+    }
+
+    /// Everything else that is merely enormous: folded to directories, then cut, and it says so.
+    #[test]
+    fn a_working_tree_over_the_ceiling_is_folded_and_labelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("README.md"), "hi").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "seed"]);
+
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        for i in 0..(MAX_CHANGES + 200) {
+            std::fs::write(root.join(format!("generated/{i}.txt")), "x").unwrap();
+        }
+
+        let status = git_status(&root);
+        assert!(
+            status.collapsed,
+            "the list is not the whole tree, and says so"
+        );
+        assert!(
+            status.changes.len() <= MAX_CHANGES,
+            "{}",
+            status.changes.len()
+        );
+        let folder = status
+            .changes
+            .iter()
+            .find(|c| c.path == "generated")
+            .expect("the folder itself is the row");
+        assert!(
+            folder.dir,
+            "and it is marked as a folder, so nothing diffs it"
+        );
+    }
 
     #[test]
     fn ignoring_a_path_writes_gitignore_once_and_leaves_the_file_on_disk() {

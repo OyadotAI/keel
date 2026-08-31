@@ -89,6 +89,16 @@ struct GitPanel: View {
 
     @ViewBuilder
     private var workingTree: some View {
+        if model.changesCollapsed {
+            // The list is not the working tree, and a list that is quietly not the whole list is
+            // worse than a long one. It says which, and points at the usual cause.
+            Text("More than 1,000 files have changed, so untracked folders are shown as folders "
+                 + "and the list stops there. A dependency folder in here usually means a missing "
+                 + ".gitignore line.")
+                .font(K.F.micro).foregroundStyle(K.C.faint)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, K.S.md).padding(.bottom, K.S.xs)
+        }
         if !model.changes.isEmpty {
             ForEach(ChangeTree.build(model.changes)) { node in
                 ChangeRow(node: node, depth: 0, model: model)

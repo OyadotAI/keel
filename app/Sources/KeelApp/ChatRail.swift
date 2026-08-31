@@ -227,7 +227,8 @@ struct ChatRail: View {
         }
         return ["Explain how this codebase is structured",
                 "Summarise the uncommitted changes",
-                "Fix the blocking readiness findings"]
+                Flags.readiness ? "Fix the blocking readiness findings"
+                                : "Plan how to add a feature, without editing anything"]
     }
 }
 

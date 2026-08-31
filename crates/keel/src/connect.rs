@@ -152,6 +152,17 @@ pub async fn open_repo(
     if !path.is_dir() {
         return Err(bad("that path is not a directory"));
     }
+    // Git-managed only, and refused here rather than in one window: every route in — the welcome
+    // screen, the recents list, the project menu, a URL — ends at this handler. A lane is a branch
+    // is a worktree, the auto-commit is what makes a turn reviewable, and rewind is a git tree, so
+    // a folder with no `.git` is a Keel with three of its features quietly missing.
+    if !path.join(".git").exists() {
+        return Err(bad(format!(
+            "{} is not a git repository. Keel works with git-managed folders only — \
+             run `git init` in it first, or open one that is already tracked.",
+            path.file_name().unwrap_or(path.as_str())
+        )));
+    }
     state.set_repo(path.clone());
     Ok(Json(OpenedRepo {
         path: path.to_string(),
@@ -320,6 +331,41 @@ fn expand_under(home: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rule the whole product rests on: a lane is a branch, the auto-commit is what makes a
+    /// turn reviewable, and rewind is a git tree. A folder with no `.git` is refused at the one
+    /// handler every route in goes through.
+    #[tokio::test]
+    async fn opening_a_folder_git_does_not_manage_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let state = Arc::new(AppState::new(path.clone()));
+
+        let plain = path.join("notes");
+        std::fs::create_dir(&plain).unwrap();
+        let err = open_repo(
+            State(state.clone()),
+            Json(OpenBody {
+                path: plain.to_string(),
+            }),
+        )
+        .await
+        .err()
+        .expect("a folder with no .git must not open");
+        assert!(err.1.contains("git-managed"), "{}", err.1);
+
+        std::fs::create_dir(plain.join(".git")).unwrap();
+        assert!(
+            open_repo(
+                State(state),
+                Json(OpenBody {
+                    path: plain.to_string()
+                })
+            )
+            .await
+            .is_ok()
+        );
+    }
 
     #[test]
     fn expands_a_leading_tilde() {
