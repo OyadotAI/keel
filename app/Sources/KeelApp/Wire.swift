@@ -312,6 +312,17 @@ enum Wire {
         /// decides who runs it, not whether it is allowed — so it gets a card of its own.
         var isMonitor: Bool { tool == "MonitorRequest" }
 
+        /// A finished plan, waiting on a decision. Headless `claude -p` has no `ExitPlanMode`, so
+        /// Keel serves `submit_plan` and queues its call under the name the tool would have had.
+        var isPlan: Bool { tool == "ExitPlanMode" }
+
+        /// The plan itself, as Markdown.
+        var planText: String { input?["plan"]?.stringValue ?? "" }
+
+        /// What the Approve button answers with. Matches `askmcp::APPROVED`; the daemon owns
+        /// every word the agent actually reads.
+        static let planApproved = "keel:plan-approved"
+
         /// The questions an `AskUserQuestion` carries, or none for a permission.
         var questions: [Question] {
             guard case .array(let qs)? = input?["questions"] else { return [] }

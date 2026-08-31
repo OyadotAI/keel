@@ -283,3 +283,74 @@ struct MonitorCard: View {
         .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
     }
 }
+
+
+// MARK: - Plans
+
+/// The plan, with the button that starts it.
+///
+/// Headless `claude -p` has no `ExitPlanMode` — verified against 2.1.251, whose plan-mode tool list
+/// has no plan tool at all — so a planning turn's only ways out were its own reply and a file on
+/// disk. Both put the one thing the person had to decide on into prose with nothing to click, and
+/// the file version left the plan somewhere the window never showed.
+///
+/// Approving cannot mean "carry on": the turn holding this plan runs under `--permission-mode
+/// plan` and cannot write a file whatever it is told. So it ends, and the build is a second turn
+/// in edit mode on the same conversation — which is where the plan already is.
+struct PlanCard: View {
+    let pending: Wire.Pending
+    let model: SessionModel
+    @State private var note = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: "list.bullet.clipboard.fill")
+                    .font(K.F.micro).foregroundStyle(K.C.warn)
+                    .accessibilityHidden(true)
+                Text("The plan is ready")
+                    .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
+                Spacer(minLength: 0)
+            }
+
+            // Scrolls rather than growing: a plan is as long as it needs to be, and a card that
+            // pushes the composer off the bottom of the window hides the thing you answer with.
+            ScrollView {
+                Markdown(pending.planText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 320)
+            .padding(K.S.sm)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+
+            TextField("What to change about it…", text: $note)
+                .textFieldStyle(.plain)
+                .font(K.F.small)
+                .padding(K.S.xs)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+
+            // Both outcomes named, because neither is "no". Approve switches this lane to Auto and
+            // sends the build; Keep planning hands the note back and the same turn carries on.
+            HStack(spacing: K.S.sm) {
+                Button("Approve & build  ⌘⌥↩") { model.approvePlan(pending) }
+                    .buttonStyle(FilledButton())
+                    .keyboardShortcut(.return, modifiers: [.command, .option])
+                    .help("Switches this lane to Auto and builds the plan as the next turn")
+                Spacer()
+                Button("Keep planning") {
+                    model.answer(pending, text: note.trimmingCharacters(in: .whitespaces).isEmpty
+                                 ? "Not yet — keep planning." : note)
+                }
+                .buttonStyle(QuietButton())
+                .help("The agent revises the plan in this same turn and shows it again")
+            }
+        }
+        .padding(K.S.md)
+        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.warn.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
+    }
+}

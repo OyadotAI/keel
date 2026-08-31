@@ -24,6 +24,11 @@ pub struct Session {
     pub messages: usize,
     /// The Claude Code version that wrote the transcript.
     pub version: Option<String>,
+    /// Who launched it, from the transcript's own `entrypoint`. Not part of the wire shape — it
+    /// exists so [`discover_sessions`] can drop the runs nobody started, and it is cached with
+    /// the rest of the summary so that filtering costs no extra pass.
+    #[serde(skip)]
+    entrypoint: Option<String>,
 }
 
 impl Session {
@@ -32,6 +37,24 @@ impl Session {
         self.title
             .clone()
             .unwrap_or_else(|| format!("(untitled — {})", self.short_id()))
+    }
+
+    /// Whether this is a conversation somebody had, rather than a headless run some other tool
+    /// made in this repository.
+    ///
+    /// Measured here: 143 transcripts, of which 118 are `sdk-py` — `/security-review`, a `reviewer`
+    /// subagent, one per invocation, each with a title good enough to look like a session anyone
+    /// might want to resume. Claude Code's own `--resume` picker shows 13 of the 143 and hides
+    /// exactly these; Keel showed all of them and the list was unreadable.
+    ///
+    /// The three kept are the ones a person or Keel drives: `cli` and `claude-desktop` are a
+    /// terminal, and `sdk-cli` is Keel's own `agent::chat`. An unrecorded entrypoint is kept,
+    /// because transcripts older than the field exist and hiding them would lose real history.
+    pub fn is_conversation(&self) -> bool {
+        match self.entrypoint.as_deref() {
+            Some(e) => matches!(e, "cli" | "claude-desktop" | "sdk-cli"),
+            None => true,
+        }
     }
 
     /// The first segment of the UUID, which is enough to identify a session by eye.
@@ -570,6 +593,9 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
             .filter(|p| p.extension() == Some("jsonl"))
         {
             if let Some(mut s) = parse_session(&p) {
+                if !s.is_conversation() {
+                    continue;
+                }
                 s.scope = scope.to_string();
                 // A session below the repo is only listed if its transcript says where.
                 if scope == "below" && s.cwd.is_none() {
@@ -627,6 +653,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
         last_active: None,
         messages: 0,
         version: None,
+        entrypoint: None,
     };
 
     for line in contents.lines() {
@@ -652,6 +679,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
                 session.cwd = session.cwd.take().or_else(|| string("cwd"));
                 session.branch = session.branch.take().or_else(|| string("gitBranch"));
                 session.version = session.version.take().or_else(|| string("version"));
+                session.entrypoint = session.entrypoint.take().or_else(|| string("entrypoint"));
 
                 if let Some(timestamp) = string("timestamp") {
                     session.started.get_or_insert_with(|| timestamp.clone());
@@ -789,6 +817,47 @@ mod tests {
 
     fn transcript_turns(home: &Utf8Path) -> Vec<Turn> {
         transcript(Utf8Path::new("/repo"), home, "lane-1")
+    }
+
+    /// 143 transcripts in this repository, 118 of them `sdk-py`: one `/security-review` run per
+    /// change, each with an `ai-title` that reads like a session somebody had. Claude Code's own
+    /// picker hides them; Keel listed all 143 and the switcher was unusable. Keel's own chat is
+    /// `sdk-cli`, so "hide the SDK" is the wrong rule — it would hide the lanes.
+    #[test]
+    fn a_headless_run_by_another_tool_is_not_a_session() {
+        let record = |entrypoint: &str, title: &str| {
+            format!(
+                concat!(
+                    r#"{{"type":"ai-title","aiTitle":"{}"}}"#,
+                    "\n",
+                    r#"{{"type":"user","cwd":"/repo","entrypoint":"{}","timestamp":"2026-01-01T00:00:00Z","message":{{"content":"x"}}}}"#,
+                    "\n",
+                ),
+                title, entrypoint
+            )
+        };
+        let (_d, home) = home_with("-repo", "keel.jsonl", &record("sdk-cli", "a lane"));
+        let project = home.join("projects").join("-repo");
+        std::fs::write(project.join("term.jsonl"), record("cli", "a terminal")).expect("write");
+        let old = concat!(
+            r#"{"type":"ai-title","aiTitle":"before the field"}"#,
+            "\n",
+            r#"{"type":"user","cwd":"/repo","timestamp":"2026-01-01T00:00:00Z","message":{"content":"x"}}"#,
+            "\n",
+        );
+        std::fs::write(project.join("old.jsonl"), old).expect("write");
+        std::fs::write(
+            project.join("rev.jsonl"),
+            record("sdk-py", "Security review"),
+        )
+        .expect("write");
+
+        let mut titles: Vec<String> = discover_sessions(Utf8Path::new("/repo"), &home)
+            .into_iter()
+            .map(|s| s.display_title())
+            .collect();
+        titles.sort();
+        assert_eq!(titles, ["a lane", "a terminal", "before the field"]);
     }
 
     #[test]

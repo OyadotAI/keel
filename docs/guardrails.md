@@ -108,6 +108,15 @@ create a file, the agent attempts `Write`, is refused, and produces a plan inste
 no file on disk afterwards. An unrecognised mode falls back to Plan, because the safe default is the
 one that cannot change the repository.
 
+Getting *out* of it is Keel's own tool. Headless `claude -p` offers no `ExitPlanMode` — its
+plan-mode tool list has no plan tool at all, verified against 2.1.251 — so a planning turn's only
+ways to deliver a plan were its own reply and a file on disk, and the one thing the person had to
+decide on arrived as prose with nothing to click. `submit_plan` (the `keel` MCP server, offered in
+plan mode alone) queues the plan into the same card a question uses. Approving cannot mean "carry
+on", because that turn is under `--permission-mode plan` and cannot write whatever it is told: it
+ends, and the build is a second turn in `acceptEdits` resumed on the same conversation, which is
+where the plan is.
+
 ## What the server will read
 
 The file reader allows two roots: the open repository, and the user's Claude Code home. The second

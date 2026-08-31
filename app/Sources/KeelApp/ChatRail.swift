@@ -36,6 +36,8 @@ struct ChatRail: View {
                     ForEach(model.pending) { p in
                         if p.isQuestion {
                             QuestionCard(pending: p, model: model)
+                        } else if p.isPlan {
+                            PlanCard(pending: p, model: model)
                         } else if p.isMonitor {
                             MonitorCard(pending: p, model: model)
                         } else {
