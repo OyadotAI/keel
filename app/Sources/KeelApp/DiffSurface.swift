@@ -84,9 +84,20 @@ struct DiffSurface: View {
                 // let rows size to their own text; long lines truncate, whole line on hover.
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        // Where these hunks came from, when it is not the working tree. Without
+                        // it, a commit's diff and an uncommitted one look identical — and the
+                        // buttons that discard a hunk would be offering to change neither.
+                        if let note = diff.note {
+                            Text(note)
+                                .font(K.F.micro).foregroundStyle(K.C.dim)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                                .background(K.C.well)
+                        }
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
                             HunkHeader(header: hunk.header, index: hi, path: path,
-                                       discardable: !diff.untracked, model: model)
+                                       discardable: !diff.untracked && diff.note == nil,
+                                       model: model)
                             let marks = Intraline.marks(hunk.lines)
                             // Ids unique across hunks: a lazy stack flattens nested ForEach, and two rows with
                             // the same id render as one — the second hunk's first rows were blank.
@@ -123,8 +134,8 @@ struct DiffSurface: View {
             }
         } else {
             // Not an error: an agent can revert a file, or the change can land in a commit while
-            // you are looking at it.
-            centred("This file matches HEAD — the change was committed or undone.")
+            // you are looking at it. The daemon says which, when it knows.
+            centred(diff?.note ?? "This file matches HEAD — the change was committed or undone.")
         }
     }
 

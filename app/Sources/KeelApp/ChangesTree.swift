@@ -484,6 +484,8 @@ struct ChangeRow: View {
         if s.hasPrefix("?") { return K.C.accent }
         if s.hasPrefix("D") { return K.C.del }
         if s.hasPrefix("A") { return K.C.add }
+        // Committed: done, not outstanding. Nothing here should be shouting.
+        if s.hasPrefix("C") { return K.C.faint }
         return K.C.warn
     }
 }

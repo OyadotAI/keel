@@ -25,12 +25,22 @@ struct FileDiff: View {
             header
             if open, let diff {
                 Hairline()
+                // Auto-commit means most of these hunks come out of a commit rather than the
+                // working tree, and a file the agent wrote and deleted again has none at all.
+                // Say which, rather than drawing an empty card.
+                if let note = diff.note {
+                    Text(note)
+                        .font(K.F.micro).foregroundStyle(K.C.dim)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                        .background(K.C.well)
+                }
                 // Full width, long lines truncated with the whole line on hover. A horizontal
                 // scroll view here sized the diff to its longest line, and a diff of short
                 // lines became a narrow strip down the left of the card.
                 ForEach(Array(diff.hunks.enumerated()), id: \.offset) { hi, hunk in
                     HunkHeader(header: hunk.header, index: hi, path: path,
-                               discardable: !diff.untracked, model: model)
+                               discardable: !diff.untracked && diff.note == nil, model: model)
                     let marks = Intraline.marks(hunk.lines)
                     // Ids unique across hunks: a lazy stack flattens nested ForEach, and two rows with
                             // the same id render as one — the second hunk's first rows were blank.
