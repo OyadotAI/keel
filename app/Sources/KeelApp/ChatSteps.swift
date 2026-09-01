@@ -17,7 +17,7 @@ struct ThinkingBlock: View {
                         .font(K.F.ui(7, .bold))
                         .rotationEffect(.degrees(open ? 90 : 0))
                     Text("thought")
-                    Text(block.text.words).monospacedDigit()
+                    Text("\(block.words) word\(block.words == 1 ? "" : "s")").monospacedDigit()
                 }
                 .font(K.F.micro)
                 .foregroundStyle(K.C.faint)
@@ -192,14 +192,6 @@ struct Lines: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
         .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-    }
-}
-
-extension String {
-    /// "1,204 words", for a label on something collapsed.
-    var words: String {
-        let n = split(whereSeparator: \.isWhitespace).count
-        return "\(n) word\(n == 1 ? "" : "s")"
     }
 }
 

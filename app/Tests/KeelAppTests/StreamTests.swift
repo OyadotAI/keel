@@ -256,6 +256,25 @@ final class SSETests: XCTestCase {
         XCTAssertEqual(parse("data:{\"tight\":1}").first?.data, #"{"tight":1}"#)
     }
 
+    /// An `event:` with no `data:` is still an event.
+    ///
+    /// This one cost an evening. axum writes **no `data:` line at all** when the payload is empty,
+    /// so `/api/session/tail`'s `caught-up` — the signal that says a replayed conversation is
+    /// complete and can be drawn — went out as a name followed by a blank line. The parser only
+    /// ever yielded on `data:`, so the event vanished between two layers that each looked
+    /// correct: the daemon's own stream showed `event: caught-up` on the wire, and the pane sat on
+    /// "Opening this session…" forever with the whole transcript already decoded behind it.
+    ///
+    /// Checking the wire is not checking the parser. Both ends are asserted here.
+    func testAnEventWithNoDataIsStillAnEvent() {
+        XCTAssertEqual(parse("event: caught-up\n").map { [$0.name, $0.data] },
+                       [["caught-up", ""]])
+        // And it does not double-fire for an event that did carry data.
+        XCTAssertEqual(parse("event: msg\ndata: {}\n").map(\.name), ["msg"])
+        // A blank line on its own, with no event pending, is nothing.
+        XCTAssertTrue(parse("\n\n").isEmpty)
+    }
+
     /// A comment line is the server's heartbeat, and it is worth more than nothing.
     ///
     /// It used to be dropped with `id:` and `retry:`, which are genuinely noise. But "the daemon
@@ -579,26 +598,44 @@ final class StepsTests: XCTestCase {
 @MainActor
 final class MarkdownTests: XCTestCase {
 
-    /// The parse belongs to the block, and happens once per mutation.
+    /// The parse belongs to the block, and runs on a clock rather than per token.
     ///
-    /// There was a cache here keyed by the source string, and it never hit: a streaming reply
-    /// makes a *new* string per token, so every delta missed, paid a full-string hash, and evicted
-    /// a finished turn's entry on the way out. A fifty-turn session re-parsed fifty replies from
-    /// scratch on every token, which is what froze the window. Nothing on the render path parses
-    /// anything now — this asserts that a block arrives already parsed.
-    func testABlockParsesAsItIsWritten() {
+    /// Two versions of this were wrong in the same shape. First a cache keyed by the source
+    /// string, which never hit — a streaming reply makes a *new* string per token, so every delta
+    /// missed, paid a full-string hash, and evicted a finished turn's entry on the way out. Then
+    /// re-parsing "just the current block" on every append, which is a smaller constant on the
+    /// same O(n²) curve, because the current block *is* most of a reply. The parse is O(n) in the
+    /// block; the fix is to run it twelve times a second, not once per token.
+    func testABlockParsesOnSettleRatherThanPerToken() {
         let block = Turn.Block()
-        block.append("# Title\n\nSome body.\n\n- one\n- two")
-        XCTAssertEqual(block.blocks.count, 3, "heading, paragraph, bullets")
-        XCTAssertEqual(block.text, "# Title\n\nSome body.\n\n- one\n- two")
+        for _ in 0..<100 { block.append("word ") }
+        XCTAssertEqual(block.text.count, 500, "the text is current immediately")
+
+        block.settle()
+        XCTAssertEqual(block.blocks.count, 1)
+        XCTAssertEqual(block.words, 100)
     }
 
-    /// Appending re-parses, so a half-written reply renders as far as it has got.
-    func testAppendingReparses() {
+    /// A settle with nothing new is free, so the tick costs nothing on an idle block.
+    func testSettlingTwiceParsesOnce() {
         let block = Turn.Block("# Title")
+        block.settle()
         XCTAssertEqual(block.blocks.count, 1)
         block.append("\n\nand a paragraph")
+        block.settle()
         XCTAssertEqual(block.blocks.count, 2)
+    }
+
+    /// The text is never observed, so a token cannot invalidate a view on its own.
+    ///
+    /// The other half of the throttle: coalescing the *parse* buys nothing if the raw string
+    /// still redraws the pane sixty times a second for a picture that cannot change.
+    func testTheRawTextIsNotObserved() throws {
+        let source = try String(contentsOfFile: #filePath
+            .replacingOccurrences(of: "Tests/KeelAppTests/StreamTests.swift",
+                                  with: "Sources/KeelApp/Turn.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("@ObservationIgnored private(set) var text"),
+                      "Block.text must stay out of Observation")
     }
 
     /// Inline emphasis is resolved by the parser, not by `body`. `AttributedString(markdown:)`

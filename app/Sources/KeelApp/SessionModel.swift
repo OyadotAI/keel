@@ -1141,6 +1141,10 @@ final class SessionModel: Identifiable {
     }
 
     private func endTurn(_ turn: Turn) async {
+        // The last deltas arrived inside the coalescing window and there is no next tick to draw
+        // them: a turn that ended would otherwise sit a fraction of a second short of its own
+        // final sentence, permanently.
+        turn.settle()
         turn.finished = true
         running = false
         // The composer is free — the agent has stopped talking — but the gate and the commit
@@ -1221,6 +1225,7 @@ final class SessionModel: Identifiable {
         }
         streamTask?.cancel()
         streamTask = nil
+        current?.settle()
         running = false
         preparing = nil
         watchApprovals(false)
@@ -2612,48 +2617,59 @@ final class SessionModel: Identifiable {
     private func follow(session id: String) {
         followTask?.cancel()
         followTask = Task { [client] in
+            // The catch-up is built off to the side and handed over in one assignment.
+            //
+            // This is the difference between "opening a session" and "watching it load". Appending
+            // each turn to `self.turns` as its records arrived meant SwiftUI laid the transcript
+            // out again for every one of them — six hundred times, before a single finished frame,
+            // with a markdown parse and a group rebuild inside each. The pane was doing all of its
+            // work in front of you. Nothing here is observed until `caught-up`.
+            var replayed: [Turn] = []
             var live: Turn?
-            /// The old conversation stays on screen until the new one has something to replace it
-            /// with. An empty pane while a 33 MB transcript is read is the wait that reads as a
-            /// failure, and a read that fails should leave what was there rather than nothing.
-            var replaced = false
+            /// Past the catch-up, turns go straight into the model: they are arriving one at a
+            /// time now, and that is the whole point of following.
+            var handedOver = false
+
             @MainActor func adopt(_ turn: Turn) {
                 // Marked before a single record reaches it, not once the catch-up ends: `record`
                 // reads this to decide whether a failure in the transcript is history or news,
                 // and by the time `caught-up` arrives every one of them has already been read.
-                turn.replayed = !self.following
-                if !replaced { self.turns = []; replaced = true }
+                turn.replayed = !handedOver
                 live?.finished = true
-                self.turns.append(turn)
+                live?.settle()
                 live = turn
+                if handedOver { self.turns.append(turn) } else { replayed.append(turn) }
             }
+
             do {
                 for try await event in client.events("/api/session/tail",
                                                      self.sq(["id": id, "from": "0"])) {
-                    // `break`, never `return`: the two lines after this loop are what take the
-                    // pane out of "Opening this session…", and a lane closed mid-replay would
+                    // `break`, never `return`: the lines after this loop are what take the pane
+                    // out of "Opening this session…", and a lane closed mid-replay would
                     // otherwise leave a state that can be entered and not left.
                     if Task.isCancelled { break }
                     switch event.name {
                     case "truncated":
                         self.replayDropped = Int(event.data) ?? 0
+
                     case "caught-up":
-                        // Everything that had already happened has been sent. Turns before this
-                        // are a replay — Keel was not there when they ran, so they have no gate
-                        // result and saying "NO CHECKS" about them would be inventing a finding.
-                        // Records after it are the session running now.
-                        if !replaced { self.turns = []; replaced = true }
-                        self.turns.forEach { $0.finished = true }
+                        // The one assignment. Everything that had already happened is drawn at
+                        // once; records after this are the session running now.
                         live?.finished = true
+                        replayed.forEach { $0.finished = true; $0.settle() }
+                        // Replaced only now, so a read that fails or is cancelled leaves the
+                        // conversation that was on screen rather than an empty pane.
+                        self.turns = replayed
+                        replayed = []
+                        handedOver = true
                         self.replaying = false
                         // Only a session something is actually writing to is being *followed*.
-                        //
-                        // Set unconditionally this told you a conversation that finished last
-                        // week was "running outside Keel" — which is the "never weird" failure
-                        // exactly: a statement about the machine that is not true. `live` is the
-                        // signal, from the transcript's own mtime.
+                        // Set unconditionally, this told you a conversation that finished last
+                        // week was "running outside Keel" — a statement about the machine that is
+                        // not true. `live` is the signal, from the transcript's own mtime.
                         self.following = self.sessions.first { $0.id == id }?.live == true
                         self.pinTick += 1
+
                     case "msg":
                         guard let data = event.data.data(using: .utf8) else { continue }
                         // A person asking opens a turn; everything else belongs to the one open.
@@ -2667,9 +2683,11 @@ final class SessionModel: Identifiable {
                             adopt(Turn(prompt: self.title))
                             self.record(data, into: live!)
                         }
+
                     case "fatal":
                         self.lastError = event.data
                         self.replaying = false
+
                     default:
                         continue
                     }
@@ -2679,6 +2697,14 @@ final class SessionModel: Identifiable {
                 // the pane rather than a failure of the turn.
                 if !Task.isCancelled { self.lastError = error.localizedDescription }
             }
+            // Every exit, including a cancel mid-catch-up: whatever was read is better than the
+            // spinner it would otherwise be left under.
+            if !replayed.isEmpty {
+                replayed.forEach { $0.finished = true; $0.settle() }
+                self.turns = replayed
+                self.pinTick += 1
+            }
+            live?.settle()
             self.replaying = false
             self.following = false
         }
