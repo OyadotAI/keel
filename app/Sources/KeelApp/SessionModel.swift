@@ -56,13 +56,13 @@ final class SessionModel: Identifiable {
     var focusComposerTick = 0
     /// Whether the daemon has answered `/api/state` at least once. Before that, every empty
     /// list is "not loaded yet", not "nothing here".
-    var loaded = false
+    var loaded: Bool { get { project.store.loaded } set { project.store.loaded = newValue } }
     /// Why the last state refresh failed, when it did.
     ///
     /// `loaded` alone could only say "not yet". Every panel refresh was a `try? … else { return }`,
     /// so a daemon that had stopped answering rendered as a permanently empty Files, Git,
     /// Readiness or Plugins panel — which reads as "your project has none of these".
-    var loadFailed: String?
+    var loadFailed: String? { get { project.store.loadFailed } set { project.store.loadFailed = newValue } }
 
     var turns: [Turn] = []
     var running = false
@@ -106,8 +106,8 @@ final class SessionModel: Identifiable {
     }
     var modelTick = 0
 
-    var branch: String?
-    var changes: [Wire.Change] = []
+    var branch: String? { get { repo.branch } set { repo.branch = newValue } }
+    var changes: [Wire.Change] { get { repo.changes } set { repo.changes = newValue } }
 
     /// A path as the checkout that will serve its diff knows it.
     ///
@@ -438,9 +438,9 @@ final class SessionModel: Identifiable {
 
     /// The dev server, when there is one.
     var previewURL: String?
-    var devDetected: String?
+    var devDetected: String? { get { project.store.devDetected } set { project.store.devDetected = newValue } }
     /// Where it runs, when that is not the repository root — which for a monorepo it never is.
-    var devDir: String?
+    var devDir: String? { get { project.store.devDir } set { project.store.devDir = newValue } }
     var devRunning = false
     var picking = false
     /// The preview is open in a window of its own, so the tab stands aside. Two panes would each
@@ -594,12 +594,12 @@ final class SessionModel: Identifiable {
             if oldValue != provider { claudeModel = "" }
         }
     }
-    var scopeFileLimit = 8
-    var policySources: [String] = []
-    var allowedProviders: Set<String> = ["claude", "codex"]
-    var policyRequiresIsolation = true
+    var scopeFileLimit: Int { get { project.store.scopeFileLimit } set { project.store.scopeFileLimit = newValue } }
+    var policySources: [String] { get { project.store.policySources } set { project.store.policySources = newValue } }
+    var allowedProviders: Set<String> { get { project.store.allowedProviders } set { project.store.allowedProviders = newValue } }
+    var policyRequiresIsolation: Bool { get { project.store.policyRequiresIsolation } set { project.store.policyRequiresIsolation = newValue } }
     /// A policy file demanded isolation. Keel's own default does not count — see `Policy`.
-    var isolationByPolicy = false
+    var isolationByPolicy: Bool { get { project.store.isolationByPolicy } set { project.store.isolationByPolicy = newValue } }
 
     /// What this lane is doing, for the rail.
     enum Activity: Equatable {
@@ -621,62 +621,18 @@ final class SessionModel: Identifiable {
         return .idle
     }
 
-    /// Take the project-level facts from another lane, so N lanes do not each scan the repository.
-    func adopt(project other: SessionModel) {
-        // Only what is about the project. A lane with its own checkout has its own branch,
-        // changes and tree, and copying the project's over them is how an edit reads as landing
-        // in the wrong place.
-        if worktree == nil {
-            branch = other.branch
-            isRepo = other.isRepo
-            repos = other.repos
-            changes = other.changes
-            changesCollapsed = other.changesCollapsed
-            tree = other.tree
-            files = other.files
-        }
-        repoPath = other.repoPath
-        // With the data, not without it. Every panel keys "not yet" off `loaded`, and a lane that
-        // adopted 158 sessions and a scan while `loaded` stayed false drew "Reading…" over all of
-        // it — for good, because a new lane never calls `refreshState` and the refreshes that
-        // could set it are themselves guarded by it. It was every panel of every tab but the
-        // first, from the moment the tab opened.
-        loaded = other.loaded
-        loadFailed = other.loadFailed
-        slashCommands = other.slashCommands
-        sessions = other.sessions
-        findings = other.findings
-        // With the findings, not without them: the panel keys "has this been scanned" off `scan`,
-        // so a lane that adopted the findings alone said "Readiness not checked" above a list of
-        // findings it was already holding.
-        scan = other.scan
-        workspace = other.workspace
-        trusted = other.trusted
-        gateCommand = other.gateCommand
-        previewWidth = other.previewWidth
-        devDetected = other.devDetected
-        devDir = other.devDir
-        // Not the running server: that belongs to one checkout, and this copied it to every lane
-        // — including the ones the block above deliberately excluded from `branch`, `changes` and
-        // `tree` because they have a checkout of their own. `refreshDev` asks for this lane.
-        if worktree == nil || worktree == other.worktree {
-            previewURL = other.previewURL
-            devRunning = other.devRunning
-            devElsewhere = other.devElsewhere
-        }
-        missingSuggestions = other.missingSuggestions
-        tools = other.tools
-        projectOpenKnown = other.projectOpenKnown
-        scopeFileLimit = other.scopeFileLimit
-        policySources = other.policySources
-        allowedProviders = other.allowedProviders
-        policyRequiresIsolation = other.policyRequiresIsolation
-        isolationByPolicy = other.isolationByPolicy
-    }
+    /// What every lane in the window shares: the project as the daemon describes it, and one
+    /// git store per checkout. A lane made on its own — a test, a settings pane — gets a
+    /// project of its own; `Lanes` hands every lane the same one.
+    let project: Project
+    /// The git facts for this lane's checkout. Switches the moment `worktree` does.
+    var repo: RepoStore { project.repo(for: worktree) }
 
-    init(client: Client, port: UInt16 = 7777, sessionId: String? = nil, id: UUID = UUID()) {
+    init(client: Client, port: UInt16 = 7777, sessionId: String? = nil, id: UUID = UUID(),
+         project: Project? = nil) {
         self.client = client
         self.port = port
+        self.project = project ?? Project(client: client, port: port)
         self.sessionId = sessionId
         self.id = id
         // Here, and not at the first turn. See `watchMonitors`.
@@ -1775,7 +1731,7 @@ final class SessionModel: Identifiable {
     // MARK: - The gate
 
     /// The command the gate will run, before it runs — read from the project rather than invented.
-    var gateCommand: String?
+    var gateCommand: String? { get { project.store.gateCommand } set { project.store.gateCommand = newValue } }
 
     func refreshGatePlan() async {
         if let check: Wire.Check = try? await client.get("/api/verify/plan", q()) {
@@ -1926,7 +1882,7 @@ final class SessionModel: Identifiable {
     ///
     /// Kept in `UserDefaults` per project so the picker works before the first turn of a session,
     /// which is exactly when somebody reaches for `/`.
-    var slashCommands: [String] = []
+    var slashCommands: [String] { get { project.store.slashCommands } set { project.store.slashCommands = newValue } }
 
     private var commandsKey: String { "keel.slashCommands." + repoPath }
 
@@ -2275,10 +2231,10 @@ final class SessionModel: Identifiable {
     /// Sessions in this project, newest first. Titles, counts and timestamps only — the daemon
     /// deliberately never returns message bodies to a listing, and a native client is not a reason
     /// to change that.
-    var sessions: [Wire.Session] = []
-    var findings: [Wire.Finding] = []
+    var sessions: [Wire.Session] { get { project.store.sessions } set { project.store.sessions = newValue } }
+    var findings: [Wire.Finding] { get { project.store.findings } set { project.store.findings = newValue } }
     /// The whole scan: score, profile, plan. `findings` stays the list the badge counts.
-    var scan: Wire.Scan?
+    var scan: Wire.Scan? { get { project.store.scan } set { project.store.scan = newValue } }
 
     struct Adopted: Decodable { var written: [String]; var skipped: [String] }
     struct ReviewPrompt: Decodable { var system: String; var evidence: String; var prompt: String }
@@ -2408,12 +2364,12 @@ final class SessionModel: Identifiable {
     ///
     /// Surfaced as a badge rather than left in a panel nobody opens: a recommendation you never
     /// see is a recommendation that does nothing.
-    var missingSuggestions: [SkillCatalog.Entry] = []
+    var missingSuggestions: [SkillCatalog.Entry] { get { project.store.missingSuggestions } set { project.store.missingSuggestions = newValue } }
 
     struct Catalog: Decodable { var suggested: [SkillCatalog.Entry] }
 
     /// The CLIs Keel drives, and whether each one actually works.
-    var tools: [ConnectionsSettings.Tool] = []
+    var tools: [ConnectionsSettings.Tool] { get { project.store.tools } set { project.store.tools = newValue } }
 
     func refreshTools() async {
         tools = (try? await client.get("/api/cli")) ?? []
@@ -2443,9 +2399,9 @@ final class SessionModel: Identifiable {
         await refreshState()
     }
 
-    var tree: [Wire.Node] = []
+    var tree: [Wire.Node] { get { repo.tree } set { repo.tree = newValue } }
     /// Every path, flat — for the filter and the mention picker.
-    var files: [String] = []
+    var files: [String] { get { repo.files } set { repo.files = newValue } }
 
     func refreshTree() async {
         guard let t: [Wire.Node] = await read("the file tree", "/api/tree", q()) else { return }
@@ -2469,11 +2425,11 @@ final class SessionModel: Identifiable {
         attachments.append(Attachment(path: path, label: path, thumbnail: nil))
     }
 
-    var workspace = Wire.Workspace(sessions: [])
+    var workspace: Wire.Workspace { get { project.store.workspace } set { project.store.workspace = newValue } }
     /// Whether a project is open. `nil` until the daemon has actually answered — which is not the
     /// same as "no project", and treating them the same is what let a failed first request read as
     /// a real answer.
-    var projectOpenKnown: Bool?
+    var projectOpenKnown: Bool? { get { project.store.projectOpenKnown } set { project.store.projectOpenKnown = newValue } }
     var projectOpen: Bool { projectOpenKnown ?? true }
 
     struct OpenBody: Encodable { var path: String }
@@ -2522,7 +2478,7 @@ final class SessionModel: Identifiable {
     }
 
     /// The open repository's path, for the project menu and for the Finder.
-    var repoPath = ""
+    var repoPath: String { get { project.store.repoPath } set { project.store.repoPath = newValue } }
 
     /// A project switch in progress: what is being opened and which step is running.
     struct Opening: Equatable { var name: String; var stage: String }
@@ -3034,7 +2990,7 @@ final class SessionModel: Identifiable {
     ///
     /// A permission granted once and then forgotten is the one that surprises you later, so it is
     /// not enough for this to be correct — it has to be visible.
-    var trusted = false
+    var trusted: Bool { get { project.store.trusted } set { project.store.trusted = newValue } }
 
     struct PermissionsView: Decodable { var trusted: Bool }
 
@@ -3261,14 +3217,14 @@ final class SessionModel: Identifiable {
     }
 
     /// Whether the project is under git at all. A new one is not, and that is not an error.
-    var isRepo = true
+    var isRepo: Bool { get { repo.isRepo } set { repo.isRepo = newValue } }
     /// Every repository in the opened folder. One for an ordinary project; several when the
     /// folder is a workspace holding `backend/` and `frontend/`.
-    var repos: [Wire.Repo] = []
+    var repos: [Wire.Repo] { get { repo.repos } set { repo.repos = newValue } }
     /// The folder is a workspace of repositories rather than one project.
     var isWorkspace: Bool { repos.count > 1 || (repos.count == 1 && !repos[0].dir.isEmpty) }
     /// `changes` is a folded, capped view of a working tree with thousands of files in it.
-    var changesCollapsed = false
+    var changesCollapsed: Bool { get { repo.changesCollapsed } set { repo.changesCollapsed = newValue } }
 
     func refreshGit() async {
         if let s: Wire.GitStatus = await read("git status", "/api/git/status", q()) {
@@ -3282,11 +3238,11 @@ final class SessionModel: Identifiable {
     }
 
     /// The last commits on this checkout, for the list beside the working tree.
-    var commits: [Wire.Commit] = []
+    var commits: [Wire.Commit] { get { repo.commits } set { repo.commits = newValue } }
 
     // MARK: - The git client
 
-    var branches: Wire.Branches?
+    var branches: Wire.Branches? { get { repo.branches } set { repo.branches = newValue } }
     var gitBusy: String?
 
     func refreshBranches() async {
