@@ -304,6 +304,25 @@ final class SessionModel: Identifiable {
     var rectsNow: (([String]) async -> [String: Picked.Rect])?
     /// Sends a message to the canvas script in the page. Set by the pane while open.
     var canvas: (([String: Any]) -> Void)?
+
+    /// The pane lends the model the page. One call for the three closures, because the pane
+    /// used to set them one at a time from inside SwiftUI's update pass and the pop-out window
+    /// and the in-window pane each did it their own way.
+    func attach(canvas c: any PreviewCanvas) {
+        canvasOwner = c
+        resnapshot = { [weak c] rect in await c?.snapshot(rect) }
+        rectsNow = { [weak c] sels in await c?.rects(for: sels) ?? [:] }
+        canvas = { [weak c] message in c?.send(message) }
+    }
+
+    /// Only if nothing has taken over since — see `canvasOwner`.
+    func detach(canvas c: any PreviewCanvas) {
+        guard canvasOwner == nil || canvasOwner === c else { return }
+        canvasOwner = nil
+        resnapshot = nil
+        rectsNow = nil
+        canvas = nil
+    }
     /// Which pane's coordinator installed the three closures above.
     ///
     /// Popping the preview out means two panes exist for a moment, and the old one's teardown runs
@@ -3170,11 +3189,13 @@ final class SessionModel: Identifiable {
     /// stopped answering. Unlike `attempt`, success clears nothing — a turn's own error must not
     /// be erased by the next `git status` that happens to work.
     private func read<T: Decodable & Sendable>(_ what: String, _ path: String,
-                                    _ q: [String: String] = [:]) async -> T? {
-        do { return try await client.get(path, q) } catch {
-            lastError = "Could not read \(what): \(error.localizedDescription)"
-            let e = error as NSError
-            Telemetry.warn("read failed", ["what": what, "domain": e.domain, "code": "\(e.code)"])
+                                               _ q: [String: String] = [:]) async -> T? {
+        switch await client.fetch(what, path, q) as Result<T, Fault> {
+        case .success(let value):
+            return value
+        case .failure(let fault):
+            lastError = "Could not read \(fault.what): \(fault.why)"
+            Telemetry.warn("read failed", ["what": fault.what])
             return nil
         }
     }

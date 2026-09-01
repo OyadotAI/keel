@@ -111,6 +111,18 @@ extension Picked.Rect: Equatable {
 }
 
 /// The preview, and the picker that turns a click into a prompt.
+/// What the page can do for the model: photograph itself, say where its elements are now, take
+/// a message, and reload. The page is the only thing that can do any of it, so the pane that
+/// owns the `WKWebView` lends the model this — and a test lends it a fake, which is the seam
+/// three closures set from inside SwiftUI's update pass never had.
+@MainActor
+protocol PreviewCanvas: AnyObject {
+    func snapshot(_ rect: Picked.Rect) async -> NSImage?
+    func rects(for selectors: [String]) async -> [String: Picked.Rect]
+    func send(_ message: [String: Any])
+    func reload()
+}
+
 struct PreviewPane: NSViewRepresentable {
     let url: URL
     let model: SessionModel
@@ -152,25 +164,13 @@ struct PreviewPane: NSViewRepresentable {
         let model = self.model
         // Off the update pass: writing observed state while SwiftUI is installing the view is
         // an invalidation loop, and one it does not always survive.
-        Task { @MainActor in
-            model.canvasOwner = coordinator
-            model.resnapshot = { [weak coordinator] rect in await coordinator?.snapshot(rect) }
-            model.rectsNow = { [weak coordinator] sels in await coordinator?.rects(for: sels) ?? [:] }
-            model.canvas = { [weak coordinator] message in coordinator?.send(message) }
-        }
+        Task { @MainActor in model.attach(canvas: coordinator) }
         return view
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         let model = coordinator.model
-        Task { @MainActor in
-            // Only if nothing has taken over since — see `canvasOwner`.
-            guard model.canvasOwner == nil || model.canvasOwner === coordinator else { return }
-            model.canvasOwner = nil
-            model.resnapshot = nil
-            model.rectsNow = nil
-            model.canvas = nil
-        }
+        Task { @MainActor in model.detach(canvas: coordinator) }
         view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(forName: "keel")
     }
@@ -204,7 +204,7 @@ struct PreviewPane: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, PreviewCanvas {
         let model: SessionModel
         weak var web: WKWebView?
         /// What the view was last told to load, so an unchanged address is not reloaded on every
@@ -229,6 +229,8 @@ struct PreviewPane: NSViewRepresentable {
         /// Posted to the top frame only: the script in each frame passes what it received to its
         /// own children. Fanning out from here walked `window.frames` one level and stopped, so a
         /// frame nested inside a frame never armed its observer and never answered a pick.
+        func reload() { web?.reload() }
+
         func send(_ message: [String: Any]) {
             guard let web,
                   let data = try? JSONSerialization.data(withJSONObject: message),

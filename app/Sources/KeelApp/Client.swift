@@ -69,6 +69,19 @@ actor Client {
         throw Failure(status: http.statusCode, body: String(decoding: data, as: UTF8.self))
     }
 
+    /// A read for a store: what could not be read, and why, as a value rather than a throw.
+    ///
+    /// `try?` on a store read was the quiet half of every "blank pane" report: the panel kept
+    /// whatever it last had with nothing on screen saying the daemon had stopped answering. A
+    /// `Result` cannot be swallowed by accident — the caller has to write the failure case, and
+    /// writing it is drawing it.
+    func fetch<T: Decodable & Sendable>(_ what: String, _ path: String,
+                                        _ query: [String: String] = [:]) async -> Result<T, Fault> {
+        do { return .success(try await get(path, query)) } catch {
+            return .failure(Fault(what: what, why: error.localizedDescription))
+        }
+    }
+
     func get<T: Decodable>(_ path: String, _ query: [String: String] = [:], as: T.Type = T.self) async throws -> T {
         let (data, response) = try await session.data(for: request(path, query))
         try check(data, response)
@@ -186,4 +199,15 @@ extension String {
     func dropPrefixIfPresent(_ p: String) -> Substring? {
         hasPrefix(p) ? dropFirst(p.count) : nil
     }
+}
+
+/// A read a store could not make: which one, and what the transport said.
+///
+/// Not `Client.Failure`, which is one HTTP response; this is the shape a pane draws, and it
+/// carries no `Fix` because a store cannot know one — a pane that does (`NotARepo` offering
+/// `git init`) still renders it. Stale data beside a fault beats a blank pane.
+struct Fault: Equatable, Error, Sendable {
+    /// What was being read, in the words a person would use: "git status", "the file tree".
+    let what: String
+    let why: String
 }
