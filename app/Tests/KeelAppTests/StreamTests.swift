@@ -719,34 +719,20 @@ final class MarkdownTests: XCTestCase {
 final class TreeAttributionTests: XCTestCase {
 
     /// A session in a terminal writes with `cat > file <<'EOF'`, and `Bash` carries a command
-    /// rather than a path — so `writeTools` sees nothing and the turn reported no files while the
-    /// diff beside it was full of them. git is the evidence instead.
-    func testAFileThatOnlyTheTreeKnowsAboutIsAttributedToTheTurn() {
+    /// rather than a path — so `writeTools` sees nothing. git is the evidence instead, and the
+    /// daemon reads it: the files arrive as a fact, and the model spells them the way this
+    /// checkout does so a file the turn wrote *and* dirtied is one row, not two.
+    func testAFileThatOnlyTheTreeKnowsAboutArrivesAsAFact() {
         let m = SessionModel(client: Client(port: 0))
-        m.changes = [.init(path: "src/lib/meta.ts", status: "M", label: "modified")]
-        let before = m.treeFingerprint
-
-        let turn = Turn(prompt: "wire up the pixel")
-        m.changes = [
-            .init(path: "src/lib/meta.ts", status: "M", label: "modified"),
-            .init(path: "src/lib/meta-client.ts", status: "?", label: "untracked"),
-        ]
-        m.attribute(before, to: turn)
-        XCTAssertEqual(turn.files, ["src/lib/meta-client.ts"],
-                       "what was already dirty belongs to whatever dirtied it")
-
-        // `Edit` names a file absolutely; git names it from the root. One file, one row.
         m.repoPath = "/repo"
-        let edited = Turn(prompt: "edit it")
-        edited.noteEdit("/repo/src/lib/meta-client.ts")
-        m.attribute(before, to: edited)
-        XCTAssertEqual(edited.files, ["/repo/src/lib/meta-client.ts"], "not twice, spelt two ways")
-
-        // A file whose status moves — staged, or newly tracked — moved in this turn too.
-        let next = Turn(prompt: "commit it")
-        m.changes = [.init(path: "src/lib/meta.ts", status: "A", label: "added")]
-        m.attribute(m.treeFingerprint.subtracting(["src/lib/meta.tsA"]), to: next)
-        XCTAssertEqual(next.files, ["src/lib/meta.ts"])
+        m.owned = true
+        let turn = Turn(prompt: "wire up the pixel")
+        turn.noteEdit("/repo/src/lib/meta-client.ts")
+        m.turns = [turn]
+        m.fact(#"{"turn":"u-1","kind":"turn.files","at":"","files":["src/lib/meta-client.ts","src/lib/meta.ts"]}"#)
+        XCTAssertEqual(turn.files, ["/repo/src/lib/meta-client.ts", "src/lib/meta.ts"],
+                       "not twice, spelt two ways")
+        XCTAssertEqual(turn.key, "u-1", "the first keyed fact names the owned turn")
     }
 }
 

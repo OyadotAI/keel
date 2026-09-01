@@ -12,6 +12,10 @@ import Foundation
 final class Turn: Identifiable {
     let id = UUID()
     let prompt: String
+    /// The `uuid` of the transcript record that opened the turn — what every fact about it is
+    /// filed under. Read off the record on a followed or replayed stream; on the owned stream it
+    /// arrives with the first keyed fact.
+    var key: String?
     /// When the turn began. A live turn is stamped as it is made; a replayed one takes the time
     /// of its first record, because the moment it was parsed is not a fact about the turn.
     var started = Date()
@@ -307,6 +311,77 @@ final class Turn: Identifiable {
 
     /// The project's own checks, run after the turn — not the agent's opinion of its own work.
     var gate: Gate = .notRun
+
+    /// What the turn asked, from the daemon's record of it. The cards a lane answers come from
+    /// the poll; this is what a follower or a replay sees of them.
+    var asked: [Asked] = []
+
+    struct Asked: Equatable {
+        var id: String
+        var tool: String
+        var command: String
+        var decision: String?
+    }
+
+    /// Fold in a fact from the daemon.
+    ///
+    /// Fills, and overwrites only what was an estimate: a replayed turn's tokens were summed off
+    /// its records and the `usage` fact is the provider's own total, so that one wins; a turn
+    /// this lane drove already measured its cost off the `result` record, so it keeps it. Files
+    /// go through the model, which knows how to spell a path the way this checkout does.
+    func absorb(_ f: Wire.Fact) {
+        switch f.kind {
+        case "turn.started":
+            if snapshot == nil { snapshot = f.snapshot }
+        case "turn.gate":
+            let command = f.command ?? ""
+            switch f.status {
+            case "running": gate = .running(command)
+            case "passed": gate = .passed(command, Double(f.ms ?? 0) / 1000)
+            case "failed": gate = .failed(command, f.problems ?? [])
+            case "none": gate = .none(command)
+            case "aborted": gate = .none("the checks were stopped before they finished — \(command)")
+            default: break
+            }
+        case "turn.commit":
+            if commit == nil { commit = f.sha }
+        case "turn.usage":
+            if replayed || tokens == nil {
+                tokens = Tokens(input: f.input ?? 0, output: f.output ?? 0,
+                                cacheRead: f.cache_read ?? 0, cacheWrite: f.cache_write ?? 0)
+            }
+            if replayed || cost == nil { cost = f.cost_usd }
+        case "turn.failed":
+            failed = true
+            if failure == nil {
+                let tail = f.tail ?? ""
+                failure = "The agent exited with code \(f.code ?? -1)." + (tail.isEmpty ? "" : "\n" + tail)
+            }
+        case "turn.shared":
+            if notIsolated == nil { notIsolated = f.reason }
+        case "approval.asked":
+            if let id = f.id, !asked.contains(where: { $0.id == id }) {
+                asked.append(Asked(id: id, tool: f.tool ?? "", command: f.command ?? "", decision: nil))
+            }
+        case "approval.answered":
+            if let i = asked.firstIndex(where: { $0.id == f.id }) {
+                asked[i].decision = f.answer ?? f.decision
+            }
+        case "turn.design":
+            if design == nil, let pins = f.pins {
+                var d = Design()
+                d.pins = pins.map {
+                    Design.Pin(selector: $0.note, before: nil, after: nil,
+                               verdict: DesignCheck.Verdict(wire: $0.verdict))
+                }
+                design = d
+            }
+        case "turn.ended":
+            if durationMS == nil { durationMS = f.ms }
+        default:
+            break
+        }
+    }
 
     enum Gate: Equatable {
         case notRun

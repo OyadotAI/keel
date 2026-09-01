@@ -24,9 +24,12 @@ final class FollowTests: XCTestCase {
         return m
     }
 
-    private func user(_ text: String, at: String = "2026-09-01T10:00:00.000Z") -> Client.Event {
-        Client.Event(name: "msg", data: #"{"type":"user","uuid":"u-\#(text.hashValue)","timestamp":"\#(at)","message":{"role":"user","content":"\#(text)"}}"#)
+    private func user(_ text: String, uuid: String = "u-1",
+                      at: String = "2026-09-01T10:00:00.000Z") -> Client.Event {
+        Client.Event(name: "msg", data: #"{"type":"user","uuid":"\#(uuid)","timestamp":"\#(at)","message":{"role":"user","content":"\#(text)"}}"#)
     }
+
+    private func fact(_ json: String) -> Client.Event { Client.Event(name: "fact", data: json) }
 
     private func assistant(_ text: String, stop: String,
                            at: String = "2026-09-01T10:00:05.000Z") -> Client.Event {
@@ -200,6 +203,58 @@ final class FollowTests: XCTestCase {
         m.lastEventAt = Date().addingTimeInterval(-120)
         m.checkPulse()
         XCTAssertEqual(m.replay, .none)
+    }
+
+    /// A fact names a turn by the record that opened it, and lands nowhere else.
+    func testAFactLandsOnlyOnTheTurnItNames() async {
+        let m = model(busy: false)
+        await m.apply(user("first", uuid: "u-1"))
+        await m.apply(assistant("one", stop: "end_turn"))
+        await m.apply(fact(#"{"turn":"u-1","kind":"turn.commit","sha":"abc123"}"#))
+        await m.apply(user("second", uuid: "u-2"))
+        await m.apply(fact(#"{"turn":"u-9","kind":"turn.commit","sha":"nobody"}"#))
+        await m.apply(fact(#"{"turn":null,"kind":"turn.commit","sha":"keyless"}"#))
+        await m.apply(assistant("two", stop: "end_turn"))
+        await m.apply(caughtUp)
+        XCTAssertEqual(m.turns[0].key, "u-1")
+        XCTAssertEqual(m.turns[0].commit, "abc123")
+        XCTAssertNil(m.turns[1].commit, "a fact for a turn nobody has, or for no turn, is dropped")
+    }
+
+    /// A fact fills what the turn does not know and never overwrites what this lane measured.
+    func testFactsFillButNeverOverwrite() async {
+        let live = model()
+        live.owned = true
+        let t = Turn(prompt: "ask")
+        t.cost = 0.5
+        live.turns = [t]
+        live.fact(#"{"turn":"u-1","kind":"turn.usage","input":10,"output":5,"cache_read":0,"cache_write":0,"cost_usd":0.9}"#)
+        XCTAssertEqual(t.cost, 0.5, "the result record already said")
+        XCTAssertEqual(t.tokens?.input, 10, "what it did not have, it takes")
+
+        let seen = model(busy: false)
+        await seen.apply(user("ask", uuid: "u-1"))
+        await seen.apply(assistant("ok", stop: "end_turn"))
+        await seen.apply(fact(#"{"turn":"u-1","kind":"turn.usage","input":10,"output":5,"cache_read":0,"cache_write":0,"cost_usd":0.9}"#))
+        await seen.apply(caughtUp)
+        XCTAssertEqual(seen.turns[0].cost, 0.9, "a replayed turn's cost is the provider's total")
+        XCTAssertEqual(seen.turns[0].tokens?.input, 10, "and its tokens, which were a sum of records")
+    }
+
+    /// The gate comes back whole: its spinner while it runs, its problems, and its duration.
+    func testGateProblemsAndDurationSurviveAReopen() async {
+        let m = model(busy: false)
+        await m.apply(user("build", uuid: "u-1"))
+        await m.apply(assistant("ok", stop: "end_turn"))
+        await m.apply(caughtUp)
+        await m.apply(fact(#"{"turn":"u-1","kind":"turn.gate","status":"running","command":"make check"}"#))
+        XCTAssertEqual(m.turns[0].gate, .running("make check"))
+        await m.apply(fact(#"{"turn":"u-1","kind":"turn.gate","status":"failed","command":"make check","ms":4100,"problems":[{"file":"src/a.rs","line":3,"col":1,"severity":"error","message":"boom"}]}"#))
+        guard case .failed(let cmd, let problems) = m.turns[0].gate else { return XCTFail("no verdict") }
+        XCTAssertEqual(cmd, "make check")
+        XCTAssertEqual(problems.map(\.file), ["src/a.rs"])
+        await m.apply(fact(#"{"turn":"u-1","kind":"turn.gate","status":"passed","command":"make check","ms":4100}"#))
+        XCTAssertEqual(m.turns[0].gate, .passed("make check", 4.1))
     }
 
     /// The Trace at each of its empty states, in the geometry that has crashed before.

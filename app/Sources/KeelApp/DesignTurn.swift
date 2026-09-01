@@ -23,6 +23,24 @@ enum DesignCheck {
         /// and all three read as if the page were mid-animation. A verdict that cannot say why it
         /// abstained is not a verdict.
         case notCompared(String)
+
+        /// The verdict as the daemon stores it, and back. The images do not survive a replay;
+        /// the verdict does.
+        var wire: String {
+            switch self {
+            case .changed: "changed"
+            case .nothingChanged: "nothingChanged"
+            case .notCompared(let why): why
+            }
+        }
+
+        init(wire: String) {
+            switch wire {
+            case "changed": self = .changed
+            case "nothingChanged": self = .nothingChanged
+            default: self = .notCompared(wire)
+            }
+        }
     }
 
     /// Compare two snapshots of the same rect.

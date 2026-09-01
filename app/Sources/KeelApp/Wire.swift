@@ -386,108 +386,96 @@ enum Wire {
         var source: String
     }
 
-    /// What Keel knows about a turn that Claude Code's transcript does not.
-    ///
-    /// The transcript carries what was said and which tools ran. The files git saw move, the
-    /// commit, the gate, the duration and the cost are all Keel's own reading of the machine, made
-    /// at the end of the turn — and before `.keel/turns/` they were kept nowhere, so a relaunch
-    /// rebuilt the conversation with its prose intact and its work missing.
-    struct TurnRecord: Codable, Equatable {
-        var n: Int
-        /// The prompt that opened the turn, truncated. The guard that this record still belongs to
-        /// the turn it was written for — never displayed, the app has the real one.
-        var prompt: String = ""
-        var files: [String] = []
-        var commit: String?
-        var gate: Gate?
+    /// One thing the daemon learned about a turn, as it happens on a live stream and in the same
+    /// order on a replay. `kind` says which; every other field is present for some kinds and
+    /// absent for the rest, and each is read with `try?` so a field of an unexpected shape drops
+    /// that field rather than the fact — a fact Keel cannot fully read is still a fact.
+    struct Fact: Decodable {
+        var turn: String?
+        var kind: String
+        var at: String?
+        var started: String?
+        var snapshot: String?
+        var prompt: String?
+        var files: [String]?
+        var status: String?
+        var command: String?
         var ms: Int?
-        var tokens: Tokens?
-        var cost: Double?
+        var problems: [Problem]?
+        var sha: String?
+        var input: Int?
+        var output: Int?
+        var cache_read: Int?
+        var cache_write: Int?
+        var cost_usd: Double?
+        var code: Int?
+        var cause: String?
+        var tail: String?
+        var reason: String?
+        var id: String?
+        var tool: String?
+        var rules: [String]?
+        var decision: String?
+        var answer: String?
+        var pins: [DesignPin]?
+        var ended: String?
 
-        init(n: Int) { self.n = n }
+        enum CodingKeys: String, CodingKey {
+            case turn, kind, at, started, snapshot, prompt, files, status, command, ms, problems,
+                 sha, input, output, cache_read, cache_write, cost_usd, code, cause, tail, reason,
+                 id, tool, rules, decision, answer, pins, ended
+        }
 
-        /// Every field but `n` is optional, matching the `#[serde(default)]` on each field of the
-        /// daemon's own `Record`.
-        ///
-        /// Swift's synthesised `Codable` does not read a property's default when the key is
-        /// missing — it throws — and one throw fails the whole array, so a single record written
-        /// by an older Keel would take a session's entire history with it. Which is the promise
-        /// this store makes and would otherwise quietly break.
+        init(kind: String, turn: String? = nil) {
+            self.kind = kind
+            self.turn = turn
+        }
+
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            n = try c.decode(Int.self, forKey: .n)
-            prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
-            files = try c.decodeIfPresent([String].self, forKey: .files) ?? []
-            commit = try c.decodeIfPresent(String.self, forKey: .commit)
-            gate = try c.decodeIfPresent(Gate.self, forKey: .gate)
-            ms = try c.decodeIfPresent(Int.self, forKey: .ms)
-            tokens = try c.decodeIfPresent(Tokens.self, forKey: .tokens)
-            cost = try c.decodeIfPresent(Double.self, forKey: .cost)
-        }
-
-        struct Gate: Codable, Equatable {
-            var status: String
-            var command: String?
-            var problems: [String] = []
-
-            init(status: String, command: String? = nil, problems: [String] = []) {
-                self.status = status
-                self.command = command
-                self.problems = problems
-            }
-
-            init(from decoder: Decoder) throws {
-                let c = try decoder.container(keyedBy: CodingKeys.self)
-                status = try c.decodeIfPresent(String.self, forKey: .status) ?? "not_run"
-                command = try c.decodeIfPresent(String.self, forKey: .command)
-                problems = try c.decodeIfPresent([String].self, forKey: .problems) ?? []
-            }
-        }
-
-        struct Tokens: Codable, Equatable {
-            var input = 0
-            var output = 0
-            var cache_read = 0
-            var cache_write = 0
-
-            init(input: Int = 0, output: Int = 0, cache_read: Int = 0, cache_write: Int = 0) {
-                self.input = input
-                self.output = output
-                self.cache_read = cache_read
-                self.cache_write = cache_write
-            }
-
-            init(from decoder: Decoder) throws {
-                let c = try decoder.container(keyedBy: CodingKeys.self)
-                input = try c.decodeIfPresent(Int.self, forKey: .input) ?? 0
-                output = try c.decodeIfPresent(Int.self, forKey: .output) ?? 0
-                cache_read = try c.decodeIfPresent(Int.self, forKey: .cache_read) ?? 0
-                cache_write = try c.decodeIfPresent(Int.self, forKey: .cache_write) ?? 0
-            }
+            kind = try c.decode(String.self, forKey: .kind)
+            turn = try? c.decodeIfPresent(String.self, forKey: .turn)
+            at = try? c.decodeIfPresent(String.self, forKey: .at)
+            started = try? c.decodeIfPresent(String.self, forKey: .started)
+            snapshot = try? c.decodeIfPresent(String.self, forKey: .snapshot)
+            prompt = try? c.decodeIfPresent(String.self, forKey: .prompt)
+            files = try? c.decodeIfPresent([String].self, forKey: .files)
+            status = try? c.decodeIfPresent(String.self, forKey: .status)
+            command = try? c.decodeIfPresent(String.self, forKey: .command)
+            ms = try? c.decodeIfPresent(Int.self, forKey: .ms)
+            problems = try? c.decodeIfPresent([Problem].self, forKey: .problems)
+            sha = try? c.decodeIfPresent(String.self, forKey: .sha)
+            // `input` is a count on `turn.usage` and the tool's arguments on `approval.asked`.
+            input = try? c.decodeIfPresent(Int.self, forKey: .input)
+            output = try? c.decodeIfPresent(Int.self, forKey: .output)
+            cache_read = try? c.decodeIfPresent(Int.self, forKey: .cache_read)
+            cache_write = try? c.decodeIfPresent(Int.self, forKey: .cache_write)
+            cost_usd = try? c.decodeIfPresent(Double.self, forKey: .cost_usd)
+            code = try? c.decodeIfPresent(Int.self, forKey: .code)
+            cause = try? c.decodeIfPresent(String.self, forKey: .cause)
+            tail = try? c.decodeIfPresent(String.self, forKey: .tail)
+            reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+            id = try? c.decodeIfPresent(String.self, forKey: .id)
+            tool = try? c.decodeIfPresent(String.self, forKey: .tool)
+            rules = try? c.decodeIfPresent([String].self, forKey: .rules)
+            decision = try? c.decodeIfPresent(String.self, forKey: .decision)
+            answer = try? c.decodeIfPresent(String.self, forKey: .answer)
+            pins = try? c.decodeIfPresent([DesignPin].self, forKey: .pins)
+            ended = try? c.decodeIfPresent(String.self, forKey: .ended)
         }
     }
 
-    /// `POST /api/turns`. The daemon flattens the record beside the session id, so this does too.
-    struct TurnRecordRequest: Encodable {
-        var session: String
-        var record: TurnRecord
+    /// A pixel verdict as the daemon stores it: the one fact the app still writes.
+    struct DesignPin: Codable, Equatable {
+        var note: String
+        var verdict: String
+    }
 
-        enum CodingKeys: String, CodingKey {
-            case session, n, prompt, files, commit, gate, ms, tokens, cost
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var c = encoder.container(keyedBy: CodingKeys.self)
-            try c.encode(session, forKey: .session)
-            try c.encode(record.n, forKey: .n)
-            try c.encode(record.prompt, forKey: .prompt)
-            try c.encode(record.files, forKey: .files)
-            try c.encodeIfPresent(record.commit, forKey: .commit)
-            try c.encodeIfPresent(record.gate, forKey: .gate)
-            try c.encodeIfPresent(record.ms, forKey: .ms)
-            try c.encodeIfPresent(record.tokens, forKey: .tokens)
-            try c.encodeIfPresent(record.cost, forKey: .cost)
-        }
+    /// `POST /api/turns`. By lane, not by turn: the app never learns its own turn's key before
+    /// the verdict is due, and the daemon knows which turn the lane is on.
+    struct DesignPost: Encodable {
+        var lane: String
+        var pins: [DesignPin]
     }
 
     struct Problem: Decodable, Identifiable, Equatable {
