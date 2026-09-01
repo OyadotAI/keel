@@ -80,6 +80,9 @@ pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response:
                 .event("connected")
                 .data(serde_json::json!({ "seq": next_seq() }).to_string())))
             .await;
+        // A broadcast does not replay: a window that connects after the watcher's first pass
+        // would wait for the list to change. Ask for it to be said again.
+        poke_sessions();
         loop {
             let emitted = tokio::select! {
                 _ = tx.closed() => return,
@@ -178,8 +181,12 @@ fn sessions_poke() -> &'static tokio::sync::Notify {
     N.get_or_init(tokio::sync::Notify::new)
 }
 
-/// Ask the sessions watcher to look now rather than at its next tick.
+/// Set by `poke_sessions`, so the next pass sends the list whether or not it changed.
+static SAY_AGAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the sessions watcher to look now rather than at its next tick, and to say what it finds.
 pub fn poke_sessions() {
+    SAY_AGAIN.store(true, std::sync::atomic::Ordering::Relaxed);
     sessions_poke().notify_one();
 }
 
@@ -251,7 +258,8 @@ async fn watch_sessions(state: Arc<AppState>) {
                 Vec::new(),
             )
             .await;
-            if last.as_ref() != Some(&now) {
+            let again = SAY_AGAIN.swap(false, std::sync::atomic::Ordering::Relaxed);
+            if again || last.as_ref() != Some(&now) {
                 if let Ok(data) = serde_json::to_value(&now) {
                     emit("sessions", None, data);
                 }
