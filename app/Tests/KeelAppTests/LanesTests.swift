@@ -453,6 +453,20 @@ final class LaneShutdownTests: XCTestCase {
         return (l, first, second)
     }
 
+    /// A lane looks for jobs from the moment it exists, not from its first turn.
+    ///
+    /// The Monitors panel draws what this loop fetches. Started at the first turn, a freshly
+    /// launched app — or any lane you open the panel on without typing first — had never fetched
+    /// anything, so "Nothing being watched" was a statement about the machine when it was a
+    /// statement about nobody having looked. Measured against a live daemon holding a finished
+    /// job: still unreported, because nothing had asked for it.
+    func testALaneWatchesForJobsBeforeItsFirstTurn() {
+        let l = Lanes(client: Client(port: 0), port: 0)
+        XCTAssertTrue(l.lanes[0].isWatchingMonitors,
+                      "a panel that cannot tell 'nothing is running' from 'nobody looked' is worse "
+                      + "than one that says nothing")
+    }
+
     func testClosingALaneEndsItsBackgroundWatch() {
         let (l, first, second) = twoLanes()
         second.watchMonitors()

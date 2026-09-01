@@ -660,6 +660,8 @@ final class SessionModel: Identifiable {
         self.port = port
         self.sessionId = sessionId
         self.id = id
+        // Here, and not at the first turn. See `watchMonitors`.
+        watchMonitors()
     }
 
     /// Why this feature cannot be merged yet, or `nil`.
@@ -2030,11 +2032,21 @@ final class SessionModel: Identifiable {
     /// Whether the background-job loop is up. For the test that asserts closing a lane ends it.
     var isWatchingMonitors: Bool { monitorTask != nil }
 
-    /// Started with the first turn and never cancelled while the lane lives.
+    /// Started when the lane is created and never cancelled while it lives.
     ///
     /// Not tied to `running`, which is the whole point: a job outlives the turn that asked for
     /// it, so the loop that notices it finishing has to outlive the turn too. Approvals poll only
     /// while a turn is up because a question cannot exist without one; a job can.
+    ///
+    /// It used to start on the lane's first *turn*, on the reasoning that a job can only be
+    /// created by the agent, so a turn is the only window in which one can appear. That is true
+    /// of the job and false of the *panel*: Monitors draws `monitors`, and before any turn had
+    /// run in this lane nothing had ever fetched it — so a freshly launched app, or any lane you
+    /// open the panel on without typing first, showed "Nothing being watched" as a statement
+    /// about the machine when it was a statement about this array never having been filled.
+    /// Measured against a live daemon holding a finished job: `reported` was still false, because
+    /// nobody had asked. A panel that cannot tell "nothing is running" from "nobody looked" is
+    /// the "never weird" failure, and the fix is for somebody to always be looking.
     func watchMonitors() {
         guard monitorTask == nil else { return }
         monitorTask = Task { [weak self, client] in
