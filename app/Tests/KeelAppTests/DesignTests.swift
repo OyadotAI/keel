@@ -488,12 +488,12 @@ final class CanvasTests: XCTestCase {
         let canvas = FakeCanvas()
         canvas.sent = { sent.append($0["keel"] as? String ?? "") }
         m.attach(canvas: canvas)
-        let tick = m.designTick
+        m.designer.wantsStage = false
         m.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"/repo/frontend/app/pricing/page.tsx"}}]}}"#.utf8), into: t)
         XCTAssertEqual(m.editing, "/repo/frontend/app/pricing/page.tsx")
         XCTAssertEqual(m.previewURL, "http://127.0.0.1:3000/pricing", "navigated to the page")
         XCTAssertEqual(sent.last, "expect")
-        XCTAssertGreaterThan(m.designTick, tick)
+        XCTAssertTrue(m.designer.wantsStage, "the window is asked to show the page")
 
         m.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w2","name":"Write","input":{"file_path":"/repo/backend/src/index.ts"}}]}}"#.utf8), into: t)
         XCTAssertEqual(m.editing, "/repo/frontend/app/pricing/page.tsx", "a backend write changes nothing")

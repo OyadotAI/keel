@@ -242,10 +242,13 @@ by `adopt(project:)` at six call sites — and a copy is a thing that goes stale
 missed the copy drew "Reading…" over data every other tab had. One object held by reference
 cannot disagree with itself. The rule that follows: **state that two panes or the window read
 belongs on a store or a view model; state that dies with its view stays `@State`;** and a tick
-counter is an event pretending to be state. `modelTick` is gone (a stored property is
-observable on its own). `pinTick` and `focusComposerTick` stay, because a scroll and a focus are
-actions with no value to compare. `diffTick`, `designTick` and `reloadTick` are what is left to
-turn into a value the view compares, and each is named here so nobody adds a sixth.
+counter is an event pretending to be state. `modelTick`, `designTick`, `reloadTick` and the
+counter behind `diffTick` are gone: a stored property is observable on its own, "show the page"
+is a Bool the window puts back, a reload is a call on the bridge, and a diff card compares the
+repo store's `treeVersion`, which climbs with every read of git. `pinTick` and
+`focusComposerTick` stay, because a scroll and a focus are actions with no value to compare.
+`WorkbenchViewModel.detour` is one value where four optionals with a "first one wins" order used
+to be read and cleared at every site.
 
 **The centre of a window is the turn, not the chat.** Files changed, commands run with their output,
 the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already

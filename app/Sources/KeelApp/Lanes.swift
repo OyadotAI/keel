@@ -85,7 +85,6 @@ final class Lanes {
             }
             _ = await repo.refreshTree(project.client)
             if event.kind == "git.changed" { await repo.refreshBranches(project.client) }
-            for lane in lanes where lane.worktree == event.wt { lane.diffTick += 1 }
         case "worktrees.changed":
             await refreshWorktrees()
         case "monitors.changed":

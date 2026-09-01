@@ -311,6 +311,7 @@ final class SessionModel: Identifiable {
         resnapshot = { [weak c] rect in await c?.snapshot(rect) }
         rectsNow = { [weak c] sels in await c?.rects(for: sels) ?? [:] }
         canvas = { [weak c] message in c?.send(message) }
+        designer.reloadPage = { [weak c] in c?.reload() }
     }
 
     /// Only if nothing has taken over since — see `canvasOwner`.
@@ -320,6 +321,7 @@ final class SessionModel: Identifiable {
         resnapshot = nil
         rectsNow = nil
         canvas = nil
+        designer.reloadPage = nil
     }
     /// Which pane's coordinator installed the three closures above.
     ///
@@ -332,12 +334,8 @@ final class SessionModel: Identifiable {
     var editing: String? { get { designer.editing } set { designer.editing = newValue } }
     /// Bring the Designer forward and follow the agent to the page it edits.
     var followEdits: Bool { get { designer.followEdits } set { designer.followEdits = newValue } }
-    /// Bumped when the window should show the preview because the agent is editing it.
-    var designTick: Int { get { designer.designTick } set { designer.designTick = newValue } }
     /// What the last write changed on the page, as the page reported it.
     var changedRegions: [Region] { get { designer.changedRegions } set { designer.changedRegions = newValue } }
-    /// Bumped by every `changed` report; `checkDesign` waits on it instead of on a timer.
-    private var changeTick = 0
 
     /// A frontend file is being written. Show the page it is, and arm the observer.
     private func frontendEdit(_ path: String) {
@@ -349,7 +347,7 @@ final class SessionModel: Identifiable {
             canvas?(["keel": "outline", "selector": pin.picked.selector])
         }
         canvas?(["keel": "expect"])
-        if followEdits { designTick += 1 }
+        if followEdits { designer.wantsStage = true }
     }
 
     /// Point the preview at the page this file is on.
@@ -393,41 +391,12 @@ final class SessionModel: Identifiable {
         Frontend.route(for: path) ?? pageOfFile[path]
     }
 
-    /// The page reported what moved.
-    func regionsChanged(_ regions: [Region]) {
-        changedRegions = regions
-        changeTick += 1
-        // While a turn runs, the write is the current turn's; after it ended it belongs to the
-        // last one. Either way the trace shows the after-image beside the code.
-        if let turn = current, let union = Picked.Rect.union(regions.map(\.rect)) {
-            Task {
-                let shot = await resnapshot?(union) ?? nil
-                var design = turn.design ?? Turn.Design()
-                design.regions = regions
-                design.pageAfter = shot
-                turn.design = design
-            }
-        }
-    }
-
-    func clearRegions() {
-        changedRegions = []
-        // What you dragged was a way of saying it, not the change itself. Put the page back, so
-        // what you are looking at when the turn lands is the agent's work and not your ghost.
-        canvas?(["keel": "revert"])
-        canvas?(["keel": "clear"])
-        syncCanvas()
-    }
-
-    /// Draw what the model knows onto the page: the pins.
-    func syncCanvas() {
-        canvas?(["keel": "pins", "pins": pins.map { ["id": $0.id.uuidString, "selector": $0.picked.selector] }])
-    }
-
-    func removePin(_ id: UUID) {
-        pins.removeAll { $0.id == id }
-        syncCanvas()
-    }
+    /// The page reported what moved. While a turn runs the write is the current turn's; after
+    /// it ended it belongs to the last one. Either way the trace shows the after-image.
+    func regionsChanged(_ regions: [Region]) { designer.regionsChanged(regions, into: current) }
+    func clearRegions() { designer.clearRegions() }
+    func syncCanvas() { designer.syncCanvas() }
+    func removePin(_ id: UUID) { designer.removePin(id) }
 
     /// The dev server, when there is one.
     var previewURL: String? { get { designer.previewURL } set { designer.previewURL = newValue } }
@@ -467,39 +436,8 @@ final class SessionModel: Identifiable {
         syncCanvas()
     }
 
-    /// A change made by hand in the page: it lands on the pin for that element, making one if
-    /// there is none, so dragging a handle is a complete instruction on its own.
-    func designNudge(_ p: Picked, label: String) {
-        if let i = pins.firstIndex(where: { $0.picked.selector == p.selector }) {
-            pins[i].picked = p
-            if !pins[i].nudges.contains(label) { pins[i].nudges.append(label) }
-        } else {
-            pins.append(Pin(picked: p, before: nil, nudges: [label]))
-            Telemetry.track("nudge", [:])
-        }
-        syncCanvas()
-    }
-
-    /// The pins and what you typed, as the prompt that gets sent. One prompt for all of them:
-    /// sending notes one at a time makes the agent swing back and forth.
-    func designPrompt(_ instruction: String) -> String? {
-        guard !pins.isEmpty else { return nil }
-        var out = pins.count == 1
-            ? "Change this element in the running app:\n\n"
-            : "Change these \(pins.count) elements in the running app. Each is pinned on the page:\n\n"
-        for (i, pin) in pins.enumerated() {
-            if pins.count > 1 { out += "## Pin \(i + 1)\n" }
-            out += pin.picked.describe()
-            if !pin.nudges.isEmpty {
-                out += "\n\nI changed this by hand in the running page, as a way of showing you "
-                    + "what I want. Make the source produce this — do not add inline styles:\n"
-                for n in pin.nudges { out += "  - \(n)\n" }
-            }
-            if !pin.note.isEmpty { out += "\n\nNote on this element: \(pin.note)" }
-            out += "\n\n"
-        }
-        return out + instruction
-    }
+    func designNudge(_ p: Picked, label: String) { designer.designNudge(p, label: label) }
+    func designPrompt(_ instruction: String) -> String? { designer.designPrompt(instruction) }
 
     /// Files pasted or dropped into the composer, sent as `@path` mentions.
     var attachments: [Attachment] = []
@@ -739,9 +677,21 @@ final class SessionModel: Identifiable {
     var current: Turn? { turns.last }
 
     /// The file whose diff is on screen, picked from the changes tree.
-    var viewingDiff: String? { get { workbench.viewingDiff } set { workbench.viewingDiff = newValue } }
+    var viewingDiff: String? {
+        get { if case .diff(let p) = workbench.detour { p } else { nil } }
+        set {
+            if let newValue { workbench.detour = .diff(newValue) }
+            else if case .diff = workbench.detour { workbench.detour = nil }
+        }
+    }
     /// The file whose contents are on screen, picked from the file tree.
-    var viewingFile: String? { get { workbench.viewingFile } set { workbench.viewingFile = newValue } }
+    var viewingFile: String? {
+        get { if case .file(let p) = workbench.detour { p } else { nil } }
+        set {
+            if let newValue { workbench.detour = .file(newValue) }
+            else if case .file = workbench.detour { workbench.detour = nil }
+        }
+    }
 
     /// One thing on the stage at a time. The stage picks the first of inspector, commit, file,
     /// diff that is set, so setting a diff while a file was open showed the file — and the
@@ -779,7 +729,13 @@ final class SessionModel: Identifiable {
     ///
     /// Clicking a skill or a hook has to lead somewhere: a row you cannot open is a row that only
     /// tells you a name you already knew.
-    var inspecting: Inspect? { get { workbench.inspecting } set { workbench.inspecting = newValue } }
+    var inspecting: Inspect? {
+        get { if case .inspect(let i) = workbench.detour { i } else { nil } }
+        set {
+            if let newValue { workbench.detour = .inspect(newValue) }
+            else if case .inspect = workbench.detour { workbench.detour = nil }
+        }
+    }
 
     enum Inspect: Equatable {
         case skill(Wire.Named)
@@ -1099,7 +1055,6 @@ final class SessionModel: Identifiable {
         // rightly answered "this file is not on disk any more". Nothing then asked again, so a new
         // file stayed at +0 −0 until the pane was rebuilt by navigating away and back. The tree is
         // final here: gate run, design checked, commit made.
-        diffTick += 1
         Notifications.turnFinished(lane: self, files: turn.files.count, gate: turn.gate)
         reportTurn(turn)
         if !queued.isEmpty { start(queued.removeFirst()) }
@@ -1575,7 +1530,9 @@ final class SessionModel: Identifiable {
                 // that it is not on disk. Now the write has landed, so the cards read again. Keyed
                 // to write tools: every other result would be a refetch of everything for nothing.
                 if let name = turn.toolName(of: id), Turn.writeTools.contains(name) {
-                    diffTick += 1
+                    // The local echo: the daemon will say `tree.changed` in a moment, and a
+                    // test with no daemon must see the same thing move.
+                    repo.treeVersion += 1
                     // Here rather than when the call opens: the path is known at the start of a
                     // write and the file only exists at the end of it, and a banner about a file
                     // that is not on disk yet is a banner about nothing. Throttled in
@@ -1779,68 +1736,8 @@ final class SessionModel: Identifiable {
         }
     }
 
-    /// Photograph the pinned elements again and say what the pixels did.
-    ///
-    /// Runs after the gate, because a turn that failed its own checks has a more useful thing to
-    /// report first — but it runs even then, since "the tests broke and it edited the wrong file"
-    /// is two facts, not one. Waits for the page to report a change rather than for a timer: the
-    /// observer is the "HMR has landed" signal, and a fixed delay was wrong in both directions.
-    func checkDesign(_ turn: Turn) async {
-        let flight = designInFlight
-        designInFlight = []
-        guard !flight.isEmpty else { return }
-
-        let seen = changeTick
-        for _ in 0..<60 where changeTick == seen && !turn.files.isEmpty {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        if changeTick == seen { try? await Task.sleep(for: .milliseconds(400)) }
-
-        var design = turn.design ?? Turn.Design()
-        design.duplicated = DesignCheck.looksDuplicated(
-            files: turn.files, hints: flight.flatMap(\.picked.hints))
-        design.regions = design.regions.isEmpty ? changedRegions : design.regions
-
-        guard let resnapshot else {
-            design.pins = flight.map {
-                .init(selector: $0.picked.selector, before: $0.before, after: nil,
-                      verdict: .notCompared("the Designer was closed, so there was nothing to "
-                                            + "photograph"))
-            }
-            turn.design = design
-            return
-        }
-
-        // Where the elements are *now*. A rect captured at pick time is a square of the viewport,
-        // and anything that scrolled between the click and here would have had the after-shot
-        // taken of whatever moved into that square.
-        let fresh = await rectsNow?(flight.map(\.picked.selector)) ?? [:]
-
-        var checked: [Turn.Design.Pin] = []
-        for pin in flight {
-            let selector = pin.picked.selector
-            // `rectsNow` is nil only when the pane went away between the guard above and here;
-            // an empty answer from a page that did reply means nobody could resolve it.
-            guard let rect = fresh[selector] ?? (rectsNow == nil ? pin.picked.rect : nil) else {
-                checked.append(.init(selector: selector, before: pin.before, after: nil,
-                                     verdict: .notCompared("the element is no longer on the page")))
-                continue
-            }
-            guard rect.width > 1, rect.height > 1 else {
-                checked.append(.init(selector: selector, before: pin.before, after: nil,
-                                     verdict: .notCompared("the element is no longer visible")))
-                continue
-            }
-            let after = await resnapshot(rect)
-            checked.append(.init(
-                selector: selector, before: pin.before, after: after,
-                verdict: after == nil
-                    ? .notCompared("the element is off-screen — scroll it into view to check it")
-                    : DesignCheck.compare(before: pin.before, after: after)))
-        }
-        design.pins = checked
-        turn.design = design
-    }
+    /// The pixel check, on the Designer. See `DesignerViewModel.checkDesign`.
+    func checkDesign(_ turn: Turn) async { await designer.checkDesign(turn) }
 
     // MARK: - Dev server
 
@@ -1866,8 +1763,6 @@ final class SessionModel: Identifiable {
     var devLog: [String] { get { designer.devLog } set { designer.devLog = newValue } }
     /// What went wrong loading the page, from the web view itself.
     var previewProblem: String? { get { designer.previewProblem } set { designer.previewProblem = newValue } }
-    /// Bumped to ask the web view to reload the page it has.
-    var reloadTick: Int { get { designer.reloadTick } set { designer.reloadTick = newValue } }
 
     // MARK: - Slash commands
 
@@ -2737,7 +2632,7 @@ final class SessionModel: Identifiable {
             for path in f.files ?? [] where !turn.files.contains(where: { repoRelative($0) == path }) {
                 turn.noteEdit(path)
             }
-            diffTick += 1
+            repo.treeVersion += 1
             return
         }
         turn.absorb(f)
@@ -2903,7 +2798,6 @@ final class SessionModel: Identifiable {
             guard !Task.isCancelled else { return }
             await refreshGit()
             await refreshTree()
-            diffTick += 1
         }
     }
 
@@ -3100,12 +2994,12 @@ final class SessionModel: Identifiable {
         }
         await refreshGit()
         // The diffs on screen are read once per view; bumping this makes them read again.
-        diffTick += 1
     }
 
     /// Bumped when the working tree changed under a diff someone is looking at: a stage, a
     /// discard, a rewind, and the end of every turn.
-    var diffTick = 0
+    /// The tree's version, for the diff cards. Climbs with every read of git.
+    var diffTick: Int { repo.treeVersion }
 
     // MARK: - Rewind
 
@@ -3134,7 +3028,6 @@ final class SessionModel: Identifiable {
         }
         await refreshGit()
         await refreshTree()
-        diffTick += 1
     }
 
     func stopDev() async {
@@ -3245,7 +3138,13 @@ final class SessionModel: Identifiable {
         Telemetry.track("commit_made", ["manual": true, "all": all])
     }
     /// The commit whose diff is on screen.
-    var viewingCommit: Wire.Commit? { get { workbench.viewingCommit } set { workbench.viewingCommit = newValue } }
+    var viewingCommit: Wire.Commit? {
+        get { if case .commit(let c) = workbench.detour { c } else { nil } }
+        set {
+            if let newValue { workbench.detour = .commit(newValue) }
+            else if case .commit = workbench.detour { workbench.detour = nil }
+        }
+    }
 
     func commitDiff(_ sha: String) async -> [Wire.Diff] {
         (try? await client.get("/api/git/commit/diff", q(["sha": sha]))) ?? []
