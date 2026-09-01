@@ -29,6 +29,14 @@ pub struct Session {
     /// the rest of the summary so that filtering costs no extra pass.
     #[serde(skip)]
     entrypoint: Option<String>,
+    /// The transcript was written to within the last minute: something is running in it right
+    /// now, here or in a terminal or anywhere else.
+    ///
+    /// Read from the file's mtime rather than from its contents, which is why it is free — the
+    /// summary is already keyed on `(len, mtime)`, so the stat has happened either way. It is
+    /// deliberately *not* cached with the summary: the summary is valid for as long as the file
+    /// has not changed, and this is a fact about how long ago that was.
+    pub live: bool,
 }
 
 impl Session {
@@ -63,457 +71,103 @@ impl Session {
     }
 }
 
-/// One exchange in a transcript, shaped for display.
-#[derive(Debug, Clone, Serialize)]
-pub struct Turn {
-    /// `user` or `assistant`.
-    pub role: &'static str,
-    pub text: String,
-    /// Tool names called in this turn, in order.
-    pub tools: Vec<String>,
-}
-
-/// One tool call, as recorded.
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionCall {
-    pub tool: String,
-    /// The command for a Bash call, or the path for a file tool.
-    pub subject: String,
-    pub output: String,
-    pub error: bool,
-    /// Which turn of the conversation ran it, counted the way [`transcript`] counts turns.
-    ///
-    /// Without this the app had nowhere to put a replayed call but the last turn, so a session
-    /// that edited forty files across nine turns showed eight turns that "changed nothing" and
-    /// one that did everything — the opposite of what the trace is for.
-    pub turn: usize,
-}
-
-/// A file a session wrote, and the turn that wrote it.
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionFile {
-    pub path: String,
-    pub turn: usize,
-}
-
-/// What one turn of a past session spent, read off the transcript.
+/// Where one session's transcript lives, behind the same guard.
 ///
-/// The footer under a live turn — time, tokens, how much of it came from cache — is the strip
-/// people say is the most useful thing on the pane, and a session opened from History had none of
-/// it: the numbers arrive on the stream's `result` record, and a replay never sees one. They are
-/// in the transcript all the same, one `usage` per request, so they are summed here.
-///
-/// Cost is deliberately absent: the CLI stopped writing `costUSD` into transcripts, and a figure
-/// derived from a price table Keel keeps would be a guess printed in the same style as a measured
-/// number. The turn's own timestamps stay strings — the app parses ISO-8601 already, and adding a
-/// date crate to this reader to subtract two of them is not worth it.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct SessionSpend {
-    pub turn: usize,
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    /// The first and last record of the turn, as the transcript wrote them.
-    pub started: String,
-    pub ended: String,
-}
-
-/// What a session actually did: which files it changed, what it ran, and what it spent.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct SessionWork {
-    /// Repository-relative, in the order they were first touched.
-    pub files: Vec<SessionFile>,
-    pub calls: Vec<SessionCall>,
-    /// One entry per turn that spent anything, in turn order.
-    pub spent: Vec<SessionSpend>,
-    /// Whether the record was cut short by the caps below.
-    pub truncated: bool,
-}
-
-/// Tools whose input names a file the session wrote.
-const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"];
-
-/// Shell verbs whose arguments are files they change. `sed` counts only with `-i`, which is why
-/// the match is on the flag rather than on the name.
-const WRITE_VERBS: &[&str] = &["tee", "touch", "cp", "mv", "rm", "patch"];
-
-/// Fragments that mean the inline script in this command writes a file, so every path in it is a
-/// path it wrote. A `python3 - <<PY` that opens a file for writing names it as a plain string.
-const WRITE_FRAGMENTS: &[&str] = &[".write(", "writeFileSync", "write_text", "'w')", "\"w\")"];
-
-/// The files a shell command changed, as far as the command itself says.
-///
-/// The trace exists to answer "what did the agent do", and for a session driven through `Bash` —
-/// heredocs, `sed -i`, a redirect — the tool names answer nothing: 131 calls, 28 files edited, and
-/// a trace reporting no file changed at all, because `Edit` and `Write` were never used.
-///
-/// Deliberately conservative, in both directions. A path is kept only when the command carries a
-/// write signal *and* the path exists in the repository, so a `grep` over a file, a `sed -n`, and
-/// a heredoc that only reads are all silent. It will miss a path a script computes rather than
-/// names — nothing in a transcript can recover that one.
-///
-/// ponytail: string matching, not a shell parser. A real parse would catch `eval`, an aliased
-/// verb and a path in a variable; if that starts mattering, the upgrade is a `shlex` pass over
-/// the pipeline rather than more fragments here.
-fn shell_writes(command: &str, repo: &Utf8Path) -> Vec<String> {
-    /// A token that could be a path: no flags, no globs, no shell expansion, and a name with an
-    /// extension somewhere below a directory. `p='app/x.swift'` is one — an assignment inside a
-    /// heredoc is how a script names the file it is about to write.
-    fn candidate(token: &str) -> Option<&str> {
-        let t = token.rsplit('=').next().unwrap_or(token);
-        let t = t.trim_matches(|c: char| "'\"`;,()<>&|".contains(c));
-        if t.is_empty() || t.starts_with('-') || t.contains(['$', '*', '?']) {
-            return None;
-        }
-        let name = t.rsplit('/').next().unwrap_or(t);
-        (t.contains('/') && name.contains('.') && !name.starts_with('.')).then_some(t)
-    }
-
-    /// Every `'…'` and `"…"` in the command. An inline script's paths are string literals, not
-    /// whitespace-separated arguments: `open('app/x.swift', 'w')` is one token to a shell.
-    fn quoted(command: &str) -> Vec<&str> {
-        let mut out = Vec::new();
-        let mut rest = command;
-        while let Some(open) = rest.find(['\'', '"']) {
-            let quote = rest.as_bytes()[open] as char;
-            let after = &rest[open + 1..];
-            let Some(close) = after.find(quote) else {
-                break;
-            };
-            out.push(&after[..close]);
-            rest = &after[close + 1..];
-        }
-        out
-    }
-
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    // An inline script that writes names its file as a string literal, so the literals are the
-    // arguments rather than the tokens after one verb.
-    let inline = WRITE_FRAGMENTS.iter().any(|f| command.contains(f));
-    let mut targets: Vec<&str> = if inline { quoted(command) } else { Vec::new() };
-
-    for (i, token) in tokens.iter().enumerate() {
-        // `> file`, `>>file`, `2> file` — the target is whatever the redirect points at.
-        if token.contains('>') {
-            let rest = token.rsplit('>').next().unwrap_or_default();
-            if rest.is_empty() {
-                targets.extend(tokens.get(i + 1));
-            } else {
-                targets.push(rest);
-            }
-        }
-        let verb = token.rsplit('/').next().unwrap_or(token);
-        if WRITE_VERBS.contains(&verb)
-            || (verb == "sed" && tokens[i..].iter().any(|t| t.starts_with("-i")))
-        {
-            targets.extend(&tokens[i + 1..]);
-        }
-    }
-
-    let mut out: Vec<String> = Vec::new();
-    for path in targets.into_iter().filter_map(candidate) {
-        let rel = path.strip_prefix(&format!("{repo}/")).unwrap_or(path);
-        let rel = rel.trim_start_matches("./");
-        // Inside the repository only: a turn that wrote a scratch file in `/tmp` changed nothing
-        // anybody is reviewing, and listing it as a changed file is noise in the one pane that
-        // has to be exact.
-        if rel.starts_with('/') {
-            continue;
-        }
-        // Only what is really there. Existence is the filter that keeps a command's other
-        // arguments — a pattern, a branch name, a URL — from being reported as edits.
-        if repo.join(rel).exists() && !out.iter().any(|p| p == rel) {
-            out.push(rel.to_string());
-        }
-    }
-    out
-}
-
-/// Bounds on what one session can put on screen. A long session is thousands of calls, and the
-/// last few hundred are the ones anybody scrolls to — which is what this now keeps. It stopped
-/// recording at the three hundredth call instead, so a long session's trace was its *first* three
-/// hundred calls under a note in the app reading "capped at the most recent 300". Memory while
-/// parsing is bounded by `MAX_OUTPUT` per call, not by this.
-const MAX_CALLS: usize = 300;
-const MAX_OUTPUT: usize = 8_000;
-
-/// What one record of a transcript contributes to the conversation, or `None` when it is not part
-/// of it at all.
-///
-/// One function because two readers have to agree on it: [`transcript`] turns these into the
-/// conversation, and [`session_work`] counts the user ones to know which turn a tool call belongs
-/// to. When the two disagreed by a single skipped record, every call in the session was filed
-/// against the wrong turn.
-fn spoken(record: &Value) -> Option<(&'static str, String, Vec<String>)> {
-    let role = match record.get("type").and_then(Value::as_str) {
-        Some("user") => "user",
-        Some("assistant") => "assistant",
-        _ => return None,
-    };
-    // Sidechain records are subagent chatter, not the conversation the user had.
-    if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-        return None;
-    }
-    let (mut text, mut tools) = (String::new(), Vec::new());
-    match record.get("message").and_then(|m| m.get("content")) {
-        // A plain user message.
-        Some(Value::String(s)) => text.push_str(s),
-        Some(Value::Array(blocks)) => {
-            for block in blocks {
-                match block.get("type").and_then(Value::as_str) {
-                    Some("text") => {
-                        if let Some(t) = block.get("text").and_then(Value::as_str) {
-                            text.push_str(t);
-                        }
-                    }
-                    Some("tool_use") => {
-                        if let Some(n) = block.get("name").and_then(Value::as_str) {
-                            tools.push(n.to_string());
-                        }
-                    }
-                    // Thinking and tool results are skipped: replaying an old session is for
-                    // reading what was said and done, not for re-litigating the reasoning.
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
-    if text.trim().is_empty() && tools.is_empty() {
-        return None;
-    }
-    // Claude Code writes background-task notifications back into the transcript as user messages
-    // so the model can consume them. They are transport envelopes, not something the person
-    // typed: rendering the XML and an embedded subagent report as a giant blue chat bubble makes
-    // a resumed conversation unreadable and misattributes the content.
-    if role == "user" && text.trim_start().starts_with("<task-notification>") {
-        return None;
-    }
-    Some((role, text.trim().to_string(), tools))
-}
-
-/// Read what a session changed and ran.
-///
-/// Shares [`transcript`]'s guard and its rule: this runs on a click, on one session the user named
-/// — never in the listing. It returns paths, commands and command output, which is what "show me
-/// what this session did" means; the conversation itself is [`transcript`]'s job.
-pub fn session_work(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> SessionWork {
-    let mut work = SessionWork::default();
-    let Some(contents) = read_transcript(repo, claude_home, id) else {
-        return work;
-    };
-
-    let root = format!("{repo}/");
-    // A tool call and its result are separate records, so calls are held by id until the result
-    // arrives rather than being emitted twice.
-    let mut pending: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-    // Which turn of the conversation is being read. `transcript` starts a turn on every user
-    // record it keeps, and the app's replay does the same, so counting them here with the same
-    // predicate is what makes the two line up.
-    let mut turn = 0usize;
-    let mut started = false;
-
-    for line in contents.lines() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if let Some(("user", _, _)) = spoken(&record) {
-            // The first user record opens turn 0 rather than turn 1; anything before it — there
-            // should be nothing — is filed against the same turn.
-            if started {
-                turn += 1;
-            }
-            started = true;
-        }
-        if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-
-        // The footer's numbers, before the content check: a record with no blocks still carries a
-        // timestamp, and the turn's span is what the app shows as TIME.
-        if started {
-            let spend = match work.spent.last_mut() {
-                Some(s) if s.turn == turn => s,
-                _ => {
-                    work.spent.push(SessionSpend {
-                        turn,
-                        ..Default::default()
-                    });
-                    work.spent.last_mut().expect("just pushed")
-                }
-            };
-            if let Some(at) = record.get("timestamp").and_then(Value::as_str) {
-                if spend.started.is_empty() {
-                    spend.started = at.to_string();
-                }
-                spend.ended = at.to_string();
-            }
-            // One per request, and a turn is many requests — so these are summed, which is what
-            // the CLI's own `result` total does with them.
-            if let Some(usage) = record
-                .get("message")
-                .and_then(|m| m.get("usage"))
-                .filter(|_| record.get("type").and_then(Value::as_str) == Some("assistant"))
-            {
-                let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
-                spend.input += n("input_tokens");
-                spend.output += n("output_tokens");
-                spend.cache_read += n("cache_read_input_tokens");
-                spend.cache_write += n("cache_creation_input_tokens");
-            }
-        }
-
-        let Some(Value::Array(blocks)) = record.get("message").and_then(|m| m.get("content"))
-        else {
-            continue;
-        };
-
-        for block in blocks {
-            match block.get("type").and_then(Value::as_str) {
-                Some("tool_use") => {
-                    let Some(tool) = block.get("name").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let input = block.get("input");
-                    let get = |k: &str| {
-                        input
-                            .and_then(|i| i.get(k))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string()
-                    };
-
-                    if WRITE_TOOLS.contains(&tool) {
-                        let path = if get("file_path").is_empty() {
-                            get("path")
-                        } else {
-                            get("file_path")
-                        };
-                        let rel = path.strip_prefix(&root).unwrap_or(&path).to_string();
-                        if !rel.is_empty()
-                            && !work.files.iter().any(|f| f.path == rel && f.turn == turn)
-                        {
-                            work.files.push(SessionFile { path: rel, turn });
-                        }
-                    }
-
-                    if tool == "Bash" {
-                        for rel in shell_writes(&get("command"), repo) {
-                            if !work.files.iter().any(|f| f.path == rel && f.turn == turn) {
-                                work.files.push(SessionFile { path: rel, turn });
-                            }
-                        }
-                    }
-                    let subject = match tool {
-                        "Bash" => get("command"),
-                        _ => {
-                            let p = if get("file_path").is_empty() {
-                                get("path")
-                            } else {
-                                get("file_path")
-                            };
-                            let p = if p.is_empty() { get("pattern") } else { p };
-                            p.strip_prefix(&root).unwrap_or(&p).to_string()
-                        }
-                    };
-                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                        pending.insert(id.to_string(), work.calls.len());
-                    }
-                    work.calls.push(SessionCall {
-                        tool: tool.to_string(),
-                        subject,
-                        output: String::new(),
-                        error: false,
-                        turn,
-                    });
-                }
-                Some("tool_result") => {
-                    let Some(at) = block
-                        .get("tool_use_id")
-                        .and_then(Value::as_str)
-                        .and_then(|id| pending.remove(id))
-                    else {
-                        continue;
-                    };
-                    let text = match block.get("content") {
-                        Some(Value::String(s)) => s.clone(),
-                        Some(Value::Array(parts)) => parts
-                            .iter()
-                            .filter_map(|p| p.get("text").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        _ => String::new(),
-                    };
-                    if let Some(call) = work.calls.get_mut(at) {
-                        if text.len() > MAX_OUTPUT {
-                            // Keep the tail: an error is at the end of the output, not the start.
-                            // Not `truncated`: that word is the app's "this session ran more calls
-                            // than are shown", and setting it here made a 131-call session say it
-                            // had been capped at 300 — a note that is not true, on a pane whose
-                            // whole job is being accurate about what happened.
-                            call.output = text[text.len() - MAX_OUTPUT..].to_string();
-                        } else {
-                            call.output = text;
-                        }
-                        call.error = block
-                            .get("is_error")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // The tail, not the head: a long session's last few hundred calls are the ones anybody
-    // scrolls to, and they are the ones the app already says it is showing.
-    if work.calls.len() > MAX_CALLS {
-        work.calls.drain(..work.calls.len() - MAX_CALLS);
-        work.truncated = true;
-    }
-    work
-}
-
-/// The one place a transcript path is built, so its guard cannot be forgotten by a second reader.
-fn read_transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<String> {
-    // The id comes from the UI. Reject anything that could climb out of the project directory.
+/// Split out of [`read_transcript`] because following a live session must not re-read the file:
+/// a transcript here reaches 33 MB, and re-reading it every poll to find the few hundred bytes
+/// that were appended is exactly the kind of work the bar exists to keep off the machine.
+fn transcript_path(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<Utf8PathBuf> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
-    // Every directory the listing draws from, not just the repository's own. A session listed
-    // from a parent folder or a lane's checkout could be seen in History and then opened to
-    // nothing, because this looked in one place and the list came from several.
     session_dirs(repo, claude_home)
         .into_iter()
         .map(|(dir, scope)| project_dir(&dir, claude_home, scope).join(format!("{id}.jsonl")))
-        .find_map(|path| std::fs::read_to_string(path).ok())
+        .find(|path| path.exists())
 }
 
-/// Read one session's transcript for display.
+/// How long the transcript is right now, or `None` if there is no such session.
 ///
-/// This is deliberately separate from [`discover_sessions`], which stays metadata-only. Listing
-/// every session in a repository is not licence to render what was said in them; opening one the
-/// user explicitly asked for is. Keeping the two apart means the cheap, always-on path can never
-/// leak a conversation, and the expensive one only runs on a click.
-pub fn transcript(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Vec<Turn> {
-    let Some(contents) = read_transcript(repo, claude_home, id) else {
-        return Vec::new();
-    };
+/// One `stat`. Following a session costs this and nothing else for as long as it stays quiet.
+pub fn transcript_len(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<u64> {
+    let path = transcript_path(repo, claude_home, id)?;
+    std::fs::metadata(path).ok().map(|m| m.len())
+}
 
-    let mut turns: Vec<Turn> = Vec::new();
-    for line in contents.lines() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some((role, text, tools)) = spoken(&record) else {
-            continue;
-        };
-        turns.push(Turn { role, text, tools });
+/// The records appended since `from`, and the offset to ask from next.
+///
+/// Two rules make this safe to poll against a file somebody else is writing:
+///
+/// * **A partial trailing line is not returned.** The writer appends a whole JSON object followed
+///   by a newline, and a read that lands between the two would otherwise hand out half a record —
+///   which parses as nothing, is dropped, and is never asked for again. The offset advances only
+///   past the last newline, so the remainder is re-read once it is complete.
+/// * **The offset is a byte position, not a line count.** Transcripts are append-only, so a
+///   position stays valid; counting lines would mean reading all of them to find the end.
+///
+/// Sidechains are skipped, and so are the record types the display readers hide, so what a
+/// follower sees and what a reader sees agree.
+pub fn tail(
+    repo: &Utf8Path,
+    claude_home: &Utf8Path,
+    id: &str,
+    from: u64,
+) -> Option<(Vec<String>, u64)> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let path = transcript_path(repo, claude_home, id)?;
+    let mut file = std::fs::File::open(&path).ok()?;
+    let len = file.metadata().ok()?.len();
+    // Shorter than we last read it: not an append. A session cleared or replaced under us is
+    // read from the start rather than from an offset into something that is no longer there.
+    let from = if len < from { 0 } else { from };
+    if len == from {
+        return Some((Vec::new(), from));
     }
-    turns
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut buffer = Vec::with_capacity((len - from) as usize);
+    file.take(len - from).read_to_end(&mut buffer).ok()?;
+
+    // Everything up to the last newline is whole; what follows it is the writer mid-append.
+    let complete = match buffer.iter().rposition(|b| *b == b'\n') {
+        Some(i) => i + 1,
+        None => return Some((Vec::new(), from)),
+    };
+    let text = String::from_utf8_lossy(&buffer[..complete]);
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter(|line| serde_json::from_str::<Value>(line).is_ok_and(|record| followable(&record)))
+        .map(str::to_string)
+        .collect();
+    Some((lines, from + complete as u64))
+}
+
+/// Whether a transcript record is one a follower should be shown.
+///
+/// Two exclusions, in the one place the reader goes through so nothing can drift from it.
+///
+/// A **sidechain** is a subagent's chatter, which belongs under the `Task` that started it rather
+/// than in the conversation.
+///
+/// A **task notification** is Claude Code telling itself that a background job finished. It is
+/// written as a `user` record because that is the turn it occupies, but nobody typed it — and
+/// drawn as one it is a blue bubble attributed to the person, which also *splits the turn*, so
+/// every reply after it lands against the XML rather than against what they actually asked.
+/// Measured on this machine: 75 of them across one project's transcripts.
+fn followable(record: &Value) -> bool {
+    if record["isSidechain"].as_bool() == Some(true) {
+        return false;
+    }
+    if !matches!(
+        record["type"].as_str(),
+        Some("assistant" | "user" | "result" | "system")
+    ) {
+        return false;
+    }
+    // Only ever a bare string: the array form carries tool results, which are not typed either.
+    let said = record["message"]["content"].as_str().unwrap_or_default();
+    !said.trim_start().starts_with("<task-notification>")
 }
 
 /// Claude Code's directory name for a working directory.
@@ -636,7 +290,15 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
     // for all but the one session actually in use.
     let stat = std::fs::metadata(path).ok()?;
     let stamp = (stat.len(), stat.modified().ok()?);
-    if let Some(hit) = cache().get(path, stamp) {
+    // Whether something is writing to it right now. Deliberately outside the cached summary: the
+    // summary is valid for as long as the file has not changed, and this is a statement about how
+    // long ago that was, so a cached one would say "live" forever.
+    let live = stamp
+        .1
+        .elapsed()
+        .is_ok_and(|since| since < std::time::Duration::from_secs(60));
+    if let Some(mut hit) = cache().get(path, stamp) {
+        hit.live = live;
         return Some(hit);
     }
 
@@ -654,6 +316,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
         messages: 0,
         version: None,
         entrypoint: None,
+        live,
     };
 
     for line in contents.lines() {
@@ -788,37 +451,6 @@ mod tests {
         );
     }
 
-    /// A lane is a checkout under `.keel/worktrees/<name>`, so every feature Keel starts is a
-    /// session in a subdirectory. The subdirectory's project path was built without `projects`,
-    /// so `read_dir` failed and the whole scope was skipped: a feature you named, worked in and
-    /// closed was in no list anywhere.
-    #[test]
-    fn a_session_run_in_a_lane_is_listed_and_can_be_opened() {
-        let transcript = concat!(
-            r#"{"type":"ai-title","aiTitle":"the lane"}"#,
-            "\n",
-            r#"{"type":"user","cwd":"/repo/.keel/worktrees/pricing","timestamp":"2026-01-01T00:00:00Z","message":{"content":"go"}}"#,
-            "\n",
-        );
-        let (_d, home) = home_with("-repo--keel-worktrees-pricing", "lane-1.jsonl", transcript);
-
-        let sessions = discover_sessions(Utf8Path::new("/repo"), &home);
-        assert_eq!(
-            sessions.len(),
-            1,
-            "the lane's session is part of the repository"
-        );
-        assert_eq!(sessions[0].scope, "below");
-        assert_eq!(sessions[0].title.as_deref(), Some("the lane"));
-
-        // And listed is not enough: opening it looked only in the repository's own directory.
-        assert_eq!(transcript_turns(&home).len(), 1);
-    }
-
-    fn transcript_turns(home: &Utf8Path) -> Vec<Turn> {
-        transcript(Utf8Path::new("/repo"), home, "lane-1")
-    }
-
     /// 143 transcripts in this repository, 118 of them `sdk-py`: one `/security-review` run per
     /// change, each with an `ai-title` that reads like a session somebody had. Claude Code's own
     /// picker hides them; Keel listed all 143 and the switcher was unusable. Keel's own chat is
@@ -876,174 +508,6 @@ mod tests {
         assert_eq!(sessions[0].messages, 1);
     }
 
-    #[test]
-    fn reads_a_transcript_for_display() {
-        let transcript = concat!(
-            r#"{"type":"user","message":{"content":"fix the build"}}"#,
-            "\n",
-            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"On it."},{"type":"tool_use","name":"Read"}]}}"#,
-            "\n",
-            r#"{"type":"user","isSidechain":true,"message":{"content":"subagent noise"}}"#,
-            "\n",
-        );
-        let (_d, home) = home_with("-repo", "abc-1.jsonl", transcript);
-
-        let turns = transcript_of(&home);
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].role, "user");
-        assert_eq!(turns[0].text, "fix the build");
-        assert_eq!(turns[1].text, "On it.");
-        assert_eq!(turns[1].tools, vec!["Read"]);
-        // Thinking is not replayed, and subagent chatter is not the user's conversation.
-        assert!(!turns.iter().any(|t| t.text.contains("hmm")));
-        assert!(!turns.iter().any(|t| t.text.contains("subagent")));
-    }
-
-    #[test]
-    fn transcript_hides_internal_task_notifications() {
-        let transcript = concat!(
-            "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n",
-            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Working on it.\"}]}}\n",
-            "{\"type\":\"user\",\"message\":{\"content\":\"<task-notification>\\n<result>internal report</result>\\n</task-notification>\"}}\n",
-            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}]}}\n",
-        );
-        let (_d, home) = home_with("-repo", "abc-1.jsonl", transcript);
-
-        let turns = transcript_of(&home);
-
-        assert_eq!(turns.len(), 3);
-        assert_eq!(turns[0].text, "hello");
-        assert_eq!(turns[1].text, "Working on it.");
-        assert_eq!(turns[2].text, "Done.");
-        assert!(
-            turns
-                .iter()
-                .all(|turn| !turn.text.contains("task-notification"))
-        );
-    }
-
-    /// The trace is a record of what the agent did *when*, so every call has to land on the turn
-    /// that ran it. Everything used to be handed to the app in one flat list, which had nowhere
-    /// to put it but the last turn: nine turns of work read as eight that changed nothing and one
-    /// that did all of it.
-    #[test]
-    fn every_call_is_filed_against_the_turn_that_ran_it() {
-        let lines = [
-            r#"{"type":"user","message":{"content":"add the endpoint"}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/repo/api.ts"}}]}}"#,
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
-            r#"{"type":"user","message":{"content":"now the tests"}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make check"}}]}}"#,
-            // Not the person typing: a background job report must not open a third turn.
-            r#"{"type":"user","message":{"content":"<task-notification>done</task-notification>"}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/repo/api.test.ts"}}]}}"#,
-        ]
-        .join("\n");
-
-        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
-        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
-        let turns = transcript(Utf8Path::new("/repo"), &home, "abc-1");
-
-        assert_eq!(
-            work.calls.iter().map(|c| c.turn).collect::<Vec<_>>(),
-            vec![0, 1, 1],
-            "the write is the first ask, the check and the edit the second"
-        );
-        assert_eq!(
-            work.files
-                .iter()
-                .map(|f| (f.path.as_str(), f.turn))
-                .collect::<Vec<_>>(),
-            vec![("api.ts", 0), ("api.test.ts", 1)]
-        );
-        // The count the app replays into, so an index out of it would be a call with no home.
-        assert_eq!(
-            turns.iter().filter(|t| t.role == "user").count(),
-            2,
-            "both readers count the same turns"
-        );
-    }
-
-    /// A turn opened from History gets the same footer a live one has, because the numbers under
-    /// it are in the transcript: one `usage` per request, summed, and the turn's own timestamps.
-    /// Without this a replayed session showed the work and none of what it took.
-    #[test]
-    fn a_replayed_turn_carries_what_it_spent() {
-        let lines = [
-            r#"{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":"go"}}"#,
-            r#"{"type":"assistant","timestamp":"2026-01-01T10:00:20.000Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":900,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"one"}]}}"#,
-            // A second request in the same turn: both count.
-            r#"{"type":"assistant","timestamp":"2026-01-01T10:00:41.000Z","message":{"usage":{"input_tokens":2,"output_tokens":7},"content":[{"type":"text","text":"two"}]}}"#,
-            // A subagent's own tokens are not this turn's, the same rule the rest of this reader
-            // follows for what a sidechain contributes.
-            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-01-01T10:00:30.000Z","message":{"usage":{"input_tokens":9999,"output_tokens":9999},"content":[{"type":"text","text":"sub"}]}}"#,
-            r#"{"type":"user","timestamp":"2026-01-01T11:00:00.000Z","message":{"content":"again"}}"#,
-            r#"{"type":"assistant","timestamp":"2026-01-01T11:00:05.000Z","message":{"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}"#,
-        ]
-        .join("\n");
-
-        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
-        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
-
-        assert_eq!(work.spent.len(), 2, "one entry per turn, in turn order");
-        let first = &work.spent[0];
-        assert_eq!((first.turn, first.input, first.output), (0, 12, 12));
-        assert_eq!((first.cache_read, first.cache_write), (900, 100));
-        assert_eq!(first.started, "2026-01-01T10:00:00.000Z");
-        assert_eq!(
-            first.ended, "2026-01-01T10:00:41.000Z",
-            "the span is the turn's own records, not the subagent's"
-        );
-        assert_eq!((work.spent[1].turn, work.spent[1].output), (1, 1));
-    }
-
-    /// An agent that edits through the shell — a heredoc, `sed -i`, a redirect — changed files
-    /// just as much as one that used `Edit`, and a trace that says "changed nothing" over 28 of
-    /// them is worse than no trace. Conservative on purpose: a read is not a write.
-    #[test]
-    fn shell_edits_count_as_changed_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = Utf8Path::from_path(dir.path()).unwrap().to_path_buf();
-        std::fs::create_dir_all(repo.join("app/Sources")).unwrap();
-        for f in [
-            "app/Sources/LaneRail.swift",
-            "app/Sources/Theme.swift",
-            "Makefile.md",
-        ] {
-            std::fs::write(repo.join(f), "x").unwrap();
-        }
-
-        let wrote = |cmd: &str| shell_writes(cmd, &repo);
-
-        assert_eq!(
-            wrote("python3 - <<'PY'\np='app/Sources/LaneRail.swift'\nopen(p,'w').write(s)\nPY"),
-            vec!["app/Sources/LaneRail.swift"],
-            "an inline script that writes names its file as a string"
-        );
-        assert_eq!(
-            wrote("sed -i.bak 's/a/b/' app/Sources/Theme.swift"),
-            vec!["app/Sources/Theme.swift"]
-        );
-        assert_eq!(
-            wrote("cat >> app/Sources/Theme.swift <<EOF"),
-            vec!["app/Sources/Theme.swift"],
-            "the target of a redirect"
-        );
-        assert!(
-            wrote("sed -n '1,200p' app/Sources/Theme.swift").is_empty(),
-            "a read is not a write"
-        );
-        assert!(wrote("grep -rn \"Reading\" app/Sources/LaneRail.swift | head -20").is_empty());
-        assert!(
-            wrote("cp app/Sources/Nowhere.swift app/Sources/Gone.swift").is_empty(),
-            "a path that is not in the repository is not reported as edited"
-        );
-        assert!(
-            wrote("cp /tmp/shot.png /tmp/before.png").is_empty(),
-            "a scratch file outside the repository is not a change to review"
-        );
-    }
-
     /// Every lane lives in `.keel/worktrees/<name>`, and Claude Code writes a dot as a dash the
     /// same way it writes a slash as one. Keying only the slashes named a directory that has
     /// never existed, so a lane's own conversation reopened blank — while still being listed,
@@ -1060,107 +524,182 @@ mod tests {
         );
     }
 
-    /// Opening a session that ran in a lane, asked for the way the app asks for it: with the lane
-    /// as the checkout. It came back empty.
-    #[test]
-    fn a_session_that_ran_in_a_lane_opens_from_that_lane() {
-        let (_d, home) = home_with(
-            "-repo--keel-worktrees-hi",
-            "abc-1.jsonl",
-            r#"{"type":"user","message":{"content":"hi"}}"#,
-        );
-        let lane = Utf8Path::new("/repo/.keel/worktrees/hi");
-        assert_eq!(transcript(lane, &home, "abc-1").len(), 1);
-        // And from the project root, which finds it by scanning instead.
-        assert_eq!(transcript(Utf8Path::new("/repo"), &home, "abc-1").len(), 1);
-    }
+    /// Following a session someone else is writing.
+    ///
+    /// The reason this exists: a conversation running in a terminal appends to the same JSONL
+    /// Keel reads, so the file is already a live feed and nothing was reading it as one. Opening
+    /// such a session showed a snapshot from the moment of the click and then sat still.
+    mod following {
+        use super::*;
 
-    fn transcript_of(home: &Utf8Path) -> Vec<Turn> {
-        transcript(Utf8Path::new("/repo"), home, "abc-1")
-    }
+        fn write(home: &Utf8Path, contents: &str) {
+            let path = home.join("projects").join("-repo").join("abc-1.jsonl");
+            std::fs::write(path, contents).unwrap();
+        }
+        fn read(home: &Utf8Path, from: u64) -> (Vec<String>, u64) {
+            tail(Utf8Path::new("/repo"), home, "abc-1", from).unwrap()
+        }
+        fn user(text: &str) -> String {
+            format!(r#"{{"type":"user","message":{{"content":"{text}"}}}}"#)
+        }
 
-    #[test]
-    fn a_session_id_cannot_escape_the_project_directory() {
-        let (_d, home) = home_with("-repo", "x.jsonl", "{}");
-        assert!(transcript(Utf8Path::new("/repo"), &home, "../../../etc/passwd").is_empty());
-        assert!(transcript(Utf8Path::new("/repo"), &home, "").is_empty());
-    }
+        /// A record half-written is not a record.
+        ///
+        /// The writer appends a whole JSON object and then a newline, so a poll landing between
+        /// the two would hand out half a line — which parses as nothing, is dropped, and is never
+        /// asked for again, because the offset had already moved past it. The offset stops at the
+        /// last newline instead, so the remainder is re-read once it is complete.
+        #[test]
+        fn a_partial_trailing_line_is_withheld_until_it_is_complete() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(
+                &home,
+                &format!("{}\n{}", user("one"), r#"{"type":"user","mess"#),
+            );
 
-    /// Selecting a session should answer "what did this do to my repository", which means the
-    /// files it wrote and the commands it ran with their output — paired across two records,
-    /// since a call and its result arrive separately.
-    #[test]
-    fn a_session_reports_what_it_changed_and_ran() {
-        // One record per line: a transcript is JSONL, and a pretty-printed fixture would be
-        // split by `lines()` into fragments that all fail to parse — silently, into an empty
-        // result that looks like "this session did nothing".
-        let lines = [
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/repo/src/a.ts"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make check"}}]}}"#,
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"1 failed"}]}}"#,
-            // The same file twice is one entry; a read is not a change.
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/repo/src/a.ts"}},{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"/repo/src/b.ts"}}]}}"#,
-            // Subagent chatter is not the session's own work.
-            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"t5","name":"Write","input":{"file_path":"/repo/side.ts"}}]}}"#,
-        ]
-        .join("\n");
+            let (lines, at) = read(&home, 0);
+            assert_eq!(lines.len(), 1, "only the line that was finished");
+            assert_eq!(
+                at,
+                user("one").len() as u64 + 1,
+                "the offset stops at the newline"
+            );
 
-        let (_d, home) = home_with("-repo", "abc-1.jsonl", &lines);
-        let work = session_work(Utf8Path::new("/repo"), &home, "abc-1");
+            // The writer finishes it.
+            write(&home, &format!("{}\n{}\n", user("one"), user("two")));
+            let (lines, _) = read(&home, at);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].contains("two"), "and nothing was lost: {lines:?}");
+        }
 
-        assert_eq!(
-            work.files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["src/a.ts"],
-            "written once, relative"
-        );
-        // A record that is only a tool result is not something anybody said, so it does not
-        // start a turn — everything here belongs to the first one.
-        assert!(work.calls.iter().all(|c| c.turn == 0));
-        assert_eq!(
-            work.calls.len(),
-            4,
-            "reads are calls even though they are not changes"
-        );
+        /// An offset returns what was appended and not the whole file again. A transcript in this
+        /// repository's own history reaches 33 MB; re-reading it every 400 ms to find a few
+        /// hundred new bytes is the work the bar exists to keep off the machine.
+        #[test]
+        fn an_offset_returns_only_the_new_range() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(&home, &format!("{}\n", user("one")));
+            let (first, at) = read(&home, 0);
+            assert_eq!(first.len(), 1);
 
-        let bash = work
-            .calls
-            .iter()
-            .find(|c| c.tool == "Bash")
-            .expect("the bash call");
-        assert_eq!(bash.subject, "make check");
-        assert_eq!(bash.output, "1 failed", "its result, paired by tool_use_id");
-        assert!(bash.error);
+            let (none, still) = read(&home, at);
+            assert!(none.is_empty(), "nothing was appended");
+            assert_eq!(still, at, "and the offset did not move");
 
-        // A call whose result never arrived is still shown; it just has nothing under it.
-        let write = work
-            .calls
-            .iter()
-            .find(|c| c.tool == "Write")
-            .expect("the write");
-        assert_eq!(write.subject, "src/a.ts");
-        assert!(write.output.is_empty());
-    }
+            write(&home, &format!("{}\n{}\n", user("one"), user("two")));
+            let (next, _) = read(&home, at);
+            assert_eq!(next.len(), 1);
+            assert!(next[0].contains("two"));
+        }
 
-    #[test]
-    fn session_work_cannot_escape_the_project_directory_either() {
-        let (_d, home) = home_with("-repo", "x.jsonl", "{}");
-        assert!(
-            session_work(Utf8Path::new("/repo"), &home, "../../../etc/passwd")
-                .files
-                .is_empty()
-        );
-        assert!(
-            session_work(Utf8Path::new("/repo"), &home, "a/b")
-                .calls
-                .is_empty()
-        );
-        assert!(
-            session_work(Utf8Path::new("/repo"), &home, "")
-                .calls
-                .is_empty()
-        );
+        /// Nobody typed a task notification.
+        ///
+        /// Claude Code writes one as a `user` record when a background job finishes, because that
+        /// is the turn it occupies. Drawn as one it is a blue bubble attributed to the person —
+        /// and it *splits the turn*, so every reply after it lands against the XML rather than
+        /// against what they actually asked. 75 of them in one project's transcripts here.
+        #[test]
+        fn a_task_notification_is_not_something_a_person_said() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(
+                &home,
+                &format!(
+                    "{}\n{}\n",
+                    user("what I actually asked"),
+                    r#"{"type":"user","message":{"content":"<task-notification>\n<task-id>x</task-id>\n</task-notification>"}}"#,
+                ),
+            );
+            let (lines, _) = read(&home, 0);
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert!(lines[0].contains("what I actually asked"));
+        }
+
+        /// A subagent's chatter belongs under the `Task` that started it, which is the same
+        /// exclusion the display reader makes — so a followed session and a read one agree.
+        #[test]
+        fn sidechains_and_bookkeeping_records_are_skipped() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(
+                &home,
+                &format!(
+                    "{}\n{}\n{}\n{}\n",
+                    user("kept"),
+                    r#"{"type":"user","isSidechain":true,"message":{"content":"subagent"}}"#,
+                    r#"{"type":"ai-title","aiTitle":"a name"}"#,
+                    r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                ),
+            );
+            let (lines, _) = read(&home, 0);
+            assert_eq!(lines.len(), 2, "the user turn and the reply: {lines:?}");
+        }
+
+        /// A transcript replaced rather than appended to is read from the start, not from an
+        /// offset into something that is no longer there.
+        #[test]
+        fn a_shorter_file_is_read_from_the_beginning() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(
+                &home,
+                &format!("{}\n{}\n{}\n", user("a"), user("b"), user("c")),
+            );
+            let (_, at) = read(&home, 0);
+
+            write(&home, &format!("{}\n", user("only")));
+            let (lines, _) = read(&home, at);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].contains("only"));
+        }
+
+        /// The same guard the readers use. It has to be the same one: a second path to a
+        /// transcript is a second place to forget it.
+        #[test]
+        fn a_session_id_still_cannot_escape_the_project_directory() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "{}");
+            assert!(tail(Utf8Path::new("/repo"), &home, "../../../etc/passwd", 0).is_none());
+            assert!(tail(Utf8Path::new("/repo"), &home, "", 0).is_none());
+            assert!(tail(Utf8Path::new("/repo"), &home, "no-such-session", 0).is_none());
+        }
+
+        /// Whether something is writing to a session right now.
+        ///
+        /// Not cached with the summary, and that is the whole subtlety: the summary is valid for
+        /// as long as the file has not changed, so a `live` cached alongside it would say "live"
+        /// forever after the one time it was true. It is recomputed on every read, from a stat
+        /// that has already happened.
+        #[test]
+        fn liveness_is_recomputed_rather_than_cached_with_the_summary() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            let path = home.join("projects").join("-repo").join("abc-1.jsonl");
+            std::fs::write(&path, format!("{}\n", user("one"))).unwrap();
+
+            // Just written, so: live. This also fills the cache.
+            assert!(parse_session(&path).unwrap().live);
+            assert!(
+                parse_session(&path).unwrap().live,
+                "still live, now from the cache"
+            );
+
+            // Age it past the window without changing its contents, so the summary cache still
+            // hits and only the mtime has moved.
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            assert!(!parse_session(&path).unwrap().live);
+        }
+
+        /// One `stat`, so a session that is sitting idle costs nothing to keep following.
+        #[test]
+        fn the_length_is_readable_without_reading_the_file() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
+            write(&home, &format!("{}\n", user("one")));
+            let len = transcript_len(Utf8Path::new("/repo"), &home, "abc-1").unwrap();
+            assert_eq!(len, user("one").len() as u64 + 1);
+            assert!(transcript_len(Utf8Path::new("/repo"), &home, "nope").is_none());
+        }
     }
 
     #[test]

@@ -154,9 +154,12 @@ enum Wire {
         /// `here`, `above` or `below` the repository.
         var scope: String?
         var cwd: String?
+        /// Something is writing to this transcript right now — a terminal, another editor, or a
+        /// lane in another window. Optional so an older daemon's reply still decodes.
+        var live: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case id, title, messages, scope, cwd
+            case id, title, messages, scope, cwd, live
             case lastActive = "last_active"
         }
 

@@ -62,7 +62,9 @@ struct WorkingBar: View {
                 ? "paused — waiting for your answer"
                 : "paused — \(model.pending.count) questions waiting"
         }
-        let quiet = Int(Date().timeIntervalSince(model.lastEventAt))
+        // The agent's own silence, not the connection's: `lastEventAt` moves on every heartbeat
+        // now, so it would read "quiet for 0s" through an entire five-minute test run.
+        let quiet = Int(Date().timeIntervalSince(model.lastProgressAt))
         if let call = turn.calls.last(where: \.running) ?? turn.calls.last {
             let name = call.subject.isEmpty ? call.tool : "\(call.tool)  \(call.subject)"
             // It used to end "Stop and run it from the terminal", which is Keel telling you to

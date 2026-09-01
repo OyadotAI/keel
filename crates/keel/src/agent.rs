@@ -7,7 +7,7 @@ use anyhow::Result;
 use axum::{
     Json,
     extract::{Query, State},
-    response::sse::{Event, Sse},
+    response::sse::{Event, KeepAlive, Sse},
 };
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
@@ -571,7 +571,7 @@ pub struct Attached {
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ChatQuery>,
-) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+) -> impl axum::response::IntoResponse {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
     // The agent runs in the lane's checkout; its permissions come from the project. The two are
     // different paths on purpose, and `settings_json` below is handed the project.
@@ -604,7 +604,7 @@ pub async fn chat(
                             ))))
                             .await;
                     });
-                    return Sse::new(ReceiverStream::new(rx));
+                    return alive(rx);
                 }
             }
         }
@@ -613,7 +613,7 @@ pub async fn chat(
             tokio::spawn(async move {
                 let _ = tx.send(Ok(Event::default().event("fatal").data(e))).await;
             });
-            return Sse::new(ReceiverStream::new(rx));
+            return alive(rx);
         }
     };
     let port = state.port();
@@ -982,7 +982,31 @@ pub async fn chat(
             .await;
     });
 
+    // A turn that is thinking sends nothing at all, and nothing on either side is watching.
+    //
+    // The app's session timeout for the stream is an hour, deliberately — a turn legitimately runs
+    // for minutes. But that means a daemon that dies, or a socket that goes away, presents as
+    // "thinking…" for an hour with a Stop button that signals a process nobody is reading from.
+    // A comment line every fifteen seconds costs nothing, is discarded by the client's parser, and
+    // turns a wedged stream into something the app can notice and say.
+    alive(rx)
+}
+
+/// The stream, with a heartbeat.
+///
+/// A turn that is thinking sends nothing at all, and nothing on either side is watching. The app's
+/// timeout for this one stream is an hour, deliberately — a turn legitimately runs for minutes.
+/// But that means a daemon that dies, or a socket that goes away, presents as "thinking…" for an
+/// hour behind a Stop button that signals a process nobody is reading from. A comment line every
+/// fifteen seconds costs nothing, is discarded by the client's parser, and turns a wedged stream
+/// into something the app can notice and say.
+///
+/// Every return from `chat` goes through here, including the ones that only carry a `fatal`.
+fn alive(rx: tokio::sync::mpsc::Receiver<Result<Event, Infallible>>) -> axum::response::Response {
+    use axum::response::IntoResponse;
     Sse::new(ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 #[cfg(test)]

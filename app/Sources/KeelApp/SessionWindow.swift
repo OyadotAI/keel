@@ -302,7 +302,12 @@ struct SessionWindow: View {
         HStack(spacing: 0) {
             // The conversation is the middle, because it is what you are doing. The record of what
             // the agent changed is a reference you consult, so it sits beside it.
+            // Keyed to the lane. Without this the view's own `@State` — the scroll anchor
+            // above all — survives a lane swap, and `scrollPosition(id:)` is then held against
+            // a turn id belonging to the conversation you just left. An id that resolves to
+            // nothing scrolls into empty space, which is the blank pane people report.
             ChatRail(model: model)
+                .id(model.id)
                 .frame(minWidth: 360)
 
             if showsStage {
@@ -324,7 +329,7 @@ struct SessionWindow: View {
                     } else {
                         switch stage {
                         case .review: ReviewPacketView(model: model, lanes: lanes)
-                        case .turn: TurnStage(model: model)
+                        case .turn: TurnStage(model: model).id(model.id)
                         case .preview: PreviewSurface(model: model)
                         }
                     }

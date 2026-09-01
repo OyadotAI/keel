@@ -75,7 +75,13 @@ final class SessionModel: Identifiable {
     var settling = false
 
     /// When the stream last said anything; the working bar reads silence off it.
+    /// When anything last arrived on the stream, heartbeat included. Proof the daemon is there.
     var lastEventAt = Date()
+    /// When the *agent* last said something. A turn thinking for four minutes is normal; a turn
+    /// whose stream has stopped arriving is not, and these used to be the same number.
+    var lastProgressAt = Date()
+    /// Nothing at all for this long, with a heartbeat every fifteen seconds, is a dead stream.
+    static let deadStream: TimeInterval = 60
     /// So the fresh-conversation retry happens once and cannot become a loop.
     private var retriedFresh = false
 
@@ -975,7 +981,7 @@ final class SessionModel: Identifiable {
         Telemetry.breadcrumb("turn started")
         let turn = Turn(prompt: full)
         turns.append(turn)
-        stallReported = false; lastEventAt = Date(); running = true
+        stallReported = false; lastEventAt = Date(); lastProgressAt = Date(); running = true
         lastError = nil; lastFix = nil
         watchApprovals(true)
         watchMonitors()
@@ -1044,6 +1050,14 @@ final class SessionModel: Identifiable {
             if let sessionId { query["session"] = sessionId }
             if let system = nextSystem { query["system"] = system; nextSystem = nil }
 
+            // A new turn is the end of reading an old one. `follow` in the trace pane refuses to
+            // scroll while a turn is focused, which is right while you are reading it and wrong
+            // the moment you ask for something new.
+            self.focusedTurn = nil
+            // Typing into a lane that was following a conversation elsewhere takes it over: from
+            // here the turns are Keel's own, and two readers appending to one `turns` array would
+            // interleave them.
+            self.unfollow()
             // Before the agent touches anything: what the tree looked like, so "restore to
             // before this turn" has something to restore to. A failure here is not a reason to
             // refuse the turn — there is simply no rewind for it, and the menu says so by absence.
@@ -1053,11 +1067,19 @@ final class SessionModel: Identifiable {
             }
             do {
                 for try await event in client.events("/api/chat", query) {
+                    // The daemon is alive. Nothing to draw — the point is that this moved, which
+                    // is what tells a thinking agent apart from a stream that has quietly died.
                     lastEventAt = Date()
+                    if event.name == Client.keepAlive { continue }
+                    // Past the heartbeat, so this is the agent itself.
+                    lastProgressAt = Date()
                     switch event.name {
                     case "msg":
                         self.preparing = nil
-                        turn.note(raw: event.data)
+                        // `record` keeps the line, because only `record` knows what it is: the
+                        // raw log is capped at 2,000 lines and partial messages emit one line per
+                        // token, so keeping every line here filled it with delta noise and
+                        // dropped every meaningful record behind it.
                         if let data = event.data.data(using: .utf8) { self.record(data, into: turn) }
                     case "err":
                         // stderr, as it happens. This is the half that used to escape only on a
@@ -1179,6 +1201,13 @@ final class SessionModel: Identifiable {
     /// so a turn sitting quiet inside a three-minute test kept running while this said it had
     /// stopped. `running` still flips immediately — the process is being signalled, and a button
     /// that waits for a round trip reads as a button that did nothing.
+    /// Stop following a session. A stream nobody is looking at still polls a file every 400 ms.
+    func unfollow() {
+        followTask?.cancel()
+        followTask = nil
+        following = false
+    }
+
     func stop() {
         let lane = id.uuidString
         Task { [client] in
@@ -1336,9 +1365,29 @@ final class SessionModel: Identifiable {
         /// authoritative list of them — built-ins, the project's own, plugins and skills, exactly
         /// as configured on this machine. Keel guessing at it would be a worse list.
         var slash_commands: [String]?
+        /// ISO-8601, on every transcript record. The live stream's `result` carries
+        /// `duration_ms`; a transcript has no `result` at all, so a replayed turn's elapsed time
+        /// is the span between its first record and its last.
+        var timestamp: String?
 
         struct Message: Decodable {
+            /// A transcript's `user` record carries `"content": "hi"` as often as it carries an
+            /// array of blocks, and a strict `[Block]?` throws on the string — which fails the
+            /// *whole* record, not the field. Following a session on disk, that would have made
+            /// every typed message unreadable.
             var content: [Block]?
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                if let blocks = try? c.decode([Block].self, forKey: .content) {
+                    content = blocks
+                } else if let text = try? c.decode(String.self, forKey: .content), !text.isEmpty {
+                    content = [Block(type: "text", text: text)]
+                }
+                model = try? c.decode(String.self, forKey: .model)
+                stop_reason = try? c.decode(String.self, forKey: .stop_reason)
+                usage = try? c.decode(Usage.self, forKey: .usage)
+            }
+            enum CodingKeys: String, CodingKey { case content, model, stop_reason, usage }
             /// `<synthetic>` marks a turn Claude Code generated itself to report a failure —
             /// the same in the live stream and in a transcript, which no other signal is.
             var model: String?
@@ -1357,7 +1406,12 @@ final class SessionModel: Identifiable {
             }
         }
         struct Block: Decodable {
+            init(type: String, text: String? = nil) { self.type = type; self.text = text }
             var type: String
+            /// A complete reasoning block. Live it arrives as `thinking_delta`s, but a transcript
+            /// holds it whole — and the reader that only knew the delta dropped every one of
+            /// them, which is why a reopened conversation had no reasoning in it at all.
+            var thinking: String?
             var id: String?
             var name: String?
             var text: String?
@@ -1368,27 +1422,60 @@ final class SessionModel: Identifiable {
         }
         struct StreamEvent: Decodable {
             var type: String?
+            /// Which content block this event is about. A tool call's arguments and the prose
+            /// beside it stream interleaved, so the index is how a delta finds its block.
+            var index: Int?
             var delta: Delta?
             var content_block: ContentBlock?
         }
-        struct ContentBlock: Decodable { var type: String? }
+        /// A `content_block_start` announces the block before any of it arrives — including, for a
+        /// `tool_use`, its id and name. That is what lets a command appear on screen while its
+        /// arguments are still being written, which is what the CLI does and Keel did not.
+        struct ContentBlock: Decodable {
+            var type: String?
+            var id: String?
+            var name: String?
+        }
         struct Delta: Decodable {
             var type: String?
             var text: String?
             var thinking: String?
+            /// `input_json_delta`: a fragment of the tool's arguments. Ignored for the whole of
+            /// Keel's life so far, which is why a tool call materialised only once it was complete.
+            var partial_json: String?
         }
     }
+
+    /// One decoder for the life of the lane. A `JSONDecoder()` per line is an allocation per
+    /// token, on the main actor, for the whole of a turn.
+    private let decoder = JSONDecoder()
 
     func record(_ data: Data, into turn: Turn) {
         if provider == .codex, recordCodex(data, into: turn) { return }
         // A line Keel cannot read is still a line the agent produced. It used to return here —
         // no log, no counter, nothing on screen — so a shape the CLI changed emptied the UI with
-        // no symptom. `note(raw:)` above has already kept it; this only records that it was not
-        // understood, so the raw view is the answer rather than a shrug.
-        guard let r = try? JSONDecoder().decode(Record.self, from: data) else {
+        // no symptom. It is kept *and* counted, so the raw view is the answer rather than a shrug.
+        guard let r = try? decoder.decode(Record.self, from: data) else {
             turn.unreadable += 1
+            turn.note(raw: String(decoding: data, as: UTF8.self))
             return
         }
+        // How long a replayed turn took, from the records themselves.
+        //
+        // A live turn gets `duration_ms` off its `result`; a transcript has no `result`, so the
+        // span between the turn's first record and its last is the only measurement there is —
+        // and it is a real one rather than a guess.
+        if let stamp = r.timestamp, let at = Self.moment(stamp) {
+            turn.saw(at)
+        }
+        // Kept here rather than in the stream loop, and not for the per-token deltas.
+        //
+        // `rawCap` is 2,000 lines and `--include-partial-messages` emits one line per token, so
+        // the escape hatch that exists to guarantee "there is no state in which Keel saw something
+        // and you cannot" filled with `content_block_delta` noise and dropped every meaningful
+        // record after the first couple of thousand tokens. The deltas are not lost: they are the
+        // reply, and the reply is on screen.
+        if r.type != "stream_event" { turn.note(raw: String(decoding: data, as: UTF8.self)) }
 
         switch r.type {
         case "system" where r.subtype == "init":
@@ -1403,15 +1490,57 @@ final class SessionModel: Identifiable {
             }
 
         case "stream_event":
-            // A new text block after a tool call is a new paragraph. Without this the second
-            // message's first word landed flush against the first message's last one.
-            if r.event?.type == "content_block_start", r.event?.content_block?.type == "text",
-               !turn.text.isEmpty, !turn.text.hasSuffix("\n\n") {
-                turn.text += turn.text.hasSuffix("\n") ? "\n" : "\n\n"
+            guard let e = r.event else { return }
+            switch e.type {
+            case "content_block_start":
+                switch e.content_block?.type {
+                case "text":
+                    // A new text block after a tool call is a new paragraph. Without this the
+                    // second message's first word landed flush against the first message's last.
+                    if !turn.text.isEmpty, !turn.text.hasSuffix("\n\n") {
+                        turn.text += turn.text.hasSuffix("\n") ? "\n" : "\n\n"
+                    }
+                    turn.say()
+                case "thinking", "redacted_thinking":
+                    if !turn.thinking.isEmpty { turn.thinking += "\n\n" }
+                    turn.think()
+                case "tool_use", "server_tool_use":
+                    // The call, before its arguments exist. Everything the row needs to draw
+                    // itself — the tool, the glyph, the spinner — is here; the subject fills in
+                    // as `input_json_delta` arrives.
+                    guard let id = e.content_block?.id, let name = e.content_block?.name else { return }
+                    turn.begin(call: id, tool: name, input: [:], parent: r.parent_tool_use_id)
+                    if let index = e.index { turn.openBlocks[index] = id }
+                default:
+                    return
+                }
+
+            // Matched on the delta being present rather than on the envelope's own name.
+            //
+            // `content_block_delta` always carries one, so this is that case — and it is also
+            // every future spelling of it. A stream that renames the event, or stops setting
+            // `type` at all, would otherwise drop the entire reply with no symptom, which is the
+            // failure this file exists to prevent.
+            case _ where e.delta != nil:
+                guard let d = e.delta else { return }
+                switch d.type {
+                case "text_delta": if let t = d.text { turn.said(t) }
+                case "thinking_delta": if let t = d.thinking { turn.thought(t) }
+                case "input_json_delta":
+                    guard let json = d.partial_json, let index = e.index,
+                          let id = turn.openBlocks[index] else { return }
+                    turn.argue(call: id, json: json)
+                default:
+                    return
+                }
+
+            case "content_block_stop":
+                guard let index = e.index, let id = turn.openBlocks.removeValue(forKey: index) else { return }
+                turn.settle(call: id)
+
+            default:
+                return
             }
-            guard let d = r.event?.delta else { return }
-            if d.type == "text_delta", let t = d.text { turn.text += t; turn.streamedText = true }
-            if d.type == "thinking_delta", let t = d.thinking { turn.thinking += t }
 
         case "assistant":
             // A failure Claude Code generated itself, not something the agent said. It used to be
@@ -1419,6 +1548,15 @@ final class SessionModel: Identifiable {
             // is how "Not logged in · Please run /login" arrived looking like a remark.
             if let failure = Self.classify(r) {
                 turn.failure = failure.message
+                // Recorded on the turn, but not raised.
+                //
+                // `classify` matches `message.model == "<synthetic>"`, which is exactly what the
+                // CLI writes into a transcript — so routing a replay through this reader popped a
+                // red banner with a **Retry** button for a rate limit that reset weeks ago, and
+                // reported it to Sentry as a turn that had just failed. Seven of them in this
+                // project's own history. What already happened is shown on the turn it happened
+                // to; only a live failure is something to act on.
+                guard !turn.replayed else { return }
                 fail(failure.message, category: failure.kind, fix: failure.fix(self))
                 // The reason these were not arriving in Sentry is that only the five-minute stall
                 // was ever reported. The taxonomy goes; the message never does — it can quote a
@@ -1431,27 +1569,55 @@ final class SessionModel: Identifiable {
                 return
             }
             if let u = r.message?.usage, u.context > 0 { turn.contextTokens = u.context }
+            // Accumulated per request, because a transcript has no `result` record.
+            //
+            // Checked against every `.jsonl` in this project: zero `result` records, and 9,420
+            // `assistant` records carrying `message.usage`. Reading the turn total only off
+            // `result` meant a session opened from History drew no footer at all — no time, no
+            // tokens, no cache share — which is the strip the deleted `session_work` existed to
+            // fill. On a live stream `result` still arrives and *assigns* the authoritative
+            // total, so this cannot double-count.
+            if let u = r.message?.usage, u.context > 0 || (u.output_tokens ?? 0) > 0 {
+                turn.tokens = (turn.tokens ?? Turn.Tokens()) + Turn.Tokens(
+                    input: u.input_tokens ?? 0, output: u.output_tokens ?? 0,
+                    cacheRead: u.cache_read_input_tokens ?? 0,
+                    cacheWrite: u.cache_creation_input_tokens ?? 0)
+            }
             // Without partial messages the prose arrives only here, whole. Take it when nothing
             // streamed it first.
-            if turn.streamedText == false {
-                for b in r.message?.content ?? [] where b.type == "text" {
-                    if let t = b.text, !t.isEmpty {
-                        if !turn.text.isEmpty { turn.text += "\n\n" }
-                        turn.text += t
-                    }
+            // One pass over the blocks, in the order the message holds them.
+            //
+            // It used to be two — every `text`, then every `tool_use` — which reversed the
+            // sequence of any message that spoke, called a tool, and spoke again. Live that never
+            // showed, because the deltas had already put the prose in order; replayed, it was the
+            // only ordering there was.
+            for b in r.message?.content ?? [] {
+                switch b.type {
+                case "text":
+                    // Without partial messages the prose arrives only here, whole — so it has to
+                    // open its own block, or the ordered view of the turn would be empty for a
+                    // provider, or a flag, that does not stream.
+                    if turn.streamedText == false, let t = b.text, !t.isEmpty { turn.wrote(t) }
+                case "thinking", "redacted_thinking":
+                    // Live this arrives as deltas; a transcript holds it whole. Reading only the
+                    // delta is why a reopened conversation had no reasoning in it.
+                    if !turn.streamedText, let t = b.thinking, !t.isEmpty { turn.mused(t) }
+                case "tool_use":
+                    guard let id = b.id, let name = b.name else { continue }
+                    turn.begin(call: id, tool: name, input: b.input ?? [:],
+                               parent: r.parent_tool_use_id)
+                default:
+                    continue
                 }
             }
             for b in r.message?.content ?? [] where b.type == "tool_use" {
-                guard let id = b.id, let name = b.name else { continue }
-                turn.begin(call: id, tool: name, input: b.input ?? [:],
-                           parent: r.parent_tool_use_id)
                 // The moment the agent starts writing a frontend file, the page is the thing to
                 // look at — the loop every vibe-coding tool is criticised for not closing.
-                if Turn.writeTools.contains(name),
-                   let path = b.input?["file_path"]?.stringValue ?? b.input?["path"]?.stringValue,
-                   Frontend.isUI(path) {
-                    frontendEdit(path)
-                }
+                guard let name = b.name, Turn.writeTools.contains(name),
+                      let path = b.input?["file_path"]?.stringValue ?? b.input?["path"]?.stringValue,
+                      Frontend.isUI(path)
+                else { continue }
+                frontendEdit(path)
             }
 
         case "user":
@@ -1502,7 +1668,10 @@ final class SessionModel: Identifiable {
             // nothing said so. A `level` of `warning` is Claude Code warning the person directly.
             if r.subtype == "compact_boundary" {
                 turn.note(raw: "the conversation was compacted")
-            } else if r.level == "warning", let said = r.content, !said.isEmpty {
+            } else if r.level == "warning", let said = r.content, !said.isEmpty,
+                      !turn.replayed {
+                // Same reason as the synthetic failure above: "Remote Control disconnected — run
+                // /login" is a thing that happened during that session, not a thing wrong now.
                 fail(said)
             }
 
@@ -1893,6 +2062,8 @@ final class SessionModel: Identifiable {
         stop()
         monitorTask?.cancel()
         monitorTask = nil
+        // A pane nobody is looking at must not keep polling a file every 400 ms.
+        unfollow()
     }
 
     private func ack(_ job: Wire.Job) async {
@@ -1970,9 +2141,29 @@ final class SessionModel: Identifiable {
                         Telemetry.breadcrumb("approval shown: \(p.tool)")
                     }
                 }
-                // A turn with no output for five minutes is the thing testers describe as
-                // "stuck on thinking". Said once per turn, with what it was doing.
-                if self.running, !self.stallReported, Date().timeIntervalSince(self.lastEventAt) > 300 {
+                // Nothing at all for a minute, heartbeat included, is a dead stream.
+                //
+                // The daemon sends a keep-alive every fifteen seconds now, so silence is no
+                // longer ambiguous: a thinking agent still moves `lastEventAt`, and a daemon that
+                // died does not. Before the heartbeat there was nothing to tell those apart, and
+                // the stream's own timeout is an hour — so a daemon that went away presented as
+                // "thinking…" until somebody gave up. It is a state that could be entered and not
+                // left, which is the half of "never stuck" that has no other guard.
+                if self.running, Date().timeIntervalSince(self.lastEventAt) > Self.deadStream {
+                    let why = "The connection to Keel's daemon stopped responding."
+                    self.streamTask?.cancel()
+                    self.streamTask = nil
+                    self.running = false
+                    self.preparing = nil
+                    self.watchApprovals(false)
+                    self.current?.failure = why
+                    self.fail(why, category: "dead-stream",
+                              fix: Fix(label: "Retry") { self.retryLast() })
+                    Telemetry.track("stream_died", ["mode": self.mode])
+                }
+                // A turn with output but no *progress* for five minutes is the thing testers
+                // describe as "stuck on thinking". Said once per turn, with what it was doing.
+                if self.running, !self.stallReported, Date().timeIntervalSince(self.lastProgressAt) > 300 {
                     self.stallReported = true
                     let tool = self.current?.calls.last?.tool ?? (self.pending.isEmpty ? "none" : "waiting-on-person")
                     Telemetry.track("turn_stalled", ["tool": tool, "pending": self.pending.count, "mode": self.mode])
@@ -2367,6 +2558,13 @@ final class SessionModel: Identifiable {
     /// drawing nothing. (`opening` is taken: that one is a project switch.)
     var replaying = false
 
+    /// The session's transcript is being followed: it is running somewhere Keel does not own it,
+    /// and what appears is arriving as it is written.
+    var following = false
+    /// How much of the conversation was dropped to keep the catch-up bounded.
+    var replayDropped = 0
+    private var followTask: Task<Void, Never>?
+
     func open(session id: String) async {
         sessionId = id
         let known = sessions.first { $0.id == id }
@@ -2381,111 +2579,134 @@ final class SessionModel: Identifiable {
         // draw and no reason on screen for why. Keeping the old conversation up while the new one
         // loads is also the better answer when the read simply fails.
         replaying = true
-        defer { replaying = false }
-        // What the session actually said, and what it did to the repository — two different
-        // endpoints, because the daemon deliberately keeps the listing away from the bodies.
-        async let bodies: [Wire.Turn]? = try? client.get("/api/session", sq(["id": id]))
-        async let work: SessionWork? = try? client.get("/api/session/work", sq(["id": id]))
-        let (said, did) = await (bodies, work)
+        replayDropped = 0
+        // One path, not two.
+        //
+        // There were two endpoints here — one for what was said, one for what was done — and a
+        // block of code that stitched their answers back into turns. It reconstructed less than
+        // the live decoder already produces: no reasoning, no tool arguments (they were faked as
+        // `["command": subject]`), no raw lines, tool output cut at 8 KB and the call list at 300.
+        // The records on disk are the shape the live decoder reads, so following the file *is*
+        // replaying it, and the conversation you reopen is the one you watched.
+        //
+        // `replaying` is cleared by the stream, when the daemon says it has caught up.
+        follow(session: id)
+    }
 
-        // The conversation, so a replayed session reads as one rather than as a command log. The
-        // work is attached to the last turn, which is where a reader looks for "and then what".
-        var replayed: [Turn] = []
-        var pendingText = ""
-        for t in said ?? [] {
-            if t.role == "user" {
-                let turn = Turn(prompt: t.text)
-                turn.finished = true
-                replayed.append(turn)
-            } else {
-                pendingText = t.text
-                replayed.last?.text = pendingText
+    /// Keep watching the transcript after it has been read.
+    ///
+    /// This is the half that was missing. Claude Code appends every record to the session's JSONL
+    /// as it goes — whoever started it, a terminal or another editor — so the file is already a
+    /// live feed, and `open` read it once and stopped. A conversation running elsewhere showed a
+    /// snapshot from the moment of the click and then sat still, which reads as Keel being wrong
+    /// about its own state rather than as a missing feature.
+    ///
+    /// Read-only. Composing into a session another process is driving is a claim problem, and
+    /// `AppState::claim` is about lanes and working trees rather than conversations — so the
+    /// composer says who owns it instead of pretending.
+    ///
+    /// The daemon sends the same `msg` events the chat stream sends, because the records on disk
+    /// are the shape `record` already reads. So a followed turn and a live one are drawn by one
+    /// decoder — which is why a reopened conversation now has its reasoning, its tool arguments
+    /// and its raw lines, none of which the old two-endpoint replay carried.
+    private func follow(session id: String) {
+        followTask?.cancel()
+        followTask = Task { [client] in
+            var live: Turn?
+            /// The old conversation stays on screen until the new one has something to replace it
+            /// with. An empty pane while a 33 MB transcript is read is the wait that reads as a
+            /// failure, and a read that fails should leave what was there rather than nothing.
+            var replaced = false
+            @MainActor func adopt(_ turn: Turn) {
+                // Marked before a single record reaches it, not once the catch-up ends: `record`
+                // reads this to decide whether a failure in the transcript is history or news,
+                // and by the time `caught-up` arrives every one of them has already been read.
+                turn.replayed = !self.following
+                if !replaced { self.turns = []; replaced = true }
+                live?.finished = true
+                self.turns.append(turn)
+                live = turn
             }
-        }
-        if replayed.isEmpty { replayed = [Turn(prompt: title)] }
-
-        if let did, !replayed.isEmpty {
-            // Each on the turn that ran it. The daemon files every call and every file against a
-            // turn now; before that it sent one flat list and this put all of it on the last
-            // turn, so a session that edited forty files over nine turns drew eight turns that
-            // "changed nothing" and one that did everything. A turn out of range — a transcript
-            // the two readers disagree about — goes on the last one rather than nowhere.
-            func turn(_ i: Int) -> Turn { replayed.indices.contains(i) ? replayed[i] : replayed[replayed.count - 1] }
-            for f in did.files { turn(f.turn).noteEdit(f.path) }
-            for (i, c) in did.calls.enumerated() {
-                let t = turn(c.turn)
-                t.begin(call: "replay-\(i)", tool: c.tool,
-                        input: ["command": .string(c.subject)])
-                t.finish(call: "replay-\(i)", output: c.output, failed: c.error)
-            }
-            // The footer strip — time, tokens, what share came from cache. It is the same data a
-            // live turn shows and it was in the transcript all along; a session opened from
-            // History simply had nothing to put there.
-            for s in did.spent ?? [] {
-                let t = turn(s.turn)
-                let tokens = Turn.Tokens(input: s.input, output: s.output,
-                                         cacheRead: s.cacheRead, cacheWrite: s.cacheWrite)
-                if tokens.total > 0 { t.tokens = tokens }
-                // Only when the two ends are genuinely apart: a turn with one record would
-                // otherwise report 0s, which is a measurement nobody made.
-                if let from = Self.moment(s.started), let to = Self.moment(s.ended),
-                   to > from {
-                    t.durationMS = Int(to.timeIntervalSince(from) * 1000)
+            do {
+                for try await event in client.events("/api/session/tail",
+                                                     self.sq(["id": id, "from": "0"])) {
+                    // `break`, never `return`: the two lines after this loop are what take the
+                    // pane out of "Opening this session…", and a lane closed mid-replay would
+                    // otherwise leave a state that can be entered and not left.
+                    if Task.isCancelled { break }
+                    switch event.name {
+                    case "truncated":
+                        self.replayDropped = Int(event.data) ?? 0
+                    case "caught-up":
+                        // Everything that had already happened has been sent. Turns before this
+                        // are a replay — Keel was not there when they ran, so they have no gate
+                        // result and saying "NO CHECKS" about them would be inventing a finding.
+                        // Records after it are the session running now.
+                        if !replaced { self.turns = []; replaced = true }
+                        self.turns.forEach { $0.finished = true }
+                        live?.finished = true
+                        self.replaying = false
+                        // Only a session something is actually writing to is being *followed*.
+                        //
+                        // Set unconditionally this told you a conversation that finished last
+                        // week was "running outside Keel" — which is the "never weird" failure
+                        // exactly: a statement about the machine that is not true. `live` is the
+                        // signal, from the transcript's own mtime.
+                        self.following = self.sessions.first { $0.id == id }?.live == true
+                        self.pinTick += 1
+                    case "msg":
+                        guard let data = event.data.data(using: .utf8) else { continue }
+                        // A person asking opens a turn; everything else belongs to the one open.
+                        if let asked = Self.asked(in: data) {
+                            adopt(Turn(prompt: asked))
+                        } else if let turn = live {
+                            self.record(data, into: turn)
+                        } else {
+                            // A transcript that opens with the agent speaking — a resumed or
+                            // compacted session. It still needs somewhere to go.
+                            adopt(Turn(prompt: self.title))
+                            self.record(data, into: live!)
+                        }
+                    case "fatal":
+                        self.lastError = event.data
+                        self.replaying = false
+                    default:
+                        continue
+                    }
                 }
+            } catch {
+                // A stream that ends is a session no longer being followed, which is a fact about
+                // the pane rather than a failure of the turn.
+                if !Task.isCancelled { self.lastError = error.localizedDescription }
             }
-            replayed[replayed.count - 1].truncated = did.truncated
-        }
-        replayed.forEach { $0.finished = true; $0.replayed = true }
-        // The one assignment, at the end, on every path that got this far.
-        turns = replayed
-        pinTick += 1
-    }
-
-    struct SessionWork: Decodable {
-        var files: [File]
-        var calls: [Call]
-        /// Optional so an older daemon's reply still decodes: a hard failure here loses the
-        /// files and the calls too, and the footer is not worth that.
-        var spent: [Spend]?
-        var truncated: Bool
-        /// The index of the turn that ran it, into the replayed conversation.
-        struct File: Decodable {
-            var path: String
-            var turn: Int
-        }
-        struct Call: Decodable {
-            var tool: String
-            var subject: String
-            var output: String
-            var error: Bool
-            var turn: Int
-        }
-        /// What one turn took, from the transcript's own `usage` records and timestamps. No cost:
-        /// the CLI no longer writes one, and a figure Keel worked out from a price list would look
-        /// exactly like the measured one beside it.
-        struct Spend: Decodable {
-            var turn: Int
-            var input: Int
-            var output: Int
-            var cacheRead: Int
-            var cacheWrite: Int
-            var started: String
-            var ended: String
-
-            enum CodingKeys: String, CodingKey {
-                case turn, input, output, started, ended
-                case cacheRead = "cache_read"
-                case cacheWrite = "cache_write"
-            }
+            self.replaying = false
+            self.following = false
         }
     }
 
-    /// ISO-8601 as the transcript writes it, with and without fractional seconds — a formatter
-    /// configured for one rejects the other, which reads as a turn that took no time at all.
+    /// A transcript timestamp, in both the shapes the CLI writes it.
+    ///
+    /// With and without fractional seconds: a miss on either is silent — the footer simply does
+    /// not draw, which is the state a session opened from History was already in.
     nonisolated static func moment(_ text: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        let full = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let plain = Date.ISO8601FormatStyle()
+        return (try? full.parse(text)) ?? (try? plain.parse(text))
+    }
+
+    /// The prompt a transcript record carries, when it is a person asking rather than a tool
+    /// answering. A `user` record holding `tool_result` blocks is the second kind and belongs to
+    /// the turn already open.
+    static func asked(in data: Data) -> String? {
+        guard let r = try? JSONDecoder().decode(Record.self, from: data), r.type == "user" else {
+            return nil
+        }
+        if let blocks = r.message?.content {
+            if blocks.contains(where: { $0.type == "tool_result" }) { return nil }
+            let said = blocks.filter { $0.type == "text" }.compactMap(\.text).joined(separator: "\n")
+            return said.isEmpty ? nil : said
+        }
+        return nil
     }
 
     /// Whether this project is trusted, which the window says out loud for as long as it is true.

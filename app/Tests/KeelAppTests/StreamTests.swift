@@ -256,8 +256,18 @@ final class SSETests: XCTestCase {
         XCTAssertEqual(parse("data:{\"tight\":1}").first?.data, #"{"tight":1}"#)
     }
 
-    func testCommentsAndKeepAlivesAreNotEvents() {
-        XCTAssertTrue(parse(":keep-alive\nid: 7\nretry: 100").isEmpty)
+    /// A comment line is the server's heartbeat, and it is worth more than nothing.
+    ///
+    /// It used to be dropped with `id:` and `retry:`, which are genuinely noise. But "the daemon
+    /// is still there" and "the agent is thinking" look identical to a reader that sees no bytes,
+    /// and the chat stream's own timeout is an hour — so a daemon that died presented as
+    /// "thinking…" until somebody gave up on it. Surfaced under a name no handler can send, so a
+    /// consumer that does not care ignores it in one line.
+    func testAKeepAliveIsSurfacedAndTheRestIsNoise() {
+        XCTAssertEqual(parse(":keep-alive").map(\.name), [Client.keepAlive])
+        XCTAssertTrue(parse("id: 7\nretry: 100").isEmpty)
+        XCTAssertFalse(Client.keepAlive.allSatisfy(\.isLetter),
+                       "it must not be spellable as an event name a handler could send")
     }
 }
 
@@ -303,26 +313,78 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(w.mcpServers[0].fromRepo)
     }
 
-    /// What a replayed turn spends travels in snake_case, and its timestamps arrive in both the
-    /// shapes the CLI writes. A miss on either is silent: the footer simply does not draw, which
-    /// is the state a session opened from History was already in.
-    func testAReplayedTurnsSpendDecodesIncludingItsCacheSplit() throws {
-        let work = try decode(#"""
-        {"files":[],"calls":[],"truncated":false,"spent":[
-          {"turn":0,"input":10,"output":5,"cache_read":900,"cache_write":100,
-           "started":"2026-01-01T10:00:00.000Z","ended":"2026-01-01T10:00:41.000Z"}]}
-        """#, SessionModel.SessionWork.self)
-        let spend = try XCTUnwrap(work.spent?.first)
-        XCTAssertEqual([spend.cacheRead, spend.cacheWrite], [900, 100])
+    /// A replayed turn's footer, from the records a transcript actually contains.
+    ///
+    /// The trap this is written against: a transcript has **no `result` record at all**. Checked
+    /// against every `.jsonl` in this project — zero `result`, and 9,420 `assistant` records
+    /// carrying `message.usage`. A first version of this test fed a hand-written `result` line and
+    /// passed green against a shape the reader will never see, while every session opened from
+    /// History drew no footer: no time, no tokens, no cache share. So the usage is accumulated per
+    /// request and the elapsed time is the span of the turn's own timestamps.
+    @MainActor
+    func testAReplayedTurnGetsItsFooterFromWhatATranscriptContains() {
+        let m = SessionModel(client: Client(port: 0))
+        let t = Turn(prompt: "x")
+        t.replayed = true
+        func assistant(_ stamp: String, _ input: Int, _ output: Int, cacheRead: Int) -> Data {
+            Data(#"""
+            {"type":"assistant","timestamp":"\#(stamp)","message":{"content":[],
+             "usage":{"input_tokens":\#(input),"output_tokens":\#(output),
+                      "cache_read_input_tokens":\#(cacheRead),"cache_creation_input_tokens":0}}}
+            """#.utf8)
+        }
+        m.record(assistant("2026-01-01T10:00:00.000Z", 10, 5, cacheRead: 400), into: t)
+        m.record(assistant("2026-01-01T10:00:41.000Z", 4, 6, cacheRead: 500), into: t)
 
-        let from = try XCTUnwrap(SessionModel.moment(spend.started))
-        let to = try XCTUnwrap(SessionModel.moment(spend.ended))
-        XCTAssertEqual(to.timeIntervalSince(from), 41)
+        XCTAssertEqual(t.tokens?.output, 11, "accumulated across the turn's requests")
+        XCTAssertEqual(t.tokens?.cacheRead, 900)
+        XCTAssertEqual(t.durationMS, 41_000, "the span of its own records")
         // The other shape, from a transcript written without fractional seconds.
         XCTAssertNotNil(SessionModel.moment("2026-01-01T10:00:00Z"))
-        // An older daemon that sends none of this still replays the files and the calls.
-        XCTAssertNil(try decode(#"{"files":[],"calls":[],"truncated":false}"#,
-                                SessionModel.SessionWork.self).spent)
+    }
+
+    /// A failure in a transcript already happened; it is not something to act on now.
+    ///
+    /// `classify` matches `message.model == "<synthetic>"`, which is exactly what the CLI writes
+    /// into a transcript — so routing a replay through the live reader popped a red banner with a
+    /// **Retry** button for a rate limit that reset weeks ago, and reported it to Sentry as a turn
+    /// that had just failed. Seven of them in this project's own history.
+    @MainActor
+    func testAFailureInATranscriptIsHistoryRatherThanNews() {
+        let m = SessionModel(client: Client(port: 0))
+        let old = Turn(prompt: "then"); old.replayed = true
+        let now = Turn(prompt: "now")
+        let spent = Data(#"""
+        {"type":"assistant","error":"rate_limit","message":{"model":"<synthetic>",
+         "content":[{"type":"text","text":"You've hit your session limit"}]}}
+        """#.utf8)
+
+        m.record(spent, into: old)
+        XCTAssertNotNil(old.failure, "still recorded on the turn it happened to")
+        XCTAssertNil(m.lastError, "but not raised as something wrong now")
+
+        m.record(spent, into: now)
+        XCTAssertNotNil(now.failure)
+        XCTAssertNotNil(m.lastError, "a live one still is")
+    }
+
+    /// Superseded by the two above; kept only so the live `result` path stays covered.
+    @MainActor
+    func testALiveResultStillCarriesTheAuthoritativeTotal() {
+        let m = SessionModel(client: Client(port: 0))
+        let t = Turn(prompt: "x")
+        m.record(Data(#"""
+        {"type":"result","duration_ms":41000,"total_cost_usd":0.12,
+         "usage":{"input_tokens":10,"output_tokens":5,
+                  "cache_read_input_tokens":900,"cache_creation_input_tokens":100}}
+        """#.utf8), into: t)
+
+        XCTAssertEqual(t.durationMS, 41_000)
+        XCTAssertEqual(t.cost, 0.12)
+        XCTAssertEqual([t.tokens?.cacheRead, t.tokens?.cacheWrite], [900, 100])
+        // 900 of the 1,010 tokens read. The share is what makes the cost figure make sense:
+        // a turn with 90% cache reads is cheap in a way its input count alone hides.
+        XCTAssertEqual(t.tokens?.cached ?? 0, 900.0 / 1010.0, accuracy: 0.001)
     }
 
     /// The two shapes the monitoring feature travels in. A field renamed on the daemon side
@@ -405,38 +467,148 @@ final class LiveTurnTests: XCTestCase {
     }
 }
 
-/// The Markdown parse, which runs on every frame of a streaming reply.
+/// The turn in the order it happened, which is what the CLI shows and Keel did not.
+@MainActor
+final class StepsTests: XCTestCase {
+    private func model() -> SessionModel { SessionModel(client: Client(port: 0)) }
+    private func feed(_ json: String, _ m: SessionModel, _ t: Turn) {
+        m.record(Data(json.utf8), into: t)
+    }
+
+    /// One `input_json_delta`, with the fragment escaped the way the wire escapes it.
+    private func argue(_ fragment: String, index: Int, _ m: SessionModel, _ t: Turn) {
+        let quoted = String(decoding: try! JSONEncoder().encode(fragment), as: UTF8.self)
+        feed("""
+        {"type":"stream_event","event":{"type":"content_block_delta","index":\(index),\
+        "delta":{"type":"input_json_delta","partial_json":\(quoted)}}}
+        """, m, t)
+    }
+
+    /// Prose, a command, and more prose is three things in a sequence.
+    ///
+    /// Keel merged every text delta of a turn into one string and put every call in a list beside
+    /// it, so a turn that said "I'll check the router", grepped, and then explained what it found
+    /// rendered as one paragraph and a separate command log. The sequence is most of what a person
+    /// is reading for, and it could not be recovered from what was stored.
+    func testProseAndCallsInterleave() {
+        let m = model()
+        let t = Turn(prompt: "check the router")
+
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll check the router first."}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#, m, t)
+
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"c1","name":"Bash"}}}"#, m, t)
+        // Split mid-string, the way the arguments actually arrive.
+        argue(#"{"command": "rg -n"#, index: 1, m, t)
+        argue(#" route"}"#, index: 1, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_stop","index":1}}"#, m, t)
+
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}"#, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Found it."}}}"#, m, t)
+
+        XCTAssertEqual(t.steps.count, 3)
+        guard case .say = t.steps[0] else { return XCTFail("first is prose") }
+        guard case .call(let id) = t.steps[1] else { return XCTFail("second is the call") }
+        guard case .say = t.steps[2] else { return XCTFail("third is prose again") }
+        XCTAssertEqual(id, "c1")
+        XCTAssertEqual(t.text, "I'll check the router first.\n\nFound it.",
+                       "the merged form the rest of the app reads is unchanged")
+    }
+
+    /// The whole command, not its first hundred and sixty characters.
+    ///
+    /// `begin` kept one field of the input, first line only, capped — so a heredoc showed the word
+    /// `cat` and an `Edit` showed a path and never its hunks. The arguments arrive as
+    /// `input_json_delta`, which was ignored outright.
+    func testTheWholeToolInputSurvives() {
+        let m = model()
+        let t = Turn(prompt: "write it")
+        let command = "cat <<'EOF' > a.txt\nline one\nline two\nEOF"
+
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"Bash"}}}"#, m, t)
+        let payload = String(decoding: try! JSONEncoder().encode(["command": command]), as: UTF8.self)
+        argue(payload, index: 0, m, t)
+        feed(#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#, m, t)
+
+        XCTAssertEqual(t.call("c1")?.input["command"]?.stringValue, command)
+        XCTAssertEqual(t.call("c1")?.subject, "cat <<'EOF' > a.txt", "the row still shows one line")
+        XCTAssertEqual(CallRow.parts(of: t.call("c1")!).first?.text, command,
+                       "and the open row shows all of it")
+    }
+
+    /// The complete `assistant` message repeats every call the stream already announced. It is the
+    /// repair, not a second call — before this it would have been drawn twice.
+    func testTheCompleteMessageDoesNotDuplicateTheCall() {
+        let m = model()
+        let t = Turn(prompt: "read it")
+        feed(#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"Read"}}}"#, m, t)
+        feed(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"/tmp/a.txt"}}]}}"#, m, t)
+
+        XCTAssertEqual(t.calls.count, 1)
+        XCTAssertEqual(t.steps.count, 1)
+        XCTAssertEqual(t.call("c1")?.input["file_path"]?.stringValue, "/tmp/a.txt",
+                       "and the complete message is what fills the arguments in")
+    }
+
+    /// A provider that does not stream partial messages still has to render.
+    func testAWholeMessageStillBecomesASayStep() {
+        let m = model()
+        let t = Turn(prompt: "hello")
+        feed(#"{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}"#, m, t)
+        feed(#"{"type":"assistant","message":{"content":[{"type":"text","text":"second"}]}}"#, m, t)
+        XCTAssertEqual(t.steps.count, 2, "the second message is not swallowed by the first")
+        XCTAssertEqual(t.text, "first\n\nsecond")
+    }
+
+    /// `rawCap` is 2,000 lines and partial messages emit one line per token, so the escape hatch
+    /// that guarantees "there is no state in which Keel saw something and you cannot" used to fill
+    /// with delta noise and drop every meaningful record behind it.
+    func testDeltasDoNotFillTheRawLog() {
+        let m = model()
+        let t = Turn(prompt: "hi")
+        for _ in 0..<50 {
+            feed(#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}"#, m, t)
+        }
+        feed(#"{"type":"result","is_error":false}"#, m, t)
+        XCTAssertEqual(t.raw.count, 1, "only the records worth keeping")
+    }
+}
+
+/// The Markdown parse, which used to run on every frame of a streaming reply.
 @MainActor
 final class MarkdownTests: XCTestCase {
 
-    /// The same text must not be re-parsed. `body` runs per text delta, so a long answer was being
-    /// parsed thousands of times on the way in — the pane stuttered under a scroll because of it.
-    func testTheSameSourceIsParsedOnce() {
-        let text = "# Title\n\nSome body.\n\n- one\n- two"
-        let first = Markdown.cachedBlocks(text)
-        let second = Markdown.cachedBlocks(text)
-        XCTAssertEqual(first.count, second.count)
-        XCTAssertEqual(first.count, 3, "heading, paragraph, bullets")
+    /// The parse belongs to the block, and happens once per mutation.
+    ///
+    /// There was a cache here keyed by the source string, and it never hit: a streaming reply
+    /// makes a *new* string per token, so every delta missed, paid a full-string hash, and evicted
+    /// a finished turn's entry on the way out. A fifty-turn session re-parsed fifty replies from
+    /// scratch on every token, which is what froze the window. Nothing on the render path parses
+    /// anything now — this asserts that a block arrives already parsed.
+    func testABlockParsesAsItIsWritten() {
+        let block = Turn.Block()
+        block.append("# Title\n\nSome body.\n\n- one\n- two")
+        XCTAssertEqual(block.blocks.count, 3, "heading, paragraph, bullets")
+        XCTAssertEqual(block.text, "# Title\n\nSome body.\n\n- one\n- two")
     }
 
-    /// Several turns render in one pass, so a one-slot cache would be evicted by its neighbour
-    /// every time and buy nothing.
-    func testDifferentSourcesBothStayCached() {
-        let a = "First answer"
-        let b = "Second answer"
-        _ = Markdown.cachedBlocks(a)
-        _ = Markdown.cachedBlocks(b)
-        XCTAssertEqual(Markdown.cachedBlocks(a).count, 1)
-        XCTAssertEqual(Markdown.cachedBlocks(b).count, 1)
+    /// Appending re-parses, so a half-written reply renders as far as it has got.
+    func testAppendingReparses() {
+        let block = Turn.Block("# Title")
+        XCTAssertEqual(block.blocks.count, 1)
+        block.append("\n\nand a paragraph")
+        XCTAssertEqual(block.blocks.count, 2)
     }
 
-    /// A streaming reply produces one new string per delta, so the cache has to be bounded or it
-    /// holds every intermediate state of every answer for the life of the app.
-    func testTheCacheIsBounded() {
-        for i in 0..<200 { _ = Markdown.cachedBlocks("delta \(i)") }
-        // Nothing to assert but that it still answers correctly after eviction.
-        XCTAssertEqual(Markdown.cachedBlocks("delta 199").count, 1)
-        XCTAssertEqual(Markdown.cachedBlocks("delta 0").count, 1)
+    /// Inline emphasis is resolved by the parser, not by `body`. `AttributedString(markdown:)`
+    /// used to be called per paragraph per frame, which was the most expensive uncached thing on
+    /// the render path.
+    func testInlineIsResolvedAtParseTime() {
+        guard case .paragraph(let text)? = Markdown.blocks("a **bold** word").first else {
+            return XCTFail("no paragraph")
+        }
+        XCTAssertEqual(String(text.characters), "a bold word", "the markers are consumed")
     }
 
     func testTablesAndRulesAreBlocks() {

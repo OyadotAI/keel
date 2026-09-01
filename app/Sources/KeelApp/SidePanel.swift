@@ -218,7 +218,10 @@ struct SessionsPanel: View {
     /// there — whether it started somewhere other than this folder. It was three monospace
     /// fragments with no separators, reading `42 msg 09:14`.
     private func detail(_ s: Wire.Session) -> String {
-        var parts = ["\(s.messages) message\(s.messages == 1 ? "" : "s")"]
+        // First, because it is the one thing here that is about right now rather than about the
+        // past — and opening it shows the conversation as it is written rather than a snapshot.
+        var parts = s.live == true ? ["● running"] : []
+        parts.append("\(s.messages) message\(s.messages == 1 ? "" : "s")")
         if let t = s.lastActive { parts.append(short(t)) }
         // Now that the headers are dates, where it ran is only ever said here.
         if let from = s.elsewhere { parts.append("in \(from)/") }
