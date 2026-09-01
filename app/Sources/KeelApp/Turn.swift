@@ -323,6 +323,17 @@ final class Turn: Identifiable {
         var decision: String?
     }
 
+    /// Commands the agent left running in a terminal session's own shell. Keel has no process
+    /// to watch or stop for these; the transcript says when they started and finished.
+    var jobs: [SeenJob] = []
+
+    struct SeenJob: Equatable {
+        var id: String
+        var command: String
+        var started: Date
+        var finished: Date?
+    }
+
     /// Fold in a fact from the daemon.
     ///
     /// Fills, and overwrites only what was an estimate: a replayed turn's tokens were summed off
@@ -366,6 +377,15 @@ final class Turn: Identifiable {
         case "approval.answered":
             if let i = asked.firstIndex(where: { $0.id == f.id }) {
                 asked[i].decision = f.answer ?? f.decision
+            }
+        case "job.started":
+            if let id = f.id, !jobs.contains(where: { $0.id == id }) {
+                let at = f.at.flatMap(SessionModel.moment) ?? Date()
+                jobs.append(SeenJob(id: id, command: f.command ?? "", started: at, finished: nil))
+            }
+        case "job.finished":
+            if let i = jobs.firstIndex(where: { $0.id == f.id }) {
+                jobs[i].finished = f.at.flatMap(SessionModel.moment) ?? Date()
             }
         case "turn.design":
             if design == nil, let pins = f.pins {

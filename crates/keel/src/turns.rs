@@ -43,6 +43,7 @@ const MAX_FILES: usize = 500;
 const MAX_PROBLEMS: usize = 200;
 const MAX_APPROVALS: usize = 100;
 const MAX_PINS: usize = 50;
+const MAX_JOBS: usize = 50;
 /// Session files kept under `.keel/turns/`. Nothing else ever deleted one.
 const MAX_STORES: usize = 500;
 /// Facts a lane can hold before its turn is keyed. The key arrives with the first assistant
@@ -101,6 +102,21 @@ pub struct Record {
     /// The pixel verdicts, which only the app can take — the one fact it still posts.
     #[serde(default)]
     pub design: Option<Vec<Pin>>,
+    /// Commands the agent left running in a terminal session's own shell. Keel cannot see or
+    /// stop those, but the transcript says when they started and when they finished.
+    #[serde(default)]
+    pub jobs: Vec<JobRecord>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct JobRecord {
+    pub id: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub started: Option<String>,
+    #[serde(default)]
+    pub finished: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -239,6 +255,10 @@ pub enum Fact {
     },
     #[serde(rename = "turn.design")]
     Design { pins: Vec<Pin> },
+    #[serde(rename = "job.started")]
+    JobStarted { id: String, command: String },
+    #[serde(rename = "job.finished")]
+    JobDone { id: String },
     #[serde(rename = "turn.ended")]
     Ended { ended: String, ms: Option<u64> },
 }
@@ -351,6 +371,21 @@ impl Record {
                 }
             }
             Fact::Design { pins } => self.design = Some(pins.clone()),
+            Fact::JobStarted { id, command } => {
+                if !self.jobs.iter().any(|j| j.id == *id) {
+                    self.jobs.push(JobRecord {
+                        id: id.clone(),
+                        command: command.clone(),
+                        started: Some(at.to_string()),
+                        finished: None,
+                    });
+                }
+            }
+            Fact::JobDone { id } => {
+                if let Some(j) = self.jobs.iter_mut().find(|j| j.id == *id) {
+                    j.finished = Some(at.to_string());
+                }
+            }
             Fact::Ended { ended, ms } => {
                 self.ended = Some(ended.clone());
                 self.ms = *ms;
@@ -441,6 +476,18 @@ impl Record {
         if let Some(pins) = &self.design {
             push(Fact::Design { pins: pins.clone() }, at(&self.ended));
         }
+        for j in &self.jobs {
+            push(
+                Fact::JobStarted {
+                    id: j.id.clone(),
+                    command: j.command.clone(),
+                },
+                at(&j.started),
+            );
+            if j.finished.is_some() {
+                push(Fact::JobDone { id: j.id.clone() }, at(&j.finished));
+            }
+        }
         if self.ended.is_some() {
             push(
                 Fact::Ended {
@@ -459,6 +506,7 @@ impl Record {
             g.problems.truncate(MAX_PROBLEMS);
         }
         self.approvals.truncate(MAX_APPROVALS);
+        self.jobs.truncate(MAX_JOBS);
         if let Some(d) = &mut self.design {
             d.truncate(MAX_PINS);
         }
@@ -1116,6 +1164,8 @@ pub struct Follower {
     home: Utf8PathBuf,
     session: String,
     open: Option<Open>,
+    /// The last turn opened, for a job that finishes after its turn did.
+    last_turn: Option<String>,
 }
 
 struct Open {
@@ -1142,7 +1192,29 @@ impl Follower {
             home,
             session,
             open: None,
+            last_turn: None,
         }
+    }
+
+    /// A command the agent left running in the terminal's own shell. Keel has no process to
+    /// watch or stop; what it has is the record, filed against the turn that started it.
+    pub async fn job(&mut self, fact: Fact) {
+        let Some(turn) = self
+            .open
+            .as_ref()
+            .map(|o| o.turn.clone())
+            .or(self.last_turn.clone())
+        else {
+            return;
+        };
+        let (repo, session) = (self.repo.clone(), self.session.clone());
+        crate::serve::blocking(
+            move || {
+                emit(&repo, &session, &turn, fact);
+            },
+            (),
+        )
+        .await;
     }
 
     #[cfg(test)]
@@ -1195,6 +1267,7 @@ impl Follower {
             )
             .await;
         }
+        self.last_turn = Some(uuid.clone());
         self.open = Some(Open {
             turn: uuid,
             prompt,

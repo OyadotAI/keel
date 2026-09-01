@@ -1852,6 +1852,22 @@ final class SessionModel: Identifiable {
 
     /// Commands Keel is running for this conversation, newest first.
     var monitors: [Wire.Job] = []
+
+    /// What the panel lists: Keel's own jobs, and the commands a followed or replayed session
+    /// left running in its own shell. Those Keel cannot see or stop, so they are read-only rows
+    /// under the lane `transcript` — but listed, because a thing that is running and invisible
+    /// is what the panel exists to prevent.
+    var visibleMonitors: [Wire.Job] {
+        let seen: [Wire.Job] = turns.flatMap { turn in
+            turn.jobs.map { job in
+                Wire.Job(id: job.id, lane: "transcript", command: job.command, dir: "",
+                         started: job.started.timeIntervalSince1970,
+                         finished: job.finished?.timeIntervalSince1970, exit: nil,
+                         log: [], reported: true)
+            }
+        }
+        return monitors + seen.reversed()
+    }
     private var monitorsRefresh: Task<Void, Never>?
 
     /// Read once at the lane's creation — before any turn, so Monitors never says "nothing being

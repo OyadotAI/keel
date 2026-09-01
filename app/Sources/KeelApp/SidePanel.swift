@@ -72,7 +72,7 @@ struct SidePanel: View {
         case .git: return nil
         case .sessions: n = model.sessions.count
         case .readiness: n = model.findings.count
-        case .monitors: n = model.monitors.count
+        case .monitors: n = model.visibleMonitors.count
         case .skills: n = model.workspace.skills.count
         case .agents: n = model.workspace.agents.count
         case .mcp: n = model.workspace.mcpServers.count
@@ -564,14 +564,16 @@ struct MonitorsPanel: View {
     let model: SessionModel
 
     var body: some View {
-        if model.monitors.isEmpty {
+        if model.visibleMonitors.isEmpty {
             EmptyState(icon: "binoculars",
                        title: "Nothing being watched",
                        "When the agent leaves a command running — a CI run, a build, a dev "
                        + "server — Keel takes it off the turn and runs it here, so it survives "
-                       + "the turn and reports back when it finishes. Stop is on the row.")
+                       + "the turn and reports back when it finishes. Stop is on the row. A "
+                       + "session running in a terminal keeps its own; those are listed here as "
+                       + "the transcript reports them.")
         } else {
-            ForEach(model.monitors) { job in
+            ForEach(model.visibleMonitors) { job in
                 MonitorRow(job: job, model: model)
                 Hairline()
             }
@@ -590,9 +592,12 @@ private struct MonitorRow: View {
     }
 
     /// Running, or how it ended. The exit code is the thing being looked for on a finished job.
+    /// A job from a transcript: Claude Code's own shell, which Keel can list but not stop.
+    private var elsewhere: Bool { job.lane == "transcript" }
+
     private var status: (text: String, tone: Color) {
-        if job.running { return ("running · \(took)", K.C.accent) }
-        let code = job.exit ?? -1
+        if job.running { return (elsewhere ? "running in the terminal · \(took)" : "running · \(took)", K.C.accent) }
+        guard let code = job.exit else { return ("done in \(took)", K.C.add) }
         return code == 0 ? ("done in \(took)", K.C.add) : ("exit \(code) after \(took)", K.C.del)
     }
 
@@ -602,7 +607,7 @@ private struct MonitorRow: View {
                 Text(job.id).font(K.F.micro.monospaced()).foregroundStyle(K.C.faint)
                 Text(status.text).font(K.F.micro).foregroundStyle(status.tone)
                 Spacer(minLength: 0)
-                if job.running {
+                if job.running, !elsewhere {
                     Button("Stop") { model.stopMonitor(job) }
                         .buttonStyle(QuietButton(tone: K.C.del))
                         .help("Interrupt it. The agent is told what it printed before it stopped.")
