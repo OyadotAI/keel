@@ -52,8 +52,6 @@ struct ChatRail: View {
                             QuestionCard(pending: p, model: model)
                         } else if p.isPlan {
                             PlanCard(pending: p, model: model)
-                        } else if p.isMonitor {
-                            MonitorCard(pending: p, model: model)
                         } else {
                             ApprovalCard(pending: p, model: model)
                         }

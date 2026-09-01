@@ -551,9 +551,9 @@ struct MonitorsPanel: View {
         if model.monitors.isEmpty {
             EmptyState(icon: "binoculars",
                        title: "Nothing being watched",
-                       "When the agent wants to leave a command running — a CI run, a build, a "
-                       + "dev server — Keel asks first, then runs it here so it survives the turn "
-                       + "and reports back when it finishes.")
+                       "When the agent leaves a command running — a CI run, a build, a dev "
+                       + "server — Keel takes it off the turn and runs it here, so it survives "
+                       + "the turn and reports back when it finishes. Stop is on the row.")
         } else {
             ForEach(model.monitors) { job in
                 MonitorRow(job: job, model: model)

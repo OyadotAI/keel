@@ -225,66 +225,6 @@ private struct OptionKey: ViewModifier {
 }
 
 
-// MARK: - Monitoring
-
-/// "Do you want me to watch this?"
-///
-/// A different question from a permission, which is why it is a different card. The agent is not
-/// asking to be allowed to run something — `Bash` may already be allowed — it is asking for a
-/// command to outlive the turn, and only Keel can grant that: a turn is one `claude -p`, and the
-/// CLI kills its own background shells at teardown. Yes hands the command to the daemon, which
-/// runs it and delivers the output back into this conversation when it finishes.
-struct MonitorCard: View {
-    let pending: Wire.Pending
-    let model: SessionModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: K.S.md) {
-            HStack(spacing: K.S.sm) {
-                Image(systemName: "binoculars.fill")
-                    .font(K.F.micro).foregroundStyle(K.C.warn)
-                    .accessibilityHidden(true)
-                Text("Keep watching this after the turn ends?")
-                    .font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
-                Spacer(minLength: 0)
-            }
-
-            Text(pending.command)
-                .font(K.F.code)
-                .foregroundStyle(K.C.text)
-                .textSelection(.enabled)
-                .lineLimit(24)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(K.S.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-                .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-
-            // Both outcomes named, because "No" here does not mean "don't run it" — it means
-            // the agent runs it in the turn and waits for it. A card whose refusal is ambiguous
-            // is one people answer wrong.
-            HStack(spacing: K.S.sm) {
-                Button("Monitor it") { model.answer(pending, allow: true, scope: "session") }
-                    .buttonStyle(FilledButton())
-                    .help("Keel runs it, it survives this turn, and its output comes back to this "
-                          + "conversation when it finishes. Listed under Monitors.")
-                Spacer()
-                Button("Run it in this turn") { model.answer(pending, allow: false, scope: "session") }
-                    .buttonStyle(QuietButton())
-                    .help("The agent runs it in the foreground and reports the result before the "
-                          + "turn ends")
-            }
-        }
-        .padding(K.S.md)
-        .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
-        .overlay(
-            RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.warn.opacity(0.45), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
-    }
-}
-
-
 // MARK: - Plans
 
 /// The plan, with the button that starts it.

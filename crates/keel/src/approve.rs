@@ -503,12 +503,27 @@ fn detaches(command: &str) -> bool {
     false
 }
 
-/// Ask whether Keel should monitor it, and either start it or say why it did not.
+/// Take the command off the turn and run it in the daemon. Nobody is asked.
 ///
-/// The answer is always a `deny`, and the reason is the whole message: `deny` is the only hook
+/// It used to be a question, and the question was the wrong shape. "Should this keep running
+/// after the turn?" is not a permission — the agent is not asking to be *allowed* to run
+/// something, `Bash` may already be allowed and the project may be trusted; it is asking for the
+/// only thing a turn cannot give it, which is to outlive the turn. There is no second answer
+/// worth having: "no" means the agent runs a dev server in the foreground until Claude Code's own
+/// `Bash` timeout kills it, having produced nothing, and a four-minute wait for a card nobody was
+/// at the keyboard for means the same thing after a four-minute stall. Both were dressed up as a
+/// decision the person was making.
+///
+/// So the job starts, and the Monitors panel is where it is answered for: it is listed while it
+/// runs, its output is there, and Stop is a button. A thing that is running and visible does not
+/// need to have been asked about; a thing that is running and *invisible* is what this subsystem
+/// exists to prevent.
+///
+/// The answer is still a `deny`, and the reason is the whole message: `deny` is the only hook
 /// verdict that reaches the agent as text it can act on, and here there is genuinely something to
 /// say — "I am watching this for you, end your turn" is not a refusal even though it travels as
-/// one.
+/// one. The agent's own call must not also run: a duplicate shell that dies at teardown helps
+/// nobody.
 async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
     let command = hook
         .tool_input
@@ -516,46 +531,6 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
         .and_then(|c| c.as_str())
         .unwrap_or_default()
         .to_string();
-
-    let id = if hook.tool_use_id.is_empty() {
-        format!("{:?}", std::time::Instant::now())
-    } else {
-        hook.tool_use_id.clone()
-    };
-    let pending = Pending {
-        id: id.clone(),
-        lane: hook.lane.clone(),
-        // Not "Bash": the card this draws asks a different question, with different answers.
-        tool: MONITOR.into(),
-        command: shown(&command),
-        // Nothing to remember. "Monitor this" is a decision about one command, not a rule about
-        // a program — writing it into the allowlist would silently background the next one too.
-        rules: Vec::new(),
-        input: hook.tool_input.clone(),
-        session_id: hook.session_id.clone(),
-    };
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    waiters().locked().insert(id.clone(), tx);
-    queue().locked().push(pending);
-
-    let answered = match tokio::time::timeout(WAIT, rx).await {
-        Ok(Ok(d)) => Some(d.decision == "allow"),
-        // Nobody answered, or nobody was there — which is not the same as being told no, and used
-        // to arrive as the same sentence.
-        _ => {
-            waiters().locked().remove(&id);
-            queue().locked().retain(|p| p.id != id);
-            None
-        }
-    };
-
-    if answered != Some(true) {
-        return Decision {
-            decision: "deny".into(),
-            reason: not_monitored(&state.repo(), &command, answered.is_none()),
-        };
-    }
 
     // The lane's checkout, so a monitored `make check` sees the lane's work and not the project's.
     let dir = if hook.cwd.is_empty() {
@@ -578,16 +553,13 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
             Decision {
                 decision: "deny".into(),
                 reason: format!(
-                    "Keel agreed to watch this and then could not start it ({e}). {}",
-                    not_monitored(&state.repo(), &command, false)
+                    "Keel took this off your turn to run it itself and then could not ({e}). {}",
+                    not_monitored(&state.repo(), &command)
                 ),
             }
         }
     }
 }
-
-/// The tool name a monitor request travels under, so the app can draw the right card.
-pub const MONITOR: &str = "MonitorRequest";
 
 /// The name a finished plan travels under: the tool Claude Code would have used, if it had one.
 pub const PLAN: &str = "ExitPlanMode";
@@ -707,13 +679,11 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
 ///
 /// So: say which of the two happened, name the thing that actually works, and close the door the
 /// agent would otherwise find on its own.
-fn not_monitored(repo: &camino::Utf8Path, command: &str, timed_out: bool) -> String {
-    let mut out = String::from(if timed_out {
-        "Not started: nobody answered the question about this within four minutes, so Keel did \
-         not run it. Nobody said no — the person may simply have been away from the window."
-    } else {
-        "Not started: the person said no to Keel watching this."
-    });
+fn not_monitored(repo: &camino::Utf8Path, command: &str) -> String {
+    let mut out = String::from(
+        "Not started: Keel tried to run this as a background job and could not. This is a fault \
+         on Keel's side, not a decision anybody made about the command.",
+    );
 
     // A dev server is what this refusal is nearly always about, and Keel has one. Saying so here
     // rather than only in the system prompt matters, because here is where the agent is looking.
@@ -995,31 +965,33 @@ pub(crate) mod tests {
         ));
     }
 
-    /// "Nobody answered" and "they said no" are different things and now say so.
+    /// A job that could not start is Keel's fault, and says so.
+    ///
+    /// This message used to have two other openings — "the person said no" and "nobody answered
+    /// within four minutes" — because monitoring was a question. It is not one any more: a
+    /// command that wants to outlive the turn is taken off the turn and listed in Monitors, where
+    /// it can be watched and stopped. The only way not to be running now is a failure to spawn,
+    /// and an agent told that must not read it as a decision it should route around.
     #[test]
-    fn a_refusal_nobody_gave_is_not_reported_as_one() {
+    fn a_job_that_could_not_start_reads_as_a_fault_and_not_a_refusal() {
         let dir = tempfile::tempdir().unwrap();
         let repo = camino::Utf8Path::from_path(dir.path()).unwrap();
-
-        let timed_out = not_monitored(repo, "pnpm dev", true);
-        assert!(timed_out.contains("nobody answered"), "{timed_out}");
+        let text = not_monitored(repo, "pnpm dev");
+        assert!(text.contains("could not"), "{text}");
         assert!(
-            timed_out.contains("Nobody said no"),
-            "a timeout must not read as a decision: {timed_out}"
+            !text.contains("said no") && !text.contains("nobody answered"),
+            "nobody decided anything: {text}"
         );
-        assert!(not_monitored(repo, "pnpm dev", false).contains("the person said no"));
     }
 
-    /// And neither of them leaves the door open that the agent walked through.
+    /// And it does not leave the door open that the agent walked through.
     #[test]
     fn the_refusal_closes_the_door_it_used_to_leave_open() {
         let dir = tempfile::tempdir().unwrap();
         let repo = camino::Utf8Path::from_path(dir.path()).unwrap();
-        for timed_out in [true, false] {
-            let text = not_monitored(repo, "pnpm dev", timed_out);
-            assert!(text.contains("Do not detach it"), "{text}");
-            assert!(text.contains("nohup"), "name the spellings: {text}");
-        }
+        let text = not_monitored(repo, "pnpm dev");
+        assert!(text.contains("Do not detach it"), "{text}");
+        assert!(text.contains("nohup"), "name the spellings: {text}");
     }
 
     /// When the command is the project's own dev server, say the thing that works instead of
@@ -1035,9 +1007,9 @@ pub(crate) mod tests {
         .unwrap();
         let detected = crate::dev::detect(&repo).expect("a dev script is a dev server");
 
-        let text = not_monitored(&repo, &detected.command, false);
+        let text = not_monitored(&repo, &detected.command);
         assert!(text.contains("Designer tab"), "{text}");
-        assert!(!not_monitored(&repo, "gh run watch 123", false).contains("Designer tab"));
+        assert!(!not_monitored(&repo, "gh run watch 123").contains("Designer tab"));
     }
 
     /// The queue is a process-wide static, and the tests that touch it run in parallel.
