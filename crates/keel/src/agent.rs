@@ -153,13 +153,13 @@ fn system_prompt(repo: &Utf8Path) -> String {
     // gets back; this bullet is here so it plans for it rather than discovering it.
     out.push_str(
         "- Background commands belong to Keel, not to your turn. Call `Bash` with \
-         `run_in_background: true` as usual: the person is asked whether to monitor it, Keel runs \
-         it outside the turn, and its output is delivered to you as a new message when it \
-         finishes. Your own call comes back refused, naming the job it became — that is the \
-         confirmation, not a failure. Do not poll it and do not start it again; say you are \
-         watching it and end the turn. If the answer is no, do not detach it by hand instead — \
-         `nohup`, `setsid`, `disown` and a trailing `&` reach the same question and get the same \
-         answer, and a shell that got past it dies with the turn with nobody watching.\n\
+         `run_in_background: true` as usual: Keel takes it off your turn and runs it itself, \
+         nobody is asked, and its output is delivered to you as a new message when it finishes. \
+         Your own call comes back refused, naming the job it became — that is the confirmation, \
+         not a failure. Do not poll it and do not start it again; say you are watching it and end \
+         the turn. Do not detach it by hand either — `nohup`, `setsid`, `disown` and a trailing \
+         `&` are taken the same way, and a shell that got past that dies with the turn with \
+         nobody watching.\n\
          - Permissions: a command outside the allowed set comes back refused; Keel shows the person \
          the refusal with a button to allow it, so say what you needed.\n\
          - To ask the person a question with options, call the `ask_user` tool (server `keel`); \

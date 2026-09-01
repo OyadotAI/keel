@@ -517,13 +517,22 @@ the turn ended, and the person only found out six minutes on, from a `<task-noti
 arrived because *they* typed again. The same kill is why "run it" needed running twice. Nothing
 Keel puts on the command line changes it, so the job belongs to the daemon instead:
 
-- The `PreToolUse` hook takes any `Bash` with `run_in_background`, **before** the trust check.
-  "Should this keep running after the turn" is not the question trust answered, so a trusted
-  project is still asked — the same reasoning that keeps `AskUserQuestion` out of it.
-- **Yes** runs it in `monitor.rs`, in the lane's checkout, outside the turn's lifetime; **no**
-  sends the agent back to the foreground. Either way the agent's own call is refused, because a
-  duplicate shell that is about to die helps nobody. The refusal names the job, and the system
-  prompt says that naming is the confirmation.
+- The `PreToolUse` hook takes any `Bash` with `run_in_background`, **before** the trust check,
+  and runs it in `monitor.rs`, in the lane's checkout, outside the turn's lifetime. The agent's
+  own call is refused, because a duplicate shell that is about to die helps nobody; the refusal
+  names the job, and the system prompt says that naming is the confirmation.
+- **Nobody is asked.** It was a card for a while, and the card was the wrong shape: "should this
+  keep running after the turn" is not a permission — `Bash` may already be allowed and the
+  project may be trusted — and there was no second answer worth having. *No* hands a dev server
+  back to a foreground `Bash` timeout that kills it having produced nothing, and a card nobody was
+  at the keyboard for cost four minutes before arriving at the same place. Monitors is where it is
+  answered for instead: listed while it runs, with its output and a Stop button. **A thing that is
+  running and visible does not need to have been asked about; a thing that is running and
+  invisible is what this subsystem exists to prevent.**
+- **A job with no lane belongs to whoever asks** — the rule `Pending` already keeps for questions.
+  `list` matched the lane exactly, so a spawn whose hook carried none filed the job under `""` and
+  every window then matched nothing: a background command running, listed nowhere, with the
+  agent's reply saying Keel was watching it.
 - The completion is delivered back into that conversation as its own turn, acked first so it
   lands exactly once, and drawn as a report rather than as a blue bubble the person did not type.
 - `stop_all()` on the parent-death path. `exit` alone reparents a monitored `pnpm dev` to init,

@@ -182,11 +182,18 @@ const SHOWN: usize = 80;
 
 /// The jobs belonging to one conversation, newest first. Without a lane, every job — which is
 /// what a fresh window asks for before it has an id of its own.
+///
+/// A job with no lane of its own belongs to whoever asks, which is the rule `Pending` already
+/// keeps for questions. The asymmetry was a way to be invisible: the lane on a job is the one on
+/// the hook's command line, a spawn that carried none filed the job under `""`, and a window
+/// asking by its own id then matched nothing — a background command running, listed nowhere, with
+/// the agent's reply saying Keel was watching it. Something running that nothing shows is the one
+/// outcome this whole file exists to prevent.
 pub fn list(lane: Option<&str>) -> Vec<Job> {
     let all = jobs().locked();
     let mut out: Vec<Job> = all
         .iter()
-        .filter(|r| lane.is_none_or(|l| l.is_empty() || r.job.lane == l))
+        .filter(|r| belongs(&r.job.lane, lane))
         .map(|r| {
             let mut job = r.job.clone();
             let len = job.log.len();
@@ -198,6 +205,13 @@ pub fn list(lane: Option<&str>) -> Vec<Job> {
         .collect();
     out.reverse();
     out
+}
+
+/// Whether a job is one this caller should see.
+///
+/// Its own, and anything filed under no lane at all.
+fn belongs(job: &str, asked: Option<&str>) -> bool {
+    asked.is_none_or(|l| l.is_empty() || job.is_empty() || job == l)
 }
 
 #[derive(Deserialize)]
@@ -292,6 +306,24 @@ mod tests {
         assert!(!list(Some("lane-2"))[0].reported);
         let _ = api_ack(Json(IdBody { id })).await;
         assert!(list(Some("lane-2"))[0].reported);
+    }
+
+    /// A job nobody claimed is seen by whoever asks. Filed under `""` — a spawn whose hook
+    /// carried no lane — it used to match no window at all, which is a background command
+    /// running, listed nowhere, with the agent's reply saying Keel was watching it.
+    ///
+    /// Asserted on the rule rather than through `start`, because the job store is process-wide
+    /// and a job with no lane is one every other test in this file would then see.
+    #[test]
+    fn a_job_with_no_lane_of_its_own_is_visible_from_one() {
+        assert!(belongs("", Some("lane-a")));
+        assert!(belongs("lane-a", Some("lane-a")));
+        assert!(!belongs("lane-b", Some("lane-a")));
+        assert!(
+            belongs("lane-b", None),
+            "a window with no id yet sees everything"
+        );
+        assert!(belongs("lane-b", Some("")));
     }
 
     /// A lane sees its own jobs and nobody else's — the same rule as questions.

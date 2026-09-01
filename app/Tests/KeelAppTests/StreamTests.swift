@@ -448,15 +448,6 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(done.elapsed, 90)
     }
 
-    /// A monitor request is not a permission and must not be drawn as one: its answers decide who
-    /// runs the command, not whether it is allowed.
-    func testAMonitorRequestIsItsOwnKindOfQuestion() throws {
-        let p = try decode(#"{"id":"bg-1","tool":"MonitorRequest","command":"gh run watch 1","rules":[],"session_id":"s"}"#, Wire.Pending.self)
-        XCTAssertTrue(p.isMonitor)
-        XCTAssertFalse(p.isQuestion)
-        XCTAssertTrue(p.rules.isEmpty, "monitoring must never write a permission rule")
-    }
-
     func testDiffLinesCarryBothLineNumbers() throws {
         let d = try decode(#"""
         {"path":"a.rs","untracked":false,"hunks":[{"header":"@@ -1 +1 @@","lines":[

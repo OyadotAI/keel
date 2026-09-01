@@ -846,32 +846,27 @@ fn eval_20_trust_does_not_cover_an_edit_that_leaves_the_project() {
 /// Measured before this existed: a turn is one `claude -p`, and the CLI kills every tracked
 /// background shell at teardown — `gh run watch` was `[killed]` eight seconds after the turn
 /// ended, and the person found out six minutes later from a notification that only arrived
-/// because they typed again. So the hook takes the call: the person is asked, Keel runs it, and
-/// the agent is refused with the job's name rather than left holding a shell that is about to die.
+/// because they typed again. So the hook takes the call: Keel runs it, and the agent is refused
+/// with the job's name rather than left holding a shell that is about to die.
+///
+/// Nobody is asked any more, and that is asserted here rather than assumed. "Should this keep
+/// running after the turn?" was a card with no second answer worth having — "no" hands a dev
+/// server back to a foreground `Bash` timeout that kills it having produced nothing — and a card
+/// nobody was at the keyboard for cost four minutes before the same outcome. The job is listed
+/// in Monitors while it runs, with its output and a Stop button, which is where being asked was
+/// supposed to lead.
 #[test]
 fn eval_21_a_monitored_command_outlives_the_turn_that_asked_for_it() {
     let (_repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
-    // Trusted, because "stop asking whether it may run things" must not silently answer "should
-    // this keep running after the turn" — a different question, and the one being tested.
-    post(port, "/api/permissions/trust", r#"{"trusted":true}"#);
 
-    let asking = std::thread::spawn(move || {
-        post_read(
-            port,
-            "/api/approve/ask",
-            r#"{"tool_name":"Bash","tool_input":{"command":"echo watching; sleep 1; echo done","run_in_background":true},"session_id":"","lane":"m","tool_use_id":"bg-1"}"#,
-        )
-        .unwrap_or_default()
-    });
-    std::thread::sleep(Duration::from_secs(2));
-
-    let queued = get(port, "/api/approve/poll?lane=m").unwrap_or_default();
-    post(
+    let decision = post_read(
         port,
-        "/api/approve/answer",
-        r#"{"id":"bg-1","decision":"allow","rules":[],"scope":"session"}"#,
-    );
-    let decision = asking.join().unwrap_or_default();
+        "/api/approve/ask",
+        r#"{"tool_name":"Bash","tool_input":{"command":"echo watching; sleep 1; echo done","run_in_background":true},"session_id":"","lane":"m","tool_use_id":"bg-1"}"#,
+    )
+    .unwrap_or_default();
+    // Whatever was queued in the meantime. Nothing should have been.
+    let queued = get(port, "/api/approve/poll?lane=m").unwrap_or_default();
 
     // Long past the point the agent's own shell would have been killed with the turn.
     std::thread::sleep(Duration::from_secs(3));
@@ -880,14 +875,14 @@ fn eval_21_a_monitored_command_outlives_the_turn_that_asked_for_it() {
     stop_daemon(&mut daemon);
 
     assert!(
-        queued.contains("MonitorRequest"),
-        "a backgrounded command was queued as an ordinary permission, so the person was asked the \
-         wrong question — or, on a trusted project, was not asked at all: {queued}"
-    );
-    assert!(
         decision.contains("deny") && decision.contains("background job"),
         "the agent was not told which job its command became; letting the call through would run \
          a second shell that dies with the turn: {decision}"
+    );
+    assert!(
+        !queued.contains("bg-1"),
+        "the person was asked whether to monitor a command Keel had already taken off the turn: \
+         {queued}"
     );
     assert!(
         jobs.contains("\"exit\":0") && jobs.contains("done"),
