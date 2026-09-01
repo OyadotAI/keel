@@ -649,6 +649,8 @@ struct PanelRow: View {
     /// the other — a description in monospace reads as output, and a command in prose reads as a
     /// claim about what it does rather than the thing that will run.
     var code = false
+    /// A dot before the name, for a row about something happening right now.
+    var accent: Color?
     let action: () -> Void
 
     var body: some View {
@@ -656,6 +658,10 @@ struct PanelRow: View {
             HStack(spacing: K.S.sm) {
                 VStack(alignment: .leading, spacing: K.S.hair) {
                     HStack(spacing: K.S.half) {
+                        if let accent {
+                            Circle().fill(accent).frame(width: 6, height: 6)
+                                .accessibilityHidden(true)
+                        }
                         Text(name)
                             .font(K.F.small.weight(.medium))
                             .foregroundStyle(dimmed ? K.C.faint : K.C.text)

@@ -29,14 +29,17 @@ pub struct Session {
     /// the rest of the summary so that filtering costs no extra pass.
     #[serde(skip)]
     entrypoint: Option<String>,
-    /// The transcript was written to within the last minute: something is running in it right
-    /// now, here or in a terminal or anywhere else.
+    /// A `claude` process has this session open right now — here, in a terminal, anywhere.
     ///
-    /// Read from the file's mtime rather than from its contents, which is why it is free — the
-    /// summary is already keyed on `(len, mtime)`, so the stat has happened either way. It is
-    /// deliberately *not* cached with the summary: the summary is valid for as long as the file
-    /// has not changed, and this is a fact about how long ago that was.
+    /// From `~/.claude/sessions/<pid>.json`, which Claude Code writes on start and removes on
+    /// exit, checked against a live pid so a crash cannot leave a ghost. It *was* "the transcript
+    /// was written to in the last minute", and that heuristic was wrong in both directions: a
+    /// turn inside a two-minute `cargo build` read as ended, and a session you had just quit read
+    /// as running for a minute after. Set by [`discover_sessions`], never cached with the summary.
     pub live: bool,
+    /// Claude Code's own word for what that process is doing: `busy` is a turn in flight, and
+    /// not busy is a prompt waiting for someone. Only meaningful while `live`.
+    pub busy: bool,
 }
 
 impl Session {
@@ -233,8 +236,41 @@ fn project_dir(dir: &Utf8Path, claude_home: &Utf8Path, scope: &str) -> Utf8PathB
     }
 }
 
+/// The sessions a `claude` process has open right now, by session id, with whether it is busy.
+///
+/// One small file per process under `~/.claude/sessions`. A file whose pid is gone is a crash
+/// that never got to clean up, and is ignored rather than shown as running forever.
+fn running(claude_home: &Utf8Path) -> std::collections::HashMap<String, bool> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(claude_home.join("sessions")) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(record) = std::fs::read_to_string(&path)
+            .map_err(drop)
+            .and_then(|s| serde_json::from_str::<Value>(&s).map_err(drop))
+        else {
+            continue;
+        };
+        let (Some(pid), Some(id)) = (record["pid"].as_i64(), record["sessionId"].as_str()) else {
+            continue;
+        };
+        // SAFETY: signal 0 delivers nothing; it only asks whether the pid exists.
+        let alive = i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
+        if alive {
+            out.insert(id.to_owned(), record["status"].as_str() == Some("busy"));
+        }
+    }
+    out
+}
+
 /// Every session recorded for `repo` and the directories around it, most recently active first.
 pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session> {
+    let running = running(claude_home);
     let mut sessions: Vec<Session> = Vec::new();
     for (dir, scope) in session_dirs(repo, claude_home) {
         let project = project_dir(&dir, claude_home, scope);
@@ -257,6 +293,10 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
                 }
                 if scope != "below" && s.cwd.is_none() {
                     s.cwd = Some(dir_of(&project, claude_home, repo, scope));
+                }
+                if let Some(busy) = running.get(&s.id) {
+                    s.live = true;
+                    s.busy = *busy;
                 }
                 sessions.push(s);
             }
@@ -290,15 +330,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
     // for all but the one session actually in use.
     let stat = std::fs::metadata(path).ok()?;
     let stamp = (stat.len(), stat.modified().ok()?);
-    // Whether something is writing to it right now. Deliberately outside the cached summary: the
-    // summary is valid for as long as the file has not changed, and this is a statement about how
-    // long ago that was, so a cached one would say "live" forever.
-    let live = stamp
-        .1
-        .elapsed()
-        .is_ok_and(|since| since < std::time::Duration::from_secs(60));
-    if let Some(mut hit) = cache().get(path, stamp) {
-        hit.live = live;
+    if let Some(hit) = cache().get(path, stamp) {
         return Some(hit);
     }
 
@@ -316,7 +348,8 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
         messages: 0,
         version: None,
         entrypoint: None,
-        live,
+        live: false,
+        busy: false,
     };
 
     for line in contents.lines() {
@@ -660,35 +693,37 @@ mod tests {
             assert!(tail(Utf8Path::new("/repo"), &home, "no-such-session", 0).is_none());
         }
 
-        /// Whether something is writing to a session right now.
-        ///
-        /// Not cached with the summary, and that is the whole subtlety: the summary is valid for
-        /// as long as the file has not changed, so a `live` cached alongside it would say "live"
-        /// forever after the one time it was true. It is recomputed on every read, from a stat
-        /// that has already happened.
+        /// Whether a `claude` has the session open right now comes from Claude Code's own
+        /// per-process file, checked against a live pid — never from the summary cache, which is
+        /// valid for as long as the transcript is unchanged and would say "running" forever.
         #[test]
-        fn liveness_is_recomputed_rather_than_cached_with_the_summary() {
-            let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
-            let path = home.join("projects").join("-repo").join("abc-1.jsonl");
-            std::fs::write(&path, format!("{}\n", user("one"))).unwrap();
+        fn liveness_comes_from_the_process_file_and_is_never_cached() {
+            let (_d, home) = home_with("-repo", "abc-1.jsonl", &format!("{}\n", user("one")));
+            let sessions_dir = home.join("sessions");
+            std::fs::create_dir_all(&sessions_dir).unwrap();
+            let me = std::process::id();
+            let file = sessions_dir.join(format!("{me}.json"));
+            std::fs::write(
+                &file,
+                format!(r#"{{"pid":{me},"sessionId":"abc-1","status":"busy"}}"#),
+            )
+            .unwrap();
+            // A crash that never cleaned up: a pid nothing has.
+            std::fs::write(
+                sessions_dir.join("1.json"),
+                r#"{"pid":2147483000,"sessionId":"abc-1","status":"busy"}"#,
+            )
+            .unwrap();
 
-            // Just written, so: live. This also fills the cache.
-            assert!(parse_session(&path).unwrap().live);
+            let first = &discover_sessions(Utf8Path::new("/repo"), &home)[0];
+            assert!(first.live && first.busy);
+
+            std::fs::remove_file(&file).unwrap();
+            let again = &discover_sessions(Utf8Path::new("/repo"), &home)[0];
             assert!(
-                parse_session(&path).unwrap().live,
-                "still live, now from the cache"
+                !again.live,
+                "the process is gone, the cached summary is not"
             );
-
-            // Age it past the window without changing its contents, so the summary cache still
-            // hits and only the mtime has moved.
-            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-            assert!(!parse_session(&path).unwrap().live);
         }
 
         /// One `stat`, so a session that is sitting idle costs nothing to keep following.

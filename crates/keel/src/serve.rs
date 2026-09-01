@@ -388,6 +388,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
 
     let app = Router::new()
         .route("/api/state", get(api_state))
+        .route("/api/sessions", get(api_sessions))
         .route("/api/tree", get(api_tree))
         .route("/api/frontend/importers", get(api_importers))
         .route("/api/session/tail", get(api_session_tail))
@@ -1128,6 +1129,29 @@ async fn api_ignore(
     .await
     .map(|()| Json(true))
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// The session list alone, for the History panel to poll while it is open.
+///
+/// `/api/state` carries it too, but that one runs a full scan of the repository, which is
+/// seconds on a large one — too much to pay every few seconds for a list of titles. This is the
+/// one `stat` per transcript the summary cache already makes cheap, and it is what keeps
+/// "● running" honest: `live` is a fact about the transcript's mtime, so a panel that never asks
+/// again shows a session running for as long as it stays open.
+async fn api_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<keel_workspace::Session>> {
+    if !state.project_open() {
+        return Json(Vec::new());
+    }
+    let repo = state.repo();
+    let sessions = blocking(
+        move || {
+            let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+            keel_workspace::discover_sessions(&repo, &home)
+        },
+        Vec::new(),
+    )
+    .await;
+    Json(sessions)
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {

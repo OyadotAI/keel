@@ -157,9 +157,11 @@ enum Wire {
         /// Something is writing to this transcript right now — a terminal, another editor, or a
         /// lane in another window. Optional so an older daemon's reply still decodes.
         var live: Bool?
+        /// Claude Code's own word: a turn is in flight. Only meaningful while `live`.
+        var busy: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case id, title, messages, scope, cwd, live
+            case id, title, messages, scope, cwd, live, busy
             case lastActive = "last_active"
         }
 

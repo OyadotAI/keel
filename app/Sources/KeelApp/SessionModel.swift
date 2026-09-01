@@ -2564,6 +2564,16 @@ final class SessionModel: Identifiable {
         Task { try? await Task.sleep(for: .seconds(2.5)); if justOpened == o.name { justOpened = nil } }
     }
 
+    /// The session list only. History polls this while it is open, so a session started in a
+    /// terminal appears without a turn having to end here, and "● running" goes away when the
+    /// writing stops rather than when something else happens to refresh the whole state.
+    func refreshSessions() async {
+        guard let fresh: [Wire.Session] = try? await client.get("/api/sessions"),
+              fresh != sessions else { return }
+        // Only on a change, so a quiet poll invalidates nothing.
+        sessions = fresh
+    }
+
     func refreshState() async {
         let s: Wire.State
         do {
@@ -2895,6 +2905,11 @@ final class SessionModel: Identifiable {
             await refreshGit()
             await refreshTree()
             attribute(before, to: turn)
+            // A followed turn never reaches `endTurn`, so this was the only place its files were
+            // ever known — and they were kept nowhere. The next replay rebuilt the turn from the
+            // transcript, which names `Edit` and `Write` and nothing a heredoc wrote, and the
+            // list went blank. Upserted, so a burst of writes is one record, not many.
+            await remember(turn)
             diffTick += 1
         }
     }
