@@ -348,7 +348,28 @@ pub async fn ask(
     // this repository" — silently covered writing to `/tmp`, to the home directory, and to
     // somebody else's checkout. `edit_is_inside`'s own comment has always said those are a
     // question; the trust check above it meant they never were.
-    let leaves_the_project = is_edit(&hook.tool_name) && !edit_is_inside(&repo, &hook.tool_input);
+    // Three reads of the project — a canonicalised path and `permissions.json` twice — on every
+    // hooked tool call. Off the executor together, once.
+    let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
+    let (leaves_the_project, trusted, effective) = {
+        let (repo, tool, input, session) = (
+            repo.clone(),
+            hook.tool_name.clone(),
+            hook.tool_input.clone(),
+            session.map(str::to_string),
+        );
+        crate::serve::blocking(
+            move || {
+                (
+                    is_edit(&tool) && !edit_is_inside(&repo, &input),
+                    crate::permissions::trusted(&repo),
+                    crate::permissions::effective(&repo, session.as_deref()),
+                )
+            },
+            (false, false, Default::default()),
+        )
+        .await
+    };
 
     if is_edit(&hook.tool_name) && !leaves_the_project {
         // Inside the repository is what `acceptEdits` already covers; nothing to ask.
@@ -359,7 +380,7 @@ pub async fn ask(
     }
 
     // One decision, already made. Nothing is queued and nobody is asked.
-    if !is_question && !leaves_the_project && crate::permissions::trusted(&repo) {
+    if !is_question && !leaves_the_project && trusted {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -367,12 +388,8 @@ pub async fn ask(
     }
 
     let rules = rules_for(&hook.tool_name, &hook.tool_input);
-    let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
 
-    if !is_question
-        && !leaves_the_project
-        && already_allowed(&rules, &crate::permissions::effective(&repo, session))
-    {
+    if !is_question && !leaves_the_project && already_allowed(&rules, &effective) {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -782,6 +799,7 @@ pub struct PollQuery {
 /// belonging to another window, which then waited out the full four minutes and failed open. A
 /// caller with no session of its own, such as the CLI, passes nothing and still gets everything.
 pub async fn poll(Query(q): Query<PollQuery>) -> Json<Vec<Pending>> {
+    // no-blocking: the queue is memory.
     let mut queue = queue().locked();
 
     if q.all {
@@ -856,28 +874,39 @@ pub async fn answer(
 
     if allow {
         // Remembered before the agent is released, so the call that follows does not ask again.
-        if body.scope == "trust" {
-            let _ = crate::permissions::set_trusted(&state.repo(), true);
-        } else {
-            for rule in &body.rules {
-                // Reported rather than dropped. "Allow once, this session" needs a conversation
-                // to belong to, and when it had none the `Err` went into a `let _ =` — the call
-                // was allowed, the rule was never stored, and the next identical call asked
-                // again. Silent, and indistinguishable from the feature not existing.
-                if let Err(why) = crate::permissions::remember(
-                    &state.repo(),
-                    rule,
-                    &body.scope,
-                    body.session.as_deref(),
-                ) {
-                    tracing::warn!("could not remember {rule:?} for {}: {why}", body.scope);
-                    sentry::capture_message(
-                        "an approval rule could not be remembered",
-                        sentry::Level::Error,
-                    );
+        // `permissions.json` is a file: off the executor.
+        let (repo, scope, rules, session) = (
+            state.repo(),
+            body.scope.clone(),
+            body.rules.clone(),
+            body.session.clone(),
+        );
+        crate::serve::blocking(
+            move || {
+                if scope == "trust" {
+                    let _ = crate::permissions::set_trusted(&repo, true);
+                    return;
                 }
-            }
-        }
+                for rule in &rules {
+                    // Reported rather than dropped. "Allow once, this session" needs a
+                    // conversation to belong to, and when it had none the `Err` went into a
+                    // `let _ =` — the call was allowed, the rule was never stored, and the next
+                    // identical call asked again. Silent, and indistinguishable from the feature
+                    // not existing.
+                    if let Err(why) =
+                        crate::permissions::remember(&repo, rule, &scope, session.as_deref())
+                    {
+                        tracing::warn!("could not remember {rule:?} for {scope}: {why}");
+                        sentry::capture_message(
+                            "an approval rule could not be remembered",
+                            sentry::Level::Error,
+                        );
+                    }
+                }
+            },
+            (),
+        )
+        .await;
     }
 
     let decision = if !body.answer.is_empty() {
@@ -921,6 +950,7 @@ pub async fn answer(
 /// so it is a process spawn plus one loopback request, and a dependency for that would be the
 /// larger cost. `None` on any failure, which the caller turns into silence.
 pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
+    // no-blocking: the hook process's own client, not a handler.
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let body = serde_json::to_string(hook).ok()?;

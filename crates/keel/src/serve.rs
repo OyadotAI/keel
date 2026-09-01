@@ -1506,23 +1506,51 @@ mod tests {
     /// say so with `// no-blocking:` and a reason.
     #[test]
     fn every_handler_keeps_blocking_work_off_the_executor() {
-        let source = include_str!("serve.rs");
-        let body = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
-
+        // Every module with a handler in it, not only this one: the rule with the worst failure
+        // mode in the daemon was kept for `serve.rs` alone, and `dev::status` walked a checkout's
+        // `package.json`s on the executor for its whole life.
+        let sources: [(&str, &str); 10] = [
+            ("serve.rs", include_str!("serve.rs")),
+            ("agent.rs", include_str!("agent.rs")),
+            ("approve.rs", include_str!("approve.rs")),
+            ("dev.rs", include_str!("dev.rs")),
+            ("monitor.rs", include_str!("monitor.rs")),
+            ("turns.rs", include_str!("turns.rs")),
+            ("worktree.rs", include_str!("worktree.rs")),
+            ("snapshot.rs", include_str!("snapshot.rs")),
+            ("verify.rs", include_str!("verify.rs")),
+            ("permissions.rs", include_str!("permissions.rs")),
+        ];
         let mut offenders = Vec::new();
-        for part in body.split("\nasync fn ").skip(1) {
-            let name = part
-                .split(['(', '<', ' '])
-                .next()
-                .unwrap_or_default()
-                .to_string();
-            if !name.starts_with("api_") {
-                continue;
+        for (file, source) in sources {
+            let body = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+            for part in body.split("async fn ").skip(1) {
+                let name = part
+                    .split(['(', '<', ' '])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                // A handler is a function axum routes to: `api_*` here, and every `pub async fn`
+                // in the modules that register their own. The private helpers between them are
+                // the handlers' own business.
+                let handler =
+                    name.starts_with("api_") || source.contains(&format!("pub async fn {name}"));
+                if !handler {
+                    continue;
+                }
+                // Its own body only: up to the next `fn` at column zero, so a well-behaved
+                // handler cannot vouch for the one after it.
+                let own = part.split("\n}\n").next().unwrap_or(part);
+                if own.contains("blocking(")
+                    || own.contains("spawn_blocking(")
+                    || own.contains("off_thread(")
+                    || own.contains("// no-blocking:")
+                    || own.contains("tokio::spawn(")
+                {
+                    continue;
+                }
+                offenders.push(format!("{file}::{name}"));
             }
-            if part.contains("blocking(") || part.contains("// no-blocking:") {
-                continue;
-            }
-            offenders.push(name);
         }
         assert!(
             offenders.is_empty(),
