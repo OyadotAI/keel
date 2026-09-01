@@ -953,7 +953,6 @@ struct ModelPicker: View {
     private var choices: [(value: String, label: String)] { model.provider.models }
 
     var body: some View {
-        let _ = model.modelTick
         Menu {
             ForEach(choices, id: \.value) { value, label in
                 Button {

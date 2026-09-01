@@ -100,11 +100,9 @@ final class SessionModel: Identifiable {
     var mode = "acceptEdits"
     /// `--model` for every turn, or empty for the CLI's default. The same choice `/model` makes
     /// in the terminal.
-    var claudeModel: String {
-        get { UserDefaults.standard.string(forKey: "keel.model") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "keel.model"); modelTick += 1 }
+    var claudeModel: String = UserDefaults.standard.string(forKey: "keel.model") ?? "" {
+        didSet { UserDefaults.standard.set(claudeModel, forKey: "keel.model") }
     }
-    var modelTick = 0
 
     var branch: String? { get { repo.branch } set { repo.branch = newValue } }
     var changes: [Wire.Change] { get { repo.changes } set { repo.changes = newValue } }
@@ -294,16 +292,16 @@ final class SessionModel: Identifiable {
         /// pixel check afterwards prove the source now matches.
         var nudges: [String] = []
     }
-    var pins: [Pin] = []
+    var pins: [Pin] { get { designer.pins } set { designer.pins = newValue } }
 
     /// The pins the turn in flight was sent with, so the after-photos know what to re-shoot.
-    var designInFlight: [Pin] = []
+    var designInFlight: [Pin] { get { designer.designInFlight } set { designer.designInFlight = newValue } }
     /// Asks the preview to photograph a rect of the page as it is now. Set by the pane while open.
-    var resnapshot: ((Picked.Rect) async -> NSImage?)?
+    var resnapshot: ((Picked.Rect) async -> NSImage?)? { get { designer.resnapshot } set { designer.resnapshot = newValue } }
     /// Asks the page where these selectors are *now*. Set by the pane while open.
-    var rectsNow: (([String]) async -> [String: Picked.Rect])?
+    var rectsNow: (([String]) async -> [String: Picked.Rect])? { get { designer.rectsNow } set { designer.rectsNow = newValue } }
     /// Sends a message to the canvas script in the page. Set by the pane while open.
-    var canvas: (([String: Any]) -> Void)?
+    var canvas: (([String: Any]) -> Void)? { get { designer.canvas } set { designer.canvas = newValue } }
 
     /// The pane lends the model the page. One call for the three closures, because the pane
     /// used to set them one at a time from inside SwiftUI's update pass and the pop-out window
@@ -328,21 +326,16 @@ final class SessionModel: Identifiable {
     /// Popping the preview out means two panes exist for a moment, and the old one's teardown runs
     /// on a `Task` — so without this it could nil out the *new* window's closures and leave the
     /// check with nothing to photograph through.
-    weak var canvasOwner: AnyObject?
+    var canvasOwner: AnyObject? { get { designer.canvasOwner } set { designer.canvasOwner = newValue } }
 
     /// The frontend file the agent is writing right now, for the bar over the preview.
-    var editing: String?
+    var editing: String? { get { designer.editing } set { designer.editing = newValue } }
     /// Bring the Designer forward and follow the agent to the page it edits.
-    var followEdits: Bool {
-        // Off by default: the trace is the tab engineers read, and a stage that switches to
-        // the page on its own is the thing they turned off first. On is a choice.
-        get { UserDefaults.standard.object(forKey: "keel.followEdits") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "keel.followEdits"); designTick += 1 }
-    }
+    var followEdits: Bool { get { designer.followEdits } set { designer.followEdits = newValue } }
     /// Bumped when the window should show the preview because the agent is editing it.
-    var designTick = 0
+    var designTick: Int { get { designer.designTick } set { designer.designTick = newValue } }
     /// What the last write changed on the page, as the page reported it.
-    var changedRegions: [Region] = []
+    var changedRegions: [Region] { get { designer.changedRegions } set { designer.changedRegions = newValue } }
     /// Bumped by every `changed` report; `checkDesign` waits on it instead of on a timer.
     private var changeTick = 0
 
@@ -437,20 +430,20 @@ final class SessionModel: Identifiable {
     }
 
     /// The dev server, when there is one.
-    var previewURL: String?
+    var previewURL: String? { get { designer.previewURL } set { designer.previewURL = newValue } }
     var devDetected: String? { get { project.store.devDetected } set { project.store.devDetected = newValue } }
     /// Where it runs, when that is not the repository root — which for a monorepo it never is.
     var devDir: String? { get { project.store.devDir } set { project.store.devDir = newValue } }
-    var devRunning = false
-    var picking = false
+    var devRunning: Bool { get { designer.devRunning } set { designer.devRunning = newValue } }
+    var picking: Bool { get { designer.picking } set { designer.picking = newValue } }
     /// The preview is open in a window of its own, so the tab stands aside. Two panes would each
     /// install their own `resnapshot` and `canvas`, and the check would photograph whichever one
     /// happened to win.
-    var detachedPreview = false
+    var detachedPreview: Bool { get { designer.detachedPreview } set { designer.detachedPreview = newValue } }
 
     /// How wide the previewed page is rendered. Desktop by default — the pane is narrow, and
     /// letting the pane decide meant every site opened in its phone layout.
-    var previewWidth: PreviewWidth = .desktop
+    var previewWidth: PreviewWidth { get { designer.previewWidth } set { designer.previewWidth = newValue } }
 
     /// Take a pick from the preview: it becomes a pin, and its before-image rides along as an
     /// attachment so the agent sees what the thing looks like now.
@@ -626,6 +619,9 @@ final class SessionModel: Identifiable {
     let project: Project
     /// The git facts for this lane's checkout. Switches the moment `worktree` does.
     var repo: RepoStore { project.repo(for: worktree) }
+    /// The Designer's state and the workbench's, each its own object. See their files.
+    let designer = DesignerViewModel()
+    let workbench = WorkbenchViewModel()
 
     init(client: Client, port: UInt16 = 7777, sessionId: String? = nil, id: UUID = UUID(),
          project: Project? = nil) {
@@ -740,9 +736,9 @@ final class SessionModel: Identifiable {
     var current: Turn? { turns.last }
 
     /// The file whose diff is on screen, picked from the changes tree.
-    var viewingDiff: String?
+    var viewingDiff: String? { get { workbench.viewingDiff } set { workbench.viewingDiff = newValue } }
     /// The file whose contents are on screen, picked from the file tree.
-    var viewingFile: String?
+    var viewingFile: String? { get { workbench.viewingFile } set { workbench.viewingFile = newValue } }
 
     /// One thing on the stage at a time. The stage picks the first of inspector, commit, file,
     /// diff that is set, so setting a diff while a file was open showed the file — and the
@@ -763,7 +759,7 @@ final class SessionModel: Identifiable {
         case pr, skills, subagent, mcp, setup
         var id: String { rawValue }
     }
-    var sheet: Sheet?
+    var sheet: Sheet? { get { workbench.sheet } set { workbench.sheet = newValue } }
 
     /// Offer the setup checklist once per project, the first time it is opened with something
     /// missing. Reachable any time from ⌘K.
@@ -780,7 +776,7 @@ final class SessionModel: Identifiable {
     ///
     /// Clicking a skill or a hook has to lead somewhere: a row you cannot open is a row that only
     /// tells you a name you already knew.
-    var inspecting: Inspect?
+    var inspecting: Inspect? { get { workbench.inspecting } set { workbench.inspecting = newValue } }
 
     enum Inspect: Equatable {
         case skill(Wire.Named)
@@ -792,7 +788,7 @@ final class SessionModel: Identifiable {
 
     /// Set when a turn is picked in the conversation, so the record beside it scrolls to match.
     /// The two panes scroll independently, which is right — but they have to be able to meet.
-    var focusedTurn: UUID?
+    var focusedTurn: UUID? { get { workbench.focusedTurn } set { workbench.focusedTurn = newValue } }
 
     /// What this conversation has cost, summed from what the CLI reported per turn. A client-side
     /// estimate, which is what the CLI calls it too.
@@ -1864,11 +1860,11 @@ final class SessionModel: Identifiable {
     }
 
     /// The dev server's last lines, for when the page is blank and the reason is in them.
-    var devLog: [String] = []
+    var devLog: [String] { get { designer.devLog } set { designer.devLog = newValue } }
     /// What went wrong loading the page, from the web view itself.
-    var previewProblem: String?
+    var previewProblem: String? { get { designer.previewProblem } set { designer.previewProblem = newValue } }
     /// Bumped to ask the web view to reload the page it has.
-    var reloadTick = 0
+    var reloadTick: Int { get { designer.reloadTick } set { designer.reloadTick = newValue } }
 
     // MARK: - Slash commands
 
@@ -1931,7 +1927,7 @@ final class SessionModel: Identifiable {
     }
 
     /// The lane whose dev server is running, when it is not this one's.
-    var devElsewhere: String?
+    var devElsewhere: String? { get { designer.devElsewhere } set { designer.devElsewhere = newValue } }
     var devIsElsewhere: Bool { devElsewhere != nil }
 
     struct StartDev: Encodable { var command: String? }
@@ -3208,7 +3204,7 @@ final class SessionModel: Identifiable {
     /// panel asks first and says the counts.
     /// Asked from the panel root, not a row: a dialog presented from a row inside a lazy stack
     /// can vanish with the row, and its button then does nothing.
-    var confirmingDiscard = false
+    var confirmingDiscard: Bool { get { workbench.confirmingDiscard } set { workbench.confirmingDiscard = newValue } }
 
     /// The past session being renamed from History, and the name being typed for it.
     ///
@@ -3216,8 +3212,8 @@ final class SessionModel: Identifiable {
     /// learn it twice: the alert used to hang off a zero-height `Color.clear` at the end of the
     /// session list, which a lazy stack with 158 rows in it never builds. Right-click, Rename,
     /// and nothing at all happened.
-    var renamingSession: String?
-    var renameDraft = ""
+    var renamingSession: String? { get { workbench.renamingSession } set { workbench.renamingSession = newValue } }
+    var renameDraft: String { get { workbench.renameDraft } set { workbench.renameDraft = newValue } }
     var discarded: String?
     func discardAll() async {
         var counts = [0, 0]
@@ -3246,7 +3242,7 @@ final class SessionModel: Identifiable {
         Telemetry.track("commit_made", ["manual": true, "all": all])
     }
     /// The commit whose diff is on screen.
-    var viewingCommit: Wire.Commit?
+    var viewingCommit: Wire.Commit? { get { workbench.viewingCommit } set { workbench.viewingCommit = newValue } }
 
     func commitDiff(_ sha: String) async -> [Wire.Diff] {
         (try? await client.get("/api/git/commit/diff", q(["sha": sha]))) ?? []
