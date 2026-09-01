@@ -259,6 +259,11 @@ async fn watch_sessions(state: Arc<AppState>) {
             )
             .await;
             let again = SAY_AGAIN.swap(false, std::sync::atomic::Ordering::Relaxed);
+            hold_terminal_claims(
+                &state,
+                now.iter()
+                    .map(|s| (s.id.as_str(), s.cwd.as_deref(), s.live, s.busy)),
+            );
             if again || last.as_ref() != Some(&now) {
                 if let Ok(data) = serde_json::to_value(&now) {
                     emit("sessions", None, data);
@@ -274,6 +279,34 @@ async fn watch_sessions(state: Arc<AppState>) {
             }
             _ = sessions_poke().notified() => {}
             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+        }
+    }
+}
+
+/// A terminal `claude` busy in one of this project's trees holds that tree, whether or not a
+/// window is following it.
+///
+/// The follower's claim covers the sessions somebody has open in Keel; this covers the rest,
+/// which is where non-negotiable 11 had its gap — a lane could start writing a tree a terminal
+/// was mid-turn in. Held while busy, released at idle unless a follower has it, in which case
+/// the follower finishes the turn and releases it. Nothing here records facts: a tree held is
+/// all an unfollowed session gets, and all it needs.
+pub fn hold_terminal_claims<'a>(
+    state: &AppState,
+    sessions: impl Iterator<Item = (&'a str, Option<&'a str>, bool, bool)>,
+) {
+    for (id, cwd, live, busy) in sessions {
+        if !live || state.owns_session(id) {
+            continue;
+        }
+        if busy {
+            if let Some(checkout) = state.session_dir_checked(cwd) {
+                // Refused when a lane is writing that tree: the lane was first, and the terminal
+                // turn is the one that will be told so if a follower attaches.
+                let _ = state.claim_terminal(id, &checkout);
+            }
+        } else {
+            state.release_terminal_unfollowed(id);
         }
     }
 }
@@ -351,6 +384,45 @@ mod tests {
             assert_eq!(second.kind, "tree.changed");
             assert!(second.seq > first.seq);
         }
+    }
+
+    /// Non-negotiable 11 for a session nobody has open: busy holds the tree, idle gives it back.
+    #[test]
+    fn an_unfollowed_busy_terminal_session_holds_its_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        // Canonical, because `session_dir_checked` compares a canonicalised cwd against the
+        // repository, and a temp dir on macOS is `/var/…` for `/private/var/…`.
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let state = AppState::new(repo.clone());
+        let cwd = repo.as_str();
+
+        hold_terminal_claims(&state, [("s-1", Some(cwd), true, true)].into_iter());
+        assert!(
+            state.claim("lane-a", &repo, true).is_err(),
+            "the terminal holds the tree while it is busy"
+        );
+        let reader = state
+            .claim("lane-r", &repo, false)
+            .expect("a reader may sit beside it");
+        state.release("lane-r", reader);
+
+        hold_terminal_claims(&state, [("s-1", Some(cwd), true, false)].into_iter());
+        let writer = state
+            .claim("lane-a", &repo, true)
+            .expect("idle gives it back");
+        state.release("lane-a", writer);
+
+        // A follower owns the claim; the watcher leaves it alone at idle.
+        state.attach_follower("s-2");
+        hold_terminal_claims(&state, [("s-2", Some(cwd), true, true)].into_iter());
+        hold_terminal_claims(&state, [("s-2", Some(cwd), true, false)].into_iter());
+        assert!(
+            state.claim("lane-b", &repo, true).is_err(),
+            "the follower will release it"
+        );
+        state.detach_follower("s-2");
+        hold_terminal_claims(&state, [("s-2", Some(cwd), true, false)].into_iter());
+        assert!(state.claim("lane-b", &repo, true).is_ok());
     }
 
     #[test]

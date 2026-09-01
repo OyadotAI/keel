@@ -14,7 +14,7 @@ final class SessionModel: Identifiable {
 
     /// Claude Code's own session id. `nil` until the first turn's `system/init` announces one,
     /// which is also why `settings_json` takes an optional session on the Rust side.
-    var sessionId: String?
+    var sessionId: String? { get { store.sessionId } set { store.sessionId = newValue } }
 
     /// What this lane is called, in the rail.
     ///
@@ -64,22 +64,22 @@ final class SessionModel: Identifiable {
     /// Readiness or Plugins panel — which reads as "your project has none of these".
     var loadFailed: String? { get { project.store.loadFailed } set { project.store.loadFailed = newValue } }
 
-    var turns: [Turn] = []
-    var running = false
+    var turns: [Turn] { get { store.turns } set { store.turns = newValue } }
+    var running: Bool { get { store.running } set { store.running = newValue } }
     /// The turn's stream has ended but the tree is not finished with.
     ///
     /// `endTurn` clears `running` first and only then runs the gate — minutes — and the
     /// auto-commit, which is `git add -A` over the whole checkout. For that whole window the
     /// lane did not count as writing, so a second shared lane could start and have its
     /// half-written files committed under this lane's prompt. Read by `writingElsewhere`.
-    var settling = false
+    var settling: Bool { get { store.settling } set { store.settling = newValue } }
 
     /// When the stream last said anything; the working bar reads silence off it.
     /// When anything last arrived on the stream, heartbeat included. Proof the daemon is there.
-    var lastEventAt = Date()
+    var lastEventAt: Date { get { store.lastEventAt } set { store.lastEventAt = newValue } }
     /// When the *agent* last said something. A turn thinking for four minutes is normal; a turn
     /// whose stream has stopped arriving is not, and these used to be the same number.
-    var lastProgressAt = Date()
+    var lastProgressAt: Date { get { store.lastProgressAt } set { store.lastProgressAt = newValue } }
     /// Nothing at all for this long, with a heartbeat every fifteen seconds, is a dead stream.
     static let deadStream: TimeInterval = 60
     /// So the fresh-conversation retry happens once and cannot become a loop.
@@ -91,9 +91,9 @@ final class SessionModel: Identifiable {
     /// the working tree — on a real repository that is minutes, during which the bar said
     /// "thinking…" and then, at ninety seconds, told the person to stop and use the terminal.
     /// It was neither thinking nor stuck; it was checking out, and saying so is the whole fix.
-    var preparing: String?
+    var preparing: String? { get { store.preparing } set { store.preparing = newValue } }
     /// One stall report per turn.
-    var stallReported = false
+    var stallReported: Bool { get { store.stallReported } set { store.stallReported = newValue } }
     var prompt = ""
     /// Prompts typed while the agent works. Queued visibly rather than refused.
     var queued: [String] = []
@@ -619,7 +619,9 @@ final class SessionModel: Identifiable {
     let project: Project
     /// The git facts for this lane's checkout. Switches the moment `worktree` does.
     var repo: RepoStore { project.repo(for: worktree) }
-    /// The Designer's state and the workbench's, each its own object. See their files.
+    /// The conversation's state, the Designer's and the workbench's, each its own object. See
+    /// their files.
+    let store = SessionStore()
     let designer = DesignerViewModel()
     let workbench = WorkbenchViewModel()
 
@@ -628,8 +630,9 @@ final class SessionModel: Identifiable {
         self.client = client
         self.port = port
         self.project = project ?? Project(client: client, port: port)
-        self.sessionId = sessionId
         self.id = id
+        // Through the store, so after every stored property is set.
+        store.sessionId = sessionId
         // Here, and not at the first turn. See `watchMonitors`.
         watchMonitors()
         watchdog()
@@ -2478,7 +2481,7 @@ final class SessionModel: Identifiable {
     /// simply empty. This was a Bool and the second case fell into the third — a tail stream
     /// that failed drew "Nothing has run yet" over a conversation that had.
     enum Replay: Equatable { case none, reading, failed(String) }
-    var replay: Replay = .none
+    var replay: Replay { get { store.replay } set { store.replay = newValue } }
     /// A transcript is being read into this lane. (`opening` is taken: that one is a project
     /// switch.)
     var replaying: Bool {
@@ -2488,11 +2491,11 @@ final class SessionModel: Identifiable {
 
     /// The session's transcript is being followed: it is running somewhere Keel does not own it,
     /// and what appears is arriving as it is written.
-    var following = false
+    var following: Bool { get { store.following } set { store.following = newValue } }
     /// How much of the conversation was dropped to keep the catch-up bounded: records, and the
     /// bytes the daemon did not read at all.
-    var replayDropped = 0
-    var replayDroppedBytes = 0
+    var replayDropped: Int { get { store.replayDropped } set { store.replayDropped = newValue } }
+    var replayDroppedBytes: Int { get { store.replayDroppedBytes } set { store.replayDroppedBytes = newValue } }
     /// The sentence both panes draw when the daemon dropped the head of a long session. Static so
     /// it can be asserted on; `nil` when nothing was dropped.
     static func droppedNotice(_ dropped: Int, bytes: Int = 0) -> String? {
@@ -2511,15 +2514,15 @@ final class SessionModel: Identifiable {
     /// Turns read from the transcript while `replay` is `.reading`, held back until the daemon
     /// says it has caught up, so the pane lays the conversation out once rather than once per
     /// turn. The reading state is the visible one; this is only where the turns wait.
-    private var catchUp: [Turn] = []
+    private var catchUp: [Turn] { get { store.catchUp } set { store.catchUp = newValue } }
     /// The turn a followed stream is writing into.
-    private var followed: Turn?
+    private var followed: Turn? { get { store.followed } set { store.followed = newValue } }
     /// Whether the turn on screen is one this lane started.
     ///
     /// A live stream and a followed one carry the same records; what differs is whose turn it is
     /// — and so whether a failure is news or history, whether Keel closes it, and whether Stop
     /// can reach it. Internal rather than private so the parity test can run both paths.
-    var owned = false
+    var owned: Bool { get { store.owned } set { store.owned = newValue } }
     private var watchdogTask: Task<Void, Never>?
 
     func open(session id: String) async {
@@ -3081,7 +3084,7 @@ final class SessionModel: Identifiable {
             lastError = "Renamed the tab, but History kept the old name: "
                 + error.localizedDescription
         }
-        await refreshState()
+        // The list follows on its own: a rename pokes the daemon's sessions watcher.
     }
 
     struct GitAct: Encodable { var action: String; var path: String; var hunk: Int? }

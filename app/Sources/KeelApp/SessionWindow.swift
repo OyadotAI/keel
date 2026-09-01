@@ -802,6 +802,13 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: K.S.md) {
+            // A daemon that stopped answering used to read as every panel quietly emptying.
+            // Said here, once, for as long as it is true; the connection comes back on its own.
+            if !model.project.events.connected, model.project.port != 0 {
+                Pill(text: "RECONNECTING", tone: .warn)
+                    .help("Keel's daemon is not answering. The window reconnects on its own; "
+                          + "nothing here is lost.")
+            }
             if model.isWorkspace {
                 // Several repositories in one folder. Each keeps its own branch, and there is no
                 // single one to name — so they are all named, which is also how you tell at a
