@@ -1076,7 +1076,10 @@ final class SessionModel: Identifiable {
                 }
             }
             var query = sq(["prompt": full, "mode": mode, "lane": id.uuidString,
-                            "provider": provider.queryValue])
+                            "provider": provider.queryValue,
+                            "auto_commit": autoCommit ? "true" : "false"])
+            // The daemon holds the commit for the pixel verdict when there is one coming.
+            if !designInFlight.isEmpty { query["design"] = "true" }
             if !claudeModel.isEmpty { query["model"] = claudeModel }
             if let sessionId { query["session"] = sessionId }
             if let system = nextSystem { query["system"] = system; nextSystem = nil }
@@ -1085,13 +1088,8 @@ final class SessionModel: Identifiable {
             // scroll while a turn is focused, which is right while you are reading it and wrong
             // the moment you ask for something new.
             self.focusedTurn = nil
-            // Before the agent touches anything: what the tree looked like, so "restore to
-            // before this turn" has something to restore to. A failure here is not a reason to
-            // refuse the turn — there is simply no rewind for it, and the menu says so by absence.
-            if let snap: Snapshot = try? await client.post("/api/git/snapshot", body: Wire.None(),
-                                                            q(), as: Snapshot.self) {
-                turn.snapshot = snap.tree
-            }
+            // The snapshot that makes "restore to before this turn" possible is the daemon's,
+            // taken before the agent is spawned and sent as the turn's first fact.
             do {
                 for try await event in client.events("/api/chat", query) {
                     await self.apply(event)
@@ -1132,29 +1130,15 @@ final class SessionModel: Identifiable {
         // below still own the tree, so another lane must not start writing it yet.
         settling = true
         defer { settling = false }
-        // What the turn wrote through `Bash` rather than through `Edit` — a heredoc, a `tee`, a
-        // formatter it ran — is in the tree and in no tool call. See `attribute`.
-        let before = treeFingerprint
+        // The files, the gate and the commit are the daemon's now, and arrived as facts before
+        // the stream closed. What is left is reading the tree they left behind.
         await refreshGit()
         await refreshTree()
-        attribute(before, to: turn)
-        // Written now that the file list is final. Everything on a turn except its prose is
-        // Keel's own reading of the machine, and none of it is in the transcript — so without
-        // this the next launch rebuilds the turn with its words and none of its work.
-        await remember(turn)
         // The turn just changed the repository, and readiness is a reading of the repository.
         // Without this the panel kept the findings from before the fix — including the one the
         // person clicked "Fix this" on — until they went and pressed rescan themselves.
         await refreshState()
         await lanes?.refreshWorktrees()
-        // The agent does not grade its own work.
-        if mode != "plan" { await runGate(turn) }
-        // Before the commit, not after. "The edit went to the wrong file" is a reason not to
-        // commit, and it used to arrive after the commit it should have questioned.
-        await checkDesign(turn)
-        // Accepted work becomes a commit, so the tree stays small and every step is a place
-        // to go back to.
-        if mode != "plan" { await commitTurn(turn) }
         // The diffs in the turn are read once, when their card appears — which for a file the
         // agent is in the middle of writing is before there is anything to read, and the daemon
         // rightly answered "this file is not on disk any more". Nothing then asked again, so a new
@@ -1366,6 +1350,9 @@ final class SessionModel: Identifiable {
         /// `duration_ms`; a transcript has no `result` at all, so a replayed turn's elapsed time
         /// is the span between its first record and its last.
         var timestamp: String?
+        /// The record's own id, on every transcript record. A `user` record's is the key every
+        /// fact about the turn it opens is filed under.
+        var uuid: String?
 
         struct Message: Decodable {
             /// A transcript's `user` record carries `"content": "hi"` as often as it carries an
@@ -1812,7 +1799,7 @@ final class SessionModel: Identifiable {
         var problems: [Wire.Problem] = []
         var command = ""
         do {
-            for try await event in client.events("/api/verify", q()) {
+            for try await event in client.events("/api/verify", q(["lane": id.uuidString])) {
                 switch event.name {
                 case "none":
                     turn.gate = .none(event.data); return
@@ -2752,8 +2739,10 @@ final class SessionModel: Identifiable {
             // A person asking opens a turn; everything else belongs to the one open. A
             // transcript that opens with the agent speaking — a resumed or compacted session —
             // still needs somewhere to go.
-            if let asked = Self.asked(in: data) {
-                adopt(Turn(prompt: asked))
+            if let (asked, key) = Self.opener(in: data) {
+                let turn = Turn(prompt: asked)
+                turn.key = key
+                adopt(turn)
             } else if followed == nil {
                 adopt(Turn(prompt: title))
             }
@@ -2765,6 +2754,8 @@ final class SessionModel: Identifiable {
             // `end_turn`, and everything after it is the next prompt. Keel was not there to close
             // the turn, so the record does. Measured on this repository's sessions: every turn.
             if record(data, into: turn), !reading { close(turn) }
+        case "fact":
+            fact(event.data)
         case "truncated":
             replayDropped = Int(event.data) ?? 0
         case "caught-up":
@@ -2797,11 +2788,62 @@ final class SessionModel: Identifiable {
                 turn.failure = why
                 fail(why, category: "nonzero_exit", fix: Fix(label: "Retry") { self.retryLast() })
             }
+            // The agent has stopped talking; the daemon is now reading the tree, and holds the
+            // commit for the pixel verdict when this turn carries pins. Before the commit, not
+            // after: "the edit went to the wrong file" is a reason not to make it.
+            if owned, let turn = current, !designInFlight.isEmpty {
+                Task {
+                    await checkDesign(turn)
+                    await postDesign(turn)
+                }
+            }
         default:
             // Never discard an event the daemon added. Keel not knowing what something means is
             // not a reason for the person not to see it.
             current?.note(raw: "\(event.name): \(event.data)")
         }
+    }
+
+    /// A fact from the daemon lands on the turn it names.
+    ///
+    /// On the owned stream a keyless fact — sent before the daemon had read the turn's opener —
+    /// is about the turn this lane has open, the only turn a chat stream can be about, and a
+    /// keyed one records the key on that turn. On a followed or replayed stream the key has to
+    /// match a turn's own opener record, and a fact that names no turn is dropped, never applied:
+    /// a wrong answer beats no answer nowhere in this product.
+    func fact(_ json: String) {
+        guard let data = json.data(using: .utf8),
+              let f = try? decoder.decode(Wire.Fact.self, from: data) else { return }
+        let turn: Turn?
+        if owned {
+            turn = current
+            if let key = f.turn, let t = turn, t.key == nil { t.key = key }
+        } else if let key = f.turn {
+            // Newest first: a fact is nearly always about the turn that just opened.
+            turn = turns.last(where: { $0.key == key }) ?? catchUp.last(where: { $0.key == key })
+        } else {
+            turn = nil
+        }
+        guard let turn else { return }
+        if f.kind == "turn.files" {
+            // Through the same normaliser the Changes panel uses: `Edit` names a file
+            // absolutely and git names it from the root of the checkout, and a file the turn
+            // wrote *and* dirtied would otherwise be two rows spelt two ways.
+            for path in f.files ?? [] where !turn.files.contains(where: { repoRelative($0) == path }) {
+                turn.noteEdit(path)
+            }
+            diffTick += 1
+            return
+        }
+        turn.absorb(f)
+    }
+
+    /// The pixel verdicts, to the daemon, which is waiting for them before it commits.
+    private func postDesign(_ turn: Turn) async {
+        guard let design = turn.design else { return }
+        let pins = design.pins.map { Wire.DesignPin(note: $0.selector, verdict: $0.verdict.wire) }
+        _ = try? await client.post("/api/turns", body: Wire.DesignPost(lane: id.uuidString, pins: pins),
+                                   q(), as: Bool.self)
     }
 
     /// The daemon has read everything that had already happened.
@@ -2824,9 +2866,6 @@ final class SessionModel: Identifiable {
         }
         running = busy
         replay = .none
-        // The other half of `remember`. The transcript has been read; this puts back what only
-        // Keel ever knew about those turns.
-        if let id = sessionId { await restoreRecords(session: id) }
         pinTick += 1
         // The tree as it is *now*, not as it was when the project opened. It is also the
         // baseline every followed turn is measured against.
@@ -2916,144 +2955,26 @@ final class SessionModel: Identifiable {
         Telemetry.track("stream_died", ["mode": "follow"])
     }
 
-    /// The working tree as a set of facts: a path and what git says about it.
-    var treeFingerprint: Set<String> { Set(changes.map { $0.path + $0.status }) }
-
-    /// Files that moved in the working tree without naming themselves in a tool call.
-    ///
-    /// `writeTools` reads the path out of `Edit` and `Write`, and a great deal of real work is
-    /// neither: a session in a terminal writes with `cat > file <<'EOF'` as readily as with
-    /// `Edit`, and a `Bash` call carries a command, not a path. Measured on the session this was
-    /// found in: 54 tool calls, every one of them `Bash`, several of them writing whole files —
-    /// so the turn reported no files changed while the diff beside it was full of them.
-    ///
-    /// git does not care which tool did the writing, so it is the evidence rather than the
-    /// arguments. Attributed against a fingerprint taken before, so this names what *this* turn
-    /// moved rather than everything uncommitted in the checkout.
-    /// Through `repoRelative`, because `Edit` names a file absolutely and git names it from the
-    /// root of the checkout: added blind, a file the turn wrote *and* dirtied would be two rows
-    /// for one file, spelt differently.
-    func attribute(_ before: Set<String>, to turn: Turn) {
-        for change in changes where !before.contains(change.path + change.status) {
-            guard !turn.files.contains(where: { repoRelative($0) == change.path }) else { continue }
-            turn.noteEdit(change.path)
-        }
-    }
-
-    // MARK: - What only Keel knows about a turn
-
-    /// Persist a finished turn's Keel-side facts, so the next launch can put them back.
-    ///
-    /// Claude Code's transcript is the record of the conversation and nothing more: what was said,
-    /// which tools ran, with what arguments. Everything the turn pane draws around that is Keel's
-    /// own — the files `attribute` read out of git, the shell writes `Turn.written` proved by
-    /// mtime, the commit, the gate, the duration, the cost. All of it was computed here and kept
-    /// nowhere, so a relaunch rebuilt the turn from the transcript and it came back with its prose
-    /// and none of its work. For a turn whose calls are all `Bash` — a heredoc, a `tee`, a
-    /// formatter — that is every file it touched.
-    ///
-    /// Failure is silent on purpose. This is a sidecar: a turn that cannot be written down is
-    /// still a turn that happened, and an error banner about a cache would be noise about
-    /// something the person did not ask for.
-    func remember(_ turn: Turn) async {
-        guard let session = sessionId, let n = turns.firstIndex(where: { $0 === turn }) else { return }
-        let body = Wire.TurnRecordRequest(session: session, record: record(of: turn, n: n))
-        _ = try? await client.post("/api/turns", body: body, q(), as: Wire.TurnRecord.self)
-    }
-
-    /// A turn as the sidecar stores it.
-    private func record(of turn: Turn, n: Int) -> Wire.TurnRecord {
-        var out = Wire.TurnRecord(n: n)
-        out.prompt = String(turn.prompt.prefix(200))
-        out.files = turn.files
-        out.commit = turn.commit
-        out.ms = turn.durationMS
-        out.cost = turn.cost
-        if let t = turn.tokens {
-            out.tokens = .init(input: t.input, output: t.output,
-                               cache_read: t.cacheRead, cache_write: t.cacheWrite)
-        }
-        switch turn.gate {
-        case .notRun: out.gate = nil
-        case .running(let c): out.gate = .init(status: "running", command: c)
-        case .passed(let c, _): out.gate = .init(status: "passed", command: c)
-        case .none(let c): out.gate = .init(status: "none", command: c)
-        case .failed(let c, let problems):
-            out.gate = .init(status: "failed", command: c,
-                             problems: problems.map { "\($0.file):\($0.line) \($0.message)" })
-        }
-        return out
-    }
-
-    /// Put back what the transcript could not carry, once the replay has caught up.
-    ///
-    /// Matched by turn number and checked against the prompt, because a transcript is not a stable
-    /// index: it can be compacted, resumed, or opened from a different starting point, and a record
-    /// landing quietly on the wrong turn would report one turn's files against another. That is a
-    /// worse failure than the one this fixes — a wrong answer beats no answer nowhere in this
-    /// product — so a mismatch drops the record and leaves the turn as the transcript had it.
-    ///
-    /// Never overwrites. A followed turn's live values are the ones actually measured just now;
-    /// this only fills what the replay left empty.
-    private func restoreRecords(session id: String) async {
-        let stored: [Wire.TurnRecord]
-        do {
-            stored = try await client.get("/api/turns", q(["session": id]))
-        } catch {
-            return
-        }
-        for record in stored {
-            guard turns.indices.contains(record.n) else { continue }
-            let turn = turns[record.n]
-            guard record.prompt.isEmpty || turn.prompt.hasPrefix(record.prompt)
-                    || record.prompt.hasPrefix(String(turn.prompt.prefix(200)))
-            else { continue }
-
-            for path in record.files { turn.noteEdit(path) }
-            if turn.commit == nil { turn.commit = record.commit }
-            if turn.durationMS == nil { turn.durationMS = record.ms }
-            if turn.cost == nil { turn.cost = record.cost }
-            if turn.tokens == nil, let t = record.tokens {
-                turn.tokens = .init(input: t.input, output: t.output,
-                                    cacheRead: t.cache_read, cacheWrite: t.cache_write)
-            }
-            if case .notRun = turn.gate, let gate = record.gate {
-                switch gate.status {
-                case "passed": turn.gate = .passed(gate.command ?? "", 0)
-                case "none": turn.gate = .none(gate.command ?? "")
-                // A gate that was still running when Keel was last quit did not finish, and
-                // redrawing it as a spinner would be a turn that can be entered and not left.
-                case "failed", "running": turn.gate = .failed(gate.command ?? "", [])
-                default: break
-                }
-            }
-        }
-    }
-
     /// Read the working tree again because a session Keel is not driving just wrote to it.
     ///
-    /// Nothing else does: `endTurn` is what refreshes the panels, and a followed turn never
+    /// Nothing else does yet: `endTurn` is what refreshes the panels, and a followed turn never
     /// reaches it — so the Changes panel kept whatever it read when the project opened, for as
-    /// long as the session ran.
+    /// long as the session ran. The turn's own files no longer come from here; they are the
+    /// daemon's `turn.files` fact. This is only the panels, until the daemon says when the tree
+    /// changed.
     ///
     /// Coalesced, because a turn writes several files in a row and each one would otherwise be a
     /// `git status` nobody is waiting for.
     private var treeWatch: Task<Void, Never>?
 
     func watchTree(_ turn: Turn) {
+        _ = turn
         treeWatch?.cancel()
         treeWatch = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
-            let before = treeFingerprint
             await refreshGit()
             await refreshTree()
-            attribute(before, to: turn)
-            // A followed turn never reaches `endTurn`, so this was the only place its files were
-            // ever known — and they were kept nowhere. The next replay rebuilt the turn from the
-            // transcript, which names `Edit` and `Write` and nothing a heredoc wrote, and the
-            // list went blank. Upserted, so a burst of writes is one record, not many.
-            await remember(turn)
             diffTick += 1
         }
     }
@@ -3071,14 +2992,18 @@ final class SessionModel: Identifiable {
     /// The prompt a transcript record carries, when it is a person asking rather than a tool
     /// answering. A `user` record holding `tool_result` blocks is the second kind and belongs to
     /// the turn already open.
-    static func asked(in data: Data) -> String? {
+    static func asked(in data: Data) -> String? { opener(in: data)?.prompt }
+
+    /// The prompt and the record's own `uuid`, which is the key every fact about the turn is
+    /// filed under.
+    static func opener(in data: Data) -> (prompt: String, key: String?)? {
         guard let r = try? JSONDecoder().decode(Record.self, from: data), r.type == "user" else {
             return nil
         }
         if let blocks = r.message?.content {
             if blocks.contains(where: { $0.type == "tool_result" }) { return nil }
             let said = blocks.filter { $0.type == "text" }.compactMap(\.text).joined(separator: "\n")
-            return said.isEmpty ? nil : said
+            return said.isEmpty ? nil : (said, r.uuid)
         }
         return nil
     }
@@ -3437,41 +3362,7 @@ final class SessionModel: Identifiable {
         set { UserDefaults.standard.set(newValue, forKey: "keel.autoCommit") }
     }
 
-    struct CommitBody: Encodable { var message: String; var automatic = false }
-
-    /// Commit what this turn did, if the gate accepted it.
-    ///
-    /// Only after a pass (or when the project has no gate to say otherwise): a commit of work
-    /// the checks rejected is a commit someone has to know to undo. A failed gate leaves the
-    /// changes where they are, red, with the problems listed.
-    private func commitTurn(_ turn: Turn) async {
-        guard autoCommit, isRepo, turn.didWork, !changes.isEmpty else { return }
-        switch turn.gate {
-        case .passed, .none, .notRun: break
-        case .failed, .running: return
-        }
-        // A pin whose pixels did not move is the failure the Designer exists to catch. Committing
-        // it anyway would bury the one turn worth looking at under a commit that says it passed.
-        if turn.design?.pins.contains(where: { $0.verdict == .nothingChanged }) == true { return }
-        let first = turn.prompt.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty && !$0.hasPrefix("@") } ?? "agent turn"
-        let subject = String(first.prefix(72))
-        let body = "Made by the agent in Keel, lane \"\(title)\". The project's checks "
-            + (turn.gate == .notRun ? "were not run." : "passed.")
-        do {
-            let committed = try await client.post("/api/git/commit",
-                                                  body: CommitBody(message: subject + "\n\n" + body,
-                                                                   automatic: true),
-                                                  q(), as: Bool.self)
-            await refreshGit()
-            // Only a commit that happened is this turn's; otherwise the footer would show the
-            // previous one as if it were new.
-            if committed { turn.commit = commits.first?.sha }
-        } catch {
-            lastError = "Could not commit: " + error.localizedDescription
-        }
-    }
+    struct CommitBody: Encodable { var message: String }
 
     /// Take the last commit apart, keeping its changes. `--soft` on the daemon's side.
     func uncommit() async {

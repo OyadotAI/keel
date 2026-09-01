@@ -1057,31 +1057,25 @@ fn commit_message(prompt: &str, gate: Option<&Gate>) -> String {
 
 #[derive(Deserialize)]
 pub struct DesignRequest {
-    pub session: String,
-    pub turn: String,
+    /// The lane, not the turn: the app never learns its own turn's key before the verdict is
+    /// due, and the daemon knows which turn the lane is on.
+    pub lane: String,
     pub pins: Vec<Pin>,
 }
 
 /// `POST /api/turns`: the pixel verdicts, which only the app can take. Everything else a turn
 /// record holds is the daemon's own observation.
+///
+/// `emit_for_lane` does its writing on its own thread.
+// no-blocking: the write is spawned inside `emit_for_lane`.
 pub async fn record(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DesignRequest>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
-    if !safe(&req.session) || req.turn.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "that is not a turn".into()));
+    if req.lane.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "a design verdict needs its lane".into()));
     }
-    let repo = state.repo();
-    tokio::task::spawn_blocking(move || {
-        emit(
-            &repo,
-            &req.session,
-            &req.turn,
-            Fact::Design { pins: req.pins },
-        );
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    emit_for_lane(&state, &req.lane, Fact::Design { pins: req.pins });
     Ok(Json(true))
 }
 

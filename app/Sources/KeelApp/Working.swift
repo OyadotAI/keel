@@ -66,6 +66,11 @@ struct WorkingBar: View {
                 ? "paused — waiting for your answer"
                 : "paused — \(model.pending.count) questions waiting"
         }
+        // A question asked of somebody else: the terminal, or the window that owns the turn.
+        // Nothing here can answer it, and the clock is stopped on it all the same.
+        if model.following, let ask = turn.asked.last, ask.decision == nil {
+            return "paused — waiting on a question in the window that owns it"
+        }
         // The agent's own silence, not the connection's: `lastEventAt` moves on every heartbeat
         // now, so it would read "quiet for 0s" through an entire five-minute test run.
         let quiet = Int(Date().timeIntervalSince(model.lastProgressAt))
