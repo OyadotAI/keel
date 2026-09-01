@@ -12,7 +12,9 @@ import Foundation
 final class Turn: Identifiable {
     let id = UUID()
     let prompt: String
-    let started = Date()
+    /// When the turn began. A live turn is stamped as it is made; a replayed one takes the time
+    /// of its first record, because the moment it was parsed is not a fact about the turn.
+    var started = Date()
 
     /// Prose from the agent, accumulated from `text_delta`s.
     ///
@@ -159,7 +161,10 @@ final class Turn: Identifiable {
     /// widens, and only when the two ends are genuinely apart: a turn with one record reporting
     /// `0s` is a measurement nobody made.
     func saw(_ at: Date) {
-        if firstRecord == nil { firstRecord = at }
+        if firstRecord == nil {
+            firstRecord = at
+            if replayed { started = at }
+        }
         guard let from = firstRecord, at > from else { return }
         if durationMS == nil || Int(at.timeIntervalSince(from) * 1000) > durationMS! {
             durationMS = Int(at.timeIntervalSince(from) * 1000)
@@ -190,9 +195,6 @@ final class Turn: Identifiable {
     /// A subagent's call, by id, to the top-level call it belongs under.
     private var parentOf: [String: String] = [:]
 
-    /// The daemon caps a replay at 300 calls and says so; hiding that would be a quiet lie about
-    /// what the session did.
-    var truncated = false
     var cost: Double?
     var durationMS: Int?
     var finished = false

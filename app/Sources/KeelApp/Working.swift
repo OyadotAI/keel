@@ -29,11 +29,15 @@ struct WorkingBar: View {
                     .monospacedDigit()
                     .foregroundStyle(K.C.accent)
 
-                Button("Stop") { model.stop() }
-                    .buttonStyle(QuietButton(tone: K.C.del))
-                    .keyboardShortcut(.escape, modifiers: [])
-                    .help("Interrupts the agent and whatever it started, the way ⌃C does — the "
-                          + "turn ends rather than being abandoned (⌘. or Esc)")
+                // Not for a turn running in somebody's terminal: the daemon has no process to
+                // signal for it, so the button would answer "Could not stop the turn".
+                if !model.following {
+                    Button("Stop") { model.stop() }
+                        .buttonStyle(QuietButton(tone: K.C.del))
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .help("Interrupts the agent and whatever it started, the way ⌃C does — the "
+                              + "turn ends rather than being abandoned (⌘. or Esc)")
+                }
             }
             .padding(.horizontal, K.S.md)
             .padding(.vertical, K.S.half)

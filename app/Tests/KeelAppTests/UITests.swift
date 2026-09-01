@@ -919,15 +919,15 @@ extension UITests {
     }
 
     /// Nothing today means This week opens, and so on down: a panel of folded headers reads as an
-    /// empty one.
+    /// empty one. Running is always open — what is happening now is never folded away.
     func testTheFirstGroupWithSessionsInItIsOpen() {
         func groups(_ labels: [String]) -> [SessionsPanel.Group] {
             labels.map { SessionsPanel.Group(label: $0, sessions: []) }
         }
-        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Today", "This week", "Older"])), ["Today"])
-        XCTAssertEqual(SessionsPanel.firstOpen(groups(["This week", "Older"])), ["This week"])
-        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Older"])), ["Older"])
-        XCTAssertEqual(SessionsPanel.firstOpen(groups([])), [])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Running", "Today", "Older"])), ["Running", "Today"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["This week", "Older"])), ["Running", "This week"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups(["Older"])), ["Running", "Older"])
+        XCTAssertEqual(SessionsPanel.firstOpen(groups([])), ["Running"])
     }
 }
 

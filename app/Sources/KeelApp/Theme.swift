@@ -427,6 +427,33 @@ extension Color {
 /// action gets the full shape, and a line of explanation is the same component with the rest left
 /// out. The inset matches `RailHeader`'s, so the first thing in a panel lines up with its title
 /// whether that thing is a list or an apology.
+/// While a transcript is being read. Slow on purpose — hundreds of messages off disk — and the
+/// one wait in either pane long enough to look like a failure. One view for both panes: the
+/// conversation had this and the Trace did not, so the two disagreed about the same model on
+/// the same screen.
+struct OpeningNote: View {
+    var body: some View {
+        VStack(spacing: K.S.md) {
+            ProgressView()
+            Text("Opening this session…").font(K.F.body).foregroundStyle(K.C.dim)
+        }
+        .transition(.opacity)
+    }
+}
+
+/// A transcript that could not be read, with the reason and a way to try again. Drawn above
+/// whatever was on screen, which stays: a failed read is not a reason to blank the conversation
+/// that was there before it.
+struct ReplayFailed: View {
+    let why: String
+    let retry: () -> Void
+
+    var body: some View {
+        EmptyState(icon: "exclamationmark.triangle", title: "This session could not be read",
+                   why, actionLabel: "Try again", action: retry)
+    }
+}
+
 struct EmptyState: View {
     var icon: String? = nil
     var title: String? = nil
