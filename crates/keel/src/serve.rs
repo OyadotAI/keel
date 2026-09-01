@@ -45,6 +45,10 @@ pub struct AppState {
     /// fact that arrives after the turn — the manual "Run checks", a late design verdict — still
     /// has a turn to belong to.
     last_turn: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    /// How many tail streams are following each session. A followed session's terminal claim
+    /// belongs to its follower, which finishes the turn; an unfollowed one's belongs to the
+    /// sessions watcher, which only holds the tree.
+    followers: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 
 /// One running turn: which checkout it is in, whether it can write to it, and what to signal.
@@ -78,6 +82,7 @@ impl AppState {
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
             tokens: std::sync::atomic::AtomicU64::new(1),
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
+            followers: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -91,6 +96,7 @@ impl AppState {
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
             tokens: std::sync::atomic::AtomicU64::new(1),
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
+            followers: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -274,6 +280,39 @@ impl AppState {
             turn.session = Some(session.to_string());
         }
         Ok(token)
+    }
+
+    pub fn attach_follower(&self, session: &str) {
+        *self
+            .followers
+            .locked()
+            .entry(session.to_string())
+            .or_insert(0) += 1;
+    }
+
+    pub fn detach_follower(&self, session: &str) {
+        let mut map = self.followers.locked();
+        if let Some(n) = map.get_mut(session) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                map.remove(session);
+            }
+        }
+    }
+
+    pub fn is_followed(&self, session: &str) -> bool {
+        self.followers.locked().get(session).is_some_and(|n| *n > 0)
+    }
+
+    /// Give back a terminal session's claim, unless a follower holds it: the follower finishes
+    /// the turn and releases it itself.
+    pub fn release_terminal_unfollowed(&self, session: &str) {
+        if self.is_followed(session) {
+            return;
+        }
+        self.running
+            .locked()
+            .remove(&crate::turns::terminal_lane(session));
     }
 
     /// Whether a lane in some window is driving this session. A follower of such a session
@@ -1056,6 +1095,7 @@ async fn api_session_tail(
                 // From here, a session nobody in Keel is driving gets the lifecycle a lane's
                 // turn gets. One a lane is driving is that lane's chat task's business.
                 if !watched.owns_session(&query.id) {
+                    watched.attach_follower(&query.id);
                     follower = Some(crate::turns::Follower::new(
                         watched.clone(),
                         store.clone(),
@@ -1096,6 +1136,7 @@ async fn api_session_tail(
         }
         if let Some(f) = &mut follower {
             f.close().await;
+            watched.detach_follower(&query.id);
         }
     });
 
