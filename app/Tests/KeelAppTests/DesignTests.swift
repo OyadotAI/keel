@@ -139,10 +139,15 @@ final class DesignCheckTests: XCTestCase {
     private func model(rects: [String: Picked.Rect],
                        shots: @escaping (Picked.Rect) -> NSImage?) -> SessionModel {
         let m = SessionModel(client: Client(port: 0))
-        m.rectsNow = { sels in rects.filter { sels.contains($0.key) } }
-        m.resnapshot = { rect in shots(rect) }
+        let canvas = FakeCanvas()
+        canvas.rects = rects
+        canvas.shots = shots
+        m.attach(canvas: canvas)
+        // Kept alive for the model, which holds it weakly the way it holds the real pane.
+        canvases.append(canvas)
         return m
     }
+    private var canvases: [FakeCanvas] = []
 
     /// Every pin is compared. It used to take the first and silently drop the rest, so a second
     /// pin paid for a before-image nobody ever looked at.
@@ -443,8 +448,10 @@ final class CanvasTests: XCTestCase {
     /// source now matches.
     func testADragBecomesAnInstruction() {
         let m = SessionModel(client: Client(port: 0))
+        let canvas = FakeCanvas()
         var reverted = false
-        m.canvas = { if $0["keel"] as? String == "revert" { reverted = true } }
+        canvas.sent = { if $0["keel"] as? String == "revert" { reverted = true } }
+        m.attach(canvas: canvas)
         m.designNudge(picked("#cta", text: "Sign up"), label: "width 240px → 320px")
         m.designNudge(picked("#cta", text: "Sign up"), label: #"text "Sign up" → "Get started""#)
         XCTAssertEqual(m.pins.count, 1, "both changes land on the one element")
@@ -478,7 +485,9 @@ final class CanvasTests: XCTestCase {
         // when it is on.
         m.followEdits = true
         var sent: [String] = []
-        m.canvas = { sent.append($0["keel"] as? String ?? "") }
+        let canvas = FakeCanvas()
+        canvas.sent = { sent.append($0["keel"] as? String ?? "") }
+        m.attach(canvas: canvas)
         let tick = m.designTick
         m.record(Data(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"/repo/frontend/app/pricing/page.tsx"}}]}}"#.utf8), into: t)
         XCTAssertEqual(m.editing, "/repo/frontend/app/pricing/page.tsx")
@@ -689,4 +698,20 @@ final class ColourParsingTests: XCTestCase {
     func testSomethingThatIsNotAColourComesBackUnchanged() {
         XCTAssertEqual(Picked.short("inherit"), "inherit")
     }
+}
+
+/// A page that answers with what the test put in it.
+@MainActor
+final class FakeCanvas: PreviewCanvas {
+    var rects: [String: Picked.Rect] = [:]
+    var shots: (Picked.Rect) -> NSImage? = { _ in nil }
+    var sent: ([String: Any]) -> Void = { _ in }
+    var reloads = 0
+
+    func snapshot(_ rect: Picked.Rect) async -> NSImage? { shots(rect) }
+    func rects(for selectors: [String]) async -> [String: Picked.Rect] {
+        rects.filter { selectors.contains($0.key) }
+    }
+    func send(_ message: [String: Any]) { sent(message) }
+    func reload() { reloads += 1 }
 }

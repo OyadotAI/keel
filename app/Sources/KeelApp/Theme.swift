@@ -454,6 +454,18 @@ struct ReplayFailed: View {
     }
 }
 
+/// A store's failure, drawn above the panel that reads it. The panel keeps its last good data
+/// underneath: stale and labelled beats blank.
+struct FailureRow: View {
+    let fault: Fault
+    var retry: (() -> Void)? = nil
+
+    var body: some View {
+        EmptyState(icon: "exclamationmark.triangle", title: "Keel could not read \(fault.what)",
+                   fault.why, actionLabel: retry == nil ? nil : "Try again", action: retry)
+    }
+}
+
 struct EmptyState: View {
     var icon: String? = nil
     var title: String? = nil
