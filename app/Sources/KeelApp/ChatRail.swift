@@ -24,12 +24,13 @@ struct ChatRail: View {
 
     /// How many turns are drawn before the conversation offers the rest.
     ///
-    /// This is what makes the pane land where it is told. A lazy stack knows the height of the
+    /// Ten, and in a plain stack rather than a lazy one. A lazy stack knows the height of the
     /// rows it has built and *estimates* the rest, and a turn's card is anything from two lines
-    /// to a megabyte of tool output — so a jump to the end of three hundred of them is computed
-    /// from three hundred guesses and lands in a region with nothing built in it. That is the
-    /// white pane on load, and no amount of re-scrolling fixes an estimate. Ten rows is a bounded
-    /// error, and the ones you cannot see are one click away rather than one scroll.
+    /// to a megabyte of tool output — so a jump to the end landed in a region with nothing built
+    /// in it, the offset sat inside empty estimated space where the geometry never moved again,
+    /// and no rescue could converge on an estimate. That was the white pane, on load and after a
+    /// replay. Ten built rows lay out in tens of milliseconds and have exact heights, so a scroll
+    /// to the end lands on the end. The rows you cannot see are one click away.
     private static let shown = 10
     @State private var showingAll = false
     /// A rescue is already running. Without it the geometry fires again on every scroll the
@@ -123,7 +124,7 @@ struct ChatRail: View {
 
     private func transcript(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: K.S.xl) {
+            VStack(alignment: .leading, spacing: K.S.xl) {
                 // A pane with nothing in it says which of the reasons it is. It used to
                 // draw the "ask for a change" hint over a session that was still being read,
                 // and nothing at all if the read had left the lane empty.
