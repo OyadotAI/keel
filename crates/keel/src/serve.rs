@@ -466,6 +466,8 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             "/api/git/restore",
             axum::routing::post(crate::snapshot::put_back),
         )
+        .route("/api/turns", get(crate::turns::list))
+        .route("/api/turns", axum::routing::post(crate::turns::record))
         .route("/api/permissions", get(crate::permissions::list))
         .route(
             "/api/permissions/trust",

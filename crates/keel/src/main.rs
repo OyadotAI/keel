@@ -38,6 +38,7 @@ mod signals;
 mod snapshot;
 mod term;
 mod tree;
+mod turns;
 mod verify;
 mod worktree;
 

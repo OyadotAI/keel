@@ -384,6 +384,110 @@ enum Wire {
         var source: String
     }
 
+    /// What Keel knows about a turn that Claude Code's transcript does not.
+    ///
+    /// The transcript carries what was said and which tools ran. The files git saw move, the
+    /// commit, the gate, the duration and the cost are all Keel's own reading of the machine, made
+    /// at the end of the turn — and before `.keel/turns/` they were kept nowhere, so a relaunch
+    /// rebuilt the conversation with its prose intact and its work missing.
+    struct TurnRecord: Codable, Equatable {
+        var n: Int
+        /// The prompt that opened the turn, truncated. The guard that this record still belongs to
+        /// the turn it was written for — never displayed, the app has the real one.
+        var prompt: String = ""
+        var files: [String] = []
+        var commit: String?
+        var gate: Gate?
+        var ms: Int?
+        var tokens: Tokens?
+        var cost: Double?
+
+        init(n: Int) { self.n = n }
+
+        /// Every field but `n` is optional, matching the `#[serde(default)]` on each field of the
+        /// daemon's own `Record`.
+        ///
+        /// Swift's synthesised `Codable` does not read a property's default when the key is
+        /// missing — it throws — and one throw fails the whole array, so a single record written
+        /// by an older Keel would take a session's entire history with it. Which is the promise
+        /// this store makes and would otherwise quietly break.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            n = try c.decode(Int.self, forKey: .n)
+            prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+            files = try c.decodeIfPresent([String].self, forKey: .files) ?? []
+            commit = try c.decodeIfPresent(String.self, forKey: .commit)
+            gate = try c.decodeIfPresent(Gate.self, forKey: .gate)
+            ms = try c.decodeIfPresent(Int.self, forKey: .ms)
+            tokens = try c.decodeIfPresent(Tokens.self, forKey: .tokens)
+            cost = try c.decodeIfPresent(Double.self, forKey: .cost)
+        }
+
+        struct Gate: Codable, Equatable {
+            var status: String
+            var command: String?
+            var problems: [String] = []
+
+            init(status: String, command: String? = nil, problems: [String] = []) {
+                self.status = status
+                self.command = command
+                self.problems = problems
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                status = try c.decodeIfPresent(String.self, forKey: .status) ?? "not_run"
+                command = try c.decodeIfPresent(String.self, forKey: .command)
+                problems = try c.decodeIfPresent([String].self, forKey: .problems) ?? []
+            }
+        }
+
+        struct Tokens: Codable, Equatable {
+            var input = 0
+            var output = 0
+            var cache_read = 0
+            var cache_write = 0
+
+            init(input: Int = 0, output: Int = 0, cache_read: Int = 0, cache_write: Int = 0) {
+                self.input = input
+                self.output = output
+                self.cache_read = cache_read
+                self.cache_write = cache_write
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                input = try c.decodeIfPresent(Int.self, forKey: .input) ?? 0
+                output = try c.decodeIfPresent(Int.self, forKey: .output) ?? 0
+                cache_read = try c.decodeIfPresent(Int.self, forKey: .cache_read) ?? 0
+                cache_write = try c.decodeIfPresent(Int.self, forKey: .cache_write) ?? 0
+            }
+        }
+    }
+
+    /// `POST /api/turns`. The daemon flattens the record beside the session id, so this does too.
+    struct TurnRecordRequest: Encodable {
+        var session: String
+        var record: TurnRecord
+
+        enum CodingKeys: String, CodingKey {
+            case session, n, prompt, files, commit, gate, ms, tokens, cost
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(session, forKey: .session)
+            try c.encode(record.n, forKey: .n)
+            try c.encode(record.prompt, forKey: .prompt)
+            try c.encode(record.files, forKey: .files)
+            try c.encodeIfPresent(record.commit, forKey: .commit)
+            try c.encodeIfPresent(record.gate, forKey: .gate)
+            try c.encodeIfPresent(record.ms, forKey: .ms)
+            try c.encodeIfPresent(record.tokens, forKey: .tokens)
+            try c.encodeIfPresent(record.cost, forKey: .cost)
+        }
+    }
+
     struct Problem: Decodable, Identifiable, Equatable {
         var file: String
         var line: Int

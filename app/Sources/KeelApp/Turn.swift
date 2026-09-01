@@ -371,6 +371,68 @@ final class Turn: Identifiable {
         files.append(path)
     }
 
+    /// At most this many path candidates per command.
+    ///
+    /// A heredoc that writes a whole file is one `Bash` call carrying a thousand quoted strings,
+    /// and each one would otherwise be a `stat` on the main actor. A redirection target is in the
+    /// first handful of tokens; the tail of an HTML body is not.
+    nonisolated private static let candidateCap = 40
+
+    /// The files a shell command wrote, as far as the machine can prove it.
+    ///
+    /// `writeTools` reads a path off `Edit` and `Write`, and `SessionModel.attribute` catches
+    /// everything else by asking git. Between them they miss exactly one case, and it is a common
+    /// one: a file a `Bash` call wrote *outside* the checkout — a scratch file in `/tmp`, a dotfile
+    /// in the home directory, something in another repository. `Bash` carries a command rather
+    /// than a path, and git's evidence stops at its own working tree, so the file was written and
+    /// nothing on screen said so.
+    ///
+    /// Candidates come off the command text and are kept only when the file's own mtime lands
+    /// inside the call's window. The text alone is a guess — `cat > "$out"` names nothing real and
+    /// `grep foo /etc/hosts` names a file it only read — and the mtime is what makes the guess
+    /// evidence. A wrong guess costs one `stat`, which is why the list can afford to be generous
+    /// and why nothing here needs to understand shell grammar.
+    ///
+    /// The ceiling this accepts: a command that writes somewhere it does not name — a script run
+    /// by path, a variable the shell expanded — is still invisible. Watching the filesystem itself
+    /// is the upgrade, and it costs Full Disk Access and a great deal of noise.
+    nonisolated static func written(by command: String, since: Date) -> [String] {
+        // Anything shaped like a path: a single- or double-quoted run, or a bare token containing
+        // a slash. Quoted forms come first on purpose — `cat > "/My Projects/x"` is the case a
+        // split on whitespace gets wrong, and this repository has already paid for that one in
+        // `approve`. Built here rather than held in a `static`, which `Regex` cannot be: it is not
+        // `Sendable`, and this runs once per finished command rather than once per match.
+        let pathish = /'([^']{1,512})'|"([^"]{1,512})"|((?:~|\.{0,2})\/[^\s'"`;|&<>()]{1,512})/
+        var seen = Set<String>()
+        var out: [String] = []
+        for match in command.matches(of: pathish).prefix(candidateCap) {
+            let raw = String(match.1 ?? match.2 ?? match.3 ?? "")
+            // A URL is not a file, and an `href` in a heredoc is the commonest way to look like one.
+            guard raw.contains("/"), !raw.contains("://") else { continue }
+            let path = (raw as NSString).expandingTildeInPath
+            guard path.hasPrefix("/"), seen.insert(path).inserted else { continue }
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory),
+                  !directory.boolValue,
+                  let at = try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]
+                      as? Date,
+                  at >= since
+            else { continue }
+            out.append(path)
+        }
+        return out
+    }
+
+    /// The write side of a finished `Bash` call, on the list.
+    ///
+    /// In the checkout this is redundant with the git pass and dedupes against it —
+    /// `attribute` compares through `repoRelative`, so one file cannot arrive twice spelt two
+    /// ways. Outside the checkout it is the only thing that reports at all.
+    private func noteShellWrites(_ call: Call) {
+        guard call.tool == "Bash", let command = call.input["command"]?.stringValue else { return }
+        for path in Self.written(by: command, since: call.started) { noteEdit(path) }
+    }
+
     /// `parent` is the `Task` call a subagent is working for. Its calls nest under that row
     /// rather than joining the top-level list: a subagent that reads forty files is one line
     /// saying so, and forty lines is the transcript nobody could follow in the terminal either.
@@ -497,12 +559,14 @@ final class Turn: Identifiable {
             calls[pi].children[ci].running = false
             calls[pi].children[ci].ended = Date()
             regroup(pi)
+            noteShellWrites(calls[pi].children[ci])
         case .top(let i)?:
             calls[i].output = output
             calls[i].failed = failed
             calls[i].running = false
             calls[i].ended = Date()
             regroup(i)
+            noteShellWrites(calls[i])
         case nil:
             break
         }
