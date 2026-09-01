@@ -144,7 +144,7 @@ struct TurnStage: View {
                         }
                     }
                     // Oldest is at the bottom here, so what came before it is said there.
-                    if let dropped = SessionModel.droppedNotice(model.replayDropped) {
+                    if let dropped = SessionModel.droppedNotice(model.replayDropped, bytes: model.replayDroppedBytes) {
                         Text(dropped).font(K.F.micro).foregroundStyle(K.C.faint)
                             .padding(.horizontal, K.S.xl).padding(.vertical, K.S.md)
                     }

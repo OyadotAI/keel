@@ -79,7 +79,7 @@ impl Session {
 /// Split out of [`read_transcript`] because following a live session must not re-read the file:
 /// a transcript here reaches 33 MB, and re-reading it every poll to find the few hundred bytes
 /// that were appended is exactly the kind of work the bar exists to keep off the machine.
-fn transcript_path(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<Utf8PathBuf> {
+pub fn transcript_path(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Option<Utf8PathBuf> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
@@ -127,9 +127,13 @@ pub fn tail(
     if len == from {
         return Some((Vec::new(), from));
     }
+    // Never more than `MAX_READ` in one call. A follower that fell far behind — or a first read
+    // that was not bounded by `tail_last` — reads the rest on its next call; a 33 MB transcript
+    // was three copies of 33 MB on the executor's behalf before this.
+    let end = len.min(from.saturating_add(MAX_READ));
     file.seek(SeekFrom::Start(from)).ok()?;
-    let mut buffer = Vec::with_capacity((len - from) as usize);
-    file.take(len - from).read_to_end(&mut buffer).ok()?;
+    let mut buffer = Vec::with_capacity((end - from) as usize);
+    file.take(end - from).read_to_end(&mut buffer).ok()?;
 
     // Everything up to the last newline is whole; what follows it is the writer mid-append.
     let complete = match buffer.iter().rposition(|b| *b == b'\n') {
@@ -144,6 +148,89 @@ pub fn tail(
         .map(str::to_string)
         .collect();
     Some((lines, from + complete as u64))
+}
+
+/// The most a single read of a transcript may take in.
+pub const MAX_READ: u64 = 8 * 1024 * 1024;
+
+/// The tail of a transcript: at most `max_bytes` of it, starting on a record boundary, and the
+/// byte the read started at — nonzero means the head was not read.
+///
+/// The first read of a session used to be the whole file. The tail is what a person opening a
+/// conversation is looking for, and the head of a 33 MB transcript is thousands of records the
+/// app would have decoded on its main actor before drawing anything.
+pub fn tail_last(
+    repo: &Utf8Path,
+    claude_home: &Utf8Path,
+    id: &str,
+    max_bytes: u64,
+) -> Option<(Vec<String>, u64, u64)> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    let path = transcript_path(repo, claude_home, id)?;
+    let len = std::fs::metadata(&path).ok()?.len();
+    let mut start = 0;
+    if len > max_bytes {
+        // Land just past the first newline at or after the cut, so the read opens on a whole
+        // record rather than the middle of one.
+        let mut file = BufReader::new(std::fs::File::open(&path).ok()?);
+        let cut = len - max_bytes;
+        file.seek(SeekFrom::Start(cut)).ok()?;
+        let mut skipped = Vec::new();
+        let n = file.read_until(b'\n', &mut skipped).ok()?;
+        start = cut + n as u64;
+    }
+    let (lines, next) = tail(repo, claude_home, id, start)?;
+    Some((lines, next, start))
+}
+
+/// What a transcript line is, for a follower deciding what the session is doing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Kind {
+    /// A person asking: the turn opens here. `cwd` is where the session runs, from the record.
+    Opener {
+        uuid: String,
+        prompt: String,
+        at: String,
+        cwd: Option<String>,
+    },
+    /// Claude Code's own note that a turn ended.
+    TurnEnd,
+    Other,
+}
+
+pub fn kind_of(line: &str) -> Kind {
+    let Ok(record) = serde_json::from_str::<Value>(line) else {
+        return Kind::Other;
+    };
+    if record["type"].as_str() == Some("system")
+        && record["subtype"].as_str() == Some("turn_duration")
+    {
+        return Kind::TurnEnd;
+    }
+    match opener(&record) {
+        Some((uuid, prompt, at)) => Kind::Opener {
+            uuid,
+            prompt,
+            at,
+            cwd: record["cwd"].as_str().map(str::to_string),
+        },
+        None => Kind::Other,
+    }
+}
+
+/// What a `claude` process says it is doing with a session, from its pid file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Busy,
+    Idle,
+}
+
+/// The status of one session's process, or `None` when no live process has it open.
+pub fn status(claude_home: &Utf8Path, session: &str) -> Option<Status> {
+    running(claude_home)
+        .get(session)
+        .map(|busy| if *busy { Status::Busy } else { Status::Idle })
 }
 
 /// The `uuid` of the human `user` record that opens a turn, if this line is one.
@@ -791,6 +878,59 @@ mod tests {
                 !again.live,
                 "the process is gone, the cached summary is not"
             );
+        }
+
+        /// The first read of a long transcript is its tail, on a record boundary, and says
+        /// where it started.
+        #[test]
+        fn the_first_read_of_a_large_transcript_reads_only_its_tail() {
+            let (_d, home) = home_with("-repo", "big-1.jsonl", "");
+            let path = home.join("projects").join("-repo").join("big-1.jsonl");
+            let mut body = String::new();
+            for i in 0..20_000 {
+                body.push_str(&user(&format!("line {i} {}", "x".repeat(200))));
+                body.push('\n');
+            }
+            std::fs::write(&path, &body).unwrap();
+            let len = std::fs::metadata(&path).unwrap().len();
+            let (lines, next, started_at) =
+                tail_last(Utf8Path::new("/repo"), &home, "big-1", 1024 * 1024).unwrap();
+            assert!(started_at > 0 && started_at >= len - 1024 * 1024);
+            assert_eq!(next, len);
+            assert!(!lines.is_empty());
+            assert!(
+                lines
+                    .iter()
+                    .all(|l| serde_json::from_str::<Value>(l).is_ok()),
+                "every line read is a whole record"
+            );
+            let (all, _, at) = tail_last(Utf8Path::new("/repo"), &home, "big-1", len * 2).unwrap();
+            assert_eq!(at, 0);
+            assert_eq!(all.len(), 20_000);
+        }
+
+        #[test]
+        fn an_opener_is_a_person_not_a_tool_result_or_a_compaction() {
+            let person = r#"{"type":"user","uuid":"u-1","cwd":"/repo","timestamp":"t","message":{"role":"user","content":"hi"}}"#;
+            assert!(
+                matches!(kind_of(person), Kind::Opener { ref uuid, ref cwd, .. } if uuid == "u-1" && cwd.as_deref() == Some("/repo"))
+            );
+            let result = r#"{"type":"user","uuid":"u-2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#;
+            assert_eq!(kind_of(result), Kind::Other);
+            let compact = r#"{"type":"user","uuid":"u-3","isCompactSummary":true,"message":{"role":"user","content":"summary"}}"#;
+            assert_eq!(kind_of(compact), Kind::Other);
+            let side = r#"{"type":"user","uuid":"u-4","isSidechain":true,"message":{"role":"user","content":"sub"}}"#;
+            assert_eq!(kind_of(side), Kind::Other);
+            let note = r#"{"type":"user","uuid":"u-5","message":{"role":"user","content":"<task-notification>done"}}"#;
+            assert_eq!(kind_of(note), Kind::Other);
+        }
+
+        #[test]
+        fn turn_duration_marks_the_end_of_a_turn() {
+            let end = r#"{"type":"system","subtype":"turn_duration","durationMs":4100}"#;
+            assert_eq!(kind_of(end), Kind::TurnEnd);
+            let other = r#"{"type":"system","subtype":"stop_hook_summary"}"#;
+            assert_eq!(kind_of(other), Kind::Other);
         }
 
         /// One `stat`, so a session that is sitting idle costs nothing to keep following.

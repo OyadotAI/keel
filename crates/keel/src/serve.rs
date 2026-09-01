@@ -262,6 +262,29 @@ impl AppState {
         }
     }
 
+    /// A terminal's claim on the tree its session runs in, under `term:<session>`. Idempotent:
+    /// the turn after the first finds its claim already held and gets the same token.
+    pub fn claim_terminal(&self, session: &str, checkout: &Utf8Path) -> Result<u64, String> {
+        let lane = crate::turns::terminal_lane(session);
+        if let Some(turn) = self.running.locked().get(&lane) {
+            return Ok(turn.token);
+        }
+        let token = self.claim(&lane, checkout, true)?;
+        if let Some(turn) = self.running.locked().get_mut(&lane) {
+            turn.session = Some(session.to_string());
+        }
+        Ok(token)
+    }
+
+    /// Whether a lane in some window is driving this session. A follower of such a session
+    /// forwards what it sees and runs no lifecycle of its own: the lane's chat task owns it.
+    pub fn owns_session(&self, session: &str) -> bool {
+        self.running
+            .locked()
+            .iter()
+            .any(|(lane, t)| !lane.starts_with("term:") && t.session.as_deref() == Some(session))
+    }
+
     /// Whether a turn *other than this session's* is allowed to write this checkout. Read by
     /// the automatic commit, which holds its own claim and must not refuse itself.
     pub fn writer_in_other(&self, checkout: &Utf8Path, session: &str) -> bool {
@@ -879,11 +902,12 @@ async fn api_session_tail(
         });
     }
 
+    let watched = state.clone();
     tokio::spawn(async move {
         let _stop = stop;
         let mut from = query.from;
-        // The first read is the catch-up and can be the whole file; every one after it is the
-        // few hundred bytes that were appended.
+        // The first read is the catch-up; every one after it is the few hundred bytes that were
+        // appended.
         let mut first = true;
         // What Keel knew about these turns, keyed by the record that opened each. Sent right
         // after that record on the first pass, so a replayed turn carries its files, gate, commit
@@ -901,26 +925,41 @@ async fn api_session_tail(
             )
             .await
         };
+        // Woken by the file rather than by a clock. kqueue on the transcript and on Claude
+        // Code's pid files; the sleep below is the fallback for a watcher that could not be made.
+        let (wake_tx, mut wake) = tokio::sync::mpsc::channel::<()>(1);
+        let _watcher = watch_session(&dir, &home, &query.id, wake_tx);
+        let mut follower: Option<crate::turns::Follower> = None;
+        let mut alive = keel_workspace::status(&home, &query.id).is_some();
+        let mut last_bytes = std::time::Instant::now();
+        let mut said_ended = false;
         loop {
-            // The receiver is the only thing that says the window is still there, and a session
-            // that has *finished* never grows — so the send that would notice a closed channel
-            // never happens, and the poll would run for the life of the daemon. One leaked task
-            // per session ever opened, which is the common case rather than the rare one.
             if tx.is_closed() {
-                return;
+                break;
             }
-            let (dir, home, id) = (dir.clone(), home.clone(), query.id.clone());
-            // Every read is off the executor: a cold transcript here reaches 33 MB, and the
-            // poll must never be able to hold a worker thread the chat stream is waiting on.
-            let read: Option<(Vec<String>, u64)> =
-                blocking(move || keel_workspace::tail(&dir, &home, &id, from), None).await;
-            let Some((lines, next)) = read else {
+            let (d, h, sid) = (dir.clone(), home.clone(), query.id.clone());
+            // Every read is off the executor, and bounded: the first is the tail of the file,
+            // not the file, and none takes more than `MAX_READ` in one go.
+            let read: Option<(Vec<String>, u64, u64)> = if first && from == 0 {
+                blocking(
+                    move || keel_workspace::tail_last(&d, &h, &sid, keel_workspace::MAX_READ),
+                    None,
+                )
+                .await
+            } else {
+                blocking(
+                    move || keel_workspace::tail(&d, &h, &sid, from).map(|(l, n)| (l, n, 0)),
+                    None,
+                )
+                .await
+            };
+            let Some((lines, next, started_at)) = read else {
                 let _ = tx
                     .send(Ok(Event::default()
                         .event("fatal")
                         .data("that session's transcript is not on this machine")))
                     .await;
-                return;
+                break;
             };
 
             // A very long history sent whole is a wall of records the app has to decode on its
@@ -932,14 +971,21 @@ async fn api_session_tail(
             } else {
                 (lines, 0)
             };
-            if dropped > 0 {
+            if first && (dropped > 0 || started_at > 0) {
                 let _ = tx
-                    .send(Ok(Event::default()
-                        .event("truncated")
-                        .data(dropped.to_string())))
+                    .send(Ok(Event::default().event("truncated").data(
+                        serde_json::json!({ "records": dropped, "bytes": started_at }).to_string(),
+                    )))
                     .await;
             }
+            let mut wrote = false;
             for line in lines {
+                wrote = true;
+                let kind = if follower.is_some() {
+                    Some(keel_workspace::kind_of(&line))
+                } else {
+                    None
+                };
                 let opener = if first && !known.is_empty() {
                     keel_workspace::opener_of(&line)
                 } else {
@@ -950,7 +996,7 @@ async fn api_session_tail(
                     .await
                     .is_err()
                 {
-                    return; // The window closed, or the lane opened something else.
+                    break; // The window closed, or the lane opened something else.
                 }
                 if let Some(record) = opener.and_then(|uuid| known.get(&uuid)) {
                     for fact in record.facts() {
@@ -962,10 +1008,27 @@ async fn api_session_tail(
                             .await
                             .is_err()
                         {
-                            return;
+                            break;
                         }
                     }
                 }
+                if let (Some(f), Some(kind)) = (&mut follower, kind) {
+                    match kind {
+                        keel_workspace::Kind::Opener {
+                            uuid, prompt, cwd, ..
+                        } => f.opened(uuid, prompt, cwd).await,
+                        keel_workspace::Kind::TurnEnd => f.turn_ended(),
+                        keel_workspace::Kind::Other => {}
+                    }
+                    f.wrote();
+                }
+            }
+            if tx.is_closed() {
+                break;
+            }
+            if wrote {
+                last_bytes = std::time::Instant::now();
+                said_ended = false;
             }
             if first {
                 first = false;
@@ -982,11 +1045,51 @@ async fn api_session_tail(
                     .await
                     .is_err()
                 {
-                    return;
+                    break;
+                }
+                // From here, a session nobody in Keel is driving gets the lifecycle a lane's
+                // turn gets. One a lane is driving is that lane's chat task's business.
+                if !watched.owns_session(&query.id) {
+                    follower = Some(crate::turns::Follower::new(
+                        watched.clone(),
+                        store.clone(),
+                        home.clone(),
+                        query.id.clone(),
+                    ));
                 }
             }
             from = next;
-            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            if let Some(f) = &mut follower {
+                f.tick().await;
+            }
+            // The process went away and the file went quiet: the session is over, and the app
+            // is told so a turn cut short by ⌃C in the terminal does not stay "running".
+            let now_alive = keel_workspace::status(&home, &query.id).is_some();
+            if alive
+                && !now_alive
+                && !said_ended
+                && last_bytes.elapsed() >= std::time::Duration::from_secs(5)
+            {
+                if let Some(f) = &mut follower {
+                    f.close().await;
+                }
+                let _ = tx
+                    .send(Ok(Event::default().event("ended").data("gone")))
+                    .await;
+                said_ended = true;
+            }
+            alive = now_alive;
+            // The stream stays open for a session that is not being written: waiting on the
+            // watcher costs nothing, and a session resumed in a terminal later is picked up here.
+            let fallback = std::time::Duration::from_secs(if alive { 2 } else { 5 });
+            tokio::select! {
+                _ = tx.closed() => break,
+                _ = wake.recv() => {}
+                _ = tokio::time::sleep(fallback) => {}
+            }
+        }
+        if let Some(f) = &mut follower {
+            f.close().await;
         }
     });
 
@@ -995,6 +1098,33 @@ async fn api_session_tail(
 
 /// Records sent when catching up on a conversation that was already long.
 const MAX_REPLAY: usize = 1_500;
+
+/// Watch a session's transcript and Claude Code's pid files, waking `wake` on any change.
+///
+/// kqueue, per file: instant, and never a recursive walk. `None` when a watcher cannot be made,
+/// in which case the poll's fallback sleep is the whole of it.
+fn watch_session(
+    dir: &Utf8Path,
+    home: &Utf8Path,
+    id: &str,
+    wake: tokio::sync::mpsc::Sender<()>,
+) -> Option<notify::RecommendedWatcher> {
+    use notify::Watcher;
+    let mut watcher =
+        notify::recommended_watcher(move |_: Result<notify::Event, notify::Error>| {
+            // A full slot means a wake is already pending, which is the same thing.
+            let _ = wake.try_send(());
+        })
+        .ok()?;
+    if let Some(path) = keel_workspace::transcript_path(dir, home, id) {
+        let _ = watcher.watch(path.as_std_path(), notify::RecursiveMode::NonRecursive);
+    }
+    let _ = watcher.watch(
+        home.join("sessions").as_std_path(),
+        notify::RecursiveMode::NonRecursive,
+    );
+    Some(watcher)
+}
 
 async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {
     Json(blocking(move || crate::repo::git_status(&repo), Default::default()).await)

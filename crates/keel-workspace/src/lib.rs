@@ -24,8 +24,8 @@ pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers};
 pub use plugins::{Plugin, discover_plugins};
 pub use sessions::{
-    Session, discover_sessions, opener_of, opening_turn, project_key, session_dirs, tail,
-    transcript_len,
+    Kind, MAX_READ, Session, Status, discover_sessions, kind_of, opener_of, opening_turn,
+    project_key, session_dirs, status, tail, tail_last, transcript_len, transcript_path,
 };
 pub use skills::{Skill, discover_skills};
 
