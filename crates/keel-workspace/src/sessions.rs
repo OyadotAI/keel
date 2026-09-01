@@ -146,6 +146,73 @@ pub fn tail(
     Some((lines, from + complete as u64))
 }
 
+/// The `uuid` of the human `user` record that opens a turn, if this line is one.
+///
+/// The key every fact about a turn is filed under. Not an ordinal: the daemon drops the head of a
+/// long replay, a compaction summary looks like a prompt, and any change to `followable` renumbers
+/// everything after it. The uuid is stable for the life of the transcript.
+pub fn opener_of(line: &str) -> Option<String> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    opener(&record).map(|(uuid, _, _)| uuid)
+}
+
+/// A person asking, as `(uuid, prompt, timestamp)`; `None` for a tool result, a compaction
+/// summary, a meta record, or a subagent's chatter — none of which opens a turn.
+fn opener(record: &Value) -> Option<(String, String, String)> {
+    if record["type"].as_str() != Some("user")
+        || record["isSidechain"].as_bool() == Some(true)
+        || record["isCompactSummary"].as_bool() == Some(true)
+        || record["isMeta"].as_bool() == Some(true)
+        || !record["toolUseResult"].is_null()
+    {
+        return None;
+    }
+    let content = &record["message"]["content"];
+    let text = if let Some(s) = content.as_str() {
+        s.to_string()
+    } else if let Some(blocks) = content.as_array() {
+        if blocks.iter().any(|b| b["type"] == "tool_result") {
+            return None;
+        }
+        blocks
+            .iter()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        return None;
+    };
+    let said = text.trim();
+    if said.is_empty() || said.starts_with("<task-notification>") {
+        return None;
+    }
+    Some((
+        record["uuid"].as_str()?.to_string(),
+        said.chars().take(200).collect(),
+        record["timestamp"].as_str().unwrap_or_default().to_string(),
+    ))
+}
+
+/// The first turn opened at or after a byte offset: `(uuid, prompt, timestamp)`.
+///
+/// How a Keel-driven turn learns its own key: the daemon notes where the transcript ended before
+/// it spawned the agent, and the prompt record it is looking for is the first thing written after
+/// that. Reads from the offset only, so a long conversation costs nothing here.
+pub fn opening_turn(
+    repo: &Utf8Path,
+    claude_home: &Utf8Path,
+    id: &str,
+    from: u64,
+) -> Option<(String, String, String)> {
+    let (lines, _) = tail(repo, claude_home, id, from)?;
+    lines.iter().find_map(|line| {
+        serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|r| opener(&r))
+    })
+}
+
 /// Whether a transcript record is one a follower should be shown.
 ///
 /// Two exclusions, in the one place the reader goes through so nothing can drift from it.

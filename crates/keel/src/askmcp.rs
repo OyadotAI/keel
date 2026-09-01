@@ -103,9 +103,8 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     waiters()
-        .lock()
-        .expect("waiters lock")
-        .insert(id.clone(), tx);
+        .locked()
+        .insert(id.clone(), (tx, lane.unwrap_or_default().to_string()));
     queue().locked().push(pending);
     match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(decision)) => Ok(decision
@@ -211,7 +210,7 @@ mod tests {
         );
         let tx = waiters().lock().unwrap().remove(&id).unwrap();
         queue().lock().unwrap().retain(|p| p.id != id);
-        tx.send(crate::approve::answered("Blue")).unwrap();
+        tx.0.send(crate::approve::answered("Blue")).unwrap();
         assert_eq!(asking.await.unwrap().unwrap(), "Blue");
         assert!(config(7777, Some("lane-1")).contains("/mcp?lane=lane-1"));
     }

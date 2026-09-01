@@ -768,15 +768,24 @@ fn eval_18_a_repositorys_own_hooks_are_quarantined_before_the_agent_runs() {
 /// 19. Every turn is preceded by a snapshot, so it can be rewound.
 ///
 /// A git tree from a throwaway index and no refs: the repository's own history is untouched by
-/// something whose whole job is to be undone.
+/// something whose whole job is to be undone. The daemon takes it itself, before the agent is
+/// spawned, and says so on the stream as the turn's first fact — the app used to ask for it
+/// through an endpoint of its own, which meant a turn Keel did not drive never had one.
 #[test]
 fn eval_19_a_turn_can_be_rewound_to_the_tree_before_it() {
-    let (repo, port, mut daemon) = project(&[("Makefile", "check:\n\ttrue\n")]);
+    let (repo, port, mut daemon, _argv) = stubbed_project();
     let dir = repo.path().to_path_buf();
     std::fs::write(dir.join("keep.txt"), "before\n").expect("write");
 
-    let snap = post_read(port, "/api/git/snapshot", "{}").unwrap_or_default();
-    let tree = field(&snap, "tree").unwrap_or_default();
+    let stream = curl_stream(&format!(
+        "http://127.0.0.1:{port}/api/chat?provider=claude&mode=plan&lane=l&prompt={}",
+        urlencode("hello")
+    ));
+    let tree = stream
+        .lines()
+        .filter(|l| l.contains(r#""kind":"turn.started""#))
+        .find_map(|l| field(l, "snapshot"))
+        .unwrap_or_default();
 
     std::fs::write(dir.join("keep.txt"), "after\n").expect("write");
     std::fs::write(dir.join("stray.txt"), "new\n").expect("write");
@@ -786,8 +795,8 @@ fn eval_19_a_turn_can_be_rewound_to_the_tree_before_it() {
     stop_daemon(&mut daemon);
 
     assert!(
-        !tree.is_empty(),
-        "no snapshot was taken, so the turn could never be undone: {snap}"
+        tree.len() == 40,
+        "no snapshot was taken before the turn, so it could never be undone: {stream}"
     );
     assert_eq!(
         std::fs::read_to_string(dir.join("keep.txt")).unwrap_or_default(),

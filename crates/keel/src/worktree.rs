@@ -502,15 +502,10 @@ pub struct DiscardBody {
 }
 
 #[derive(Deserialize)]
+/// The Commit button. Keel's own checkpoint after a turn no longer comes through here: the
+/// daemon makes it inside the turn, under the lane's claim — see `turns::finish`.
 pub struct CommitBody {
     pub message: String,
-    /// Keel's own checkpoint after a turn, rather than the Commit button.
-    ///
-    /// The same distinction `git::AUTOMATIC` already makes: the button is an act the person
-    /// chose and runs whatever they have set up, the checkpoint is Keel's initiative and is
-    /// refused when it would photograph somebody else's half-written tree.
-    #[serde(default)]
-    pub automatic: bool,
 }
 
 fn bad(e: String) -> (StatusCode, String) {
@@ -579,19 +574,7 @@ pub async fn api_commit(
     crate::serve::Checkout(checkout): crate::serve::Checkout,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
-    // `add -A` photographs the whole tree, so an automatic commit taken while another lane's
-    // agent is still writing holds that lane's half-finished files under this lane's message —
-    // and the other lane's own commit then shows less than it did. The claim is the only place
-    // that knows, because the other lane may be in a different window.
-    //
-    // Refusing costs a checkpoint, which is recoverable: the files are still there and the next
-    // turn commits them. The alternative is not.
-    if body.automatic && state.writer_in(&checkout) {
-        return Err(bad(
-            "Another feature is editing this working tree, so this turn was not committed — a              commit now would hold its half-written files. The changes are still here; commit              them once it finishes."
-                .into(),
-        ));
-    }
+    let _ = &state;
     off_thread(move || commit_all(&checkout, &body.message))
         .await
         .map(Json)
