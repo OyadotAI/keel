@@ -25,6 +25,8 @@ struct Welcome: View {
     @State private var log = ""
     @State private var error: String?
     @State private var starting = false
+    /// Which form `StartProject` opens on, set by the tile that opened it.
+    @State private var startMode = StartProject.Mode.new
     /// A git repository with no `CLAUDE.md`, waiting on the answer to the dialog below.
     @State private var uninitialised: String?
 
@@ -96,7 +98,7 @@ struct Welcome: View {
                  + "is a normal turn, so you see it and can rewind it.")
         }
         .sheet(isPresented: $starting) {
-            StartProject(client: model.client) { path, brief, file in
+            StartProject(client: model.client, start: startMode) { path, brief, file in
                 starting = false
                 open(path)
                 if let file { model.attach(fileURL: file) }
@@ -235,10 +237,16 @@ struct Welcome: View {
                 }
                 if Flags.scaffolding {
                     ActionTile(icon: "wand.and.stars", title: "New project",
-                               detail: "Scaffolded, with its own gate") { starting = true }
+                               detail: "Scaffolded, with its own gate") {
+                        startMode = .new
+                        starting = true
+                    }
                 }
                 ActionTile(icon: "arrow.down.circle.fill", title: "Clone from GitHub",
-                           detail: "Bring one down and open it") { starting = true }
+                           detail: "Bring one down and open it") {
+                    startMode = .clone
+                    starting = true
+                }
             }
             .disabled(!ready)
             .opacity(ready ? 1 : 0.45)
@@ -440,9 +448,6 @@ enum Recents {
         UserDefaults.standard.set(Array(list.prefix(8)), forKey: key)
     }
 }
-
-
-/// The one prominent action on a screen. Same shape as Send, wider padding.
 
 
 /// One way into the product: an icon, what it does, and what that means.

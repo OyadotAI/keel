@@ -1167,6 +1167,10 @@ final class SessionModel: Identifiable {
         await refreshGit()
         await refreshTree()
         attribute(before, to: turn)
+        // Written now that the file list is final. Everything on a turn except its prose is
+        // Keel's own reading of the machine, and none of it is in the transcript — so without
+        // this the next launch rebuilds the turn with its words and none of its work.
+        await remember(turn)
         // The turn just changed the repository, and readiness is a reading of the repository.
         // Without this the panel kept the findings from before the fix — including the one the
         // person clicked "Fix this" on — until they went and pressed rescan themselves.
@@ -2703,6 +2707,9 @@ final class SessionModel: Identifiable {
                         replayed = []
                         handedOver = true
                         self.replaying = false
+                        // The other half of `remember`. The transcript has been read; this puts
+                        // back what only Keel ever knew about those turns.
+                        await self.restoreRecords(session: id)
                         // Only a session something is actually writing to is being *followed*.
                         // Set unconditionally, this told you a conversation that finished last
                         // week was "running outside Keel" — a statement about the machine that is
@@ -2776,6 +2783,96 @@ final class SessionModel: Identifiable {
         for change in changes where !before.contains(change.path + change.status) {
             guard !turn.files.contains(where: { repoRelative($0) == change.path }) else { continue }
             turn.noteEdit(change.path)
+        }
+    }
+
+    // MARK: - What only Keel knows about a turn
+
+    /// Persist a finished turn's Keel-side facts, so the next launch can put them back.
+    ///
+    /// Claude Code's transcript is the record of the conversation and nothing more: what was said,
+    /// which tools ran, with what arguments. Everything the turn pane draws around that is Keel's
+    /// own — the files `attribute` read out of git, the shell writes `Turn.written` proved by
+    /// mtime, the commit, the gate, the duration, the cost. All of it was computed here and kept
+    /// nowhere, so a relaunch rebuilt the turn from the transcript and it came back with its prose
+    /// and none of its work. For a turn whose calls are all `Bash` — a heredoc, a `tee`, a
+    /// formatter — that is every file it touched.
+    ///
+    /// Failure is silent on purpose. This is a sidecar: a turn that cannot be written down is
+    /// still a turn that happened, and an error banner about a cache would be noise about
+    /// something the person did not ask for.
+    func remember(_ turn: Turn) async {
+        guard let session = sessionId, let n = turns.firstIndex(where: { $0 === turn }) else { return }
+        let body = Wire.TurnRecordRequest(session: session, record: record(of: turn, n: n))
+        _ = try? await client.post("/api/turns", body: body, q(), as: Wire.TurnRecord.self)
+    }
+
+    /// A turn as the sidecar stores it.
+    private func record(of turn: Turn, n: Int) -> Wire.TurnRecord {
+        var out = Wire.TurnRecord(n: n)
+        out.prompt = String(turn.prompt.prefix(200))
+        out.files = turn.files
+        out.commit = turn.commit
+        out.ms = turn.durationMS
+        out.cost = turn.cost
+        if let t = turn.tokens {
+            out.tokens = .init(input: t.input, output: t.output,
+                               cache_read: t.cacheRead, cache_write: t.cacheWrite)
+        }
+        switch turn.gate {
+        case .notRun: out.gate = nil
+        case .running(let c): out.gate = .init(status: "running", command: c)
+        case .passed(let c, _): out.gate = .init(status: "passed", command: c)
+        case .none(let c): out.gate = .init(status: "none", command: c)
+        case .failed(let c, let problems):
+            out.gate = .init(status: "failed", command: c,
+                             problems: problems.map { "\($0.file):\($0.line) \($0.message)" })
+        }
+        return out
+    }
+
+    /// Put back what the transcript could not carry, once the replay has caught up.
+    ///
+    /// Matched by turn number and checked against the prompt, because a transcript is not a stable
+    /// index: it can be compacted, resumed, or opened from a different starting point, and a record
+    /// landing quietly on the wrong turn would report one turn's files against another. That is a
+    /// worse failure than the one this fixes — a wrong answer beats no answer nowhere in this
+    /// product — so a mismatch drops the record and leaves the turn as the transcript had it.
+    ///
+    /// Never overwrites. A followed turn's live values are the ones actually measured just now;
+    /// this only fills what the replay left empty.
+    private func restoreRecords(session id: String) async {
+        let stored: [Wire.TurnRecord]
+        do {
+            stored = try await client.get("/api/turns", q(["session": id]))
+        } catch {
+            return
+        }
+        for record in stored {
+            guard turns.indices.contains(record.n) else { continue }
+            let turn = turns[record.n]
+            guard record.prompt.isEmpty || turn.prompt.hasPrefix(record.prompt)
+                    || record.prompt.hasPrefix(String(turn.prompt.prefix(200)))
+            else { continue }
+
+            for path in record.files { turn.noteEdit(path) }
+            if turn.commit == nil { turn.commit = record.commit }
+            if turn.durationMS == nil { turn.durationMS = record.ms }
+            if turn.cost == nil { turn.cost = record.cost }
+            if turn.tokens == nil, let t = record.tokens {
+                turn.tokens = .init(input: t.input, output: t.output,
+                                    cacheRead: t.cache_read, cacheWrite: t.cache_write)
+            }
+            if case .notRun = turn.gate, let gate = record.gate {
+                switch gate.status {
+                case "passed": turn.gate = .passed(gate.command ?? "", 0)
+                case "none": turn.gate = .none(gate.command ?? "")
+                // A gate that was still running when Keel was last quit did not finish, and
+                // redrawing it as a spinner would be a turn that can be entered and not left.
+                case "failed", "running": turn.gate = .failed(gate.command ?? "", [])
+                default: break
+                }
+            }
         }
     }
 

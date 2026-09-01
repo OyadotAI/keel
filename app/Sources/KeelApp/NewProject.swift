@@ -11,7 +11,16 @@ struct StartProject: View {
     /// The path opened, the brief to send first (empty for none), and a file to attach with it.
     let onOpened: (String, String, URL?) -> Void
 
-    @State private var mode = Flags.scaffolding ? Mode.new : .clone
+    /// Which form the sheet opens on. A caller that already knows — the welcome screen's two
+    /// tiles are labelled with the answer — passes it, so the tile and the form it opens agree.
+    init(client: Client, start: Mode = Flags.scaffolding ? .new : .clone,
+         onOpened: @escaping (String, String, URL?) -> Void) {
+        self.client = client
+        self.onOpened = onOpened
+        _mode = State(initialValue: start)
+    }
+
+    @State private var mode: Mode
     @State private var name = ""
     @State private var parent = "~/Dev"
     @State private var template: Template = Template.all[0]

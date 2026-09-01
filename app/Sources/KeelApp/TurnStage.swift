@@ -409,18 +409,36 @@ struct ChangedFiles: View {
     /// is a list of names and stats, not a wall of code.
     @State private var open = true
 
+    /// Counted in the header rather than left to be discovered by scrolling: a turn that wrote
+    /// three files in the repository and one in `/tmp` did something the first number alone does
+    /// not describe, and the one outside is the one nothing else in Keel will ever mention again.
+    private var outside: Int {
+        turn.files.count { model.repoRelative($0).hasPrefix("/") }
+    }
+
+    private var title: String {
+        let n = turn.files.count
+        let files = "\(n) file\(n == 1 ? "" : "s") changed"
+        return outside == 0 ? files : "\(files) · \(outside) outside the repository"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionBar(
-                title: "\(turn.files.count) file\(turn.files.count == 1 ? "" : "s") changed",
-                open: $open
-            )
+            SectionBar(title: title, open: $open)
             if open {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     // Through the same normaliser the Changes panel uses: an absolute path from
                     // a lane's checkout is not a path this checkout's git can answer for.
                     ForEach(turn.files, id: \.self) { path in
-                        FileDiff(path: model.repoRelative(path), model: model)
+                        let shown = model.repoRelative(path)
+                        // Still absolute after the normaliser means it is not in this checkout at
+                        // all, so there is no `git diff` to ask for and the answer would be an
+                        // empty card. Say where it is and whose git has it instead.
+                        if shown.hasPrefix("/") {
+                            OutsideFile(path: shown, model: model)
+                        } else {
+                            FileDiff(path: shown, model: model)
+                        }
                     }
                 }
                 .padding(.horizontal, K.S.sm)
@@ -883,5 +901,106 @@ struct RawOutput: View {
         guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
         lastFollow = now
         proxy.scrollTo(id, anchor: .top)
+    }
+}
+
+/// A file this turn wrote that git cannot answer for, because it is not in this checkout.
+///
+/// There is no diff to draw, and the reason the row exists is not the diff: it is that the file
+/// was written at all. A turn that puts something in `/tmp`, in the home directory, or into
+/// somebody else's repository and then says nothing about it is the invisible half of "see what
+/// your agent actually did" — and invisible is the one thing Keel is for.
+private struct OutsideFile: View {
+    let path: String
+    let model: SessionModel
+
+    /// The repository holding this file, if any — resolved once, off the render path.
+    @State private var repo: String??
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            Image(systemName: "arrow.up.forward.app")
+                .font(K.F.tiny).foregroundStyle(K.C.faint).frame(width: 10)
+
+            // Same reading order as a diff header: directory dimmed, filename not.
+            HStack(spacing: 0) {
+                Text(directory).foregroundStyle(K.C.faint)
+                Text(filename).foregroundStyle(K.C.text)
+            }
+            .font(K.F.codeSmall.weight(.medium))
+            .lineLimit(1).truncationMode(.head)
+
+            switch repo {
+            case .some(.some(let root)):
+                Pill(text: (root as NSString).lastPathComponent, tone: .accent)
+            case .some(.none):
+                // The one that matters. Nothing is keeping a copy of this file, so there is no
+                // diff to read later and no rewind that will bring it back.
+                Pill(text: "NOT IN GIT", tone: .warn)
+            case nil:
+                EmptyView()
+            }
+
+            Spacer(minLength: K.S.sm)
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .background(hovering ? K.C.hover : K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
+        .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .asButton { Self.reveal(path) }
+        .hint("\(path) — outside this repository. Click to reveal it in the Finder.")
+        .task(id: path) { repo = .some(Self.gitRoot(of: path)) }
+    }
+
+    private var directory: String {
+        let parent = (path as NSString).deletingLastPathComponent
+        return parent.isEmpty ? "" : parent + "/"
+    }
+
+    private var filename: String { (path as NSString).lastPathComponent }
+
+    /// The Finder, from the app rather than through `model.reveal`.
+    ///
+    /// `/api/fs/reveal` resolves through `tree::resolve`, which confines every path to the
+    /// repository and the Claude config — the traversal guard on a loopback API that any page in
+    /// a browser can reach. A file in `/tmp` is exactly what it is there to refuse, so the request
+    /// 400s and `reveal` drops it on the floor: the row looked dead and said nothing. Weakening
+    /// the guard to light up one row would be the wrong trade by a distance.
+    ///
+    /// It does not need the daemon anyway. The path is already absolute, and the app is the host —
+    /// the same reason `NSOpenPanel` replaced `/api/browse`. `model.reveal` keeps the round trip
+    /// because its callers pass checkout-relative paths and only the daemon knows which checkout a
+    /// lane is standing in.
+    ///
+    /// A scratch file the agent wrote and deleted again selects nothing at all, so that case falls
+    /// back to opening the folder it was in.
+    static func reveal(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
+    }
+
+    /// What is version-controlling this file, if anything: the nearest `.git` on the way up.
+    ///
+    /// `FileManager` rather than `git rev-parse`, because this answers one question about one
+    /// path and a row in a list must not wait on a subprocess. It is a dozen `stat`s at the
+    /// deepest, and it runs once per row rather than once per render.
+    ///
+    /// A submodule's `.git` is a file rather than a directory, which is why this asks whether the
+    /// name exists rather than whether a directory does.
+    static func gitRoot(of path: String) -> String? {
+        var dir = (path as NSString).deletingLastPathComponent
+        while dir.count > 1 {
+            if FileManager.default.fileExists(atPath: (dir as NSString).appendingPathComponent(".git")) {
+                return dir
+            }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        return nil
     }
 }
