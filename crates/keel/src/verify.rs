@@ -258,7 +258,8 @@ fn looks_like_a_file(path: &str) -> bool {
 
 /// Report which check would run, without running it.
 pub async fn plan(Checkout(repo): Checkout) -> axum::Json<Option<Check>> {
-    axum::Json(detect(&repo))
+    // A walk of the checkout's manifests: off the executor.
+    axum::Json(crate::serve::blocking(move || detect(&repo), None).await)
 }
 
 /// Every check this folder has: the project's own, or one per repository it holds.
@@ -311,7 +312,13 @@ pub async fn run_all(
     mut sink: impl FnMut(GateEvent),
     cancelled: impl Fn() -> bool,
 ) -> Verdict {
-    let checks = detect_all(root);
+    // no-blocking: the walk is on its own thread, and the rest is a child process awaited.
+    let checks = {
+        let root = root.to_owned();
+        tokio::task::spawn_blocking(move || detect_all(&root))
+            .await
+            .unwrap_or_default()
+    };
     if checks.is_empty() {
         let why = "No check command found. Add a `check` target to your Makefile, or \
                    typecheck/test scripts to package.json."

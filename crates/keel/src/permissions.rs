@@ -30,9 +30,10 @@ use crate::serve::AppState;
 /// nobody granted, applied to a conversation nobody was watching. Project rules stay shared,
 /// because those *are* per-project by design.
 ///
-/// Never cleaned up when a session ends. Bounded by sessions opened in one run of Keel, each a
-/// handful of short strings.
-// ponytail: grows for the process lifetime; evict by session if a long-running Keel ever cares.
+/// Never cleaned up when a session ends; capped instead, at `MAX_SESSION_RULES` conversations,
+/// dropping the first key past the cap. Each is a handful of short strings.
+const MAX_SESSION_RULES: usize = 200;
+
 fn session_rules() -> &'static Mutex<BTreeMap<String, BTreeSet<String>>> {
     static RULES: OnceLock<Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
     RULES.get_or_init(Default::default)
@@ -303,7 +304,9 @@ pub async fn trust(
     State(state): State<Arc<AppState>>,
     Json(body): Json<TrustBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
-    set_trusted(&state.repo(), body.trusted)
+    let repo = state.repo();
+    crate::serve::blocking(move || set_trusted(&repo, body.trusted), Ok(()))
+        .await
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
     Ok(Json(body.trusted))
 }
@@ -319,7 +322,15 @@ pub async fn list(
     Query(q): Query<SessionQuery>,
 ) -> Json<PermissionsView> {
     let repo = state.repo();
-    let project = load(&repo);
+    // Two files and a walk, off the executor: this runs on every panel and every turn end.
+    let (project, suggested, is_trusted) = {
+        let repo = repo.clone();
+        crate::serve::blocking(
+            move || (load(&repo), defaults(&repo), trusted(&repo)),
+            (BTreeSet::new(), Vec::new(), false),
+        )
+        .await
+    };
     // Only this window's one-time rules. Showing another conversation's would suggest they applied
     // here, which is exactly the confusion the keying removed.
     let session: Vec<String> = q
@@ -327,18 +338,15 @@ pub async fn list(
         .as_deref()
         .and_then(|s| {
             session_rules()
-                .lock()
-                .expect("rules lock")
+                .locked()
                 .get(s)
                 .map(|r| r.iter().cloned().collect())
         })
         .unwrap_or_default();
-    // These are applied now, not suggested — the panel shows them so it is visible *why* the
-    // agent can run `make` without ever having asked, rather than leaving that unexplained.
-    let suggested = defaults(&repo);
-
+    // `suggested` are applied now, not suggested — the panel shows them so it is visible *why*
+    // the agent can run `make` without ever having asked, rather than leaving that unexplained.
     Json(PermissionsView {
-        trusted: trusted(&repo),
+        trusted: is_trusted,
         project: project.into_iter().collect(),
         session,
         suggested,
@@ -395,10 +403,16 @@ pub fn remember(
             let Some(session) = session else {
                 return Err("A session rule needs the conversation it belongs to.".into());
             };
-            session_rules()
-                .lock()
-                .expect("rules lock")
-                .entry(session.to_string())
+            let mut all = session_rules().locked();
+            // Capped: the first conversation past the cap loses its one-time rules, which is a
+            // question asked again, not a permission granted.
+            if all.len() >= MAX_SESSION_RULES
+                && !all.contains_key(session)
+                && let Some(first) = all.keys().next().cloned()
+            {
+                all.remove(&first);
+            }
+            all.entry(session.to_string())
                 .or_default()
                 .insert(rule.to_string());
             Ok(())
@@ -414,12 +428,12 @@ pub async fn add(
     if !matches!(body.scope.as_str(), "project" | "session") {
         return Err(bad("scope must be `project` or `session`"));
     }
-    remember(
-        &state.repo(),
-        &body.rule,
-        &body.scope,
-        body.session.as_deref(),
+    let repo = state.repo();
+    crate::serve::blocking(
+        move || remember(&repo, &body.rule, &body.scope, body.session.as_deref()),
+        Ok(()),
     )
+    .await
     .map_err(|e| bad(&e))?;
     Ok(Json(true))
 }
@@ -436,9 +450,16 @@ pub async fn remove(
         }
     } else {
         let repo = state.repo();
-        let mut rules = load(&repo);
-        rules.remove(&body.rule);
-        save(&repo, &rules).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+        crate::serve::blocking(
+            move || {
+                let mut rules = load(&repo);
+                rules.remove(&body.rule);
+                save(&repo, &rules)
+            },
+            Ok(()),
+        )
+        .await
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
     }
     Ok(Json(true))
 }

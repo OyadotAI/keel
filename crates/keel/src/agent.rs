@@ -67,6 +67,7 @@ pub async fn stop(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StopQuery>,
 ) -> Json<Stopped> {
+    // no-blocking: a signal to a pid the state already holds.
     Json(Stopped {
         stopped: state.interrupt(query.lane.as_deref().unwrap_or_default()),
     })
@@ -539,20 +540,28 @@ pub async fn attach(
         .unwrap_or_default();
 
     let dir = checkout.join(".keel").join("attachments");
-    std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
-
-    // A `.gitignore` inside the directory keeps attachments out of `git status` — and so out of the
-    // Changes panel — without editing the repository's own `.gitignore`, which is the user's file
-    // and not Keel's to rewrite.
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        let _ = std::fs::write(&ignore, "*\n");
-    }
-
     let name = format!("{stamp}-{safe}");
-    let path = dir.join(&name);
     let bytes = body.len();
-    std::fs::write(&path, &body).map_err(|e| bad(e.to_string()))?;
+    // Up to 10 MB written to disk: off the executor, like every other file the daemon writes.
+    let written: Result<(), String> = crate::serve::blocking(
+        {
+            let (dir, name) = (dir.clone(), name.clone());
+            move || {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                // A `.gitignore` inside the directory keeps attachments out of `git status` —
+                // and so out of the Changes panel — without editing the repository's own
+                // `.gitignore`, which is the user's file and not Keel's to rewrite.
+                let ignore = dir.join(".gitignore");
+                if !ignore.exists() {
+                    let _ = std::fs::write(&ignore, "*\n");
+                }
+                std::fs::write(dir.join(&name), &body).map_err(|e| e.to_string())
+            }
+        },
+        Err("the attachment could not be written".into()),
+    )
+    .await;
+    written.map_err(bad)?;
 
     Ok(Json(Attached {
         path: format!(".keel/attachments/{name}"),

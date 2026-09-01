@@ -95,8 +95,13 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     let id = {
         let mut all = jobs().locked();
         // Sequential rather than random: `m3` is something a person can say out loud, and the
-        // count only ever climbs within one daemon.
-        let id = format!("m{}", all.len() + 1);
+        // count only ever climbs within one daemon. A counter, not the list's length: the list
+        // is pruned, and `len() + 1` handed a new job an id a finished one still had.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let id = format!(
+            "m{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         all.push(Run {
             job: Job {
                 id: id.clone(),
@@ -135,9 +140,25 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     Ok(id)
 }
 
+/// Past this many finished jobs, undelivered ones go too. The exemption below is for a window
+/// that has not asked yet, not for a daemon nobody ever asks — which is the case that grew
+/// without bound.
+const HARD_CEILING: usize = 200;
+
 /// Keep the finished list bounded. Running jobs are never dropped.
 fn prune(all: &mut Vec<Run>) {
     let finished = all.iter().filter(|r| !r.job.running()).count();
+    if finished > HARD_CEILING {
+        let mut over = finished - KEEP_FINISHED;
+        all.retain(|r| {
+            if r.job.running() || over == 0 {
+                return true;
+            }
+            over -= 1;
+            false
+        });
+        return;
+    }
     if finished <= KEEP_FINISHED {
         return;
     }
@@ -229,6 +250,7 @@ pub struct LaneQuery {
 }
 
 pub async fn api_list(Query(q): Query<LaneQuery>) -> Json<Vec<Job>> {
+    // no-blocking: the registry is memory.
     Json(list(q.lane.as_deref()))
 }
 
@@ -240,6 +262,7 @@ pub struct IdBody {
 /// Stop a job. SIGINT to the group, not SIGTERM — the same choice as stopping a turn, and for the
 /// same reason: an interrupt lets what is running unwind and print why it ended.
 pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
+    // no-blocking: a signal and memory.
     let pid = {
         let all = jobs().locked();
         all.iter()
@@ -269,6 +292,7 @@ pub fn stop_all() {
 
 /// Mark a completion as delivered to the conversation.
 pub async fn api_ack(Json(body): Json<IdBody>) -> Json<bool> {
+    // no-blocking: the registry is memory.
     let mut all = jobs().locked();
     match all.iter_mut().find(|r| r.job.id == body.id) {
         Some(r) => {

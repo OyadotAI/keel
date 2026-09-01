@@ -225,7 +225,11 @@ fn owner_of(checkout: &Utf8Path) -> String {
 }
 
 pub async fn status(crate::serve::Checkout(repo): crate::serve::Checkout) -> Json<Status> {
-    let found = detect(&repo);
+    // `detect` walks the checkout reading `package.json`s: a file walk, off the executor.
+    let found = {
+        let repo = repo.clone();
+        crate::serve::blocking(move || detect(&repo), None).await
+    };
     let s = state().locked();
     let running = s.child.is_some();
     // Whose it is decides what this lane is told. Answering "running" with a URL served from
@@ -374,6 +378,7 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
 }
 
 pub async fn stop() -> Json<bool> {
+    // no-blocking: a signal and memory.
     stop_now();
     Json(true)
 }
