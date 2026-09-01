@@ -135,7 +135,7 @@ struct ChatRail: View {
                 }
                 if model.turns.isEmpty, model.replay == .none { hint }
                 // Oldest is at the top here, so what came before it is said here.
-                if let dropped = SessionModel.droppedNotice(model.replayDropped) {
+                if let dropped = SessionModel.droppedNotice(model.replayDropped, bytes: model.replayDroppedBytes) {
                     Text(dropped).font(K.F.micro).foregroundStyle(K.C.faint)
                         .padding(.horizontal, K.S.xxl)
                 }

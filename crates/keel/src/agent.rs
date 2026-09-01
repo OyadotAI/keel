@@ -1153,6 +1153,7 @@ pub async fn chat(
                     failed,
                     expect_design: query.design.unwrap_or(false),
                     auto_commit: query.auto_commit.unwrap_or(true),
+                    refused: None,
                 },
                 // The claim is held for the whole of this, so nothing else can take the tree.
                 || true,

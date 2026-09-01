@@ -2608,14 +2608,23 @@ final class SessionModel: Identifiable {
     /// The session's transcript is being followed: it is running somewhere Keel does not own it,
     /// and what appears is arriving as it is written.
     var following = false
-    /// How much of the conversation was dropped to keep the catch-up bounded.
+    /// How much of the conversation was dropped to keep the catch-up bounded: records, and the
+    /// bytes the daemon did not read at all.
     var replayDropped = 0
+    var replayDroppedBytes = 0
     /// The sentence both panes draw when the daemon dropped the head of a long session. Static so
     /// it can be asserted on; `nil` when nothing was dropped.
-    static func droppedNotice(_ dropped: Int) -> String? {
-        guard dropped > 0 else { return nil }
-        return "\(dropped) earlier record\(dropped == 1 ? " was" : "s were") not loaded — "
-            + "this session is longer than Keel replays."
+    static func droppedNotice(_ dropped: Int, bytes: Int = 0) -> String? {
+        if dropped > 0 {
+            return "\(dropped) earlier record\(dropped == 1 ? " was" : "s were") not loaded — "
+                + "this session is longer than Keel replays."
+        }
+        if bytes > 0 {
+            let mb = Double(bytes) / 1_048_576
+            return "The first \(mb.formatted(.number.precision(.fractionLength(1)))) MB of this "
+                + "session were not loaded — it is longer than Keel replays."
+        }
+        return nil
     }
     private var followTask: Task<Void, Never>?
     /// Turns read from the transcript while `replay` is `.reading`, held back until the daemon
@@ -2748,8 +2757,8 @@ final class SessionModel: Identifiable {
             }
             guard let turn = followed else { return }
             let reading = replay == .reading
-            // Past the catch-up this is a session being written right now.
-            if !reading { running = true; watchTree(turn) }
+            // Past the catch-up this is a session being written right now, by somebody.
+            if !reading { running = true; following = true; watchTree(turn) }
             // The transcript's own end of turn: the last assistant record of a turn stops for
             // `end_turn`, and everything after it is the next prompt. Keel was not there to close
             // the turn, so the record does. Measured on this repository's sessions: every turn.
@@ -2757,7 +2766,20 @@ final class SessionModel: Identifiable {
         case "fact":
             fact(event.data)
         case "truncated":
-            replayDropped = Int(event.data) ?? 0
+            // `{"records": n, "bytes": b}`; a bare number is an older daemon's record count.
+            struct Truncated: Decodable { var records: Int?; var bytes: Int? }
+            if let data = event.data.data(using: .utf8),
+               let t = try? JSONDecoder().decode(Truncated.self, from: data) {
+                replayDropped = t.records ?? 0
+                replayDroppedBytes = t.bytes ?? 0
+            } else {
+                replayDropped = Int(event.data) ?? 0
+            }
+        case "ended":
+            // The session's process went away and its transcript went quiet: a turn cut short
+            // by ⌃C in the terminal is over, whether or not it said so.
+            following = false
+            if let turn = followed { close(turn) }
         case "caught-up":
             await caughtUp()
         case "err":

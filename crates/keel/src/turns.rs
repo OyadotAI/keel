@@ -556,6 +556,13 @@ pub fn upsert(
     let path = store_path(repo, session);
     let dir = store_dir(repo);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Keel's records, not the project's: without this git saw the store as the turn's own new
+    // file, attributed it to the turn, and the checkpoint would have committed it. The same
+    // `.gitignore` the attachments and the worktrees carry.
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(&ignore, "*\n");
+    }
     let body = serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -754,6 +761,9 @@ pub struct Finish {
     pub expect_design: bool,
     /// The person's "commit after every turn" setting.
     pub auto_commit: bool,
+    /// Why the gate and the commit are not to run at all, decided before the turn: the tree was
+    /// another lane's when this one opened.
+    pub refused: Option<String>,
 }
 
 /// How long the gate may run inside a turn before the commit is made without it.
@@ -821,7 +831,9 @@ pub async fn finish(
     // work to grade, so a question answered costs no test run.
     let mut gate: Option<Gate> = None;
     let mut shared: Option<String> = None;
-    if !f.writes {
+    if let Some(why) = f.refused.clone() {
+        shared = Some(why);
+    } else if !f.writes {
         shared = Some("a plan turn writes nothing, so nothing was checked or committed".into());
     } else if !files.is_empty() && window_open() {
         let checkout = f.checkout.clone();
@@ -1053,6 +1065,197 @@ fn commit_message(prompt: &str, gate: Option<&Gate>) -> String {
     format!("{subject}\n\nMade by the agent in Keel. The project's checks {checks}")
 }
 
+// MARK: - Following a terminal
+
+/// The lane name a terminal session's claim is held under.
+pub fn terminal_lane(session: &str) -> String {
+    format!("term:{session}")
+}
+
+/// A turn ends when nothing has been written for this long after the boundary was seen.
+const TERMINAL_QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// A session a terminal is driving, given the same lifecycle a lane's turn gets.
+///
+/// The daemon is the only process that sees every window, and from `caught-up` on it sees this
+/// session's transcript as it is written. A prompt record opens a turn: the tree is claimed and
+/// photographed. Claude Code's own turn-end note, or its pid file saying idle, and then quiet,
+/// closes it: files, gate, commit, ended — `finish`, the same as for a lane.
+///
+/// Non-negotiable 11 bends here, honestly. A terminal `claude` is a writer nobody claimed; the
+/// `term:<session>` claim is what makes it one. A lane starting to write that tree gets the
+/// existing refusal, and a terminal turn opening in a tree a lane is writing gets its files noted
+/// and nothing checked or committed. The claim is the arbiter both ways.
+///
+/// Ceilings, said plainly: the photograph is taken after the prompt was submitted, so an `Edit`
+/// in the first few tens of milliseconds is inside it; and a turn open when its follower goes
+/// away — the window closed mid-turn — is finished only if the session is idle by then.
+pub struct Follower {
+    state: Arc<AppState>,
+    repo: Utf8PathBuf,
+    home: Utf8PathBuf,
+    session: String,
+    open: Option<Open>,
+}
+
+struct Open {
+    turn: String,
+    prompt: String,
+    checkout: Utf8PathBuf,
+    begun: Begun,
+    claim: Option<u64>,
+    refused: Option<String>,
+    end_seen: bool,
+    quiet_since: std::time::Instant,
+}
+
+impl Follower {
+    pub fn new(
+        state: Arc<AppState>,
+        repo: Utf8PathBuf,
+        home: Utf8PathBuf,
+        session: String,
+    ) -> Self {
+        Self {
+            state,
+            repo,
+            home,
+            session,
+            open: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Pretend the transcript has been quiet long enough, so a test need not wait for it.
+    #[cfg(test)]
+    fn quiet(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.quiet_since = std::time::Instant::now() - TERMINAL_QUIET * 2;
+        }
+    }
+
+    /// A person asked: a turn opens. Whatever was open before it is over — a prompt is the one
+    /// boundary that cannot be missed.
+    pub async fn opened(&mut self, uuid: String, prompt: String, cwd: Option<String>) {
+        self.close_open().await;
+        let checkout = self
+            .state
+            .session_dir_checked(cwd.as_deref())
+            .unwrap_or_else(|| self.repo.clone());
+        let (claim, refused) = match self.state.claim_terminal(&self.session, &checkout) {
+            Ok(token) => (Some(token), None),
+            Err(why) => (None, Some(why)),
+        };
+        let begun = {
+            let checkout = checkout.clone();
+            crate::serve::blocking(move || Some(begin(&checkout)), None)
+                .await
+                .unwrap_or_else(|| Begun {
+                    started: now(),
+                    snapshot: None,
+                    fingerprint: Default::default(),
+                })
+        };
+        {
+            let (repo, session, turn) = (self.repo.clone(), self.session.clone(), uuid.clone());
+            let fact = Fact::Started {
+                started: begun.started.clone(),
+                snapshot: begun.snapshot.clone(),
+                prompt: truncated(&prompt, 200),
+            };
+            crate::serve::blocking(
+                move || {
+                    emit(&repo, &session, &turn, fact);
+                },
+                (),
+            )
+            .await;
+        }
+        self.open = Some(Open {
+            turn: uuid,
+            prompt,
+            checkout,
+            begun,
+            claim,
+            refused,
+            end_seen: false,
+            quiet_since: std::time::Instant::now(),
+        });
+    }
+
+    /// Claude Code wrote its own note that the turn ended.
+    pub fn turn_ended(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.end_seen = true;
+        }
+    }
+
+    /// Something was appended to the transcript.
+    pub fn wrote(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.quiet_since = std::time::Instant::now();
+        }
+    }
+
+    /// One pass of the poll. The boundary is the turn-end note or the pid file saying idle, and
+    /// then nothing written for a moment — the note lands before the last record does.
+    pub async fn tick(&mut self) {
+        let Some(open) = &self.open else { return };
+        let idle =
+            keel_workspace::status(&self.home, &self.session) != Some(keel_workspace::Status::Busy);
+        if (open.end_seen || idle) && open.quiet_since.elapsed() >= TERMINAL_QUIET {
+            self.close_open().await;
+        }
+    }
+
+    /// The follower is going away. A turn still open is finished only if the session is idle:
+    /// finishing under a `claude` mid-write would commit half a turn.
+    pub async fn close(&mut self) {
+        let idle =
+            keel_workspace::status(&self.home, &self.session) != Some(keel_workspace::Status::Busy);
+        if idle {
+            self.close_open().await;
+        } else if let Some(open) = self.open.take()
+            && let Some(token) = open.claim
+        {
+            self.state.release(&terminal_lane(&self.session), token);
+        }
+    }
+
+    async fn close_open(&mut self) {
+        let Some(open) = self.open.take() else { return };
+        let (home, session) = (self.home.clone(), self.session.clone());
+        finish(
+            &self.state,
+            Finish {
+                repo: self.repo.clone(),
+                checkout: open.checkout,
+                session: self.session.clone(),
+                turn: open.turn,
+                prompt: open.prompt,
+                begun: open.begun,
+                writes: open.claim.is_some(),
+                usage: None,
+                failed: None,
+                expect_design: false,
+                auto_commit: true,
+                refused: open.refused,
+            },
+            // The tree is this turn's for as long as its `claude` is not writing it again.
+            move || keel_workspace::status(&home, &session) != Some(keel_workspace::Status::Busy),
+            || true,
+        )
+        .await;
+        if let Some(token) = open.claim {
+            self.state.release(&terminal_lane(&self.session), token);
+        }
+    }
+}
+
 // MARK: - The one thing the app still posts
 
 #[derive(Deserialize)]
@@ -1073,7 +1276,10 @@ pub async fn record(
     Json(req): Json<DesignRequest>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
     if req.lane.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "a design verdict needs its lane".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a design verdict needs its lane".into(),
+        ));
     }
     emit_for_lane(&state, &req.lane, Fact::Design { pins: req.pins });
     Ok(Json(true))
@@ -1365,6 +1571,165 @@ mod tests {
             parse_iso("2026-09-01T18:31:49.259Z"),
             Some(1_788_287_509_259)
         );
+    }
+
+    // MARK: the follower
+
+    /// A repository with one commit, and a Claude home with one live pid file for `session`.
+    fn followed(session: &str, status: &str) -> (Utf8PathBuf, Utf8PathBuf, Arc<AppState>) {
+        let repo = scratch();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        for args in [&["add", "-A"][..], &["commit", "-qm", "start"]] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let home = scratch();
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        set_status(&home, session, status);
+        let state = Arc::new(AppState::new(repo.clone()));
+        (repo, home, state)
+    }
+
+    fn set_status(home: &Utf8Path, session: &str, status: &str) {
+        let me = std::process::id();
+        std::fs::write(
+            home.join("sessions").join(format!("{me}.json")),
+            format!(r#"{{"pid":{me},"sessionId":"{session}","status":"{status}"}}"#),
+        )
+        .unwrap();
+    }
+
+    fn record_of(repo: &Utf8Path, session: &str, turn: &str) -> Record {
+        read(repo, session)
+            .into_iter()
+            .find(|r| r.turn == turn)
+            .expect("a record for the turn")
+    }
+
+    #[tokio::test]
+    async fn a_followed_turn_gets_its_files_from_git() {
+        let (repo, home, state) = followed("s-files", "busy");
+        let mut f = Follower::new(state, repo.clone(), home.clone(), "s-files".into());
+        f.opened("u-1".into(), "write a file".into(), Some(repo.to_string()))
+            .await;
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        f.turn_ended();
+        set_status(&home, "s-files", "idle");
+        f.quiet();
+        f.tick().await;
+        assert!(!f.is_open());
+        let r = record_of(&repo, "s-files", "u-1");
+        assert_eq!(r.files, vec!["new.txt"]);
+        assert!(r.snapshot.is_some(), "photographed before it ran");
+        assert!(
+            r.commit.is_some(),
+            "checked in — no gate is declared, and none is a pass"
+        );
+        assert!(r.ended.is_some());
+    }
+
+    /// Nothing is finished while the terminal's `claude` is still busy and has not said the
+    /// turn is over: the boundary is Claude Code's own, not a timer.
+    #[tokio::test]
+    async fn a_followed_turn_is_committed_only_at_an_idle_boundary() {
+        let (repo, home, state) = followed("s-idle", "busy");
+        let mut f = Follower::new(state, repo.clone(), home.clone(), "s-idle".into());
+        f.opened("u-1".into(), "work".into(), None).await;
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        f.quiet();
+        f.tick().await;
+        assert!(f.is_open(), "busy and unannounced: not over");
+        assert!(record_of(&repo, "s-idle", "u-1").commit.is_none());
+
+        set_status(&home, "s-idle", "idle");
+        f.tick().await;
+        assert!(!f.is_open(), "idle and quiet is the boundary");
+        assert!(record_of(&repo, "s-idle", "u-1").commit.is_some());
+    }
+
+    /// The tree is the turn's only while its `claude` is not writing it again.
+    #[tokio::test]
+    async fn a_turn_that_goes_busy_again_commits_nothing() {
+        let (repo, home, state) = followed("s-busy", "idle");
+        let mut f = Follower::new(state, repo.clone(), home.clone(), "s-busy".into());
+        f.opened("u-1".into(), "work".into(), None).await;
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        f.turn_ended();
+        f.quiet();
+        // The next turn started between the boundary and the commit.
+        set_status(&home, "s-busy", "busy");
+        f.tick().await;
+        assert!(!f.is_open(), "the boundary was seen, so the turn is over");
+        let r = record_of(&repo, "s-busy", "u-1");
+        assert_eq!(r.files, vec!["new.txt"], "what it did is still recorded");
+        assert!(r.commit.is_none(), "nothing is committed under a writer");
+        assert!(r.shared.is_some());
+    }
+
+    /// Non-negotiable 11, both ways: a terminal writer refuses a lane, and a lane refuses a
+    /// terminal turn's commit.
+    #[tokio::test]
+    async fn a_terminal_writer_refuses_a_keel_lane_on_the_same_tree() {
+        let (repo, home, state) = followed("s-nn11", "busy");
+        let mut f = Follower::new(state.clone(), repo.clone(), home.clone(), "s-nn11".into());
+        f.opened("u-1".into(), "work".into(), None).await;
+        assert!(
+            state.claim("lane-a", &repo, true).is_err(),
+            "the terminal holds the tree"
+        );
+        assert!(
+            state.claim("lane-b", &repo, false).is_ok(),
+            "a reader may sit beside it"
+        );
+        f.turn_ended();
+        f.quiet();
+        set_status(&home, "s-nn11", "idle");
+        f.tick().await;
+        assert!(
+            state.claim("lane-a", &repo, true).is_ok(),
+            "released with the turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_followed_turn_beside_a_writing_lane_gets_files_and_no_commit() {
+        let (repo, home, state) = followed("s-beside", "idle");
+        let token = state.claim("lane-a", &repo, true).unwrap();
+        let mut f = Follower::new(state.clone(), repo.clone(), home.clone(), "s-beside".into());
+        f.opened("u-1".into(), "work".into(), None).await;
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        let r = record_of(&repo, "s-beside", "u-1");
+        assert_eq!(r.files, vec!["new.txt"]);
+        assert!(r.commit.is_none());
+        assert!(
+            r.gate.is_none(),
+            "nothing is checked in somebody else's tree"
+        );
+        assert!(r.shared.is_some());
+        state.release("lane-a", token);
     }
 
     #[test]
