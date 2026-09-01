@@ -83,7 +83,7 @@ struct SessionWindow: View {
             case .changes: "Changes"
             case .git: "Git"
             case .files: "Files"
-            case .sessions: "History"
+            case .sessions: "Sessions"
             case .readiness: "Readiness"
             case .monitors: "Monitors"
             case .skills: "Skills"
