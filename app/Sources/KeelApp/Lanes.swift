@@ -15,6 +15,8 @@ import SwiftUI
 final class Lanes {
     let client: Client
     let port: UInt16
+    /// The one project every lane reads. See `Project`.
+    let project: Project
 
     private(set) var lanes: [SessionModel] = []
     var activeID: UUID?
@@ -39,8 +41,9 @@ final class Lanes {
     init(client: Client, port: UInt16) {
         self.client = client
         self.port = port
+        project = Project(client: client, port: port)
         lanes = []
-        let first = SessionModel(client: client, port: port)
+        let first = SessionModel(client: client, port: port, project: project)
         first.lanes = self
         lanes = [first]
         activeID = first.id
@@ -104,7 +107,7 @@ final class Lanes {
         // Only sessions the daemon can still see: a transcript can be deleted, and a lane pointing
         // at one that is gone would fail on its first turn rather than on open. A lane in its own
         // checkout keeps its sessions there, so for those the checkout still existing is the test.
-        let known = Set(lanes.first?.sessions.map(\.id) ?? [])
+        let known = Set(project.store.sessions.map(\.id))
         let pairs = zip(saved.sessions, saved.worktrees ?? Array(repeating: nil, count: saved.sessions.count))
         let live = pairs.enumerated().filter { _, pair in
             let (id, wt) = pair
@@ -117,13 +120,12 @@ final class Lanes {
         for (index, pair) in live {
             let (id, wt) = pair
             let taskID = saved.tasks.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? UUID()
-            let m = SessionModel(client: client, port: port, sessionId: id, id: taskID)
+            let m = SessionModel(client: client, port: port, sessionId: id, id: taskID, project: project)
             m.lanes = self
             m.worktree = wt
             m.isolated = wt != nil
             m.title = saved.titles.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? m.title
             m.provider = saved.providers.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? .claude
-            if let a = lanes.first { m.adopt(project: a) }
             restored.append(m)
             await m.open(session: id)
             guard mine == generation else { return }
@@ -171,7 +173,7 @@ final class Lanes {
     /// Never nil: `close` refills an emptied list, and the window reads this on every pass.
     var active: SessionModel {
         if let found = lanes.first(where: { $0.id == activeID }) ?? lanes.first { return found }
-        let m = SessionModel(client: client, port: port)
+        let m = SessionModel(client: client, port: port, project: project)
         m.lanes = self
         lanes = [m]
         activeID = m.id
@@ -356,7 +358,7 @@ final class Lanes {
             idle.title = "Untitled"
             return idle
         }
-        let m = SessionModel(client: client, port: port, sessionId: id)
+        let m = SessionModel(client: client, port: port, sessionId: id, project: project)
         m.lanes = self
         m.isolated = isolated
         // Reading from the moment the tab exists. `open(session:)` sets this, but only once the
@@ -365,9 +367,6 @@ final class Lanes {
         // conversation. Three states for one click.
         m.replaying = id != nil
         Telemetry.track("lane_created", ["isolated": isolated, "resumed": id != nil])
-        // From whichever lane exists, not from `active` — which would refill an emptied list
-        // with a lane of its own on the way to making this one.
-        if let a = lanes.first(where: { $0.id == activeID }) ?? lanes.first { m.adopt(project: a) }
         lanes.append(m)
         activeID = m.id
         return m
@@ -377,9 +376,8 @@ final class Lanes {
     /// the background: the person's lane stays focused and the review tab fills in on its own.
     func reviewLane(beside current: SessionModel) -> SessionModel {
         let keep = activeID
-        let m = SessionModel(client: client, port: port, sessionId: nil)
+        let m = SessionModel(client: client, port: port, sessionId: nil, project: project)
         m.lanes = self
-        m.adopt(project: current)
         m.title = "Staff review"
         m.hidden = true
         lanes.append(m)
@@ -405,7 +403,7 @@ final class Lanes {
         // a pasted block into the root's `.keel/attachments`, leaving the `@path` in the prompt
         // pointing at nothing the agent could read from its own checkout.
         await refreshWorktrees()
-        if let cwd = (lanes.first?.sessions.first { $0.id == id })?.cwd,
+        if let cwd = (project.store.sessions.first { $0.id == id })?.cwd,
            cwd.contains("/.keel/worktrees/"),
            let wt = worktrees.first(where: { (cwd as NSString).lastPathComponent == $0.name }) {
             m.worktree = wt.name
@@ -441,7 +439,7 @@ final class Lanes {
         // while the background review runs leaves a window with no tabs, a workbench drawn for a
         // lane nothing can select, and no way back to the start screen.
         if shown.isEmpty {
-            newLane().adopt(project: model)
+            newLane()
             atStart = true
         }
         if activeID == model.id { activeID = shown.last?.id }
@@ -458,7 +456,7 @@ final class Lanes {
         for lane in doomed { lane.closed() }
         lanes.removeAll { ids.contains($0.id) }
         if shown.isEmpty {
-            newLane().adopt(project: doomed[0])
+            newLane()
             atStart = true
         }
         if let active = activeID, ids.contains(active) { activeID = shown.last?.id }
@@ -512,10 +510,5 @@ final class Lanes {
         a.finishedOpening()
         a.offerSetup()
         a.offerReview()
-        // Every lane draws the same project chrome, so they share what the project says about
-        // itself rather than each asking.
-        for lane in lanes where lane.id != a.id {
-            lane.adopt(project: a)
-        }
     }
 }
