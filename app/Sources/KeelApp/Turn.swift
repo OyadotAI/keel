@@ -36,17 +36,53 @@ final class Turn: Identifiable {
     @Observable
     final class Block: Identifiable {
         let id = UUID()
-        private(set) var text = ""
-        /// Parsed once per mutation rather than once per frame. This is the memoisation that
-        /// `Markdown`'s string-keyed cache was supposed to be and never was.
-        private(set) var blocks: [Markdown.Block] = []
 
-        init(_ text: String = "") { append(text) }
+        /// The text as it stands. **Not observed**, deliberately.
+        ///
+        /// A token arrives faster than a frame, and a view that redraws on the raw string redraws
+        /// once per token for a picture that cannot change more than sixty times a second. Only
+        /// `blocks` is observed, and `blocks` moves on a clock.
+        @ObservationIgnored private(set) var text = ""
+
+        /// The parse the views render from.
+        private(set) var blocks: [Markdown.Block] = []
+        /// How many words it holds, for a label on something collapsed. Counted in `settle`
+        /// rather than read off `text` in a view: `text` is not observed, so a label reading it
+        /// would go stale — and counting words walks the whole string, once per render.
+        private(set) var words = 0
+        /// What `blocks` was parsed from, so a flush with nothing new is free.
+        @ObservationIgnored private var parsed = 0
+        @ObservationIgnored private var flushing = false
+
+        init(_ text: String = "") { append(text); settle() }
+
+        /// Roughly twelve times a second — under a frame, far above what anyone reads at.
+        ///
+        /// The parse is O(n) in the whole block, so running it per token is O(n²) in the reply.
+        /// That is the shape of the bug this class was written to remove, and re-parsing "only
+        /// the current block" instead of the whole turn was a smaller constant on the same curve:
+        /// the current block *is* most of a reply. The cure is the clock, not the scope.
+        static let coalesce = Duration.milliseconds(80)
 
         func append(_ more: String) {
             guard !more.isEmpty else { return }
             text += more
+            guard !flushing else { return }
+            flushing = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Block.coalesce)
+                self?.flushing = false
+                self?.settle()
+            }
+        }
+
+        /// Parse now: the block closed, or the turn ended, and there is no next tick to correct a
+        /// half-drawn reply.
+        func settle() {
+            guard text.count != parsed else { return }
+            parsed = text.count
             blocks = Markdown.blocks(text)
+            words = text.split(whereSeparator: \.isWhitespace).count
         }
     }
 
@@ -108,6 +144,13 @@ final class Turn: Identifiable {
         if !text.isEmpty { text += "\n\n" }
         text += whole
     }
+
+    /// Parse whatever is still pending, now.
+    ///
+    /// Blocks parse on a clock while a reply streams, which is right — a token arrives faster
+    /// than a frame. A turn that has ended has no next tick to correct a half-drawn block.
+    func settle() { steps.forEach { if case .say(let b) = $0 { b.settle() }
+                                    else if case .think(let b) = $0 { b.settle() } } }
 
     /// A record was written at this moment.
     ///
@@ -357,16 +400,16 @@ final class Turn: Identifiable {
             parentOf[id] = parent
             calls[pi].children.append(call)
             // A `Group` holds copies of its calls, so a child appended here is invisible to the
-            // rows until the group is rebuilt. Without this the nested view — the whole point of
-            // a `Task` row — stayed empty for the entire run of the subagent and then filled in
-            // at once when the `Task` itself returned.
-            groups = Self.grouped(calls)
+            // rows until the parent's copy is refreshed. Without this the nested view — the whole
+            // point of a `Task` row — stayed empty for the entire run of the subagent and then
+            // filled in at once when the `Task` itself returned.
+            regroup(pi)
         } else {
             callIndex[id] = calls.count
             calls.append(call)
             steps.append(.call(id))
             open = nil
-            groups = Self.grouped(calls)
+            group(call)
         }
         // A file a subagent wrote is still a file this turn wrote.
         if Self.writeTools.contains(tool) {
@@ -393,11 +436,11 @@ final class Turn: Identifiable {
             calls[i].input = input
             calls[i].subject = subject
             calls[i].reason = input["description"]?.stringValue ?? calls[i].reason
-            groups = Self.grouped(calls)
+            regroup(i)
         case .child(let pi, let ci):
             calls[pi].children[ci].input = input
             calls[pi].children[ci].subject = subject
-            groups = Self.grouped(calls)
+            regroup(pi)
         }
         if Self.writeTools.contains(tool(at: call)) {
             noteEdit(input["file_path"]?.stringValue ?? input["path"]?.stringValue)
@@ -453,13 +496,13 @@ final class Turn: Identifiable {
             calls[pi].children[ci].failed = failed
             calls[pi].children[ci].running = false
             calls[pi].children[ci].ended = Date()
-            groups = Self.grouped(calls)
+            regroup(pi)
         case .top(let i)?:
             calls[i].output = output
             calls[i].failed = failed
             calls[i].running = false
             calls[i].ended = Date()
-            groups = Self.grouped(calls)
+            regroup(i)
         case nil:
             break
         }
@@ -554,22 +597,37 @@ final class Turn: Identifiable {
     /// answer has arrived, and a failure inside a run is carried by the group rather than
     /// splitting it.
     ///
-    /// Stored, not computed. As a computed property it was read from `body`, so every token
-    /// rebuilt the whole list — and a `Call` is a struct carrying its entire output, so that was a
-    /// deep copy of every byte the turn had printed, per frame.
+    /// Stored and maintained in place, never rebuilt.
+    ///
+    /// It was computed and read from `body`, so every token rebuilt the whole list — and a `Call`
+    /// is a struct carrying its entire output, so that was a deep copy of every byte the turn had
+    /// printed, per frame. Rebuilding it on each mutation instead only moved the cost: a turn with
+    /// a hundred and sixty calls does five hundred mutations, and each one copied all of them.
+    /// Replaying a session did it six hundred times before a single frame was drawn, which is what
+    /// "clicking a session loads all the events" looked like.
+    ///
+    /// So a mutation patches the one entry it touches. `place` is what makes that O(1) — results
+    /// do not arrive in the order the calls were made, so finding the entry by scanning would put
+    /// the scan back.
     private(set) var groups: [Group] = []
+    /// Call id → where it sits in `groups`: which group, and which call within it.
+    private var place: [String: (group: Int, at: Int)] = [:]
 
-    private static func grouped(_ calls: [Call]) -> [Group] {
-        var out: [Group] = []
-        for c in calls {
-            if var last = out.last, last.tool == c.tool {
-                last.calls.append(c)
-                out[out.count - 1] = last
-            } else {
-                out.append(Group(id: c.id, tool: c.tool, calls: [c]))
-            }
+    /// A new top-level call joins the last group when it is the same tool, or starts a new one.
+    private func group(_ call: Call) {
+        if groups.last?.tool == call.tool {
+            groups[groups.count - 1].calls.append(call)
+        } else {
+            groups.append(Group(id: call.id, tool: call.tool, calls: [call]))
         }
-        return out
+        place[call.id] = (groups.count - 1, groups[groups.count - 1].calls.count - 1)
+    }
+
+    /// Copy one call back over the group's own copy of it. The group holds values, so a change to
+    /// `calls` is invisible to the rows until this runs.
+    private func regroup(_ i: Int) {
+        guard let at = place[calls[i].id] else { return }
+        groups[at.group].calls[at.at] = calls[i]
     }
 }
 

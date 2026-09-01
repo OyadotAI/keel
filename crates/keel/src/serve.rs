@@ -826,8 +826,14 @@ async fn api_session_tail(
                 first = false;
                 // "Everything that already happened has been sent." Turns before this are a
                 // replay; turns after it are the session running now.
+                // The offset, not an empty string — axum writes no `data:` line at all for an
+                // empty payload, which makes the frame a name with nothing under it and leaves
+                // every client's parser to decide whether that is an event. Somewhere useful to
+                // resume from is better than nothing to say.
                 if tx
-                    .send(Ok(Event::default().event("caught-up").data("")))
+                    .send(Ok(Event::default()
+                        .event("caught-up")
+                        .data(next.to_string())))
                     .await
                     .is_err()
                 {

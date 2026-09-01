@@ -143,11 +143,26 @@ actor Client {
 /// multi-line data — Keel never sends, so parsing it would be code with no caller.
 struct SSEParser {
     private var name = "message"
+    /// Whether a `data:` line has been seen since the last `event:`.
+    private var carried = false
 
     mutating func feed(_ line: String) -> Client.Event? {
-        if line.isEmpty { name = "message"; return nil }
+        // The end of a frame. An `event:` with no `data:` is still an event, and dropping it is
+        // how a whole message disappears between two layers that each look correct.
+        //
+        // Measured: axum writes **no `data:` line at all** when the payload is empty, so
+        // `/api/session/tail`'s `caught-up` — the signal that a replayed conversation is ready to
+        // draw — reached the socket as `event: caught-up` followed by a blank line, and was
+        // swallowed here. The pane sat on "Opening this session…" with the whole transcript
+        // already decoded behind it.
+        if line.isEmpty {
+            defer { name = "message"; carried = false }
+            guard !carried, name != "message" else { return nil }
+            return Client.Event(name: name, data: "")
+        }
         if let v = line.dropPrefixIfPresent("event:") {
             name = v.trimmingCharacters(in: .whitespaces)
+            carried = false
             return nil
         }
         if let v = line.dropPrefixIfPresent("data:") {
@@ -155,6 +170,7 @@ struct SSEParser {
             // `/api/verify` streams raw compiler output as `line` events, and that output is
             // indented. Dropping every leading space would silently reflow every error message
             // Keel shows.
+            carried = true
             return Client.Event(name: name, data: String(v.hasPrefix(" ") ? v.dropFirst() : v))
         }
         // A comment line is the server's heartbeat. It carries nothing, but the fact that it
