@@ -156,18 +156,9 @@ struct SessionsPanel: View {
             }
         }
         }
-        // The list was a snapshot from whenever the panel opened: a session started in a
-        // terminal did not appear and one that had ended kept saying it was running, because
-        // nothing asked again. Three seconds is one `stat` per transcript and a read of a few
-        // small files; the model drops a reply that changed nothing. Cancelled with the panel.
-        // A session moving between Running and Today slides rather than jumps.
+        // A session moving between Running and Today slides rather than jumps. The list itself
+        // arrives from the daemon's own watch on Claude Code's files — nothing here asks.
         .animation(.easeInOut(duration: 0.2), value: model.sessions)
-        .task {
-            while !Task.isCancelled {
-                await model.refreshSessions()
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
     }
 
     struct Group: Identifiable {

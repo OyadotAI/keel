@@ -14,6 +14,8 @@ final class Project {
     let client: Client
     let port: UInt16
     let store = ProjectStore()
+    /// What changed, from the daemon. Started by `Lanes`, which routes it.
+    let events = DaemonEvents()
     private var checkouts: [String: RepoStore] = [:]
 
     init(client: Client, port: UInt16) {
@@ -92,8 +94,57 @@ final class RepoStore {
     /// Every path, flat — for the filter and the mention picker.
     var files: [String] = []
     var branches: Wire.Branches?
+    /// The last read that failed, for the panel to say beside what it still has.
+    var failure: Fault?
 
     init(worktree: String?) {
         self.worktree = worktree
+    }
+
+    private func query(_ extra: [String: String] = [:]) -> [String: String] {
+        var out = extra
+        if let worktree { out["wt"] = worktree }
+        return out
+    }
+
+    /// What git says about the tree and its last commits. The fault, when the read failed.
+    func refreshGit(_ client: Client) async -> Fault? {
+        switch await client.fetch("git status", "/api/git/status", query()) as Result<Wire.GitStatus, Fault> {
+        case .success(let s):
+            isRepo = s.isRepo
+            branch = s.branch
+            changes = s.changes
+            repos = s.repos
+            changesCollapsed = s.collapsed
+            failure = nil
+        case .failure(let fault):
+            failure = fault
+            return fault
+        }
+        commits = (try? await client.get("/api/git/log", query(["n": "20"]))) ?? []
+        return nil
+    }
+
+    func refreshTree(_ client: Client) async -> Fault? {
+        switch await client.fetch("the file tree", "/api/tree", query()) as Result<[Wire.Node], Fault> {
+        case .success(let t):
+            tree = t
+            var flat: [String] = []
+            func walk(_ nodes: [Wire.Node]) {
+                for n in nodes {
+                    if n.dir { walk(n.children ?? []) } else { flat.append(n.path) }
+                }
+            }
+            walk(t)
+            files = flat
+            return nil
+        case .failure(let fault):
+            failure = fault
+            return fault
+        }
+    }
+
+    func refreshBranches(_ client: Client) async {
+        branches = try? await client.get("/api/git/branches", query())
     }
 }

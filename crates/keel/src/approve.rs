@@ -405,6 +405,12 @@ pub async fn ask(
         .locked()
         .insert(id.clone(), (tx, hook.lane.clone()));
     queue().locked().push(pending);
+    // The window is told a question is waiting, rather than asking every 700 ms whether one is.
+    crate::events::emit(
+        "pending",
+        None,
+        serde_json::json!({ "lane": hook.lane, "session": hook.session_id }),
+    );
     // On the record, so a reopened turn shows what it asked — the card itself still comes from
     // the poll.
     crate::turns::emit_for_lane(
@@ -651,6 +657,11 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
         .locked()
         .insert(id.clone(), (tx, hook.lane.clone()));
     queue().locked().push(pending);
+    crate::events::emit(
+        "pending",
+        None,
+        serde_json::json!({ "lane": hook.lane, "session": hook.session_id }),
+    );
 
     let answer = match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(d)) => d

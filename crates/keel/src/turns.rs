@@ -766,6 +766,23 @@ pub struct Finish {
     pub refused: Option<String>,
 }
 
+impl Finish {
+    /// The lane checkout's name, for the events that are about one checkout; `None` is the
+    /// project's own tree.
+    fn checkout_name(&self) -> Option<&str> {
+        let rel = self.checkout.strip_prefix(&self.repo).ok()?;
+        let mut parts = rel.components();
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(a), Some(b), Some(name))
+                if a.as_str() == ".keel" && b.as_str() == "worktrees" =>
+            {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
+    }
+}
+
 /// How long the gate may run inside a turn before the commit is made without it.
 const DESIGN_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -825,6 +842,7 @@ pub async fn finish(
             files: files.clone(),
         })
         .await;
+        crate::events::emit("tree.changed", f.checkout_name(), serde_json::Value::Null);
     }
 
     // 2. The gate. The agent does not grade its own work — and a turn that wrote nothing has no
@@ -982,6 +1000,8 @@ pub async fn finish(
             .await;
             if let Some(sha) = sha {
                 emit_now(Fact::Commit { sha }).await;
+                crate::events::emit("git.changed", f.checkout_name(), serde_json::Value::Null);
+                crate::events::emit("tree.changed", f.checkout_name(), serde_json::Value::Null);
             }
         }
     }

@@ -47,6 +47,81 @@ final class Lanes {
         first.lanes = self
         lanes = [first]
         activeID = first.id
+        // Port 0 is a test's client: nothing to connect to, and a reconnect loop per model would
+        // be noise. The routing still runs, so a test can hand events in.
+        if port != 0 { project.events.start(client) }
+        watchProject()
+    }
+
+    // MARK: - What the daemon says changed
+
+    private var eventsTask: Task<Void, Never>?
+
+    private func watchProject() {
+        eventsTask = Task { [weak self] in
+            guard let self else { return }
+            for await event in self.project.events.subscribe() {
+                await self.route(event)
+            }
+        }
+    }
+
+    /// One door for every project event. Coarse on purpose: "git changed" means read git again,
+    /// for the checkout it names; the small payloads — the session list, the lane a question is
+    /// for — come inline.
+    func route(_ event: Wire.ProjectEvent) async {
+        switch event.kind {
+        case "connected", "lagged":
+            await reconnected()
+        case "sessions":
+            if let list: [Wire.Session] = event.payload() {
+                project.store.sessions = list
+                for lane in lanes { lane.sessionsChanged(list) }
+            }
+        case "tree.changed", "git.changed":
+            let repo = project.repo(for: event.wt)
+            if let fault = await repo.refreshGit(project.client) {
+                active.lastError = "Could not read \(fault.what): \(fault.why)"
+            }
+            _ = await repo.refreshTree(project.client)
+            if event.kind == "git.changed" { await repo.refreshBranches(project.client) }
+            for lane in lanes where lane.worktree == event.wt { lane.diffTick += 1 }
+        case "worktrees.changed":
+            await refreshWorktrees()
+        case "monitors.changed":
+            for lane in lanes { lane.refreshMonitorsSoon() }
+        case "dev.changed":
+            for lane in lanes { await lane.refreshDev() }
+        case "permissions.changed":
+            await active.refreshTrust()
+        case "state.changed":
+            await active.refreshState()
+        case "pending":
+            struct Head: Decodable { var lane: String? }
+            if let head: Head = event.payload(),
+               let lane = lanes.first(where: { $0.id.uuidString == head.lane }) {
+                await lane.fetchApprovals()
+            } else {
+                for lane in lanes where lane.running { await lane.fetchApprovals() }
+            }
+        default:
+            break
+        }
+    }
+
+    /// Whatever happened while the connection was down is gone, so everything is read again —
+    /// except the project scan, which the startup path owns until it has run once.
+    private func reconnected() async {
+        let a = active
+        if project.store.loaded { await a.refreshState() }
+        await refreshWorktrees()
+        _ = await project.repo(for: nil).refreshGit(project.client)
+        _ = await project.repo(for: nil).refreshTree(project.client)
+        for lane in lanes {
+            await lane.refreshMonitors()
+            await lane.refreshDev()
+            if lane.running { await lane.fetchApprovals() }
+        }
     }
 
     // MARK: - Remembering what was open

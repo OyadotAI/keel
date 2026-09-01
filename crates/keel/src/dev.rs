@@ -343,19 +343,34 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
     let Some(pipe) = pipe else { return };
     let mut lines = BufReader::new(pipe).lines();
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        let mut s = state().locked();
-        if s.url.is_none()
-            && let Some(url) = find_url(&line)
-        {
-            s.url = Some(url);
-        }
-        s.log.push(line);
-        if s.log.len() > MAX_LOG {
-            let excess = s.log.len() - MAX_LOG;
-            s.log.drain(..excess);
+    loop {
+        let line = match crate::lines::next(&mut lines).await {
+            crate::lines::Next::Line(line) => line,
+            crate::lines::Next::Skipped => continue,
+            crate::lines::Next::Done => break,
+        };
+        let announced = {
+            let mut s = state().locked();
+            let mut announced = false;
+            if s.url.is_none()
+                && let Some(url) = find_url(&line)
+            {
+                s.url = Some(url);
+                announced = true;
+            }
+            s.log.push(line);
+            if s.log.len() > MAX_LOG {
+                let excess = s.log.len() - MAX_LOG;
+                s.log.drain(..excess);
+            }
+            announced
+        };
+        if announced {
+            crate::events::emit("dev.changed", None, serde_json::Value::Null);
         }
     }
+    // The pipe closed: the server is gone, or going.
+    crate::events::emit("dev.changed", None, serde_json::Value::Null);
 }
 
 pub async fn stop() -> Json<bool> {
@@ -380,6 +395,8 @@ pub fn stop_now() {
     s.child = None;
     s.url = None;
     s.checkout = None;
+    drop(s);
+    crate::events::emit("dev.changed", None, serde_json::Value::Null);
 }
 
 #[cfg(test)]

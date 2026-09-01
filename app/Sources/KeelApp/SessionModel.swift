@@ -527,7 +527,6 @@ final class SessionModel: Identifiable {
     }
 
     private var streamTask: Task<Void, Never>?
-    private var approvalTask: Task<Void, Never>?
 
     /// The daemon's port, so views that speak to it directly (the terminal's websocket) do not
     /// each have to be told.
@@ -637,6 +636,7 @@ final class SessionModel: Identifiable {
         self.id = id
         // Here, and not at the first turn. See `watchMonitors`.
         watchMonitors()
+        watchdog()
     }
 
     /// Why this feature cannot be merged yet, or `nil`.
@@ -1135,8 +1135,6 @@ final class SessionModel: Identifiable {
     func unfollow() {
         followTask?.cancel()
         followTask = nil
-        watchdogTask?.cancel()
-        watchdogTask = nil
         // Put back here, synchronously, rather than in the cancelled task's exit: `start()` takes
         // a followed lane over and sets `running` itself, and a task exiting a moment later that
         // set it false again would end the turn that had just begun.
@@ -1951,79 +1949,54 @@ final class SessionModel: Identifiable {
             await refreshDev()
             return
         }
-        // The URL appears in the server's own output a moment after it starts.
-        for _ in 0..<40 {
-            await refreshDev()
-            if previewURL != nil { return }
-            try? await Task.sleep(for: .milliseconds(400))
-        }
-        if previewURL == nil {
-            lastError = "The dev server started but has not announced a URL yet. Its output is "
-                + "in the preview pane."
-        }
+        // The URL appears in the server's own output a moment after it starts, and the daemon
+        // says so — `dev.changed` — the moment it does.
+        await refreshDev()
     }
 
     // MARK: - Background jobs
 
     /// Commands Keel is running for this conversation, newest first.
     var monitors: [Wire.Job] = []
-    private var monitorTask: Task<Void, Never>?
-    /// Whether the background-job loop is up. For the test that asserts closing a lane ends it.
-    var isWatchingMonitors: Bool { monitorTask != nil }
+    private var monitorsRefresh: Task<Void, Never>?
 
-    /// Started when the lane is created and never cancelled while it lives.
-    ///
-    /// Not tied to `running`, which is the whole point: a job outlives the turn that asked for
-    /// it, so the loop that notices it finishing has to outlive the turn too. Approvals poll only
-    /// while a turn is up because a question cannot exist without one; a job can.
-    ///
-    /// It used to start on the lane's first *turn*, on the reasoning that a job can only be
-    /// created by the agent, so a turn is the only window in which one can appear. That is true
-    /// of the job and false of the *panel*: Monitors draws `monitors`, and before any turn had
-    /// run in this lane nothing had ever fetched it — so a freshly launched app, or any lane you
-    /// open the panel on without typing first, showed "Nothing being watched" as a statement
-    /// about the machine when it was a statement about this array never having been filled.
-    /// Measured against a live daemon holding a finished job: `reported` was still false, because
-    /// nobody had asked. A panel that cannot tell "nothing is running" from "nobody looked" is
-    /// the "never weird" failure, and the fix is for somebody to always be looking.
+    /// Read once at the lane's creation — before any turn, so Monitors never says "nothing being
+    /// watched" as a statement about the machine when it is one about this array never having
+    /// been filled — and again whenever the daemon says the jobs changed.
     func watchMonitors() {
-        guard monitorTask == nil else { return }
-        monitorTask = Task { [weak self, client] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                let q: [String: String] = ["lane": self.id.uuidString]
-                if let jobs: [Wire.Job] = try? await client.get("/api/monitors", q) {
-                    // Said before the list is replaced, because "new" is what this poll knows and
-                    // the next one does not. Nobody is asked whether to monitor a command any
-                    // more, so the banner is where "something that outlives this turn just
-                    // started" is seen at all.
-                    let known = Set(self.monitors.map(\.id))
-                    for job in jobs where !known.contains(job.id) && job.running {
-                        Notifications.jobStarted(lane: self, command: job.command)
-                    }
-                    self.monitors = jobs
-                    // Acked before it is delivered, and by the one lane that owns it: the result
-                    // reaching the conversation twice is worse than not reaching it at all.
-                    for job in jobs where !job.running && !job.reported {
-                        await self.ack(job)
-                        self.deliver(job)
-                        // The one people walked away for: a job outlives its turn by design, so
-                        // the report landing in a conversation nobody is looking at is not news
-                        // reaching anybody.
-                        Notifications.jobFinished(lane: self, command: job.command, exit: job.exit)
-                    }
-                }
-                // Two seconds while there is something to watch, fifteen when there is not. The
-                // loop is per lane and never ends, so at the flat rate a window with four lanes
-                // and no jobs still asked the daemon 172,800 times a day for the same empty list.
-                //
-                // `running` is in the condition and not just the job list: a job can only be
-                // created by the agent, so a turn in flight is the window in which one can
-                // appear, and without it a job approved during a slow tick would take fifteen
-                // seconds to show up — trading a real delay for traffic nobody was paying for.
-                let watching = self.running || self.monitors.contains { $0.running }
-                try? await Task.sleep(for: .seconds(watching ? 2 : 15))
-            }
+        Task { await refreshMonitors() }
+    }
+
+    /// The daemon says the jobs moved. A build prints hundreds of lines and says so for each;
+    /// one read a few hundred milliseconds after the last is the whole of what the panel needs.
+    func refreshMonitorsSoon() {
+        monitorsRefresh?.cancel()
+        monitorsRefresh = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            await self.refreshMonitors()
+        }
+    }
+
+    func refreshMonitors() async {
+        let q: [String: String] = ["lane": id.uuidString]
+        guard let jobs: [Wire.Job] = try? await client.get("/api/monitors", q) else { return }
+        // Said before the list is replaced, because "new" is what this read knows and the next
+        // one does not. Nobody is asked whether to monitor a command any more, so the banner is
+        // where "something that outlives this turn just started" is seen at all.
+        let known = Set(monitors.map(\.id))
+        for job in jobs where !known.contains(job.id) && job.running {
+            Notifications.jobStarted(lane: self, command: job.command)
+        }
+        monitors = jobs
+        // Acked before it is delivered, and by the one lane that owns it: the result reaching
+        // the conversation twice is worse than not reaching it at all.
+        for job in jobs where !job.running && !job.reported {
+            await ack(job)
+            deliver(job)
+            // The one people walked away for: a job outlives its turn by design, so the report
+            // landing in a conversation nobody is looking at is not news reaching anybody.
+            Notifications.jobFinished(lane: self, command: job.command, exit: job.exit)
         }
     }
 
@@ -2037,11 +2010,12 @@ final class SessionModel: Identifiable {
     /// point after you close the tab" is not a thing to leave to inference.
     func closed() {
         stop()
-        monitorTask?.cancel()
-        monitorTask = nil
+        monitorsRefresh?.cancel()
+        monitorsRefresh = nil
         treeWatch?.cancel()
         treeWatch = nil
-        // A pane nobody is looking at must not keep polling a file every 400 ms.
+        watchdogTask?.cancel()
+        watchdogTask = nil
         unfollow()
     }
 
@@ -2085,71 +2059,41 @@ final class SessionModel: Identifiable {
 
     // MARK: - Approvals
 
-    /// Polled only while a turn is running, and only for this conversation.
+    /// Arm or disarm the cards for a turn.
+    ///
+    /// Disarming answers every card on the way out: the hook is a process blocked on
+    /// `/api/approve` and it waits the full four minutes before it gives up, so pressing Stop on
+    /// a turn with a question on screen used to leave the agent hanging with the screen showing
+    /// nothing outstanding. A plain deny, which the daemon turns into "Not approved. Say what
+    /// you needed and stop" — the right thing to hear from a turn being interrupted.
     private func watchApprovals(_ on: Bool) {
-        approvalTask?.cancel()
-        approvalTask = nil
         guard on else {
-            // Clearing the cards answered nothing. The hook is a process blocked on `/api/approve`
-            // and it waits the full four minutes before it gives up, so pressing Stop on a turn
-            // with a question on screen left the agent hanging with the screen showing nothing
-            // outstanding. Every card gets a decision on the way out.
             let outstanding = pending
             pending = []
-            // A plain deny, which the daemon turns into "Not approved. Say what you needed and
-            // stop" — the right thing to hear from a turn that is being interrupted. Not an
-            // `answer:` string, which is the shape of an AskUserQuestion reply.
             for card in outstanding { answer(card, allow: false, scope: "once") }
             return
         }
-        approvalTask = Task { [weak self, client] in
-            // Weak, so a closed lane stops polling instead of living on inside its own task.
-            while !Task.isCancelled {
-                guard let self else { return }
-                var q: [String: String] = ["lane": self.id.uuidString]
-                if let id = self.sessionId { q["session"] = id }
-                if let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q), !found.isEmpty {
-                    self.pending.append(contentsOf: found)
-                    Notifications.approvalWaiting(lane: self, found.count)
-                    // So a tester's "it just sat there" can be read against "a question was
-                    // shown and never answered": the tool, not the command.
-                    for p in found {
-                        self.approvalsThisTurn += 1
-                        Telemetry.track("approval_shown", ["tool": p.tool, "question": p.isQuestion,
-                                                           "rules": p.rules.count, "mode": self.mode])
-                        Telemetry.breadcrumb("approval shown: \(p.tool)")
-                    }
-                }
-                // Nothing at all for a minute, heartbeat included, is a dead stream.
-                //
-                // The daemon sends a keep-alive every fifteen seconds now, so silence is no
-                // longer ambiguous: a thinking agent still moves `lastEventAt`, and a daemon that
-                // died does not. Before the heartbeat there was nothing to tell those apart, and
-                // the stream's own timeout is an hour — so a daemon that went away presented as
-                // "thinking…" until somebody gave up. It is a state that could be entered and not
-                // left, which is the half of "never stuck" that has no other guard.
-                if self.running, Date().timeIntervalSince(self.lastEventAt) > Self.deadStream {
-                    let why = "The connection to Keel's daemon stopped responding."
-                    self.streamTask?.cancel()
-                    self.streamTask = nil
-                    self.running = false
-                    self.preparing = nil
-                    self.watchApprovals(false)
-                    self.current?.failure = why
-                    self.fail(why, category: "dead-stream",
-                              fix: Fix(label: "Retry") { self.retryLast() })
-                    Telemetry.track("stream_died", ["mode": self.mode])
-                }
-                // A turn with output but no *progress* for five minutes is the thing testers
-                // describe as "stuck on thinking". Said once per turn, with what it was doing.
-                if self.running, !self.stallReported, Date().timeIntervalSince(self.lastProgressAt) > 300 {
-                    self.stallReported = true
-                    let tool = self.current?.calls.last?.tool ?? (self.pending.isEmpty ? "none" : "waiting-on-person")
-                    Telemetry.track("turn_stalled", ["tool": tool, "pending": self.pending.count, "mode": self.mode])
-                    Telemetry.warn("turn silent for 5 minutes", ["tool": tool, "mode": self.mode, "pending": "\(self.pending.count)"])
-                }
-                try? await Task.sleep(for: .milliseconds(700))
-            }
+        Task { await fetchApprovals() }
+    }
+
+    /// The questions waiting for this conversation. Read when the daemon says one is waiting —
+    /// the `pending` frame — and once when a turn starts; it used to be a poll every 700 ms for
+    /// the length of every turn.
+    func fetchApprovals() async {
+        guard running else { return }
+        var q: [String: String] = ["lane": id.uuidString]
+        if let id = sessionId { q["session"] = id }
+        guard let found: [Wire.Pending] = try? await client.get("/api/approve/poll", q),
+              !found.isEmpty else { return }
+        pending.append(contentsOf: found)
+        Notifications.approvalWaiting(lane: self, found.count)
+        // So a tester's "it just sat there" can be read against "a question was shown and never
+        // answered": the tool, not the command.
+        for p in found {
+            approvalsThisTurn += 1
+            Telemetry.track("approval_shown", ["tool": p.tool, "question": p.isQuestion,
+                                               "rules": p.rules.count, "mode": mode])
+            Telemetry.breadcrumb("approval shown: \(p.tool)")
         }
     }
 
@@ -2404,16 +2348,7 @@ final class SessionModel: Identifiable {
     var files: [String] { get { repo.files } set { repo.files = newValue } }
 
     func refreshTree() async {
-        guard let t: [Wire.Node] = await read("the file tree", "/api/tree", q()) else { return }
-        tree = t
-        var flat: [String] = []
-        func walk(_ nodes: [Wire.Node]) {
-            for n in nodes {
-                if n.dir { walk(n.children ?? []) } else { flat.append(n.path) }
-            }
-        }
-        walk(t)
-        files = flat
+        if let fault = await repo.refreshTree(client) { note(fault) }
     }
 
     /// Attach a file from the tree as an `@path` mention.
@@ -2494,20 +2429,14 @@ final class SessionModel: Identifiable {
         Task { try? await Task.sleep(for: .seconds(2.5)); if justOpened == o.name { justOpened = nil } }
     }
 
-    /// The session list only. History polls this while it is open, so a session started in a
-    /// terminal appears without a turn having to end here, and "● running" goes away when the
-    /// writing stops rather than when something else happens to refresh the whole state.
-    func refreshSessions() async {
-        guard let fresh: [Wire.Session] = try? await client.get("/api/sessions"),
-              fresh != sessions else { return }
-        // Only on a change, so a quiet poll invalidates nothing.
-        sessions = fresh
-        // The list is also the backstop for a followed turn that ended without saying so — ⌃C
-        // in the terminal writes no `end_turn`. Claude Code's own pid file does say it.
-        if following, let s = fresh.first(where: { $0.id == sessionId }) {
-            if s.live != true { following = false }
-            if s.busy != true, running, let turn = followed { close(turn) }
-        }
+    /// The session list changed, from the daemon's own watch on Claude Code's files.
+    ///
+    /// Also the backstop for a followed turn that ended without saying so — ⌃C in the terminal
+    /// writes no `end_turn`. Claude Code's own pid file does say it.
+    func sessionsChanged(_ fresh: [Wire.Session]) {
+        guard following, let s = fresh.first(where: { $0.id == sessionId }) else { return }
+        if s.live != true { following = false }
+        if s.busy != true, running, !owned, let turn = followed { close(turn) }
     }
 
     func refreshState() async {
@@ -2649,7 +2578,6 @@ final class SessionModel: Identifiable {
         owned = false
         running = false
         lastEventAt = Date()
-        watchdog()
         followTask = Task { [client] in
             do {
                 for try await event in client.events("/api/session/tail",
@@ -2899,8 +2827,6 @@ final class SessionModel: Identifiable {
         followed = nil
         if replay == .reading { replay = .none }
         following = false
-        watchdogTask?.cancel()
-        watchdogTask = nil
     }
 
     /// A followed stream that goes silent — no records, no heartbeat — for a minute is a dead
@@ -2908,7 +2834,7 @@ final class SessionModel: Identifiable {
     /// poll; a followed session polls for nothing, so it had no check at all, and a daemon that
     /// died under it left "Following this session" up for good.
     private func watchdog() {
-        watchdogTask?.cancel()
+        guard watchdogTask == nil else { return }
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
@@ -2919,8 +2845,33 @@ final class SessionModel: Identifiable {
     }
 
     /// One tick of the watchdog, separately so a test can run it without waiting a minute.
+    ///
+    /// For a turn this lane owns: nothing at all for a minute, heartbeat included, is a dead
+    /// stream. The daemon sends a keep-alive every fifteen seconds, so silence is not ambiguous —
+    /// a thinking agent still moves `lastEventAt`, and a daemon that died does not. Before the
+    /// heartbeat there was nothing to tell those apart, and the stream's own timeout is an hour.
+    /// And a turn with output but no *progress* for five minutes is the thing testers describe
+    /// as "stuck on thinking": said once per turn, with what it was doing.
     func checkPulse() {
-        guard !owned, following || replay == .reading,
+        if owned {
+            guard running else { return }
+            if Date().timeIntervalSince(lastEventAt) > Self.deadStream {
+                let why = "The connection to Keel's daemon stopped responding."
+                streamTask?.cancel()
+                streamTask = nil
+                if let turn = current { close(turn) } else { running = false }
+                current?.failure = why
+                fail(why, category: "dead-stream", fix: Fix(label: "Retry") { self.retryLast() })
+                Telemetry.track("stream_died", ["mode": mode])
+            } else if !stallReported, Date().timeIntervalSince(lastProgressAt) > 300 {
+                stallReported = true
+                let tool = current?.calls.last?.tool ?? (pending.isEmpty ? "none" : "waiting-on-person")
+                Telemetry.track("turn_stalled", ["tool": tool, "pending": pending.count, "mode": mode])
+                Telemetry.warn("turn silent for 5 minutes", ["tool": tool, "mode": mode, "pending": "\(pending.count)"])
+            }
+            return
+        }
+        guard following || replay == .reading,
               Date().timeIntervalSince(lastEventAt) > Self.deadStream else { return }
         let why = "The connection to Keel's daemon stopped responding."
         followTask?.cancel()
@@ -3085,24 +3036,6 @@ final class SessionModel: Identifiable {
         refusedThisTurn.append(turn.toolName(of: id) ?? "unknown")
     }
 
-    /// A read that failed says so.
-    ///
-    /// `try?` on these was the quiet half of every "blank pane" report: the Changes panel and the
-    /// file tree simply kept whatever they last had, with nothing on screen saying the daemon had
-    /// stopped answering. Unlike `attempt`, success clears nothing — a turn's own error must not
-    /// be erased by the next `git status` that happens to work.
-    private func read<T: Decodable & Sendable>(_ what: String, _ path: String,
-                                               _ q: [String: String] = [:]) async -> T? {
-        switch await client.fetch(what, path, q) as Result<T, Fault> {
-        case .success(let value):
-            return value
-        case .failure(let fault):
-            lastError = "Could not read \(fault.what): \(fault.why)"
-            Telemetry.warn("read failed", ["what": fault.what])
-            return nil
-        }
-    }
-
     private func attempt(_ work: () async throws -> Void) async {
         do { try await work(); lastError = nil; lastFix = nil } catch {
             lastError = error.localizedDescription
@@ -3227,14 +3160,14 @@ final class SessionModel: Identifiable {
     var changesCollapsed: Bool { get { repo.changesCollapsed } set { repo.changesCollapsed = newValue } }
 
     func refreshGit() async {
-        if let s: Wire.GitStatus = await read("git status", "/api/git/status", q()) {
-            isRepo = s.isRepo
-            branch = s.branch
-            changes = s.changes
-            repos = s.repos
-            changesCollapsed = s.collapsed
-        }
-        commits = (try? await client.get("/api/git/log", q(["n": "20"]))) ?? []
+        if let fault = await repo.refreshGit(client) { note(fault) }
+    }
+
+    /// A read that failed says so, without clearing a turn's own error on the next one that
+    /// succeeds.
+    private func note(_ fault: Fault) {
+        lastError = "Could not read \(fault.what): \(fault.why)"
+        Telemetry.warn("read failed", ["what": fault.what])
     }
 
     /// The last commits on this checkout, for the list beside the working tree.
@@ -3246,7 +3179,7 @@ final class SessionModel: Identifiable {
     var gitBusy: String?
 
     func refreshBranches() async {
-        branches = try? await client.get("/api/git/branches", q())
+        await repo.refreshBranches(client)
     }
 
     struct BranchBody: Encodable { var action: String; var name: String }

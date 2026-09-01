@@ -489,6 +489,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
 
     let app = Router::new()
         .route("/api/state", get(api_state))
+        .route("/api/events", get(crate::events::stream))
         .route("/api/sessions", get(api_sessions))
         .route("/api/tree", get(api_tree))
         .route("/api/frontend/importers", get(api_importers))
@@ -673,7 +674,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         // it is one `is_loopback()` and nothing else.
         .layer(axum::middleware::from_fn(crate::pair::guard))
         .layer(axum::middleware::from_fn(report_failures))
-        .with_state(state);
+        .layer(axum::middleware::from_fn(crate::events::after_mutation))
+        .with_state(state.clone());
+
+    // What happens outside Keel — a session started in a terminal, a file saved in an editor —
+    // reaches the window through these.
+    crate::events::watch(state);
 
     let (ip, reach) = bind_address();
     let addr = SocketAddr::from((ip, port));

@@ -106,6 +106,11 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
         .locked()
         .insert(id.clone(), (tx, lane.unwrap_or_default().to_string()));
     queue().locked().push(pending);
+    crate::events::emit(
+        "pending",
+        None,
+        serde_json::json!({ "lane": lane.unwrap_or_default() }),
+    );
     match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(decision)) => Ok(decision
             .reason
