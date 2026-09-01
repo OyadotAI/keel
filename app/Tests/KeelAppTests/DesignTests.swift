@@ -584,13 +584,18 @@ final class NothingIsDroppedTests: XCTestCase {
 
     /// A line Keel cannot decode used to return with no log, no counter and nothing on screen —
     /// so a shape the CLI changed would empty the UI with no symptom at all.
+    ///
+    /// Keeping the line is `record`'s own job now, not the caller's. It has to be, because only
+    /// `record` knows whether a line is worth the raw log's 2,000 slots: the stream loop kept
+    /// every line it received, and with partial messages that is one line per token, so the log
+    /// that exists to guarantee nothing is hidden filled with deltas.
     func testAnUndecodableLineIsCountedNotDiscarded() {
         let m = SessionModel(client: Client(port: 0))
         let t = Turn(prompt: "x")
-        t.note(raw: "{ this is not json")
         m.record(Data("{ this is not json".utf8), into: t)
         XCTAssertEqual(t.unreadable, 1)
         XCTAssertEqual(t.raw.count, 1, "the bytes are still there to look at")
+        XCTAssertEqual(t.raw.first?.text, "{ this is not json")
     }
 
     /// An unfamiliar record type is kept and named rather than silently dropped.

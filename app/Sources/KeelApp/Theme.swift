@@ -1036,3 +1036,28 @@ extension View {
         modifier(FollowsTail(pinned: pinned))
     }
 }
+
+/// Watches the stream's tail and calls back — and draws nothing.
+///
+/// It exists to own an Observation dependency that must not belong to a pane's `body`. Both the
+/// conversation and the trace need to know that a turn grew so they can follow it, and both read
+/// `model.tailToken` from an `.onChange` written inline. Under Observation, reading a value in
+/// `body` registers the dependency against *that body* — so every text delta invalidated the whole
+/// transcript: the `ForEach` over every turn, every row in it, and the composer beside it. The
+/// scroll was coalesced at 80 ms and the rebuild was not, which is what made a long reply stutter
+/// and a long session stall.
+///
+/// Here the dependency belongs to a zero-size view whose re-evaluation costs nothing.
+struct TailFollower: View {
+    let model: SessionModel
+    let onGrow: () -> Void
+
+    var body: some View {
+        // `Color.clear` rather than `EmptyView`: a view with no content is not guaranteed to be
+        // evaluated at all, and this one exists only to be evaluated.
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onChange(of: model.tailToken) { onGrow() }
+    }
+}

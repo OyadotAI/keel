@@ -5,8 +5,9 @@ import UniformTypeIdentifiers
 /// The conversation, and the box you type in.
 ///
 /// A rail beside the stage rather than the thing itself: the turn is the unit of work, and the
-/// chat is how you steer it. Tool calls appear here as one dim line each so the shape of what the
-/// agent is doing is visible without competing with what it changed.
+/// chat is how you steer it. Tool calls appear here as one dim line each, in the order they
+/// happened, so the shape of what the agent is doing is visible without competing with what it
+/// changed — and each one opens onto exactly what was passed to it.
 struct ChatRail: View {
     @Bindable var model: SessionModel
     @FocusState private var composerFocused: Bool
@@ -60,6 +61,29 @@ struct ChatRail: View {
             // pane you might not be looking at — and on a window too narrow for the stage there
             // was no working bar at all. A turn that is thinking for ninety seconds with nothing
             // on screen beside the composer reads as a turn that did not start.
+            // A conversation running somewhere else, mirrored here as it is written.
+            //
+            // Worth saying out loud rather than leaving the turns to appear on their own: what is
+            // on screen is not this window's work, and typing takes it over rather than joining
+            // in. Two processes driving one `--resume` is a claim problem, and `AppState::claim`
+            // is about lanes and working trees rather than conversations.
+            if model.following {
+                HStack(spacing: K.S.xs) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(K.F.tiny)
+                    Text("Following this session — it is running outside Keel. Sending takes it over.")
+                        .font(K.F.micro)
+                    Spacer()
+                }
+                .foregroundStyle(K.C.dim)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
+                .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.sm))
+                .padding(.horizontal, K.S.xxl)
+                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, K.S.sm)
+                .transition(.opacity)
+            }
             if model.running {
                 WorkingBar(model: model)
                     .padding(.horizontal, K.S.xxl)
@@ -72,6 +96,7 @@ struct ChatRail: View {
         }
         .animation(K.M.enter, value: model.pending.count)
         .animation(K.M.settle, value: model.running)
+        .animation(K.M.settle, value: model.following)
         .background(K.C.bg)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropping) { model.take(drop: $0) }
         // The shortcuts themselves are handled by `WindowEvents`, which is never unmounted.
@@ -106,17 +131,13 @@ struct ChatRail: View {
         // last turn instead, the scroll view keeps that row in view as the rows above it are
         // measured and their heights change under it.
         .scrollPosition(id: $anchor, anchor: .bottom)
-        // Watches the reply text as well as the tool calls. It only watched calls before, and
-        // a reply arrives as text deltas — so the pane sat still through the entire answer.
-        .onChange(of: model.tailToken) {
-            guard pinned else { return }
-            // Coalesced. A reply arrives as many small deltas, and scrolling on each of them
-            // competes with the wheel and makes the pane feel like it is resisting.
-            let now = Date()
-            guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
-            lastFollow = now
-            toBottom()
-        }
+        // The tail token is watched by a view of its own, not from here.
+        //
+        // Reading it in this `body` registered the dependency against the whole pane, so every
+        // text delta invalidated the transcript — the `ForEach` over every turn, each `ChatTurn`,
+        // and the composer with it. The 80 ms coalescing throttled the *scroll*; nothing throttled
+        // the rebuild. `TailFollower` draws nothing and is the only thing that re-evaluates.
+        .overlay { TailFollower(model: model) { follow() } }
         // A task, not an onChange: opening a session bumps `pinTick` before this pane exists,
         // so the change had no listener and the transcript opened at the top. A task with that
         // id runs on appear as well, after the rows have laid out.
@@ -146,6 +167,16 @@ struct ChatRail: View {
                 .transition(.opacity)
             }
         }
+    }
+
+    /// Coalesced. A reply arrives as many small deltas, and scrolling on each of them competes
+    /// with the wheel and makes the pane feel like it is resisting.
+    private func follow() {
+        guard pinned else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
+        lastFollow = now
+        toBottom()
     }
 
     /// To the end of the conversation: the last turn, held at the bottom of the pane.
@@ -300,27 +331,13 @@ private struct ChatTurn: View {
                 }
             }
 
-            if !turn.thinking.isEmpty {
-                DisclosureGroup {
-                    Text(turn.thinking)
-                        .font(K.F.codeSmall).italic()
-                        .foregroundStyle(K.C.faint)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, K.S.sm)
-                        .overlay(alignment: .leading) {
-                            Rectangle().fill(K.C.line).frame(width: 2)
-                        }
-                } label: {
-                    Text("thinking").font(K.F.micro).foregroundStyle(K.C.faint)
-                }
-                .padding(.leading, K.S.xs)
-            }
-
-            // The reply, on the left, in grey. No border: the fill is the shape.
-            // The reply, on the left, as prose: it is the long half, and a box around three
-            // paragraphs and a table is a box around the page.
-            if !turn.text.isEmpty {
+            // What it did, in the order it did it.
+            //
+            // One merged blob of prose and a list of tool calls in another pane is not what the
+            // agent did: it thought, said something, ran a command, read what came back, and said
+            // something else. That sequence is the thing being reviewed, and reconstructing it
+            // from two panes was left to the reader.
+            if !turn.steps.isEmpty {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     HStack(spacing: K.S.xs) {
                         Image(systemName: "sailboat.fill")
@@ -328,8 +345,21 @@ private struct ChatTurn: View {
                         Text("Keel").font(K.F.micro.weight(.semibold))
                     }
                     .foregroundStyle(K.C.dim)
-                    Markdown(turn.text)
-                        .padding(.trailing, K.S.lg)
+
+                    ForEach(turn.steps) { step in
+                        switch step {
+                        case .say(let block):
+                            // Already parsed, on the model. Nothing here parses anything.
+                            Markdown(blocks: block.blocks)
+                                .padding(.trailing, K.S.lg)
+                        case .think(let block):
+                            ThinkingBlock(block: block)
+                        case .call(let id):
+                            if let call = turn.call(id) {
+                                CallRow(call: call)
+                            }
+                        }
+                    }
                 }
                 .padding(.top, K.S.sm)
             }

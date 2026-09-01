@@ -11,8 +11,8 @@
 //!
 //! Session transcripts contain the full text of everything discussed. [`discover_sessions`], which
 //! runs constantly to populate lists, surfaces only titles, counts and timestamps — reading a
-//! transcript to render a list is not licence to display its contents. [`transcript`] is the
-//! separate, explicit path for opening one session the user asked for by name.
+//! transcript to render a list is not licence to display its contents. [`tail`] is the separate,
+//! explicit path for opening one session the user asked for by name, and it carries the id guard.
 
 mod agents;
 mod config;
@@ -23,10 +23,7 @@ mod skills;
 pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers};
 pub use plugins::{Plugin, discover_plugins};
-pub use sessions::{
-    Session, SessionCall, SessionWork, Turn, discover_sessions, project_key, session_dirs,
-    session_work, transcript,
-};
+pub use sessions::{Session, discover_sessions, project_key, session_dirs, tail, transcript_len};
 pub use skills::{Skill, discover_skills};
 
 use camino::{Utf8Path, Utf8PathBuf};

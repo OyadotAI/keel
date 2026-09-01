@@ -100,6 +100,10 @@ actor Client {
         var data: String
     }
 
+    /// The server's heartbeat, surfaced as an event so a silent stream can be told from a dead
+    /// one. Never sent by a handler, so it cannot collide with a real event name.
+    static let keepAlive = "\u{0000}keep-alive"
+
     /// Stream an SSE endpoint.
     ///
     /// Written against `URLSession.bytes` rather than a library: the format is two field names and
@@ -153,7 +157,11 @@ struct SSEParser {
             // Keel shows.
             return Client.Event(name: name, data: String(v.hasPrefix(" ") ? v.dropFirst() : v))
         }
-        // A comment line (`:keep-alive`) or anything unrecognised is not an event.
+        // A comment line is the server's heartbeat. It carries nothing, but the fact that it
+        // arrived is the one thing a reader needs to tell "the agent is thinking" from "the
+        // daemon is gone" — and those look identical when the stream's own timeout is an hour.
+        // Named so a consumer that does not care can ignore it in one line.
+        if line.hasPrefix(":") { return Client.Event(name: Client.keepAlive, data: "") }
         return nil
     }
 }

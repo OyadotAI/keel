@@ -47,6 +47,17 @@ struct TurnStage: View {
         proxy.scrollTo(id, anchor: .bottom)
     }
 
+    /// The row a turn is drawn in — its own card, or the quiet run it was folded into.
+    private func row(holding turn: UUID) -> String? {
+        guard let n = model.turns.firstIndex(where: { $0.id == turn }).map({ $0 + 1 }) else { return nil }
+        return rows.first { row in
+            switch row.kind {
+            case .turn(let t, _): t.id == turn
+            case .quiet(let first, let last, _): n >= first && n <= last
+            }
+        }?.id
+    }
+
     private var rows: [Row] {
         var out: [Row] = []
         var quietFrom: Int?
@@ -54,7 +65,10 @@ struct TurnStage: View {
 
         func closeQuiet(_ upTo: Int) {
             guard let from = quietFrom else { return }
-            out.append(Row(id: "quiet-\(from)-\(upTo)",
+            // Keyed on where the run starts, not on where it currently ends: `quiet-3-3` becoming
+            // `quiet-3-4` and then `quiet-3-5` as turns land is a new row each time, so the one
+            // being drawn is torn down and rebuilt on every quiet turn.
+            out.append(Row(id: "quiet-\(from)",
                            kind: .quiet(from, upTo, from == upTo ? quietPrompt : "")))
             quietFrom = nil
         }
@@ -84,6 +98,11 @@ struct TurnStage: View {
                     if model.turns.isEmpty {
                         EmptyStage(model: model)
                     }
+                    // `rows` walks every turn, so it is read once here rather than once per
+                    // row: `row.id != rows.last?.id` inside the loop made drawing the list
+                    // quadratic in its own length.
+                    let rows = rows
+                    let lastRow = rows.last?.id
                     ForEach(rows) { row in
                         switch row.kind {
                         case .turn(let t, let n):
@@ -91,7 +110,7 @@ struct TurnStage: View {
                         case .quiet(let first, let last, let prompt):
                             QuietRun(first: first, last: last, prompt: prompt).id(row.id)
                         }
-                        if row.id != rows.last?.id { Hairline() }
+                        if row.id != lastRow { Hairline() }
                     }
                 }
             }
@@ -99,7 +118,11 @@ struct TurnStage: View {
             // One handler on a compound token, not four on separate counts. Four meant a tool
             // call that also wrote a file fired two overlapping scroll animations, and the pane
             // visibly fought itself.
-            .onChange(of: model.tailToken) { follow(proxy) }
+            //
+            // In a view of its own rather than here: read from this `body` the token's dependency
+            // belongs to the whole pane, so every delta rebuilt `rows` over every turn and every
+            // card in the list. See `TailFollower`.
+            .overlay { TailFollower(model: model) { follow(proxy) } }
             .onChange(of: model.pinTick) {
                 pinned = true
                 if let id = rows.last?.id { proxy.scrollTo(id, anchor: .bottom) }
@@ -110,15 +133,29 @@ struct TurnStage: View {
                 if !pinned && model.running {
                     JumpToLatest {
                         pinned = true
+                        // Going back to the tail is the gesture that says "stop holding me at
+                        // that turn", and it is what releases `follow`.
+                        model.focusedTurn = nil
                         if let id = rows.last?.id {
                             withAnimation(K.M.settle) { proxy.scrollTo(id, anchor: .bottom) }
                         }
                     }
                 }
             }
-            .onChange(of: model.focusedTurn) {
-                guard let id = model.focusedTurn else { return }
-                withAnimation(K.M.settle) { proxy.scrollTo(id.uuidString, anchor: .top) }
+            // Resolved through `rows`, and `initial: true` because the pane may not be mounted.
+            //
+            // A turn that changed nothing has no card — it is folded into a `QuietRun` — so
+            // scrolling to its own id was a silent no-op and the "Turn N →" marker beside it did
+            // nothing at all.
+            //
+            // `initial: true` is the other half: clicking the marker while the stage is showing
+            // the preview or the review packet *mounts* this pane, and a plain `onChange` does
+            // not fire on appear — so the jump never happened, and `focusedTurn` stayed set with
+            // `follow` refusing to scroll for as long as it was. It is cleared by the next send
+            // rather than here, so the wash that says which turn you landed on survives the frame.
+            .onChange(of: model.focusedTurn, initial: true) {
+                guard let id = model.focusedTurn, let row = row(holding: id) else { return }
+                withAnimation(K.M.settle) { proxy.scrollTo(row, anchor: .top) }
             }
         }
     }
@@ -567,18 +604,16 @@ private struct CallDetail: View {
                         .transition(.opacity)
             }
 
+            // A line at a time, in a lazy stack.
+            //
+            // This was one `Text` of twenty thousand characters, and a scroll view has to lay its
+            // content out whole to know how big it is — so CoreText encoded all of it, on the main
+            // thread, the moment a row opened. It is the same 2,000 ms hang `String.capped` was
+            // written for, at the one site that never got the fix.
             if open, !call.output.isEmpty {
-                ScrollView {
-                    Text(call.output.prefix(20_000))
-                        .font(K.F.codeSmall).foregroundStyle(K.C.dim)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(K.S.sm)
-                }
-                .frame(maxHeight: 240)
-                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-                .padding(.trailing, K.S.md).padding(.bottom, K.S.xs)
-                .transition(.opacity)
+                Lines(text: call.output)
+                    .padding(.trailing, K.S.md).padding(.bottom, K.S.xs)
+                    .transition(.opacity)
             }
         }
         .animation(K.M.flow, value: open)

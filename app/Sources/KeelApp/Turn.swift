@@ -15,11 +15,129 @@ final class Turn: Identifiable {
     let started = Date()
 
     /// Prose from the agent, accumulated from `text_delta`s.
+    ///
+    /// The whole turn's prose as one string, which is what every consumer outside the conversation
+    /// wants — the copy buttons, the reports, the review packet. What it cannot say is *when* each
+    /// part of it was said; `steps` is the ordered form.
     var text = ""
     /// Whether any of it arrived as deltas; when none did, the whole `assistant` message is
     /// the only copy and is taken instead.
     var streamedText = false
     var thinking = ""
+
+    // MARK: - The turn in order
+
+    /// One streamed content block.
+    ///
+    /// A class, so a delta mutates *this* object rather than the turn: under Observation that
+    /// invalidates the one row being written and nothing else. Appending to `Turn.text` invalidated
+    /// every view that read the turn, which was both panes and every finished row in them.
+    @MainActor
+    @Observable
+    final class Block: Identifiable {
+        let id = UUID()
+        private(set) var text = ""
+        /// Parsed once per mutation rather than once per frame. This is the memoisation that
+        /// `Markdown`'s string-keyed cache was supposed to be and never was.
+        private(set) var blocks: [Markdown.Block] = []
+
+        init(_ text: String = "") { append(text) }
+
+        func append(_ more: String) {
+            guard !more.isEmpty else { return }
+            text += more
+            blocks = Markdown.blocks(text)
+        }
+    }
+
+    /// What the turn did, in the order it did it.
+    ///
+    /// The CLI interleaves prose, reasoning and tool calls; a turn that says "I'll check the router
+    /// first", greps, and then explains what it found is three things in a sequence. Keel kept the
+    /// prose in one string and the calls in a list beside it, so the sequence was unrecoverable —
+    /// which is most of what "it hides what the CLI shows" means.
+    ///
+    /// A call is referenced by id rather than held: `calls` stays the owner, so grouping, risk and
+    /// the trace pane are unchanged.
+    enum Step: Identifiable {
+        case say(Block)
+        case think(Block)
+        case call(String)
+
+        var id: String {
+            switch self {
+            case .say(let b): "say-\(b.id)"
+            case .think(let b): "think-\(b.id)"
+            case .call(let id): "call-\(id)"
+            }
+        }
+    }
+
+    private(set) var steps: [Step] = []
+
+    /// The block currently being written, when it is of this kind. A delta belongs to the block
+    /// that was last opened; a `content_block_start` opens a new one.
+    private var open: Step?
+
+    /// Content-block index → the tool call it announced, for the span between that block's
+    /// `content_block_start` and its `content_block_stop`. Indices restart with every message, so
+    /// this lives on the turn and is emptied as each block closes.
+    var openBlocks: [Int: String] = [:]
+
+    /// Open a new prose block. Called on `content_block_start` for a `text` block.
+    func say() { let b = Block(); steps.append(.say(b)); open = .say(b) }
+    /// Open a new reasoning block.
+    func think() { let b = Block(); steps.append(.think(b)); open = .think(b) }
+
+    /// Prose, into the open block — opening one first if the stream never announced a block start.
+    func said(_ more: String) {
+        if case .say(let b)? = open { b.append(more) } else { say(); said(more); return }
+        text += more
+        streamedText = true
+    }
+
+    /// A whole block that arrived at once, from a run with no partial messages.
+    ///
+    /// Deliberately not `say()` + `said()`: `said` sets `streamedText`, which is the flag telling
+    /// the next complete message that its prose has already been seen. Taking that path here would
+    /// mean the first whole message rendered and every one after it was dropped.
+    func wrote(_ whole: String) {
+        guard !whole.isEmpty else { return }
+        steps.append(.say(Block(whole)))
+        open = nil
+        if !text.isEmpty { text += "\n\n" }
+        text += whole
+    }
+
+    /// A record was written at this moment.
+    ///
+    /// A live turn measures itself — `duration_ms` off the `result`. A transcript has no `result`
+    /// record at all, so a replayed turn's elapsed time is the span of its own records. Only ever
+    /// widens, and only when the two ends are genuinely apart: a turn with one record reporting
+    /// `0s` is a measurement nobody made.
+    func saw(_ at: Date) {
+        if firstRecord == nil { firstRecord = at }
+        guard let from = firstRecord, at > from else { return }
+        if durationMS == nil || Int(at.timeIntervalSince(from) * 1000) > durationMS! {
+            durationMS = Int(at.timeIntervalSince(from) * 1000)
+        }
+    }
+    private var firstRecord: Date?
+
+    /// A whole reasoning block that arrived at once — a transcript holds them complete.
+    func mused(_ whole: String) {
+        guard !whole.isEmpty else { return }
+        steps.append(.think(Block(whole)))
+        open = nil
+        if !thinking.isEmpty { thinking += "\n\n" }
+        thinking += whole
+    }
+
+    /// Reasoning, into the open block.
+    func thought(_ more: String) {
+        if case .think(let b)? = open { b.append(more) } else { think(); thought(more); return }
+        thinking += more
+    }
 
     /// Files written, in the order first touched. Order matters: it is the shape of the work.
     private(set) var files: [String] = []
@@ -158,6 +276,15 @@ final class Turn: Identifiable {
         var tool: String
         /// The one-line subject: a command, a path, a pattern — whatever the tool was actually about.
         var subject: String
+        /// Everything the agent passed the tool.
+        ///
+        /// Only `subject` used to survive — one field, first line, 160 characters — so an `Edit`
+        /// showed a path and never its hunks, and a heredoc showed the word `cat`. The CLI prints
+        /// all of it, and the whole complaint about Keel hiding raw data starts here.
+        var input: [String: JSONValue] = [:]
+        /// `input_json_delta` as it arrives, before the block closes and it can be parsed. This is
+        /// what lets a command appear while it is being written rather than only once it is run.
+        var partialInput = ""
         var reason: String?
         var output: String = ""
         var failed = false
@@ -204,26 +331,112 @@ final class Turn: Identifiable {
     /// `parent` is the `Task` call a subagent is working for. Its calls nest under that row
     /// rather than joining the top-level list: a subagent that reads forty files is one line
     /// saying so, and forty lines is the transcript nobody could follow in the terminal either.
-    func begin(call id: String, tool: String, input: [String: JSONValue], parent: String? = nil) {
-        // The argument worth showing, in the order the tools actually carry it.
+    /// The one-line summary of a call, in the order the tools actually carry it.
+    static func subject(of input: [String: JSONValue]) -> String {
         let subject = ["command", "file_path", "path", "pattern", "description"]
             .compactMap { input[$0]?.stringValue }
             .first ?? ""
         let oneLine = subject.split(separator: "\n").first.map(String.init) ?? ""
-        let reason = input["description"]?.stringValue
-        let call = Call(id: id, tool: tool, subject: String(oneLine.prefix(160)), reason: reason)
+        return String(oneLine.prefix(160))
+    }
+
+    /// Idempotent in `id`.
+    ///
+    /// A call is announced twice when partial messages are on: once as a `content_block_start`,
+    /// which is what lets it appear while its arguments are still being written, and again in the
+    /// complete `assistant` message. The second is the repair, not a second call.
+    func begin(call id: String, tool: String, input: [String: JSONValue], parent: String? = nil) {
+        if let existing = index(of: id) {
+            // The complete message arriving after the stream. Its input is the authoritative one.
+            if !input.isEmpty { update(call: existing, input: input) }
+            return
+        }
+        let call = Call(id: id, tool: tool, subject: Self.subject(of: input), input: input,
+                        reason: input["description"]?.stringValue)
         if let parent, let pi = callIndex[parent] {
             parentOf[id] = parent
             calls[pi].children.append(call)
+            // A `Group` holds copies of its calls, so a child appended here is invisible to the
+            // rows until the group is rebuilt. Without this the nested view — the whole point of
+            // a `Task` row — stayed empty for the entire run of the subagent and then filled in
+            // at once when the `Task` itself returned.
+            groups = Self.grouped(calls)
         } else {
             callIndex[id] = calls.count
             calls.append(call)
+            steps.append(.call(id))
+            open = nil
+            groups = Self.grouped(calls)
         }
         // A file a subagent wrote is still a file this turn wrote.
         if Self.writeTools.contains(tool) {
             noteEdit(input["file_path"]?.stringValue ?? input["path"]?.stringValue)
         }
     }
+
+    /// Where a call lives: a top-level index, or a parent index and a child index.
+    private enum Where { case top(Int); case child(Int, Int) }
+
+    private func index(of id: String) -> Where? {
+        if let i = callIndex[id] { return .top(i) }
+        if let parent = parentOf[id], let pi = callIndex[parent],
+           let ci = calls[pi].children.firstIndex(where: { $0.id == id }) {
+            return .child(pi, ci)
+        }
+        return nil
+    }
+
+    private func update(call: Where, input: [String: JSONValue]) {
+        let subject = Self.subject(of: input)
+        switch call {
+        case .top(let i):
+            calls[i].input = input
+            calls[i].subject = subject
+            calls[i].reason = input["description"]?.stringValue ?? calls[i].reason
+            groups = Self.grouped(calls)
+        case .child(let pi, let ci):
+            calls[pi].children[ci].input = input
+            calls[pi].children[ci].subject = subject
+            groups = Self.grouped(calls)
+        }
+        if Self.writeTools.contains(tool(at: call)) {
+            noteEdit(input["file_path"]?.stringValue ?? input["path"]?.stringValue)
+        }
+    }
+
+    private func tool(at call: Where) -> String {
+        switch call {
+        case .top(let i): calls[i].tool
+        case .child(let pi, let ci): calls[pi].children[ci].tool
+        }
+    }
+
+    /// Arguments arriving a fragment at a time, before the block closes.
+    func argue(call id: String, json: String) {
+        switch index(of: id) {
+        case .top(let i)?: calls[i].partialInput += json
+        case .child(let pi, let ci)?: calls[pi].children[ci].partialInput += json
+        case nil: break
+        }
+    }
+
+    /// The block closed: the accumulated fragments are now a complete JSON object.
+    func settle(call id: String) {
+        guard let at = index(of: id) else { return }
+        let partial = switch at {
+        case .top(let i): calls[i].partialInput
+        case .child(let pi, let ci): calls[pi].children[ci].partialInput
+        }
+        guard !partial.isEmpty,
+              let input = try? JSONDecoder().decode([String: JSONValue].self,
+                                                    from: Data(partial.utf8))
+        else { return }
+        update(call: at, input: input)
+    }
+
+    /// The call a `Step.call` refers to. Top level only — a subagent's calls are drawn nested
+    /// under the `Task` that started them, not as steps of their own.
+    func call(_ id: String) -> Call? { callIndex[id].map { calls[$0] } }
 
     /// Which tool a call id belongs to, including one made by a subagent.
     func toolName(of id: String) -> String? {
@@ -234,19 +447,22 @@ final class Turn: Identifiable {
     }
 
     func finish(call id: String, output: String, failed: Bool) {
-        if let parent = parentOf[id], let pi = callIndex[parent],
-           let ci = calls[pi].children.firstIndex(where: { $0.id == id }) {
+        switch index(of: id) {
+        case .child(let pi, let ci)?:
             calls[pi].children[ci].output = output
             calls[pi].children[ci].failed = failed
             calls[pi].children[ci].running = false
             calls[pi].children[ci].ended = Date()
-            return
+            groups = Self.grouped(calls)
+        case .top(let i)?:
+            calls[i].output = output
+            calls[i].failed = failed
+            calls[i].running = false
+            calls[i].ended = Date()
+            groups = Self.grouped(calls)
+        case nil:
+            break
         }
-        guard let i = callIndex[id] else { return }
-        calls[i].output = output
-        calls[i].failed = failed
-        calls[i].running = false
-        calls[i].ended = Date()
     }
 
     // MARK: - Risk
@@ -337,7 +553,13 @@ final class Turn: Identifiable {
     /// three hundred near-identical `Bash` rows. Grouping is about the tool, not about whether the
     /// answer has arrived, and a failure inside a run is carried by the group rather than
     /// splitting it.
-    var groups: [Group] {
+    ///
+    /// Stored, not computed. As a computed property it was read from `body`, so every token
+    /// rebuilt the whole list — and a `Call` is a struct carrying its entire output, so that was a
+    /// deep copy of every byte the turn had printed, per frame.
+    private(set) var groups: [Group] = []
+
+    private static func grouped(_ calls: [Call]) -> [Group] {
         var out: [Group] = []
         for c in calls {
             if var last = out.last, last.tool == c.tool {
@@ -383,6 +605,33 @@ enum JSONValue: Decodable, Sendable {
     subscript(key: String) -> JSONValue? {
         if case .object(let o) = self { return o[key] }
         return nil
+    }
+
+    /// Back as JSON, indented. For a tool Keel has no shape for, this is what is shown — all of
+    /// it, because "we kept one field of it" is the thing being fixed.
+    func pretty(indent: Int) -> String {
+        let pad = String(repeating: "  ", count: indent + 1)
+        let close = String(repeating: "  ", count: indent)
+        switch self {
+        case .string(let s):
+            // Enough of an escape for something that is read, not re-parsed.
+            let escaped = s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            return "\"\(escaped)\""
+        case .number(let n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case .bool(let b): return b ? "true" : "false"
+        case .null: return "null"
+        case .array(let items):
+            guard !items.isEmpty else { return "[]" }
+            return "[\n" + items.map { pad + $0.pretty(indent: indent + 1) }
+                .joined(separator: ",\n") + "\n\(close)]"
+        case .object(let o):
+            guard !o.isEmpty else { return "{}" }
+            return "{\n" + o.sorted { $0.key < $1.key }
+                .map { "\(pad)\"\($0.key)\": \($0.value.pretty(indent: indent + 1))" }
+                .joined(separator: ",\n") + "\n\(close)}"
+        }
     }
 
     /// A `tool_result` is a string on some records and a list of text blocks on others.

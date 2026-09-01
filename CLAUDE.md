@@ -180,9 +180,10 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
 6. **Stop sends SIGINT**, not SIGTERM. SIGTERM abandons the turn.
 7. **Listing sessions never shows what was said.** `discover_sessions` runs constantly to populate
    the switcher and returns titles, counts and timestamps only — reading a transcript to render a
-   list is not licence to display it. `transcript()` is the separate, explicit path for opening one
+   list is not licence to display it. `tail()` is the separate, explicit path for opening one
    session the user asked for by name, and it rejects any id that could climb out of the project
-   directory. Both asserted by test.
+   directory. Both asserted by test. (It was `transcript()` and `session_work()`, two readers that
+   between them reconstructed *less* than the live decoder already produces — see "One reader".)
 8. **A question belongs to one conversation.** `Pending` carries the `session_id` Claude Code
    already sends, and `/api/approve/poll?session=` partitions the queue rather than draining it.
    Windows are per-session now; the old `mem::take` meant whichever polled first swallowed every
@@ -250,6 +251,91 @@ note recommends, greets you with a blank 404, and `keel app` does the same in a 
 window onto nothing is the exact failure the bar names, and it survived because deleting the thing
 a route served is not the same edit as deleting the code that navigates to it. The fix is a
 deletion, not a route.
+
+## The conversation
+
+The chat pane is what a person watches while a turn runs, so the two failures it can have are the
+two the bar names: it can be slow, and it can show less than the terminal it replaced.
+
+**A turn is a sequence, not two lists.** `Turn.text` was one accumulating string and `Turn.calls`
+a list beside it, so the order — said something, ran a command, read the result, said something
+else — was not recoverable from what was stored. `Turn.steps` is that order; `text` and `calls`
+remain, because everything outside the pane (the copy buttons, the reports, the review packet)
+wants the merged form. A `Step.call` references its call by id rather than holding it, so grouping,
+risk and the trace pane are unchanged.
+
+**A call keeps its whole input.** `begin` used to store one field of it — first line, 160
+characters — which is a path for an `Edit` and the word `cat` for a heredoc. The arguments arrive
+as `input_json_delta` and were ignored outright, so a call did not exist on screen until it was
+complete; now it appears when its block opens and fills in as it is typed, which is what the CLI
+does.
+
+**A `Turn.Block` is where a delta lands.** Appending to the turn invalidated every view that read
+the turn, which was both panes and every finished row in them. Appending to a block invalidates
+that row. The block also holds its own parse, which is the memoisation `Markdown` never had: its
+cache was keyed by the source string, and a streaming reply makes a new string per token — so every
+delta missed, paid a full-string hash, and evicted a finished turn's entry on the way out. Fifty
+turns meant fifty replies re-parsed from scratch per token. Nothing on the render path parses
+anything now; `AttributedString(markdown:)` runs once per block, at parse time.
+
+**Reading a value in `body` registers the dependency against that body.** `model.tailToken` was
+read from an `.onChange` written inline in both panes, so every text delta rebuilt the whole
+transcript. The scroll was coalesced at 80 ms; the rebuild was not. `TailFollower` is a zero-size
+view that owns the dependency and calls back — the pattern to reach for whenever a pane needs to
+*know* about a stream without being *rebuilt* by it.
+
+**View `@State` outlives its model unless it is keyed.** `ChatRail` holds its scroll position as a
+row id, deliberately — offsets resolve against a lazy stack's estimates. Mounted without
+`.id(model.id)` the view survived a lane swap while the model did not, so the anchor named a turn
+from the conversation you just left, and an id that resolves to nothing scrolls into empty space.
+That is the white pane, and it is one line in `SessionWindow`.
+
+### One reader
+
+Claude Code appends every record to `~/.claude/projects/<key>/<id>.jsonl` as it goes — whoever
+started it. The file is already a live feed, and nothing was reading it as one: `open(session:)`
+read it once, from two endpoints, and stopped. A conversation running in a terminal showed a
+snapshot from the moment of the click and then sat still, which reads as Keel being wrong about its
+own state rather than as a missing feature.
+
+`tail()` returns the records appended since a byte offset, and `/api/session/tail` polls it and
+emits **the same `msg` events `/api/chat` emits** — because the records on disk are the shape the
+live decoder already reads. So replaying a session and following one are one path, and it is the
+path that has always drawn a live turn.
+
+That was the cheap version of a feature, and the deletion is the evidence: `transcript()`,
+`session_work()`, `api_session`, `api_session_work`, `SessionWork` and `moment()` all go, because a
+second reader of a format is a second thing to keep in step — and this one had already drifted.
+It reconstructed *less* than the decoder beside it: no reasoning, no tool arguments (they were
+faked as `["command": subject]`), no raw lines, output cut at 8 KB, the call list at 300, and
+`spent` records matched onto turns by index. A reopened conversation is now the one you watched.
+
+Two rules the polling has to keep, both tested: **a partial trailing line is withheld**, because
+the writer appends the object and the newline separately and a record handed out in halves is one
+that parses as nothing and is never asked for again; and **the offset is a byte position**, because
+transcripts are append-only so a position stays valid, while counting lines means reading all of
+them to find the end. Sidechains and bookkeeping records are dropped at the same choke point the
+id guard lives at, so a follower and a reader cannot disagree.
+
+It is read-only on purpose. Two processes driving one `--resume` is a claim problem, and
+`AppState::claim` is about lanes and working trees rather than conversations — so the composer says
+who owns it, and typing takes it over rather than joining in.
+
+**Reasoning does not survive a replay, and that is the format.** Claude Code writes a `thinking`
+block's shape to the transcript and keeps only its signature: measured on this repository's own
+session, 61 blocks, every one of them empty. The decoder reads them where they exist; nothing can
+recover the ones that do not.
+
+### The heartbeat
+
+A turn that is thinking sends nothing at all, and the chat stream's own timeout is an hour —
+deliberately, because a turn legitimately runs for minutes. So a daemon that died and an agent that
+is thinking hard were indistinguishable, and the first presented as "thinking…" until somebody gave
+up: a state that could be entered and not left, which is the half of "never stuck" nothing else
+guarded. Every SSE stream now carries axum's keep-alive, `SSEParser` surfaces the comment line
+under a name no handler can send, and two clocks come apart — `lastEventAt` (anything at all, so
+sixty seconds of silence is a dead stream and fails the turn with a reason) and `lastProgressAt`
+(the agent itself, which is what "quiet for 4m" has always meant).
 
 ## Lanes and worktrees
 
@@ -506,7 +592,9 @@ dependency is the point: the daemon knows about them, none of them knows about t
 - `keel-mcp` — the tool surface.
 - `keel-providers` — GitHub, Cloudflare.
 - `keel-workspace` — reads Claude Code's own state (sessions, skills, plugins, agents, commands,
-  hooks, MCP servers). Read-only, and never surfaces session message bodies.
+  hooks, MCP servers). Read-only, and the listing never surfaces session message bodies — see
+  non-negotiable 7. `tail()` is the one path that reads a conversation, on an explicit ask, and it
+  is also how a session running outside Keel is watched: see "One reader".
 - `app/` — the Swift macOS application. A client of the daemon, and nothing else.
 
 Inside `keel` itself, one module is one thing:

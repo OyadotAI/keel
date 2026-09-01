@@ -390,8 +390,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/state", get(api_state))
         .route("/api/tree", get(api_tree))
         .route("/api/frontend/importers", get(api_importers))
-        .route("/api/session", get(api_session))
-        .route("/api/session/work", get(api_session_work))
+        .route("/api/session/tail", get(api_session_tail))
         .route(
             "/api/session/rename",
             axum::routing::post(crate::names::rename),
@@ -730,59 +729,121 @@ async fn api_raw(
 }
 
 #[derive(serde::Deserialize)]
-struct SessionQuery {
+struct TailQuery {
     id: String,
     /// The directory the session was launched from, when not the repository.
     cwd: Option<String>,
+    /// Where the last read stopped. `0` for the whole transcript.
+    #[serde(default)]
+    from: u64,
 }
 
-/// Read one session's transcript, for the session switcher in the agent panel.
-async fn api_session(
+/// Follow one session's transcript, live.
+///
+/// This is what makes a session running somewhere else — a terminal, another editor — visible
+/// here. Claude Code appends every record to `~/.claude/projects/<key>/<id>.jsonl` as it goes,
+/// whoever started it, so the file is already the live feed; nothing was reading it as one.
+///
+/// Read-only, and deliberately so: two processes driving one conversation is a claim problem, and
+/// `AppState::claim` is about lanes and working trees rather than sessions.
+///
+/// The events are the **same `msg` events `/api/chat` emits**, because the records are the same
+/// shape the app's decoder already reads. That is the whole reason this is cheap: replaying a
+/// session and following one become one path, and it is the path that has always drawn a live
+/// turn — so a reopened conversation gets its reasoning, its tool arguments and its raw lines
+/// back, none of which the two-endpoint replay ever carried.
+///
+/// Polled rather than watched. `notify` would be a dependency and a platform-specific one, and
+/// what it would buy over a `stat` every 400 ms is latency nobody can see.
+async fn api_session_tail(
     State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
-    Query(query): Query<SessionQuery>,
-) -> Json<Vec<keel_workspace::Turn>> {
+    Query(query): Query<TailQuery>,
+) -> impl axum::response::IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
     let dir = if query.cwd.is_some() {
         state.session_dir(query.cwd.as_deref())
     } else {
         repo
     };
-    // Off the executor. A transcript is a single `read_to_string` of an append-only JSONL file
-    // and then a `serde_json` parse of every line of it; the largest in this repository's own
-    // history is 33 MB. On the executor that is one of a handful of worker threads held for as
-    // long as it takes, and everything else the window has in flight — the approval poll, the
-    // chat stream — waits behind a click on "open this session".
-    Json(
-        blocking(
-            move || keel_workspace::transcript(&dir, &home, &query.id),
-            Vec::new(),
-        )
-        .await,
-    )
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+
+    tokio::spawn(async move {
+        let mut from = query.from;
+        // The first read is the catch-up and can be the whole file; every one after it is the
+        // few hundred bytes that were appended.
+        let mut first = true;
+        loop {
+            // The receiver is the only thing that says the window is still there, and a session
+            // that has *finished* never grows — so the send that would notice a closed channel
+            // never happens, and the poll would run for the life of the daemon. One leaked task
+            // per session ever opened, which is the common case rather than the rare one.
+            if tx.is_closed() {
+                return;
+            }
+            let (dir, home, id) = (dir.clone(), home.clone(), query.id.clone());
+            // Every read is off the executor: a cold transcript here reaches 33 MB, and the
+            // poll must never be able to hold a worker thread the chat stream is waiting on.
+            let read: Option<(Vec<String>, u64)> =
+                blocking(move || keel_workspace::tail(&dir, &home, &id, from), None).await;
+            let Some((lines, next)) = read else {
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .event("fatal")
+                        .data("that session's transcript is not on this machine")))
+                    .await;
+                return;
+            };
+
+            // A very long history sent whole is a wall of records the app has to decode on its
+            // main actor before it can draw anything. The tail is what a person opening a
+            // conversation is looking for, so the head is dropped and the app is told.
+            let (lines, dropped) = if first && lines.len() > MAX_REPLAY {
+                let dropped = lines.len() - MAX_REPLAY;
+                (lines[dropped..].to_vec(), dropped)
+            } else {
+                (lines, 0)
+            };
+            if dropped > 0 {
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .event("truncated")
+                        .data(dropped.to_string())))
+                    .await;
+            }
+            for line in lines {
+                if tx
+                    .send(Ok(Event::default().event("msg").data(line)))
+                    .await
+                    .is_err()
+                {
+                    return; // The window closed, or the lane opened something else.
+                }
+            }
+            if first {
+                first = false;
+                // "Everything that already happened has been sent." Turns before this are a
+                // replay; turns after it are the session running now.
+                if tx
+                    .send(Ok(Event::default().event("caught-up").data("")))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            from = next;
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    });
+
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
 
-/// What one session changed and ran. Explicit, on a click — see `keel_workspace::session_work`.
-async fn api_session_work(
-    State(state): State<Arc<AppState>>,
-    Checkout(repo): Checkout,
-    Query(query): Query<SessionQuery>,
-) -> Json<keel_workspace::SessionWork> {
-    let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-    let dir = if query.cwd.is_some() {
-        state.session_dir(query.cwd.as_deref())
-    } else {
-        repo
-    };
-    // Same file, same reason as `api_session`.
-    Json(
-        blocking(
-            move || keel_workspace::session_work(&dir, &home, &query.id),
-            Default::default(),
-        )
-        .await,
-    )
-}
+/// Records sent when catching up on a conversation that was already long.
+const MAX_REPLAY: usize = 1_500;
 
 async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {
     Json(blocking(move || crate::repo::git_status(&repo), Default::default()).await)

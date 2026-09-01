@@ -11,12 +11,17 @@ import SwiftUI
 /// footnotes and nested blockquotes are not what an agent writes back about a code change, and a
 /// parser that handles them is a parser to maintain.
 struct Markdown: View {
-    let source: String
+    /// Already parsed. `body` does no parsing at all: a streaming reply re-parses once per delta
+    /// on the model side (`Turn.Block`), not once per block per frame here.
+    let parsed: [Block]
 
-    init(_ source: String) { self.source = source }
+    /// A literal that never changes — a hint, a job report, a plan card.
+    init(_ source: String) { parsed = Self.blocks(source) }
+    /// A block the model already parsed.
+    init(blocks: [Block]) { parsed = blocks }
 
     var body: some View {
-        let blocks = Self.cachedBlocks(source)
+        let blocks = parsed
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 view(for: block)
@@ -32,13 +37,13 @@ struct Markdown: View {
     private func view(for block: Block) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(inline(text))
+            Text(text)
                 .font(K.F.ui(level == 1 ? 20 : (level == 2 ? 17 : 14), .semibold))
                 .foregroundStyle(K.C.text)
                 .lineSpacing(2)
 
         case .paragraph(let text):
-            Text(inline(text))
+            Text(text)
                 .font(K.F.reading)
                 .foregroundStyle(K.C.text)
                 .lineSpacing(3)
@@ -52,7 +57,7 @@ struct Markdown: View {
                             .font(K.F.code)
                             .foregroundStyle(K.C.faint)
                             .frame(minWidth: 18, alignment: .trailing)
-                        Text(inline(item.text))
+                        Text(item.text)
                             .font(K.F.reading)
                             .foregroundStyle(K.C.text)
                             .lineSpacing(3)
@@ -87,7 +92,11 @@ struct Markdown: View {
 
     /// Inline emphasis and `code`. Failure falls back to the literal text rather than dropping it:
     /// an unparseable reply must still be readable.
-    private func inline(_ s: String) -> AttributedString {
+    ///
+    /// Called by `blocks(_:)`, never by `body`. It used to be the other way round, which meant the
+    /// Foundation Markdown parser ran once per paragraph per frame — for a twelve-paragraph reply,
+    /// twelve parses on the main thread for every token that arrived.
+    static func inline(_ s: String) -> AttributedString {
         (try? AttributedString(
             markdown: s,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
@@ -96,45 +105,25 @@ struct Markdown: View {
 
     // MARK: - Blocks
 
+    /// Inline emphasis is resolved here rather than at render time, so a `Block` is finished work.
     enum Block {
-        case heading(Int, String)
-        case paragraph(String)
+        case heading(Int, AttributedString)
+        case paragraph(AttributedString)
         case bullets([Item])
         case code(String?, String)
         case table([[String]])
         case rule
 
-        struct Item { let marker: String; let text: String }
+        struct Item { let marker: String; let text: AttributedString }
     }
 
-    /// The parse, memoised.
+    /// There is deliberately no cache here.
     ///
-    /// `body` runs on every text delta while a reply streams, and this parses the whole string
-    /// each time — so a ten-kilobyte answer was re-parsed thousands of times on the way in, once
-    /// per frame, which is what made the pane stutter under a scroll.
-    ///
-    /// Keyed by the text itself and bounded, rather than a single slot: several turns render in
-    /// the same pass, so a one-entry cache would be evicted by its neighbour every time and buy
-    /// nothing.
-    @MainActor
-    private static var cache: [String: [Block]] = [:]
-    @MainActor
-    private static var order: [String] = []
-
-    @MainActor
-    static func cachedBlocks(_ source: String) -> [Block] {
-        if let hit = cache[source] { return hit }
-        let parsed = blocks(source)
-        cache[source] = parsed
-        order.append(source)
-        // A streaming reply produces one new string per delta, so this would otherwise grow to
-        // hold every intermediate state of every answer.
-        if order.count > 40 {
-            cache.removeValue(forKey: order.removeFirst())
-        }
-        return parsed
-    }
-
+    /// There was one, keyed by the source string and bounded at forty entries, and it never hit:
+    /// a streaming reply produces a *new* string per token, so every delta missed, paid a
+    /// full-string hash and insert, and evicted a finished turn's entry on the way out. A
+    /// fifty-turn session re-parsed fifty replies from scratch on every token. The parse is
+    /// memoised on `Turn.Block` instead, where it runs once per mutation and cannot thrash.
     static func blocks(_ source: String) -> [Block] {
         var out: [Block] = []
         var paragraph: [String] = []
@@ -145,9 +134,9 @@ struct Markdown: View {
                 // Agents often use a short colon-ended line as a section lead-in before a list.
                 // It is semantic hierarchy even when the model omitted Markdown hashes.
                 if paragraph.count == 1, paragraph[0].hasSuffix(":") {
-                    out.append(.heading(3, paragraph[0]))
+                    out.append(.heading(3, inline(paragraph[0])))
                 } else {
-                    out.append(.paragraph(paragraph.joined(separator: " ")))
+                    out.append(.paragraph(inline(paragraph.joined(separator: " "))))
                 }
                 paragraph = []
             }
@@ -208,7 +197,8 @@ struct Markdown: View {
                 flushAll()
                 let level = trimmed.prefix(while: { $0 == "#" }).count
                 out.append(.heading(min(level, 3),
-                                    String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)))
+                                    inline(String(trimmed.dropFirst(level))
+                                        .trimmingCharacters(in: .whitespaces))))
                 continue
             }
 
@@ -244,12 +234,12 @@ struct Markdown: View {
     /// `- `, `* `, and `1. ` — the three an agent actually writes.
     private static func bullet(_ line: String) -> Block.Item? {
         for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
-            return .init(marker: "•", text: String(line.dropFirst(marker.count)))
+            return .init(marker: "•", text: inline(String(line.dropFirst(marker.count))))
         }
         let digits = line.prefix(while: \.isNumber)
         if !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") {
             return .init(marker: "\(digits).",
-                         text: String(line.dropFirst(digits.count + 2)))
+                         text: inline(String(line.dropFirst(digits.count + 2))))
         }
         return nil
     }
