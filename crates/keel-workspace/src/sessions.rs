@@ -196,6 +196,16 @@ pub enum Kind {
     },
     /// Claude Code's own note that a turn ended.
     TurnEnd,
+    /// The agent left a command running in the background — Claude Code's own shell, which
+    /// Keel cannot see or stop, but can at least list.
+    JobStarted {
+        id: String,
+        command: String,
+    },
+    /// Claude Code's note to itself that a background command finished.
+    JobDone {
+        id: String,
+    },
     Other,
 }
 
@@ -207,6 +217,34 @@ pub fn kind_of(line: &str) -> Kind {
         && record["subtype"].as_str() == Some("turn_duration")
     {
         return Kind::TurnEnd;
+    }
+    if record["type"].as_str() == Some("assistant")
+        && let Some(blocks) = record["message"]["content"].as_array()
+        && let Some(b) = blocks.iter().find(|b| {
+            b["type"] == "tool_use"
+                && b["name"] == "Bash"
+                && b["input"]["run_in_background"] == true
+        })
+        && let Some(id) = b["id"].as_str()
+    {
+        return Kind::JobStarted {
+            id: id.to_string(),
+            command: b["input"]["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        };
+    }
+    if record["type"].as_str() == Some("user")
+        && let Some(said) = record["message"]["content"].as_str()
+        && said.trim_start().starts_with("<task-notification>")
+    {
+        let id = said
+            .split_once("<task-id>")
+            .and_then(|(_, rest)| rest.split_once("</task-id>"))
+            .map(|(id, _)| id.trim().to_string())
+            .unwrap_or_default();
+        return Kind::JobDone { id };
     }
     match opener(&record) {
         Some((uuid, prompt, at)) => Kind::Opener {
@@ -307,24 +345,20 @@ pub fn opening_turn(
 /// A **sidechain** is a subagent's chatter, which belongs under the `Task` that started it rather
 /// than in the conversation.
 ///
-/// A **task notification** is Claude Code telling itself that a background job finished. It is
-/// written as a `user` record because that is the turn it occupies, but nobody typed it — and
-/// drawn as one it is a blue bubble attributed to the person, which also *splits the turn*, so
-/// every reply after it lands against the XML rather than against what they actually asked.
-/// Measured on this machine: 75 of them across one project's transcripts.
+/// A **task notification** — Claude Code telling itself that a background job finished — is
+/// kept here, because it is the one record that says a job ended; the tail handler reads it as
+/// `Kind::JobDone` and does not forward it as a message. Drawn as one it was a blue bubble
+/// attributed to the person, which also *split the turn*, so every reply after it landed against
+/// the XML rather than against what they actually asked. Measured on this machine: 75 of them
+/// across one project's transcripts.
 fn followable(record: &Value) -> bool {
     if record["isSidechain"].as_bool() == Some(true) {
         return false;
     }
-    if !matches!(
+    matches!(
         record["type"].as_str(),
         Some("assistant" | "user" | "result" | "system")
-    ) {
-        return false;
-    }
-    // Only ever a bare string: the array form carries tool results, which are not typed either.
-    let said = record["message"]["content"].as_str().unwrap_or_default();
-    !said.trim_start().starts_with("<task-notification>")
+    )
 }
 
 /// Claude Code's directory name for a working directory.
@@ -841,7 +875,9 @@ mod tests {
         /// Claude Code writes one as a `user` record when a background job finishes, because that
         /// is the turn it occupies. Drawn as one it is a blue bubble attributed to the person —
         /// and it *splits the turn*, so every reply after it lands against the XML rather than
-        /// against what they actually asked. 75 of them in one project's transcripts here.
+        /// against what they actually asked. 75 of them in one project's transcripts here. It is
+        /// kept by the tail — it is the one record that says the job ended — and classified as
+        /// exactly that, so the handler files it and never draws it.
         #[test]
         fn a_task_notification_is_not_something_a_person_said() {
             let (_d, home) = home_with("-repo", "abc-1.jsonl", "");
@@ -854,8 +890,26 @@ mod tests {
                 ),
             );
             let (lines, _) = read(&home, 0);
-            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert_eq!(lines.len(), 2, "{lines:?}");
             assert!(lines[0].contains("what I actually asked"));
+            assert_eq!(kind_of(&lines[1]), Kind::JobDone { id: "x".into() });
+            assert!(opener_of(&lines[1]).is_none(), "never a prompt");
+        }
+
+        /// A command left running in the background is a job the transcript reports, from the
+        /// call that started it.
+        #[test]
+        fn a_background_command_is_a_job_the_transcript_reports() {
+            let started = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-9","name":"Bash","input":{"command":"gh run watch 1","run_in_background":true}}]}}"#;
+            assert_eq!(
+                kind_of(started),
+                Kind::JobStarted {
+                    id: "t-9".into(),
+                    command: "gh run watch 1".into()
+                }
+            );
+            let plain = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{"command":"ls"}}]}}"#;
+            assert_eq!(kind_of(plain), Kind::Other);
         }
 
         /// A subagent's chatter belongs under the `Task` that started it, which is the same
@@ -979,7 +1033,10 @@ mod tests {
             let side = r#"{"type":"user","uuid":"u-4","isSidechain":true,"message":{"role":"user","content":"sub"}}"#;
             assert_eq!(kind_of(side), Kind::Other);
             let note = r#"{"type":"user","uuid":"u-5","message":{"role":"user","content":"<task-notification>done"}}"#;
-            assert_eq!(kind_of(note), Kind::Other);
+            assert!(
+                matches!(kind_of(note), Kind::JobDone { .. }),
+                "a job ending, not a person"
+            );
         }
 
         #[test]

@@ -1026,20 +1026,20 @@ async fn api_session_tail(
             let mut wrote = false;
             for line in lines {
                 wrote = true;
-                let kind = if follower.is_some() {
-                    Some(keel_workspace::kind_of(&line))
-                } else {
-                    None
-                };
+                let kind = keel_workspace::kind_of(&line);
                 let opener = if first && !known.is_empty() {
                     keel_workspace::opener_of(&line)
                 } else {
                     None
                 };
-                if tx
-                    .send(Ok(Event::default().event("msg").data(line)))
-                    .await
-                    .is_err()
+                // A task notification is Claude Code's note to itself. It is read here, as a
+                // job finishing, and never drawn: drawn, it was a blue bubble attributed to the
+                // person that split the turn.
+                if !matches!(kind, keel_workspace::Kind::JobDone { .. })
+                    && tx
+                        .send(Ok(Event::default().event("msg").data(line)))
+                        .await
+                        .is_err()
                 {
                     break; // The window closed, or the lane opened something else.
                 }
@@ -1057,12 +1057,18 @@ async fn api_session_tail(
                         }
                     }
                 }
-                if let (Some(f), Some(kind)) = (&mut follower, kind) {
+                if let Some(f) = &mut follower {
                     match kind {
                         keel_workspace::Kind::Opener {
                             uuid, prompt, cwd, ..
                         } => f.opened(uuid, prompt, cwd).await,
                         keel_workspace::Kind::TurnEnd => f.turn_ended(),
+                        keel_workspace::Kind::JobStarted { id, command } => {
+                            f.job(crate::turns::Fact::JobStarted { id, command }).await
+                        }
+                        keel_workspace::Kind::JobDone { id } => {
+                            f.job(crate::turns::Fact::JobDone { id }).await
+                        }
                         keel_workspace::Kind::Other => {}
                     }
                     f.wrote();
