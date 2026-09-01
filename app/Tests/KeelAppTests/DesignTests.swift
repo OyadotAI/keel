@@ -503,6 +503,14 @@ final class CanvasTests: XCTestCase {
 /// Talking to the daemon.
 final class ClientTimeoutTests: XCTestCase {
 
+    /// A window holds one connection per stream — events, a tail per lane, a chat per turn —
+    /// and the default ceiling is six per host. Measured: exactly six established, and a seventh
+    /// lane sat on "Opening this session…" with the daemon having already answered.
+    func testAWindowIsNeverWaitingOnAConnectionSlot() async {
+        let limit = await Client(port: 0).maximumConnections()
+        XCTAssertGreaterThanOrEqual(limit, 32, "the ceiling is what a lane waits on")
+    }
+
     /// The session's hour exists for the chat stream, and every ordinary call used to inherit it.
     /// A daemon that never answered `/api/open` left the window dimmed on "Opening …" with
     /// nothing to click and nothing to cancel — for an hour. An ordinary call has to give up.

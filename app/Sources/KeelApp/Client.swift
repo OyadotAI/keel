@@ -20,8 +20,21 @@ actor Client {
         // `Self.ordinary` per request, so a call that will not come back fails and says so.
         cfg.timeoutIntervalForRequest = 3600
         cfg.timeoutIntervalForResource = 86_400
+        // Every stream holds a connection for the life of a lane — the events stream, one tail
+        // per lane, a chat stream per turn — and the default ceiling is six per host. The seventh
+        // request queued behind them for ever: a lane opened from History sat on "Opening this
+        // session…" with the daemon having already answered. Loopback connections are cheap;
+        // a window that cannot ask is not.
+        cfg.httpMaximumConnectionsPerHost = Self.connections
         session = URLSession(configuration: cfg)
     }
+
+    /// Connections the session may hold to the daemon at once. Well past what a window with a
+    /// dozen lanes needs, so the limit is never the thing a person is waiting on.
+    static let connections = 64
+
+    /// What the session was actually configured with, for the test that pins it.
+    func maximumConnections() -> Int { session.configuration.httpMaximumConnectionsPerHost }
 
     struct Failure: Error, LocalizedError {
         let status: Int
