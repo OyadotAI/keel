@@ -23,7 +23,10 @@ mod skills;
 pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers};
 pub use plugins::{Plugin, discover_plugins};
-pub use sessions::{Session, discover_sessions, project_key, session_dirs, tail, transcript_len};
+pub use sessions::{
+    Session, discover_sessions, opener_of, opening_turn, project_key, session_dirs, tail,
+    transcript_len,
+};
 pub use skills::{Skill, discover_skills};
 
 use camino::{Utf8Path, Utf8PathBuf};

@@ -283,98 +283,225 @@ pub fn detect_all(root: &Utf8Path) -> Vec<Check> {
     out
 }
 
-/// Run the check and stream its output.
-pub async fn run(Checkout(repo): Checkout) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+/// One thing the gate said while it ran.
+pub enum GateEvent {
+    /// No check could be found; the string says what to add.
+    None(String),
+    /// A check is starting: the command, prefixed by its directory in a workspace.
+    Start(String),
+    Problem(Problem),
+    Fatal(String),
+}
+
+/// What the gate came to.
+pub struct Verdict {
+    /// `passed`, `failed`, `none`, or `aborted` when the tree stopped being the caller's mid-run.
+    pub status: &'static str,
+    pub command: String,
+    pub problems: Vec<Problem>,
+}
+
+/// Run every check the checkout declares, in turn, and say what they came to.
+///
+/// One verdict carrying the worst code, so a green frontend cannot hide a red backend. `cancelled`
+/// is asked once a second while a check runs; the moment it answers yes the check's whole process
+/// group is ended — the gate's, never the agent's — and the verdict is `aborted`.
+pub async fn run_all(
+    root: &Utf8Path,
+    mut sink: impl FnMut(GateEvent),
+    cancelled: impl Fn() -> bool,
+) -> Verdict {
+    let checks = detect_all(root);
+    if checks.is_empty() {
+        let why = "No check command found. Add a `check` target to your Makefile, or \
+                   typecheck/test scripts to package.json."
+            .to_string();
+        sink(GateEvent::None(why.clone()));
+        return Verdict {
+            status: "none",
+            command: why,
+            problems: Vec::new(),
+        };
+    }
+
+    let mut worst = 0;
+    let mut problems = Vec::new();
+    let mut ran = Vec::new();
+    for check in &checks {
+        let where_ = if check.dir.is_empty() {
+            check.command.clone()
+        } else {
+            format!("{} · {}", check.dir, check.command)
+        };
+        sink(GateEvent::Start(where_.clone()));
+        ran.push(where_);
+
+        // Through a shell, because the detected command is a pipeline of the project's own
+        // scripts. Its own process group, so aborting it takes the whole pipeline.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&check.command)
+            .current_dir(root.join(&check.dir))
+            // Nothing to read from. The gate inherited the daemon's stdin, so a check that asks
+            // a question — a prompt, a confirmation, a login — blocked forever with the gate
+            // stuck on "running" and no way to end it. There is nobody to answer it here.
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                sink(GateEvent::Fatal(e.to_string()));
+                return Verdict {
+                    status: "none",
+                    command: e.to_string(),
+                    problems,
+                };
+            }
+        };
+        let pid = child.id().unwrap_or(0);
+
+        let (out, err) = (child.stdout.take(), child.stderr.take());
+        let scans = async { tokio::join!(scan_pipe(out, &check.dir), scan_pipe(err, &check.dir)) };
+        let mut aborted = false;
+        let waited = async {
+            loop {
+                tokio::select! {
+                    status = child.wait() => {
+                        break status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                        if !aborted && cancelled() {
+                            aborted = true;
+                            crate::signals::end_tree(pid);
+                        }
+                    }
+                }
+            }
+        };
+        let ((from_out, from_err), code) = tokio::join!(scans, waited);
+        for p in from_out.into_iter().chain(from_err) {
+            sink(GateEvent::Problem(p.clone()));
+            problems.push(p);
+        }
+        if aborted {
+            return Verdict {
+                status: "aborted",
+                command: ran.join(", "),
+                problems,
+            };
+        }
+        if code != 0 && worst == 0 {
+            worst = code;
+        }
+    }
+
+    Verdict {
+        status: if worst == 0 { "passed" } else { "failed" },
+        command: ran.join(", "),
+        problems,
+    }
+}
+
+/// `?lane=` names the lane whose last turn the verdict belongs to, when the button is pressed
+/// on one; the verdict then lands on that turn as a fact as well as on this stream.
+#[derive(serde::Deserialize)]
+pub struct RunQuery {
+    pub lane: Option<String>,
+}
+
+/// Run the check and stream its output — the "Run checks" button.
+pub async fn run(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::serve::AppState>>,
+    Checkout(repo): Checkout,
+    axum::extract::Query(query): axum::extract::Query<RunQuery>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     tokio::spawn(async move {
-        let checks = detect_all(&repo);
-        if checks.is_empty() {
-            let _ = tx
-                .send(Ok(Event::default().event("none").data(
-                    "No check command found. Add a `check` target to your Makefile, or \
-                     typecheck/test scripts to package.json.",
-                )))
-                .await;
-            return;
-        }
-
-        // Every repository's gate, in turn. One `done` at the end carrying the worst code, so a
-        // green frontend cannot hide a red backend — and so the app needs no change to read it.
-        let mut worst = 0;
-        for check in &checks {
-            let where_ = if check.dir.is_empty() {
-                check.command.clone()
-            } else {
-                format!("{} · {}", check.dir, check.command)
-            };
-            let _ = tx
-                .send(Ok(Event::default().event("start").data(where_)))
-                .await;
-
-            // Through a shell, because the detected command is a pipeline of the project's own
-            // scripts.
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c")
-                .arg(&check.command)
-                .current_dir(repo.join(&check.dir))
-                // Nothing to read from. The gate inherited the daemon's stdin, so a check that
-                // asks a question — a prompt, a confirmation, a login — blocked forever with the
-                // gate stuck on "running" and no way to end it. There is nobody to answer it here.
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-
-            let mut child = match cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(Event::default().event("fatal").data(e.to_string())))
-                        .await;
-                    return;
+        let started = std::time::Instant::now();
+        // Events are relayed as they happen: the sink is synchronous, so it hands each one to a
+        // task that does the awaiting. The sink owns the sender and goes with the run, which is
+        // what ends the relay; `done` waits for it so nothing arrives after.
+        let (relay, mut relayed) = tokio::sync::mpsc::unbounded_channel::<Event>();
+        let forward = {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                while let Some(e) = relayed.recv().await {
+                    if tx.send(Ok(e)).await.is_err() {
+                        return;
+                    }
                 }
-            };
-
-            let (out, err) = (child.stdout.take(), child.stderr.take());
-            tokio::join!(
-                scan_pipe(out, tx.clone(), &check.dir),
-                scan_pipe(err, tx.clone(), &check.dir)
-            );
-
-            let code = child
-                .wait()
-                .await
-                .map(|s| s.code().unwrap_or(-1))
-                .unwrap_or(-1);
-            if code != 0 && worst == 0 {
-                worst = code;
-            }
+            })
+        };
+        let verdict = run_all(
+            &repo,
+            move |event| {
+                let e = match event {
+                    GateEvent::None(why) => Event::default().event("none").data(why),
+                    GateEvent::Start(cmd) => Event::default().event("start").data(cmd),
+                    GateEvent::Problem(p) => match serde_json::to_string(&p) {
+                        Ok(json) => Event::default().event("problem").data(json),
+                        Err(_) => return,
+                    },
+                    GateEvent::Fatal(why) => Event::default().event("fatal").data(why),
+                };
+                let _ = relay.send(e);
+            },
+            || false,
+        )
+        .await;
+        let _ = forward.await;
+        let code = match verdict.status {
+            "passed" | "none" => 0,
+            _ => 1,
+        };
+        if verdict.status != "none" {
+            let _ = tx
+                .send(Ok(Event::default().event("done").data(code.to_string())))
+                .await;
         }
-
-        let _ = tx
-            .send(Ok(Event::default().event("done").data(worst.to_string())))
-            .await;
+        if let Some(lane) = query.lane.filter(|l| !l.is_empty()) {
+            crate::turns::emit_for_lane(
+                &state,
+                &lane,
+                crate::turns::Fact::Gate {
+                    status: verdict.status.to_string(),
+                    command: Some(verdict.command),
+                    ms: Some(started.elapsed().as_millis() as u64),
+                    problems: verdict
+                        .problems
+                        .iter()
+                        .map(crate::turns::Problem::from)
+                        .collect(),
+                },
+            );
+        }
     });
 
     Sse::new(ReceiverStream::new(rx))
 }
 
-/// Forward a pipe line by line, emitting a `problem` event whenever a line locates one.
+/// Read a pipe line by line and keep every line that locates a problem.
 ///
 /// Cargo prints the message on one line and the location on the next, so the last message seen is
 /// carried forward to fill an otherwise-empty location.
-async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
-    pipe: Option<R>,
-    tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
-    dir: &str,
-) {
+async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>, dir: &str) -> Vec<Problem> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let Some(pipe) = pipe else { return };
+    let mut found = Vec::new();
+    let Some(pipe) = pipe else { return found };
     let mut lines = BufReader::new(pipe).lines();
     let mut last_message = String::new();
 
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        let line = match crate::lines::next(&mut lines).await {
+            crate::lines::Next::Line(line) => line,
+            crate::lines::Next::Skipped => continue,
+            crate::lines::Next::Done => break,
+        };
         let trimmed = line.trim();
         if trimmed.starts_with("error") || trimmed.starts_with("warning") {
             last_message = trimmed.to_string();
@@ -396,24 +523,10 @@ async fn scan_pipe<R: tokio::io::AsyncRead + Unpin>(
             {
                 p.file = format!("{dir}/{}", p.file);
             }
-            if let Ok(json) = serde_json::to_string(&p)
-                && tx
-                    .send(Ok(Event::default().event("problem").data(json)))
-                    .await
-                    .is_err()
-            {
-                return;
-            }
-        }
-
-        if tx
-            .send(Ok(Event::default().event("line").data(line)))
-            .await
-            .is_err()
-        {
-            return;
+            found.push(p);
         }
     }
+    found
 }
 
 #[cfg(test)]

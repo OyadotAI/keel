@@ -110,7 +110,9 @@ pub struct Decision {
     pub reason: String,
 }
 
-type Waiters = Mutex<HashMap<String, tokio::sync::oneshot::Sender<Decision>>>;
+/// The hook process blocked on each question, with the lane it belongs to — the lane is what
+/// files the answer against the turn as a fact.
+type Waiters = Mutex<HashMap<String, (tokio::sync::oneshot::Sender<Decision>, String)>>;
 
 pub fn waiters() -> &'static Waiters {
     static W: OnceLock<Waiters> = OnceLock::new();
@@ -399,8 +401,28 @@ pub async fn ask(
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    waiters().locked().insert(id.clone(), tx);
+    waiters()
+        .locked()
+        .insert(id.clone(), (tx, hook.lane.clone()));
     queue().locked().push(pending);
+    // On the record, so a reopened turn shows what it asked — the card itself still comes from
+    // the poll.
+    crate::turns::emit_for_lane(
+        &state,
+        &hook.lane,
+        crate::turns::Fact::ApprovalAsked {
+            id: id.clone(),
+            tool: hook.tool_name.clone(),
+            command: shown(
+                hook.tool_input
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default(),
+            ),
+            rules: rules_for(&hook.tool_name, &hook.tool_input),
+            input: crate::turns::bounded_input(&hook.tool_input),
+        },
+    );
 
     // A person who walked away must not leave the agent wedged. Timing out falls back to the
     // allowlist, which will refuse it — the same outcome as before, reached without hanging.
@@ -625,7 +647,9 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    waiters().locked().insert(id.clone(), tx);
+    waiters()
+        .locked()
+        .insert(id.clone(), (tx, hook.lane.clone()));
     queue().locked().push(pending);
 
     let answer = match tokio::time::timeout(WAIT, rx).await {
@@ -860,7 +884,16 @@ pub async fn answer(
     };
 
     match waiters().locked().remove(&body.id) {
-        Some(tx) => {
+        Some((tx, lane)) => {
+            crate::turns::emit_for_lane(
+                &state,
+                &lane,
+                crate::turns::Fact::ApprovalAnswered {
+                    id: body.id.clone(),
+                    decision: decision.decision.clone(),
+                    answer: (!body.answer.is_empty()).then(|| body.answer.clone()),
+                },
+            );
             let _ = tx.send(decision);
             Ok(Json(serde_json::json!({ "ok": true })))
         }
@@ -1353,7 +1386,7 @@ pub(crate) mod tests {
                 }
             }
             let id = found.expect("queued");
-            let tx = waiters().locked().remove(&id).unwrap();
+            let (tx, _) = waiters().locked().remove(&id).unwrap();
             queue().locked().retain(|p| p.id != id);
             tx.send(answered(answer)).unwrap();
             let decision = asking.await.unwrap();

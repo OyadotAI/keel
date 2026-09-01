@@ -41,6 +41,10 @@ pub struct AppState {
     /// Hands out a token per claim, so a turn that ends late releases its own slot and never a
     /// newer turn's.
     tokens: std::sync::atomic::AtomicU64,
+    /// The last turn each lane ran, as `(session, turn key)`, kept past the claim's release so a
+    /// fact that arrives after the turn — the manual "Run checks", a late design verdict — still
+    /// has a turn to belong to.
+    last_turn: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
 }
 
 /// One running turn: which checkout it is in, whether it can write to it, and what to signal.
@@ -57,6 +61,12 @@ struct Turn {
     checkout: Utf8PathBuf,
     /// False for a plan turn, which writes nothing and may sit beside one that does.
     writes: bool,
+    /// The conversation the turn is in, once the provider has said (`system/init`).
+    session: Option<String>,
+    /// The `uuid` of the transcript record that opened the turn, once it has been read.
+    key: Option<String>,
+    /// Facts that arrived before the turn was keyed, with when they did.
+    early: Vec<(String, crate::turns::Fact)>,
 }
 
 impl AppState {
@@ -67,6 +77,7 @@ impl AppState {
             port: std::sync::atomic::AtomicU16::new(7777),
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
             tokens: std::sync::atomic::AtomicU64::new(1),
+            last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -79,6 +90,7 @@ impl AppState {
             port: std::sync::atomic::AtomicU16::new(7777),
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
             tokens: std::sync::atomic::AtomicU64::new(1),
+            last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -189,9 +201,74 @@ impl AppState {
                 pid: None,
                 checkout: checkout.to_owned(),
                 writes,
+                session: None,
+                key: None,
+                early: Vec::new(),
             },
         );
         Ok(token)
+    }
+
+    /// The conversation a lane's turn is in, once the provider has said.
+    pub fn bound(&self, lane: &str, token: u64, session: &str) {
+        if let Some(turn) = self.running.locked().get_mut(lane)
+            && turn.token == token
+        {
+            turn.session = Some(session.to_string());
+        }
+    }
+
+    /// The turn has a key: the `uuid` of the transcript record that opened it. Returns the facts
+    /// that arrived before there was one, for the caller to write down.
+    pub fn keyed(
+        &self,
+        lane: &str,
+        token: u64,
+        session: &str,
+        key: &str,
+    ) -> Vec<(String, crate::turns::Fact)> {
+        let mut map = self.running.locked();
+        let Some(turn) = map.get_mut(lane).filter(|t| t.token == token) else {
+            return Vec::new();
+        };
+        turn.session = Some(session.to_string());
+        turn.key = Some(key.to_string());
+        self.last_turn
+            .locked()
+            .insert(lane.to_string(), (session.to_string(), key.to_string()));
+        std::mem::take(&mut turn.early)
+    }
+
+    /// `(session, turn)` for a lane: its running turn once keyed, else the last turn it ran.
+    pub fn turn_key(&self, lane: &str) -> Option<(String, String)> {
+        if let Some(turn) = self.running.locked().get(lane)
+            && let (Some(session), Some(key)) = (&turn.session, &turn.key)
+        {
+            return Some((session.clone(), key.clone()));
+        }
+        self.last_turn.locked().get(lane).cloned()
+    }
+
+    /// Hold a fact for a turn that has no key yet. False when the lane has no turn running, or
+    /// holds as many as it may.
+    pub fn hold_early(&self, lane: &str, fact: crate::turns::Fact) -> bool {
+        let mut map = self.running.locked();
+        match map.get_mut(lane) {
+            Some(turn) if turn.key.is_none() && turn.early.len() < crate::turns::MAX_EARLY => {
+                turn.early.push((crate::turns::now(), fact));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a turn *other than this session's* is allowed to write this checkout. Read by
+    /// the automatic commit, which holds its own claim and must not refuse itself.
+    pub fn writer_in_other(&self, checkout: &Utf8Path, session: &str) -> bool {
+        self.running
+            .locked()
+            .values()
+            .any(|t| t.writes && t.checkout == checkout && t.session.as_deref() != Some(session))
     }
 
     /// Record the process, so Stop has something to signal.
@@ -217,6 +294,7 @@ impl AppState {
     /// Read by the auto-commit, which is `git add -A` in the whole tree: committing while another
     /// lane's agent is mid-write is how one turn's commit comes to hold another turn's
     /// half-finished files under the wrong message.
+    #[cfg(test)]
     pub fn writer_in(&self, checkout: &Utf8Path) -> bool {
         self.running
             .locked()
@@ -460,14 +538,9 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::worktree::api_discard),
         )
         .route(
-            "/api/git/snapshot",
-            axum::routing::post(crate::snapshot::take),
-        )
-        .route(
             "/api/git/restore",
             axum::routing::post(crate::snapshot::put_back),
         )
-        .route("/api/turns", get(crate::turns::list))
         .route("/api/turns", axum::routing::post(crate::turns::record))
         .route("/api/permissions", get(crate::permissions::list))
         .route(
@@ -705,7 +778,7 @@ async fn api_importers(
 /// The caller supplies what to return if the task panics, rather than the helper requiring
 /// `Default` — a scan report has no meaningful empty value, and inventing one to satisfy a
 /// signature is the wrong way round.
-async fn blocking<T, F>(work: F, fallback: T) -> T
+pub(crate) async fn blocking<T, F>(work: F, fallback: T) -> T
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -772,12 +845,62 @@ async fn api_session_tail(
         repo
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+    let store = state.repo();
+
+    // Facts as they are emitted about this session, from whoever is driving it: a lane in this
+    // window or another, or the daemon itself. Ends when the poll below ends — `stop` is dropped
+    // with it — or when the window goes.
+    let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    {
+        let tx = tx.clone();
+        let session = query.id.clone();
+        tokio::spawn(async move {
+            let mut facts = crate::turns::subscribe(&session);
+            loop {
+                let emitted = tokio::select! {
+                    _ = &mut stopped => return,
+                    e = facts.recv() => match e {
+                        Ok(e) => e,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    },
+                };
+                let Ok(json) = serde_json::to_string(&*emitted) else {
+                    continue;
+                };
+                if tx
+                    .send(Ok(Event::default().event("fact").data(json)))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
 
     tokio::spawn(async move {
+        let _stop = stop;
         let mut from = query.from;
         // The first read is the catch-up and can be the whole file; every one after it is the
         // few hundred bytes that were appended.
         let mut first = true;
+        // What Keel knew about these turns, keyed by the record that opened each. Sent right
+        // after that record on the first pass, so a replayed turn carries its files, gate, commit
+        // and cost exactly where a live one would have.
+        let known: std::collections::HashMap<String, crate::turns::Record> = {
+            let (store, id) = (store.clone(), query.id.clone());
+            blocking(
+                move || {
+                    crate::turns::read(&store, &id)
+                        .into_iter()
+                        .map(|r| (r.turn.clone(), r))
+                        .collect()
+                },
+                std::collections::HashMap::new(),
+            )
+            .await
+        };
         loop {
             // The receiver is the only thing that says the window is still there, and a session
             // that has *finished* never grows — so the send that would notice a closed channel
@@ -817,12 +940,31 @@ async fn api_session_tail(
                     .await;
             }
             for line in lines {
+                let opener = if first && !known.is_empty() {
+                    keel_workspace::opener_of(&line)
+                } else {
+                    None
+                };
                 if tx
                     .send(Ok(Event::default().event("msg").data(line)))
                     .await
                     .is_err()
                 {
                     return; // The window closed, or the lane opened something else.
+                }
+                if let Some(record) = opener.and_then(|uuid| known.get(&uuid)) {
+                    for fact in record.facts() {
+                        let Ok(json) = serde_json::to_string(&fact) else {
+                            continue;
+                        };
+                        if tx
+                            .send(Ok(Event::default().event("fact").data(json)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
                 }
             }
             if first {

@@ -68,11 +68,6 @@ pub fn restore(root: &Utf8Path, tree: &str) -> Result<String, String> {
     Ok(undo)
 }
 
-#[derive(Serialize)]
-pub struct Snapshot {
-    pub tree: String,
-}
-
 #[derive(Deserialize)]
 pub struct RestoreBody {
     pub tree: String,
@@ -82,17 +77,6 @@ pub struct RestoreBody {
 pub struct Restored {
     /// The snapshot of what was there before the restore — restore this to undo it.
     pub undo: String,
-}
-
-pub async fn take(
-    Checkout(repo): Checkout,
-) -> Result<Json<Snapshot>, (axum::http::StatusCode, String)> {
-    tokio::task::spawn_blocking(move || snapshot(&repo))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r)
-        .map(|tree| Json(Snapshot { tree }))
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 pub async fn put_back(

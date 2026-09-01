@@ -44,6 +44,10 @@ pub struct ChatQuery {
     pub model: Option<String>,
     /// Agent runtime. Unsupported values fail rather than silently selecting another provider.
     pub provider: Option<String>,
+    /// The turn carries pins, so the app will post their pixel verdicts and the commit waits.
+    pub design: Option<bool>,
+    /// The person's "commit after every turn" setting. Absent means yes.
+    pub auto_commit: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -661,6 +665,49 @@ pub async fn chat(
         // failure with the worst shape — the window looks idle and every send is refused.
         let _lane_held = crate::serve::Held::new(stopper.clone(), lane.clone(), token);
 
+        // Before the agent touches anything: what the tree looked like, so "restore to before
+        // this turn" has something to restore to, and what git already had to say about it, so
+        // the turn's files are what moved against that and not everything uncommitted. Where the
+        // transcript ends now, so the record that opens this turn can be found without reading
+        // what came before it.
+        let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+        let transcript_from = match &query.session {
+            Some(session) => {
+                let (dir, home, session) = (cwd.clone(), home.clone(), session.clone());
+                crate::serve::blocking(
+                    move || keel_workspace::transcript_len(&dir, &home, &session).unwrap_or(0),
+                    0,
+                )
+                .await
+            }
+            None => 0,
+        };
+        let begun = {
+            let checkout = cwd.clone();
+            crate::serve::blocking(move || Some(crate::turns::begin(&checkout)), None)
+                .await
+                .unwrap_or_else(|| crate::turns::Begun {
+                    started: crate::turns::now(),
+                    snapshot: None,
+                    fingerprint: Default::default(),
+                })
+        };
+        let started_fact = crate::turns::Fact::Started {
+            started: begun.started.clone(),
+            snapshot: begun.snapshot.clone(),
+            prompt: query.prompt.chars().take(200).collect(),
+        };
+        // Straight to the app, keyless — the only turn a chat stream can be about is the one it
+        // has open — and held for the record until the key arrives.
+        if let Ok(json) = serde_json::to_string(&crate::turns::Emitted {
+            turn: None,
+            at: begun.started.clone(),
+            fact: started_fact.clone(),
+        }) {
+            let _ = tx.send(Ok(Event::default().event("fact").data(json))).await;
+        }
+        stopper.hold_early(&lane, started_fact);
+
         let provider = query.provider.as_deref().unwrap_or("claude");
         let mut command = if provider == "codex" {
             let mut command = Command::new("codex");
@@ -879,6 +926,18 @@ pub async fn chat(
         // lines" and "exited 1 without a word" are different bugs, and the report could not tell
         // them apart.
         let mut streamed = false;
+        // The turn's identity, read off the stream as it goes: the conversation from
+        // `system/init`, and the key — the transcript record that opened the turn — once the
+        // first reply has been written, which is after the prompt record and before any tool
+        // could fire. What the `result` record says it cost.
+        let mut session: Option<String> = query.session.clone();
+        let mut key: Option<String> = None;
+        let mut key_attempts = 0;
+        let mut forwarder: Option<tokio::task::JoinHandle<()>> = None;
+        let mut usage: Option<crate::turns::Usage> = None;
+        if let Some(session) = &session {
+            stopper.bound(&lane, token, session);
+        }
         if let Some(stdout) = child.stdout.take() {
             let mut lines = BufReader::new(stdout).lines();
             // Forward each JSONL record verbatim. Translating event shapes here would mean two
@@ -904,6 +963,83 @@ pub async fn chat(
                     crate::lines::Next::Done => break,
                 };
                 streamed = true;
+                // Cheap substring checks first; the parse only runs on the three records that
+                // matter, of the thousands a turn streams.
+                if session.is_none()
+                    && line.contains("\"subtype\":\"init\"")
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
+                    && v["type"] == "system"
+                    && let Some(id) = v["session_id"].as_str()
+                {
+                    session = Some(id.to_string());
+                    stopper.bound(&lane, token, id);
+                }
+                if key.is_none()
+                    && key_attempts < 5
+                    && line.contains("\"type\":\"assistant\"")
+                    && let Some(sid) = session.clone()
+                {
+                    key_attempts += 1;
+                    let (dir, home, id) = (cwd.clone(), home.clone(), sid.clone());
+                    let found = crate::serve::blocking(
+                        move || keel_workspace::opening_turn(&dir, &home, &id, transcript_from),
+                        None,
+                    )
+                    .await;
+                    if let Some((uuid, _prompt, _at)) = found {
+                        let early = stopper.keyed(&lane, token, &sid, &uuid);
+                        let (repo, sid2, uuid2) = (repo.clone(), sid.clone(), uuid.clone());
+                        crate::serve::blocking(
+                            move || crate::turns::flush_early(&repo, &sid2, &uuid2, early),
+                            (),
+                        )
+                        .await;
+                        // From here every fact about this turn — the gate, the commit, a
+                        // question asked by the hook — reaches the app through the bus.
+                        let (ftx, turn) = (tx.clone(), uuid.clone());
+                        let mut facts = crate::turns::subscribe(&sid);
+                        forwarder = Some(tokio::spawn(async move {
+                            loop {
+                                let e = match facts.recv().await {
+                                    Ok(e) => e,
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                        continue;
+                                    }
+                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                                };
+                                let Ok(json) = serde_json::to_string(&*e) else {
+                                    continue;
+                                };
+                                if ftx
+                                    .send(Ok(Event::default().event("fact").data(json)))
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                                if e.turn.as_deref() == Some(&turn)
+                                    && matches!(e.fact, crate::turns::Fact::Ended { .. })
+                                {
+                                    return;
+                                }
+                            }
+                        }));
+                        key = Some(uuid);
+                    }
+                }
+                if line.contains("\"type\":\"result\"")
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
+                    && v["type"] == "result"
+                {
+                    let u = &v["usage"];
+                    usage = Some(crate::turns::Usage {
+                        input: u["input_tokens"].as_u64().unwrap_or(0),
+                        output: u["output_tokens"].as_u64().unwrap_or(0),
+                        cache_read: u["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                        cache_write: u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                        cost_usd: v["total_cost_usd"].as_f64(),
+                    });
+                }
                 if tx
                     .send(Ok(Event::default().event("msg").data(line)))
                     .await
@@ -977,9 +1113,58 @@ pub async fn chat(
             }
         }
 
+        // `done` first: the composer is free the moment the agent has stopped talking. What
+        // follows — the files, the gate, the commit — is Keel's, arrives as facts, and holds the
+        // lane's claim until it is over, so no other lane can start writing this tree meanwhile.
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
+
+        let failed = (code != 0).then(|| {
+            let why = errors.locked().trim().to_string();
+            let tail: String = why
+                .lines()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            crate::turns::Failed {
+                code,
+                cause: classify(&why).to_string(),
+                tail: redact(&tail),
+            }
+        });
+        if let (Some(session), Some(turn)) = (session, key) {
+            let window = tx.clone();
+            crate::turns::finish(
+                &stopper,
+                crate::turns::Finish {
+                    repo: repo.clone(),
+                    checkout: cwd.clone(),
+                    session,
+                    turn,
+                    prompt: query.prompt.clone(),
+                    begun,
+                    writes,
+                    usage,
+                    failed,
+                    expect_design: query.design.unwrap_or(false),
+                    auto_commit: query.auto_commit.unwrap_or(true),
+                },
+                // The claim is held for the whole of this, so nothing else can take the tree.
+                || true,
+                // A window that has gone is not worth a test run.
+                move || !window.is_closed(),
+            )
+            .await;
+            // The last facts are on the bus; let them reach the app before the stream closes.
+            if let Some(forwarder) = forwarder {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), forwarder).await;
+            }
+        }
     });
 
     // A turn that is thinking sends nothing at all, and nothing on either side is watching.
