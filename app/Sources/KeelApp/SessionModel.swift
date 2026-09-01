@@ -2991,7 +2991,7 @@ final class SessionModel: Identifiable {
             _ = try await client.post("/api/session/rename",
                                       body: SessionRename(id: id, name: title), as: Renamed.self)
         } catch {
-            lastError = "Renamed the tab, but History kept the old name: "
+            lastError = "Renamed the tab, but Sessions kept the old name: "
                 + error.localizedDescription
         }
         // The list follows on its own: a rename pokes the daemon's sessions watcher.
