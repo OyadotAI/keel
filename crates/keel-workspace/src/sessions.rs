@@ -395,46 +395,103 @@ fn project_dir(dir: &Utf8Path, claude_home: &Utf8Path, scope: &str) -> Utf8PathB
 /// One small file per process under `~/.claude/sessions`. A file whose pid is gone is a crash
 /// that never got to clean up, and is ignored rather than shown as running forever.
 fn running(claude_home: &Utf8Path) -> std::collections::HashMap<String, bool> {
+    /// One parse per pid file per mtime. The files of crashed processes are never removed by
+    /// anything, and this runs on every session listing; before the memo each of them was read
+    /// and parsed again every time. Liveness is *not* memoised — a process can die under an
+    /// unchanged file — so the `kill(pid, 0)` still runs per file, which is a syscall.
+    type Parsed = Option<(i32, String, bool)>;
+    type Memo = std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, Parsed)>;
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+
     let mut out = std::collections::HashMap::new();
     let Ok(entries) = std::fs::read_dir(claude_home.join("sessions")) else {
         return out;
     };
+    let mut seen = Vec::new();
     for e in entries.flatten() {
         let path = e.path();
         if path.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
-        let Ok(record) = std::fs::read_to_string(&path)
-            .map_err(drop)
-            .and_then(|s| serde_json::from_str::<Value>(&s).map_err(drop))
-        else {
+        let Some(mtime) = e.metadata().ok().and_then(|m| m.modified().ok()) else {
             continue;
         };
-        let (Some(pid), Some(id)) = (record["pid"].as_i64(), record["sessionId"].as_str()) else {
+        seen.push(path.clone());
+        let parsed = {
+            let held = memo.lock().unwrap_or_else(|p| p.into_inner());
+            held.get(&path)
+                .filter(|(at, _)| *at == mtime)
+                .map(|(_, p)| p.clone())
+        };
+        let parsed = match parsed {
+            Some(p) => p,
+            None => {
+                let p: Parsed = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .and_then(|record| {
+                        let pid = i32::try_from(record["pid"].as_i64()?).ok()?;
+                        let id = record["sessionId"].as_str()?.to_owned();
+                        Some((pid, id, record["status"].as_str() == Some("busy")))
+                    });
+                memo.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(path.clone(), (mtime, p.clone()));
+                p
+            }
+        };
+        let Some((pid, id, busy)) = parsed else {
             continue;
         };
         // SAFETY: signal 0 delivers nothing; it only asks whether the pid exists.
-        let alive = i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
         if alive {
-            out.insert(id.to_owned(), record["status"].as_str() == Some("busy"));
+            out.insert(id, busy);
         }
     }
+    // Files that are gone leave the memo with them.
+    memo.lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|path, _| seen.contains(path));
     out
 }
+
+/// Transcripts parsed for a listing, newest first. Past this the list is history nobody scrolls
+/// to, and the cost — a `stat` each warm, a read each cold — is paid on every listing.
+const MAX_LISTED: usize = 300;
 
 /// Every session recorded for `repo` and the directories around it, most recently active first.
 pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session> {
     let running = running(claude_home);
-    let mut sessions: Vec<Session> = Vec::new();
+    // Every transcript is stat'd; only the newest are parsed.
+    let mut found: Vec<(std::time::SystemTime, Utf8PathBuf, &'static str)> = Vec::new();
     for (dir, scope) in session_dirs(repo, claude_home) {
         let project = project_dir(&dir, claude_home, scope);
         let Ok(entries) = std::fs::read_dir(&project) else {
             continue;
         };
-        for p in entries
-            .filter_map(Result::ok)
-            .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
-            .filter(|p| p.extension() == Some("jsonl"))
+        for e in entries.flatten() {
+            let Ok(p) = Utf8PathBuf::from_path_buf(e.path()) else {
+                continue;
+            };
+            if p.extension() != Some("jsonl") {
+                continue;
+            }
+            let at = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            found.push((at, p, scope));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.truncate(MAX_LISTED);
+
+    let mut sessions: Vec<Session> = Vec::new();
+    for (_, p, scope) in found {
+        let project = p.parent().map(|d| d.to_owned()).unwrap_or_default();
         {
             if let Some(mut s) = parse_session(&p) {
                 if !s.is_conversation() {
