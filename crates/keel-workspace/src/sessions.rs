@@ -292,21 +292,20 @@ fn opener(record: &Value) -> Option<(String, String, String)> {
     {
         return None;
     }
-    let content = &record["message"]["content"];
-    let text = if let Some(s) = content.as_str() {
-        s.to_string()
-    } else if let Some(blocks) = content.as_array() {
-        if blocks.iter().any(|b| b["type"] == "tool_result") {
-            return None;
+    let text = match &record["message"]["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => {
+            if blocks.iter().any(|b| b["type"] == "tool_result") {
+                return None;
+            }
+            blocks
+                .iter()
+                .filter(|b| b["type"] == "text")
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
         }
-        blocks
-            .iter()
-            .filter(|b| b["type"] == "text")
-            .filter_map(|b| b["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        return None;
+        _ => return None,
     };
     let said = text.trim();
     if said.is_empty() || said.starts_with("<task-notification>") {
@@ -520,7 +519,7 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
             found.push((at, p, scope));
         }
     }
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
     found.truncate(MAX_LISTED);
 
     let mut sessions: Vec<Session> = Vec::new();
