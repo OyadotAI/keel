@@ -979,6 +979,15 @@ final class SessionModel: Identifiable {
         Telemetry.track("turn_started", ["mode": mode, "pins": designInFlight.count,
                                          "attachments": attached])
         Telemetry.breadcrumb("turn started")
+        // Typing into a lane that was following a conversation elsewhere takes it over: from here
+        // the turns are Keel's own, and two readers appending to one `turns` array would
+        // interleave them.
+        //
+        // Here rather than inside the task below, which is where it used to be: making an
+        // isolated checkout comes first there and takes seconds, and the poll kept appending
+        // turns of its own for the whole of it — including one for the prompt this turn is
+        // already drawing.
+        unfollow()
         let turn = Turn(prompt: full)
         turns.append(turn)
         stallReported = false; lastEventAt = Date(); lastProgressAt = Date(); running = true
@@ -1054,10 +1063,6 @@ final class SessionModel: Identifiable {
             // scroll while a turn is focused, which is right while you are reading it and wrong
             // the moment you ask for something new.
             self.focusedTurn = nil
-            // Typing into a lane that was following a conversation elsewhere takes it over: from
-            // here the turns are Keel's own, and two readers appending to one `turns` array would
-            // interleave them.
-            self.unfollow()
             // Before the agent touches anything: what the tree looked like, so "restore to
             // before this turn" has something to restore to. A failure here is not a reason to
             // refuse the turn — there is simply no rewind for it, and the menu says so by absence.
@@ -1154,8 +1159,12 @@ final class SessionModel: Identifiable {
         preparing = nil
         editing = nil
         watchApprovals(false)
+        // What the turn wrote through `Bash` rather than through `Edit` — a heredoc, a `tee`, a
+        // formatter it ran — is in the tree and in no tool call. See `attribute`.
+        let before = treeFingerprint
         await refreshGit()
         await refreshTree()
+        attribute(before, to: turn)
         // The turn just changed the repository, and readiness is a reading of the repository.
         // Without this the panel kept the findings from before the fix — including the one the
         // person clicked "Fix this" on — until they went and pressed rescan themselves.
@@ -2669,6 +2678,10 @@ final class SessionModel: Identifiable {
                         // not true. `live` is the signal, from the transcript's own mtime.
                         self.following = self.sessions.first { $0.id == id }?.live == true
                         self.pinTick += 1
+                        // The tree as it is *now*, not as it was when the project opened. It is
+                        // also the baseline every followed turn is measured against.
+                        await self.refreshGit()
+                        await self.refreshTree()
 
                     case "msg":
                         guard let data = event.data.data(using: .utf8) else { continue }
@@ -2677,6 +2690,7 @@ final class SessionModel: Identifiable {
                             adopt(Turn(prompt: asked))
                         } else if let turn = live {
                             self.record(data, into: turn)
+                            if handedOver { self.watchTree(turn) }
                         } else {
                             // A transcript that opens with the agent speaking — a resumed or
                             // compacted session. It still needs somewhere to go.
@@ -2707,6 +2721,53 @@ final class SessionModel: Identifiable {
             live?.settle()
             self.replaying = false
             self.following = false
+        }
+    }
+
+    /// The working tree as a set of facts: a path and what git says about it.
+    var treeFingerprint: Set<String> { Set(changes.map { $0.path + $0.status }) }
+
+    /// Files that moved in the working tree without naming themselves in a tool call.
+    ///
+    /// `writeTools` reads the path out of `Edit` and `Write`, and a great deal of real work is
+    /// neither: a session in a terminal writes with `cat > file <<'EOF'` as readily as with
+    /// `Edit`, and a `Bash` call carries a command, not a path. Measured on the session this was
+    /// found in: 54 tool calls, every one of them `Bash`, several of them writing whole files —
+    /// so the turn reported no files changed while the diff beside it was full of them.
+    ///
+    /// git does not care which tool did the writing, so it is the evidence rather than the
+    /// arguments. Attributed against a fingerprint taken before, so this names what *this* turn
+    /// moved rather than everything uncommitted in the checkout.
+    /// Through `repoRelative`, because `Edit` names a file absolutely and git names it from the
+    /// root of the checkout: added blind, a file the turn wrote *and* dirtied would be two rows
+    /// for one file, spelt differently.
+    func attribute(_ before: Set<String>, to turn: Turn) {
+        for change in changes where !before.contains(change.path + change.status) {
+            guard !turn.files.contains(where: { repoRelative($0) == change.path }) else { continue }
+            turn.noteEdit(change.path)
+        }
+    }
+
+    /// Read the working tree again because a session Keel is not driving just wrote to it.
+    ///
+    /// Nothing else does: `endTurn` is what refreshes the panels, and a followed turn never
+    /// reaches it — so the Changes panel kept whatever it read when the project opened, for as
+    /// long as the session ran.
+    ///
+    /// Coalesced, because a turn writes several files in a row and each one would otherwise be a
+    /// `git status` nobody is waiting for.
+    private var treeWatch: Task<Void, Never>?
+
+    func watchTree(_ turn: Turn) {
+        treeWatch?.cancel()
+        treeWatch = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            let before = treeFingerprint
+            await refreshGit()
+            await refreshTree()
+            attribute(before, to: turn)
+            diffTick += 1
         }
     }
 

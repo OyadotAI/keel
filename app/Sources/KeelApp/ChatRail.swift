@@ -18,12 +18,23 @@ struct ChatRail: View {
     /// Whether the view is following the stream. Scrolling up to read releases it — a pane that
     /// drags you back to the bottom mid-sentence is worse than one that never followed.
     @State private var pinned = true
-    /// The row the pane is held against. Written by the scroll view as you scroll, and by
-    /// `toBottom()` to put it back at the end.
-    @State private var anchor: String?
     @State private var lastFollow = Date.distantPast
     /// The scroll the throttle turned away, waiting out its window. At most one.
     @State private var trailing: Task<Void, Never>?
+
+    /// How many turns are drawn before the conversation offers the rest.
+    ///
+    /// This is what makes the pane land where it is told. A lazy stack knows the height of the
+    /// rows it has built and *estimates* the rest, and a turn's card is anything from two lines
+    /// to a megabyte of tool output — so a jump to the end of three hundred of them is computed
+    /// from three hundred guesses and lands in a region with nothing built in it. That is the
+    /// white pane on load, and no amount of re-scrolling fixes an estimate. Ten rows is a bounded
+    /// error, and the ones you cannot see are one click away rather than one scroll.
+    private static let shown = 10
+    @State private var showingAll = false
+    /// A rescue is already running. Without it the geometry fires again on every scroll the
+    /// rescue itself performs.
+    @State private var rescuing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,47 +118,77 @@ struct ChatRail: View {
     }
 
     private var transcript: some View {
+        ScrollViewReader { proxy in transcript(proxy) }
+    }
+
+    private func transcript(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: K.S.xl) {
                 // A pane with nothing in it says which of the reasons it is. It used to
                 // draw the "ask for a change" hint over a session that was still being read,
                 // and nothing at all if the read had left the lane empty.
                 if model.turns.isEmpty, !model.replaying { hint }
-                ForEach(Array(model.turns.enumerated()), id: \.element.id) { i, turn in
+                let hidden = showingAll ? 0 : max(0, model.turns.count - Self.shown)
+                if hidden > 0 {
+                    // Unpinned first. Asking for the earlier turns is asking to *read* them, and
+                    // the content-height loop below would otherwise read the arrival of ten more
+                    // cards as a reason to put you back at the end of the conversation.
+                    ShowMore(count: hidden, up: true) { pinned = false; showingAll = true }
+                }
+                ForEach(Array(model.turns.enumerated()).dropFirst(hidden), id: \.element.id) { i, turn in
                     ChatTurn(turn: turn, number: i + 1, model: model)
                         .id("chat-\(turn.id)")
                 }
             }
-            .scrollTargetLayout()
             .padding(.horizontal, K.S.xxl)
             .padding(.vertical, K.S.xl)
             .frame(maxWidth: 800, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollBounceBehavior(.basedOnSize)
-        // Held against a *row*, not against an offset. Every other way of saying "show me the
-        // end" — an anchor view and `scrollTo`, `defaultScrollAnchor(.bottom)`, a scroll to the
-        // bottom edge — resolves to a number computed from the estimated heights of rows the
-        // lazy stack has not measured, so a long session opened on a blank pane that you had to
-        // scroll up out of to find the conversation. Photographed, in `chat-long`. Pinned to the
-        // last turn instead, the scroll view keeps that row in view as the rows above it are
-        // measured and their heights change under it.
-        .scrollPosition(id: $anchor, anchor: .bottom)
         // The tail token is watched by a view of its own, not from here.
         //
         // Reading it in this `body` registered the dependency against the whole pane, so every
         // text delta invalidated the transcript — the `ForEach` over every turn, each `ChatTurn`,
         // and the composer with it. The 80 ms coalescing throttled the *scroll*; nothing throttled
         // the rebuild. `TailFollower` draws nothing and is the only thing that re-evaluates.
-        .overlay { TailFollower(model: model) { follow() } }
+        .overlay { TailFollower(model: model) { follow(proxy) } }
         // A task, not an onChange: opening a session bumps `pinTick` before this pane exists,
         // so the change had no listener and the transcript opened at the top. A task with that
         // id runs on appear as well, after the rows have laid out.
         .task(id: model.pinTick) {
             pinned = true
-            toBottom()
+            showingAll = false
+            // The seed. Landing short is expected — the rows below have never been built, so
+            // this is a scroll into an estimate — and the content-height loop below is what
+            // corrects it as they are.
+            toBottom(proxy)
         }
         .followsTail($pinned)
+        // The one that actually keeps the pane at the end, and the answer to every version of
+        // "it went white" in this file's history.
+        //
+        // A `LazyVStack` does not know how tall it is. It measures the rows it has built and
+        // *estimates* the rest from them, so the content height is a guess that is revised every
+        // time another row is created — and here the rows range from a two-line answer to a turn
+        // with a hundred steps in it, so the guess is wrong by whole screens. A scroll to the end
+        // is a position in that guess. When the guess is then corrected downwards, the offset
+        // that was the end is now past the end, and past the end of a scroll view is the window's
+        // own background: white, with the conversation above it, exactly as reported.
+        //
+        // Nothing was watching for that. `TailFollower` fires on the *model* changing, and an
+        // estimate being corrected is pure layout — no delta, no token, no event. So the pane
+        // scrolled to a wrong number once and then sat in it.
+        //
+        // Every change in content height re-asserts the end, which turns a one-shot guess into a
+        // loop that converges: each correction builds more rows, each rebuild is a better
+        // estimate, and the scroll lands truer until the height stops moving. It cannot yank
+        // anybody: `pinned` is false the moment a person scrolls up, and that is the only thing
+        // this reads.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { was, now in
+            guard pinned, now != was else { return }
+            follow(proxy)
+        }
         // The rescue: a transcript scrolled clean off its own content.
         //
         // This is the blank pane people report — white, with the conversation reachable only by
@@ -159,20 +200,24 @@ struct ChatRail: View {
         // names nothing leaves the offset exactly where it was, past the end of content that
         // shrank underneath it — and nothing in SwiftUI brings it back.
         //
-        // `contentOffset.y >= contentSize.height` means not one pixel of the conversation is in
-        // the viewport. A rubber band cannot reach it — an overscroll stops with the content's
-        // own edge still on screen — so this does not fire on a fling.
+        // Measured as *how much of the conversation is on screen*, which is the thing being
+        // complained about. The first version of this asked whether the offset was past the end
+        // of the content entirely, and that is only the worst case: an anchor that stops
+        // resolving leaves the offset wherever it was, so the pane settles anywhere past its
+        // legal maximum — usually with a sliver of the last turn at the top and the rest of the
+        // window white. Scrolling by hand cannot produce that state at all, because it clamps.
         .onScrollGeometryChange(for: Bool.self) { g in
-            Self.blank(offset: g.contentOffset.y, content: g.contentSize.height)
-        } action: { was, blank in
-            guard blank, !was else { return }
-            rescue()
+            Self.blank(offset: g.contentOffset.y, content: g.contentSize.height,
+                       viewport: g.containerSize.height)
+        } action: { _, blank in
+            guard blank else { rescuing = false; return }
+            rescue(proxy)
         }
         // The end of a turn is the one update the coalescing window can swallow whole: the
         // last delta arrives and there is no next one to correct the short scroll.
         .onChange(of: model.running) {
             guard pinned else { return }
-            toBottom()
+            toBottom(proxy)
         }
         // In the middle of the pane, not as the first row of it: a line of small grey text
         // at the top left of an empty transcript is a wait nobody sees, and the read it is
@@ -184,7 +229,7 @@ struct ChatRail: View {
             if !pinned && model.running {
                 JumpToLatest {
                     pinned = true
-                    withAnimation(K.M.settle) { toBottom() }
+                    withAnimation(K.M.settle) { toBottom(proxy) }
                 }
                 .transition(.opacity)
             }
@@ -201,7 +246,7 @@ struct ChatRail: View {
     /// autoscrolling" is: not following that switched off, following that is permanently one
     /// window behind. `onChange(of: model.running)` already patched exactly one of those pauses,
     /// the very last one, which is why the end of a turn was the only part that reliably landed.
-    private func follow() {
+    private func follow(_ proxy: ScrollViewProxy) {
         guard pinned else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFollow) > 0.08 else {
@@ -212,47 +257,83 @@ struct ChatRail: View {
                 try? await Task.sleep(for: .milliseconds(80))
                 guard !Task.isCancelled, pinned else { return }
                 lastFollow = Date()
-                toBottom()
+                toBottom(proxy)
             }
             return
         }
         lastFollow = now
-        toBottom()
+        toBottom(proxy)
     }
 
     /// To the end of the conversation: the last turn, held at the bottom of the pane.
-    private func toBottom() {
+    ///
+    /// Held against a *row*, never against an offset: an offset into a lazy stack is a number
+    /// computed from the estimated heights of rows it has never built, and here those rows range
+    /// from a two-line answer to a turn with a hundred steps in it.
+    ///
+    /// Asked for as an *action* rather than held as state. `scrollPosition(id:)` keeps the row id
+    /// in a binding, and a binding already holding the value you assign is a no-op — so through a
+    /// streaming turn, whose last row's id never changes, every scroll after the first asked for
+    /// something that was already true and the pane quietly stopped following. A `scrollTo`
+    /// re-resolves the row every time it is called and a row that is gone is a no-op rather than
+    /// a position nothing can leave. The Trace has always followed this way, and the Trace is not
+    /// the pane people report.
+    ///
+    /// Deliberately not animated. This is a tail following a live stream, like a terminal, and an
+    /// easing curve restarted twelve times a second is what "flaky" looks like — the explicit
+    /// jumps animate, because those are deliberate moves.
+    private func toBottom(_ proxy: ScrollViewProxy) {
         guard let last = model.turns.last else { return }
-        anchor = "chat-\(last.id)"
+        proxy.scrollTo("chat-\(last.id)", anchor: .bottom)
     }
 
-    /// Not one pixel of the conversation is in the viewport. The decision on its own, so it can
-    /// be asserted without a scroll view.
-    static func blank(offset: CGFloat, content: CGFloat) -> Bool {
-        content > 0 && offset >= content
+    /// Less than a quarter of the pane has any conversation in it. The decision on its own, so
+    /// it can be asserted without a scroll view.
+    ///
+    /// At rest at the end, a full viewport of content is showing, so this is a long way from
+    /// firing. Only an overscroll can approach it — a fling would have to rubber-band three
+    /// quarters of the window past the end — and even then the rescue puts the pane exactly where
+    /// the band was going to settle anyway. Content shorter than the viewport is never blank: it
+    /// cannot scroll, so it is on screen by construction.
+    static func blank(offset: CGFloat, content: CGFloat, viewport: CGFloat) -> Bool {
+        content > viewport && content - offset < viewport / 4
     }
 
     /// Put a pane that is showing nothing back at the end of the conversation — and say so.
     ///
-    /// Cleared before it is set, because the id it needs may be the one it is already holding:
-    /// an anchor resolving to nothing is not the same as an anchor being *wrong*, and assigning
-    /// the value already there is a no-op that leaves the pane as blank as it found it.
+    /// It retries, which is the half that was missing and the reason people kept reporting a
+    /// white pane after this existed. `onScrollGeometryChange` fires on a *transition*, so one
+    /// attempt was all there ever was: a scroll issued while the rows it has to measure are
+    /// still being built lands short, the value is already `true`, nothing fires again, and the
+    /// pane stays white until the person scrolls out of it by hand. Which is exactly the report.
+    ///
+    /// The last resort is folding the conversation back to its most recent turns. Content the
+    /// stack has actually measured is content a scroll cannot miss, and a person who expanded
+    /// the history is better off at the end of the conversation than in a white rectangle.
     ///
     /// Reported, because this is exactly the failure the bar names — a pane showing a thing it
     /// cannot explain — and the only reason it lasted this long is that it is silent. It crashes
     /// nothing and fails no request; a person scrolls out of it and carries on, and we never hear.
     /// Counts and flags only, never a prompt or a path.
-    private func rescue() {
-        guard let last = model.turns.last else { return }
+    private func rescue(_ proxy: ScrollViewProxy) {
+        guard !rescuing, model.turns.last != nil else { return }
+        rescuing = true
         Telemetry.warn("transcript scrolled off its own content", [
             "turns": "\(model.turns.count)",
             "replaying": "\(model.replaying)",
             "running": "\(model.running)",
+            "expanded": "\(showingAll)",
         ])
-        anchor = nil
         Task { @MainActor in
             pinned = true
-            anchor = "chat-\(last.id)"
+            for attempt in 0..<3 {
+                if attempt == 2 { showingAll = false }
+                toBottom(proxy)
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+            // Cleared here as well as by the geometry: a pane that is somehow still blank must
+            // be able to ask again the next time anything moves.
+            rescuing = false
         }
     }
 
