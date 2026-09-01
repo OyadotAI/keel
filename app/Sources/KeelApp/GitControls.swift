@@ -34,6 +34,11 @@ struct BranchStatus: View {
                 if c.ahead > 0 { Pill(text: "\(c.ahead) ↑", tone: .warn) }
                 if c.behind > 0 { Pill(text: "\(c.behind) ↓", tone: .accent) }
                 if c.ahead == 0 && c.behind == 0 { Pill(text: "IN SYNC", tone: .good) }
+            } else if let b, !b.remotes.isEmpty {
+                // The project has a remote; this branch has simply never been pushed. Saying
+                // "NO REMOTE" and offering to add one here told a connected repository it was
+                // not connected — and the first Push sets the upstream by itself.
+                Pill(text: "NOT PUSHED", tone: .warn)
             } else if b != nil {
                 Pill(text: "NO REMOTE", tone: .neutral)
                 // The state a freshly created project is in. Fetch and Push are greyed
