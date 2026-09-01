@@ -975,6 +975,11 @@ async fn api_session_tail(
         let (wake_tx, mut wake) = tokio::sync::mpsc::channel::<()>(1);
         let _watcher = watch_session(&dir, &home, &query.id, wake_tx);
         let mut follower: Option<crate::turns::Follower> = None;
+        // The turn in flight when the window arrives: the last prompt of the replay with no
+        // turn-end after it. A follower that starts at catch-up would otherwise never see that
+        // turn open, and a window relaunched mid-turn — every `make dev` — lost the turn's
+        // files, gate and commit for good.
+        let mut inflight: Option<(String, String, Option<String>)> = None;
         let mut alive = keel_workspace::status(&home, &query.id).is_some();
         let mut last_bytes = std::time::Instant::now();
         let mut said_ended = false;
@@ -1057,6 +1062,15 @@ async fn api_session_tail(
                         }
                     }
                 }
+                if follower.is_none() {
+                    match &kind {
+                        keel_workspace::Kind::Opener {
+                            uuid, prompt, cwd, ..
+                        } => inflight = Some((uuid.clone(), prompt.clone(), cwd.clone())),
+                        keel_workspace::Kind::TurnEnd => inflight = None,
+                        _ => {}
+                    }
+                }
                 if let Some(f) = &mut follower {
                     match kind {
                         keel_workspace::Kind::Opener {
@@ -1102,12 +1116,22 @@ async fn api_session_tail(
                 // turn gets. One a lane is driving is that lane's chat task's business.
                 if !watched.owns_session(&query.id) {
                     watched.attach_follower(&query.id);
-                    follower = Some(crate::turns::Follower::new(
+                    let mut f = crate::turns::Follower::new(
                         watched.clone(),
                         store.clone(),
                         home.clone(),
                         query.id.clone(),
-                    ));
+                    );
+                    // Busy, with a prompt nothing has closed: that turn is running now, and it
+                    // is this follower's from here. The photograph is late — the turn may have
+                    // written already — which beats no record of the turn at all.
+                    if let Some((uuid, prompt, cwd)) = inflight.take()
+                        && keel_workspace::status(&home, &query.id)
+                            == Some(keel_workspace::Status::Busy)
+                    {
+                        f.opened(uuid, prompt, cwd).await;
+                    }
+                    follower = Some(f);
                 }
             }
             from = next;

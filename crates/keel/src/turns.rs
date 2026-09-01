@@ -771,6 +771,10 @@ pub struct Begun {
     pub snapshot: Option<String>,
     /// `path + status` for every change git saw. The turn's files are what moved against this.
     pub fingerprint: HashSet<String>,
+    /// `HEAD` before the turn. A session that commits its own work — a terminal `claude` told to
+    /// commit, most often — leaves nothing in `git status` by the time it goes idle, and the
+    /// files it changed are in the commits it made since this.
+    pub head: Option<String>,
 }
 
 /// Photograph the tree and note what git already had to say about it. Blocking: two gits.
@@ -782,7 +786,16 @@ pub fn begin(checkout: &Utf8Path) -> Begun {
         started: now(),
         snapshot: crate::snapshot::snapshot(checkout).ok(),
         fingerprint: fingerprint(checkout),
+        head: head(checkout),
     }
+}
+
+/// The short sha of `HEAD`, or `None` where there is no commit yet.
+fn head(checkout: &Utf8Path) -> Option<String> {
+    crate::git::run(checkout, &["rev-parse", "--short", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn fingerprint(checkout: &Utf8Path) -> HashSet<String> {
@@ -869,22 +882,46 @@ pub async fn finish(
         }
     };
 
-    // 1. Files. The daemon's reading of what moved, which is the only one that catches a heredoc.
+    // 1. Files. The daemon's reading of what moved, which is the only one that catches a heredoc:
+    // what is uncommitted against the fingerprint `begin` took, and what the turn committed
+    // itself since the `HEAD` it started at — a session told to commit leaves a clean tree.
     let checkout = f.checkout.clone();
     let before = f.begun.fingerprint.clone();
-    let files: Vec<String> = crate::serve::blocking(
-        move || {
-            let mut moved: Vec<String> = fingerprint(&checkout)
-                .difference(&before)
-                .map(|entry| entry[..entry.len().saturating_sub(2)].to_string())
-                .collect();
-            moved.sort();
-            moved.dedup();
-            moved
-        },
-        Vec::new(),
-    )
-    .await;
+    let from = f.begun.head.clone();
+    let (uncommitted, committed, own_commit): (Vec<String>, Vec<String>, Option<String>) =
+        crate::serve::blocking(
+            move || {
+                let mut moved: Vec<String> = fingerprint(&checkout)
+                    .difference(&before)
+                    .map(|entry| entry[..entry.len().saturating_sub(2)].to_string())
+                    .collect();
+                moved.sort();
+                moved.dedup();
+                let now = head(&checkout);
+                let (committed, own) = match (&from, &now) {
+                    (Some(from), Some(now)) if from != now => (
+                        crate::git::run(
+                            &checkout,
+                            &["diff", "--name-only", &format!("{from}..{now}")],
+                        )
+                        .map(|out| out.lines().map(str::to_string).collect())
+                        .unwrap_or_default(),
+                        Some(now.clone()),
+                    ),
+                    _ => (Vec::new(), None),
+                };
+                (moved, committed, own)
+            },
+            (Vec::new(), Vec::new(), None),
+        )
+        .await;
+    let mut files: Vec<String> = uncommitted
+        .iter()
+        .chain(committed.iter())
+        .cloned()
+        .collect();
+    files.sort();
+    files.dedup();
     if !files.is_empty() {
         emit_now(Fact::Files {
             files: files.clone(),
@@ -1008,11 +1045,16 @@ pub async fn finish(
     }
 
     // 4. The commit. Accepted work becomes a checkpoint, so the tree stays small and every step
-    // is a place to go back to.
+    // is a place to go back to. A turn that committed its own work has its checkpoint already:
+    // that commit is the turn's, and only what it left uncommitted is Keel's to make one of.
+    if let Some(sha) = own_commit {
+        emit_now(Fact::Commit { sha }).await;
+        crate::events::emit("git.changed", f.checkout_name(), serde_json::Value::Null);
+    }
     let gate_allows = gate
         .as_ref()
         .is_none_or(|g| matches!(g.status.as_str(), "passed" | "none"));
-    if f.writes && f.auto_commit && !files.is_empty() && shared.is_none() {
+    if f.writes && f.auto_commit && !uncommitted.is_empty() && shared.is_none() {
         if design_says_no {
             shared = Some(
                 "the pixel check found a pinned element unchanged, so this turn was not committed"
@@ -1250,6 +1292,7 @@ impl Follower {
                     started: now(),
                     snapshot: None,
                     fingerprint: Default::default(),
+                    head: None,
                 })
         };
         {
@@ -1739,6 +1782,46 @@ mod tests {
             "checked in — no gate is declared, and none is a pass"
         );
         assert!(r.ended.is_some());
+    }
+
+    /// A session told to commit its own work leaves a clean tree at the boundary. Its files are
+    /// what its commits changed, and its commit is the turn's.
+    #[tokio::test]
+    async fn a_followed_turn_that_committed_its_own_work_reports_the_files() {
+        let (repo, home, state) = followed("s-self", "busy");
+        let mut f = Follower::new(state, repo.clone(), home.clone(), "s-self".into());
+        f.opened("u-1".into(), "commit something".into(), None)
+            .await;
+        std::fs::write(repo.join("made.txt"), "by the agent\n").unwrap();
+        for args in [
+            &["add", "-A"][..],
+            &["commit", "-qm", "the agent's own commit"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        f.turn_ended();
+        set_status(&home, "s-self", "idle");
+        f.quiet();
+        f.tick().await;
+        let r = record_of(&repo, "s-self", "u-1");
+        assert_eq!(
+            r.files,
+            vec!["made.txt"],
+            "what the turn's own commit changed"
+        );
+        let head = crate::git::run(&repo, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert_eq!(
+            r.commit.as_deref(),
+            Some(head.trim()),
+            "the turn's own commit, not a new one"
+        );
     }
 
     /// Nothing is finished while the terminal's `claude` is still busy and has not said the
