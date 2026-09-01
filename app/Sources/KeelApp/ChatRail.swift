@@ -22,6 +22,8 @@ struct ChatRail: View {
     /// `toBottom()` to put it back at the end.
     @State private var anchor: String?
     @State private var lastFollow = Date.distantPast
+    /// The scroll the throttle turned away, waiting out its window. At most one.
+    @State private var trailing: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -146,6 +148,26 @@ struct ChatRail: View {
             toBottom()
         }
         .followsTail($pinned)
+        // The rescue: a transcript scrolled clean off its own content.
+        //
+        // This is the blank pane people report — white, with the conversation reachable only by
+        // scrolling up out of it by hand and back down. It has more than one cause and all of
+        // them land here, so the check is on the geometry rather than on any one of them:
+        // `scrollPosition(id:)` holds a *row*, and a row id stops resolving when the turns are
+        // replaced (a replay builds new `Turn`s, so every id is new) or removed (the fresh-session
+        // retry drops the turn it failed on, and `/clear` drops all of them). An anchor that
+        // names nothing leaves the offset exactly where it was, past the end of content that
+        // shrank underneath it — and nothing in SwiftUI brings it back.
+        //
+        // `contentOffset.y >= contentSize.height` means not one pixel of the conversation is in
+        // the viewport. A rubber band cannot reach it — an overscroll stops with the content's
+        // own edge still on screen — so this does not fire on a fling.
+        .onScrollGeometryChange(for: Bool.self) { g in
+            Self.blank(offset: g.contentOffset.y, content: g.contentSize.height)
+        } action: { was, blank in
+            guard blank, !was else { return }
+            rescue()
+        }
         // The end of a turn is the one update the coalescing window can swallow whole: the
         // last delta arrives and there is no next one to correct the short scroll.
         .onChange(of: model.running) {
@@ -171,10 +193,29 @@ struct ChatRail: View {
 
     /// Coalesced. A reply arrives as many small deltas, and scrolling on each of them competes
     /// with the wheel and makes the pane feel like it is resisting.
+    ///
+    /// Coalesced on *both* edges, which is the half that was missing. A leading-edge throttle
+    /// drops the last delta of every burst, and a burst ends every time the agent stops talking
+    /// to go and run something — so the pane sat a paragraph short of the end for as long as the
+    /// tool took, and the next thing written started off-screen. That is what "it stopped
+    /// autoscrolling" is: not following that switched off, following that is permanently one
+    /// window behind. `onChange(of: model.running)` already patched exactly one of those pauses,
+    /// the very last one, which is why the end of a turn was the only part that reliably landed.
     private func follow() {
         guard pinned else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
+        guard now.timeIntervalSince(lastFollow) > 0.08 else {
+            // Replaced rather than stacked: within one window every delta wants the same thing,
+            // and the last one to ask is the one holding the newest tail.
+            trailing?.cancel()
+            trailing = Task {
+                try? await Task.sleep(for: .milliseconds(80))
+                guard !Task.isCancelled, pinned else { return }
+                lastFollow = Date()
+                toBottom()
+            }
+            return
+        }
         lastFollow = now
         toBottom()
     }
@@ -183,6 +224,36 @@ struct ChatRail: View {
     private func toBottom() {
         guard let last = model.turns.last else { return }
         anchor = "chat-\(last.id)"
+    }
+
+    /// Not one pixel of the conversation is in the viewport. The decision on its own, so it can
+    /// be asserted without a scroll view.
+    static func blank(offset: CGFloat, content: CGFloat) -> Bool {
+        content > 0 && offset >= content
+    }
+
+    /// Put a pane that is showing nothing back at the end of the conversation — and say so.
+    ///
+    /// Cleared before it is set, because the id it needs may be the one it is already holding:
+    /// an anchor resolving to nothing is not the same as an anchor being *wrong*, and assigning
+    /// the value already there is a no-op that leaves the pane as blank as it found it.
+    ///
+    /// Reported, because this is exactly the failure the bar names — a pane showing a thing it
+    /// cannot explain — and the only reason it lasted this long is that it is silent. It crashes
+    /// nothing and fails no request; a person scrolls out of it and carries on, and we never hear.
+    /// Counts and flags only, never a prompt or a path.
+    private func rescue() {
+        guard let last = model.turns.last else { return }
+        Telemetry.warn("transcript scrolled off its own content", [
+            "turns": "\(model.turns.count)",
+            "replaying": "\(model.replaying)",
+            "running": "\(model.running)",
+        ])
+        anchor = nil
+        Task { @MainActor in
+            pinned = true
+            anchor = "chat-\(last.id)"
+        }
     }
 
     /// What an empty lane is for.

@@ -28,6 +28,23 @@ final class ThemeTests: XCTestCase {
         XCTAssertFalse(FollowsTail.following(false, atBottom: false, byHand: false))
     }
 
+    /// The white pane: the transcript scrolled clean off the end of its own content.
+    ///
+    /// Reported repeatedly as "the middle goes empty, I scroll up and back down and it is there".
+    /// `scrollPosition(id:)` holds a row, and a replay rebuilds every `Turn` with a new id — so
+    /// the anchor names nothing, the offset stays where it was, and the content it was measured
+    /// against is gone. The threshold is the whole viewport past the end, which a rubber band
+    /// cannot reach, so a fling never trips it.
+    func testAPaneScrolledOffItsOwnContentIsRecognisedAsBlank() {
+        XCTAssertTrue(ChatRail.blank(offset: 4000, content: 1200))
+        XCTAssertTrue(ChatRail.blank(offset: 1200, content: 1200))
+        // Overscrolling the end by a rubber band: the last rows are still on screen.
+        XCTAssertFalse(ChatRail.blank(offset: 1100, content: 1200))
+        XCTAssertFalse(ChatRail.blank(offset: 0, content: 1200))
+        // Nothing laid out yet is not a blank pane, it is a pane that has not been measured.
+        XCTAssertFalse(ChatRail.blank(offset: 0, content: 0))
+    }
+
     private func resolve(_ color: Color, _ appearance: NSAppearance) -> NSColor {
         var out = NSColor.black
         appearance.performAsCurrentDrawingAppearance {
