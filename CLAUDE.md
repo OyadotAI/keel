@@ -111,12 +111,25 @@ reader means using these, not re-deriving them.
   prefix's line numbers are as true as they were, and a newly written file is one hunk holding all
   of it) took a lockfile diff from 3.83 MB to 380 KB. `monitor::SHOWN` (80) sends what the UI
   reads instead of all 400 lines it keeps.
-- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor`** — reads the source and
-  fails on any `api_*` handler that does its work inline. This is the rule with the worst failure
-  mode in the file, because breaking it fails no other test: axum's pool is small, so one handler
-  reading a 33 MB transcript holds up the approval poll and the chat stream, and what that looks
-  like is a window that is intermittently slow for reasons nobody can reproduce. A handler that
-  genuinely only touches memory says `// no-blocking: <reason>`.
+- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor`** — reads the source of
+  ten modules and fails on any handler that does its work inline. This is the rule with the worst
+  failure mode in the daemon, because breaking it fails no other test: axum's pool is small, so
+  one handler reading a 33 MB transcript holds up every other request, and what that looks like
+  is a window that is intermittently slow for reasons nobody can reproduce. It was kept for
+  `serve.rs` alone for a long time, and `dev::status` walked a checkout's `package.json`s on the
+  executor for its whole life. A handler that genuinely only touches memory says
+  `// no-blocking: <reason>`.
+- **`turns::emit` is the one path a fact takes** — into `.keel/turns/<session>.json` under one
+  lock, atomically, then onto the per-session bus. A fact written and not broadcast is a replay
+  that disagrees with the live view; one broadcast and not written is the reverse. The store
+  carries its own `.gitignore`: the follower's first test found git attributing
+  `.keel/turns/<session>.json` to the turn and the checkpoint about to commit Keel's records into
+  the project.
+- **`events::after_mutation` says what a request changed, from the path it took** — one
+  middleware rather than a call in sixty handlers. The daemon's own hands emit where they change
+  things nobody asked for (a job's output, a dev server's URL, the checkpoint after a turn), and
+  two watchers cover what happens outside Keel. `BudgetTests.testTheMainPageDoesNotPoll` pins
+  every `Task.sleep` left on the main page by name, so the list can only shrink.
 - **Summaries are cached against length and mtime** (`keel-workspace::sessions`). `/api/state`
   runs on every panel and every turn end and re-read the whole project's history each time — 151
   sessions, 127 MB, 240 ms — for a list of titles. Transcripts are append-only, so length and
@@ -153,9 +166,9 @@ reader means using these, not re-deriving them.
   so `/` in a freshly opened project offered Keel's one own command and nothing else. Deleting it
   would have removed the evidence that the feature was broken. Check which it is first.
 - **`SessionModel.closed()` for a lane leaving the window.** `stop()` deliberately leaves the
-  background-job loop running, which is right when a turn ends and wrong when the lane does.
-  Before this the only thing that ended it was the model being deallocated, and when SwiftUI lets
-  go of a view's model is not a lifetime anyone here controls.
+  lane's watchdog and debounces alone, which is right when a turn ends and wrong when the lane
+  does. Before this the only thing that ended them was the model being deallocated, and when
+  SwiftUI lets go of a view's model is not a lifetime anyone here controls.
 
 ## Non-negotiables
 
@@ -197,9 +210,14 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
     not in the settings UI, so a hand-edited `state.json` cannot open a port either.
 11. **One turn per lane, one writer per working tree.** `AppState::claim`, in the daemon — not a
     client. Both were kept in one window's Swift array and neither survived a second window, which
-    the tear-off-a-tab gesture produces on purpose. Appended rather than inserted: the numbers
+    the tear-off-a-tab gesture produces on purpose. A terminal `claude` is a writer too: a busy
+    one holds `term:<session>` on its tree — through its follower when a window has it open, and
+    through the sessions watcher (`events::hold_terminal_claims`) when none does — so a lane
+    starting to write that tree is refused, and a terminal turn opening in a lane's tree gets its
+    files noted and nothing checked or committed. Appended rather than inserted: the numbers
     above are pinned. Tests: `serve::tests::one_lane_takes_one_turn`,
-    `one_working_tree_takes_one_writer`.
+    `one_working_tree_takes_one_writer`, `turns::tests::a_terminal_writer_refuses_a_keel_lane_on_the_same_tree`,
+    `events::tests::an_unfollowed_busy_terminal_session_holds_its_tree`.
 
 ## The Mac app and the daemon
 
@@ -208,9 +226,26 @@ nothing here needs Xcode's project format, and `xcodebuild` will not run until i
 accepted). It spawns `keel serve` as a child process and talks to it over loopback.
 
 The split is the point. Everything that knows anything — the scanner, the workspace reader, the
-permission model, the approval hook — stays in Rust and stays independently runnable as `keel scan`,
-`keel workspace`, `keel serve`. Swift is the view layer. A rewrite that moved that logic into the
-app would have thrown away the product in order to change the window.
+permission model, the approval hook, and now the turn itself — stays in Rust and stays
+independently runnable as `keel scan`, `keel workspace`, `keel serve`. Swift is the view layer. A
+rewrite that moved that logic into the app would have thrown away the product in order to change
+the window.
+
+**Inside the app, state lives in stores and view models; views read a lane, which forwards.**
+`Project` is one per window and holds `ProjectStore` (what the daemon says about the project) and
+one `RepoStore` per checkout (what git says about that tree). A lane (`SessionModel`) holds a
+`SessionStore` (the turns, whether one runs, where a transcript read stands), a
+`DesignerViewModel` and a `WorkbenchViewModel`, and forwards every one of their properties, so a
+view that reads `model.changes` is reading `project.repo(for: worktree).changes` and Observation
+tracks that access. Every lane used to hold its own *copy* of the project — thirty fields, copied
+by `adopt(project:)` at six call sites — and a copy is a thing that goes stale: a new tab that
+missed the copy drew "Reading…" over data every other tab had. One object held by reference
+cannot disagree with itself. The rule that follows: **state that two panes or the window read
+belongs on a store or a view model; state that dies with its view stays `@State`;** and a tick
+counter is an event pretending to be state. `modelTick` is gone (a stored property is
+observable on its own). `pinTick` and `focusComposerTick` stay, because a scroll and a focus are
+actions with no value to compare. `diffTick`, `designTick` and `reloadTick` are what is left to
+turn into a value the view compares, and each is named here so nobody adds a sixth.
 
 **The centre of a window is the turn, not the chat.** Files changed, commands run with their output,
 the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already
@@ -298,10 +333,13 @@ read it once, from two endpoints, and stopped. A conversation running in a termi
 snapshot from the moment of the click and then sat still, which reads as Keel being wrong about its
 own state rather than as a missing feature.
 
-`tail()` returns the records appended since a byte offset, and `/api/session/tail` polls it and
-emits **the same `msg` events `/api/chat` emits** — because the records on disk are the shape the
-live decoder already reads. So replaying a session and following one are one path, and it is the
-path that has always drawn a live turn.
+`tail()` returns the records appended since a byte offset, and `/api/session/tail` is woken by
+kqueue on the transcript — a 2 s sleep is the fallback, not the mechanism — and emits **the same
+`msg` events `/api/chat` emits**, because the records on disk are the shape the live decoder
+already reads. So replaying a session and following one are one path, and it is the path that
+has always drawn a live turn. Both streams carry `fact` events as well; see "Facts". The first
+read of a transcript is its tail — at most 8 MB, on a record boundary — and no read takes more
+than that in one go; a 33 MB session was three copies of 33 MB on the executor's behalf before.
 
 That was the cheap version of a feature, and the deletion is the evidence: `transcript()`,
 `session_work()`, `api_session`, `api_session_work`, `SessionWork` and `moment()` all go, because a
@@ -320,6 +358,47 @@ id guard lives at, so a follower and a reader cannot disagree.
 It is read-only on purpose. Two processes driving one `--resume` is a claim problem, and
 `AppState::claim` is about lanes and working trees rather than conversations — so the composer says
 who owns it, and typing takes it over rather than joining in.
+
+### Facts: what the daemon knows about a turn
+
+Claude Code's transcript records what was said and which tools ran, and that is all it owes
+anyone. Everything else on a turn — the tree before it ran, the files git says it moved, the
+gate's verdict with its problems, the commit, what it cost, what it asked — is Keel's own reading
+of the machine, and for a long time it was computed in the app at the end of a turn the app
+owned and kept nowhere, so a relaunch rebuilt a turn with its prose and none of its work, and a
+followed turn never had any. Now every one of those is a **fact** (`turns.rs`): the daemon writes
+it to `.keel/turns/<session>.json` and broadcasts it on a per-session bus, and both streams carry
+it — live as it happens, on replay interleaved right after the record that opened the turn, so
+a reopened conversation shows exactly what the live view showed. The app consumes them in one
+place (`SessionModel.fact`) and computes nothing of its own at the end of a turn any more; the
+one fact it still posts is the pixel verdict, which only it can take, addressed by lane.
+
+Three things about the shape are load-bearing. **A record is keyed by the `uuid` of the human
+`user` record that opened the turn**, not by an ordinal: the daemon drops the head of a long
+replay, a compaction summary looks like a prompt, and any change to what a follower is shown
+renumbers everything after it; the uuid is stable because transcripts are append-only. **A
+Keel-driven turn is keyed off its own transcript** — the daemon notes where the file ended before
+spawning and reads the first prompt record after that — and facts that arrive before the key is
+known travel keyless, which on a chat stream can only mean the turn the lane has open. **`finish`
+is the lifecycle, for every turn whoever drove it:** files against the fingerprint `begin` took,
+the gate with `running` said first, the design verdict waited for when one is coming, the commit
+if the gate did not say no and the tree is still this turn's, the cost, the end — under the
+lane's claim for a lane, and under `term:<session>` for a terminal session, whose turns the
+`Follower` closes on Claude Code's own turn-end note or its pid file saying idle, and then quiet.
+
+### Events: what changed
+
+The app used to find out by asking — the session list every three seconds while History was
+open, the jobs every two or fifteen per lane for the life of the window, approvals every 700 ms
+for the length of every turn, git after every turn and every time the app came to the front.
+Four idle lanes asked the daemon for the same empty job list 172,800 times a day and still found
+out late. `GET /api/events` (`events.rs`) says what changed, one subscription per window
+(`DaemonEvents`, fanned out; `Lanes.route` is the one door). The events are coarse on purpose —
+"git changed, read it again" rather than a patch — except the small ones, which carry their
+payload. A connection that drops comes back on its own and says so: the status bar reads
+RECONNECTING for as long as it is true, where before a dead daemon read as every panel quietly
+emptying. A `connected` frame on every reconnect is what tells every store to read again,
+because whatever happened in the gap is gone.
 
 **Reasoning does not survive a replay, and that is the format.** Claude Code writes a `thinking`
 block's shape to the transcript and keeps only its signature: measured on this repository's own
