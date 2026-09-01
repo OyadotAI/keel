@@ -256,6 +256,35 @@ final class SSETests: XCTestCase {
         XCTAssertEqual(parse("data:{\"tight\":1}").first?.data, #"{"tight":1}"#)
     }
 
+    /// The console copies what is on screen, including what was dropped.
+    ///
+    /// A turn's console is the pane people reach for when they are about to paste what happened
+    /// into an issue, and dragging a selection through two thousand lines of a lazy scroll view
+    /// is not a way to get it. It copies the indenting it is currently showing, and it says out
+    /// loud that lines were not kept rather than handing over a silently short log.
+    @MainActor
+    func testTheConsoleCopiesEveryLineAndSaysWhatWasDropped() {
+        let t = Turn(prompt: "x")
+        t.note(raw: #"{"type":"result"}"#)
+        t.note(raw: "boom", stream: .err)
+        for _ in 0..<Turn.rawCap { t.note(raw: "overflow") }
+
+        XCTAssertEqual(t.raw.count, Turn.rawCap)
+        XCTAssertGreaterThan(t.rawDropped, 0)
+
+        let flat = RawOutput.text(of: t, indented: false)
+        XCTAssertTrue(flat.hasPrefix(#"{"type":"result"}"# + "\nboom"))
+        XCTAssertTrue(flat.hasSuffix("…and \(t.rawDropped) more lines, not kept"),
+                      "a short log handed over silently is worse than none")
+        XCTAssertEqual(flat.split(separator: "\n").count, Turn.rawCap + 1)
+
+        // And the indented form is the one on screen when that is what is shown. Matched on the
+        // line break rather than the spacing: `JSONSerialization` writes `"type" : "result"`, and
+        // pinning its punctuation would be a test of Foundation.
+        XCTAssertTrue(RawOutput.text(of: t, indented: true).contains("{\n"),
+                      "the record was pretty-printed")
+    }
+
     /// An `event:` with no `data:` is still an event.
     ///
     /// This one cost an evening. axum writes **no `data:` line at all** when the payload is empty,

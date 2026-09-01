@@ -417,7 +417,10 @@ private struct ChatTurn: View {
     }
 }
 
-private struct CopyChip: View {
+/// The copy affordance used wherever something is worth taking out of Keel: a reply, a console,
+/// a command's output. Faint until it has something to say, and it says "copied" rather than
+/// flashing — a button that gives no feedback is one people press twice.
+struct CopyChip: View {
     let label: String
     let copied: Bool
     let action: () -> Void

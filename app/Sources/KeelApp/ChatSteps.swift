@@ -159,6 +159,7 @@ struct Lines: View {
     /// Enough to see what happened; the rest is one click away and almost never wanted.
     static let shown = 300
     @State private var all = false
+    @State private var copied = false
 
     private var lines: [String] { text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) }
 
@@ -179,6 +180,18 @@ struct Lines: View {
                 .padding(K.S.sm)
             }
             .frame(maxHeight: 260)
+            .overlay(alignment: .topTrailing) {
+                // Always the whole output, never the 300 lines that happen to be drawn: what you
+                // want out of a failing command is the part that scrolled past.
+                CopyChip(label: "", copied: copied) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
+                }
+                .padding(K.S.xxs)
+                .help("Copy all \(lines.count) lines")
+            }
             if lines.count > Self.shown {
                 Button(all ? "Show less" : "Show all \(lines.count) lines") {
                     withAnimation(K.M.quick) { all.toggle() }
