@@ -106,8 +106,20 @@ struct TurnStage: View {
                     if let undo = model.undoSnapshot {
                         UndoBar(model: model, undo: undo)
                     }
+                    // A pane with nothing in it says which of the reasons it is. This pane
+                    // used to read none of them: it asserted "Nothing has run yet" over a
+                    // session that was still being read, and for good over one that could not be.
+                    if case .failed(let why) = model.replay {
+                        ReplayFailed(why: why) {
+                            Task { if let id = model.sessionId { await model.open(session: id) } }
+                        }
+                    }
                     if model.turns.isEmpty {
-                        EmptyStage(model: model)
+                        switch model.replay {
+                        case .reading: OpeningNote().frame(maxWidth: .infinity).padding(K.S.xl)
+                        case .failed: EmptyView()
+                        case .none: EmptyStage(model: model)
+                        }
                     }
                     // `rows` walks every turn, so it is read once here rather than once per
                     // row: `row.id != rows.last?.id` inside the loop made drawing the list
@@ -130,6 +142,11 @@ struct TurnStage: View {
                         ShowMore(count: rows.count - Self.shown) {
                             withAnimation(K.M.flow) { showingAll = true }
                         }
+                    }
+                    // Oldest is at the bottom here, so what came before it is said there.
+                    if let dropped = SessionModel.droppedNotice(model.replayDropped) {
+                        Text(dropped).font(K.F.micro).foregroundStyle(K.C.faint)
+                            .padding(.horizontal, K.S.xl).padding(.vertical, K.S.md)
                     }
                 }
             }
@@ -306,11 +323,6 @@ struct TurnCard: View {
 
             if !turn.files.isEmpty { ChangedFiles(turn: turn, model: model) }
 
-            if turn.truncated {
-                Text("This replay is capped at the most recent 300 calls — the session ran more.")
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
-            }
-
             if let why = turn.notIsolated {
                 // The turn was meant to be isolated and could not be. Said plainly, because it
                 // changes where the agent wrote — but the work happened, which is the point.
@@ -359,7 +371,9 @@ struct TurnCard: View {
             Text("TURN \(number)")
                 .sectionLabel()
                 .foregroundStyle(K.C.faint)
-            if !turn.finished { Pill(text: "RUNNING", tone: .accent) }
+            if !turn.finished {
+                Pill(text: model.following ? "RUNNING · outside Keel" : "RUNNING", tone: .accent)
+            }
             Spacer(minLength: K.S.sm)
             Text(turn.started, style: .time)
                 .font(K.F.codeTiny).foregroundStyle(K.C.faint)

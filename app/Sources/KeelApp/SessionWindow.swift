@@ -1061,7 +1061,17 @@ struct WindowEvents: ViewModifier {
             }
             .modifier(TrustAlert(model: model, shown: $confirmingTrust))
             .onChange(of: lanes.waitingCount) { Notifications.badge(lanes.waitingCount) }
-            .task(id: model.id) { await lanes.refreshShared() }
+            .task(id: model.id) {
+                // A lane switch is not a project open: the project was read when it was opened.
+                // What a lane has of its own is its checkout, so that is what is re-read here.
+                // The full nine-call pass on every ⌘-tab is what made switching lanes feel slow.
+                guard model.repoPath.isEmpty else {
+                    await model.refreshGit()
+                    await model.refreshTree()
+                    return
+                }
+                await lanes.refreshShared()
+            }
             .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
                                   showSettings: $showSettings))
             .onWindowCommand(.keelReviewTask) { _ in

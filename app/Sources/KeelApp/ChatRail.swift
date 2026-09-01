@@ -125,7 +125,18 @@ struct ChatRail: View {
                 // A pane with nothing in it says which of the reasons it is. It used to
                 // draw the "ask for a change" hint over a session that was still being read,
                 // and nothing at all if the read had left the lane empty.
-                if model.turns.isEmpty, !model.replaying { hint }
+                if case .failed(let why) = model.replay {
+                    ReplayFailed(why: why) {
+                        Task { if let id = model.sessionId { await model.open(session: id) } }
+                    }
+                    .padding(.horizontal, K.S.xxl)
+                }
+                if model.turns.isEmpty, model.replay == .none { hint }
+                // Oldest is at the top here, so what came before it is said here.
+                if let dropped = SessionModel.droppedNotice(model.replayDropped) {
+                    Text(dropped).font(K.F.micro).foregroundStyle(K.C.faint)
+                        .padding(.horizontal, K.S.xxl)
+                }
                 let hidden = showingAll ? 0 : max(0, model.turns.count - Self.shown)
                 if hidden > 0 {
                     // Unpinned first. Asking for the earlier turns is asking to *read* them, and
@@ -221,7 +232,7 @@ struct ChatRail: View {
         // at the top left of an empty transcript is a wait nobody sees, and the read it is
         // reporting is the slowest one in the app.
         .overlay {
-            if model.replaying, model.turns.isEmpty { openingNote }
+            if model.replaying, model.turns.isEmpty { OpeningNote() }
         }
         .overlay(alignment: .bottom) {
             if !pinned && model.running {
@@ -341,16 +352,6 @@ struct ChatRail: View {
     /// jobs are — and, when another lane is already editing, warns that they share one working
     /// tree. A lane can have a checkout of its own; this one chose not to, so the honest thing is
     /// to say so at the point where it matters rather than let two agents fight over the files.
-    /// While a transcript is being read. Slow on purpose — hundreds of messages off disk — and
-    /// the one wait in this pane long enough to look like a failure.
-    private var openingNote: some View {
-        VStack(spacing: K.S.md) {
-            ProgressView()
-            Text("Opening this session…").font(K.F.body).foregroundStyle(K.C.dim)
-        }
-        .transition(.opacity)
-    }
-
     private var hint: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             if model.isolated {

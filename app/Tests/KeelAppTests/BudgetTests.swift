@@ -159,4 +159,35 @@ final class BudgetTests: XCTestCase {
         let megabytes = Int(out.split(separator: "\t").first ?? "0") ?? 0
         XCTAssertLessThanOrEqual(megabytes, 40, "the bundle grew to \(megabytes) MB")
     }
+
+    /// The main page does not poll.
+    ///
+    /// Every `Task.sleep` on the History → session → Trace path, pinned. Each survivor is named
+    /// here with its reason; a new sleep loop fails this and has to be argued in this comment
+    /// before it ships. The list shrinks as the daemon's event streams land — it must never grow.
+    ///
+    /// Rejected: a counting `Client`. The actor has no injection seam, and adding one for a test
+    /// is the abstraction the bar forbids. A source count is cruder and cannot be worked around.
+    ///
+    /// Survivors, as of this pin:
+    /// - `SessionModel` ×10: the design-change wait (100 ms ×60, then 400 ms) — leaves with
+    ///   `DesignerViewModel`; the dev-server URL wait (400 ms ×40) — leaves with `DevStore`; the
+    ///   monitors loop (2 s / 15 s) — leaves with `/api/events`; the approvals loop (700 ms) —
+    ///   leaves with `approval.asked` facts; the followed-tree debounce (600 ms) — leaves with
+    ///   `turn.files` facts; the follow watchdog (15 s, local, no request); and three fades
+    ///   (`justOpened`, `remembered`, `discarded`) that are timers, not requests.
+    /// - `Lanes` ×1: the daemon-startup backoff, bounded at 40 attempts.
+    /// - `SidePanel` ×1: the History poll (3 s) — leaves with the `sessions` frame.
+    func testTheMainPageDoesNotPoll() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/KeelApp")
+        var sleeps: [String: Int] = [:]
+        for file in ["SessionModel.swift", "Lanes.swift", "SidePanel.swift"] {
+            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            sleeps[file] = text.components(separatedBy: "Task.sleep").count - 1
+        }
+        XCTAssertEqual(sleeps, ["SessionModel.swift": 10, "Lanes.swift": 1, "SidePanel.swift": 1],
+                       "a sleep loop was added to the main page; name it in this test's comment or use an event")
+    }
 }

@@ -990,6 +990,7 @@ final class SessionModel: Identifiable {
         // turns of its own for the whole of it — including one for the prompt this turn is
         // already drawing.
         unfollow()
+        owned = true
         let turn = Turn(prompt: full)
         turns.append(turn)
         stallReported = false; lastEventAt = Date(); lastProgressAt = Date(); running = true
@@ -1074,48 +1075,7 @@ final class SessionModel: Identifiable {
             }
             do {
                 for try await event in client.events("/api/chat", query) {
-                    // The daemon is alive. Nothing to draw — the point is that this moved, which
-                    // is what tells a thinking agent apart from a stream that has quietly died.
-                    lastEventAt = Date()
-                    if event.name == Client.keepAlive { continue }
-                    // Past the heartbeat, so this is the agent itself.
-                    lastProgressAt = Date()
-                    switch event.name {
-                    case "msg":
-                        self.preparing = nil
-                        // `record` keeps the line, because only `record` knows what it is: the
-                        // raw log is capped at 2,000 lines and partial messages emit one line per
-                        // token, so keeping every line here filled it with delta noise and
-                        // dropped every meaningful record behind it.
-                        if let data = event.data.data(using: .utf8) { self.record(data, into: turn) }
-                    case "err":
-                        // stderr, as it happens. This is the half that used to escape only on a
-                        // non-zero exit, so a run that hung reported nothing it had already said.
-                        turn.note(raw: event.data, stream: .err)
-                    case "fatal":
-                        self.fail(event.data, category: "daemon", fix: self.repoFix)
-                        turn.failure = event.data
-                        if Self.sessionIsGone(event.data) { self.sessionId = nil }
-                    case "starting":
-                        // The daemon is reading the project. Seconds on a large one, and before
-                        // this the screen simply stayed empty for all of it.
-                        self.preparing = event.data + "…"
-                    case "done":
-                        self.preparing = nil
-                        // The exit code was sent and thrown away, so a provider that died with
-                        // nothing on stderr drew a finished turn with nothing in it.
-                        let code = Int(event.data) ?? 0
-                        if code != 0, turn.failure == nil {
-                            let why = "The agent exited with code \(code)."
-                            turn.failure = why
-                            self.fail(why, category: "nonzero_exit",
-                                      fix: Fix(label: "Retry") { self.retryLast() })
-                        }
-                    default:
-                        // Never discard an event the daemon added. Keel not knowing what something
-                        // means is not a reason for the person not to see it.
-                        turn.note(raw: "\(event.name): \(event.data)")
-                    }
+                    await self.apply(event)
                 }
             } catch {
                 self.lastError = error.localizedDescription
@@ -1148,19 +1108,11 @@ final class SessionModel: Identifiable {
     }
 
     private func endTurn(_ turn: Turn) async {
-        // The last deltas arrived inside the coalescing window and there is no next tick to draw
-        // them: a turn that ended would otherwise sit a fraction of a second short of its own
-        // final sentence, permanently.
-        turn.settle()
-        turn.finished = true
-        running = false
+        close(turn)
         // The composer is free — the agent has stopped talking — but the gate and the commit
         // below still own the tree, so another lane must not start writing it yet.
         settling = true
         defer { settling = false }
-        preparing = nil
-        editing = nil
-        watchApprovals(false)
         // What the turn wrote through `Bash` rather than through `Edit` — a heredoc, a `tee`, a
         // formatter it ran — is in the tree and in no tool call. See `attribute`.
         let before = treeFingerprint
@@ -1224,6 +1176,15 @@ final class SessionModel: Identifiable {
     func unfollow() {
         followTask?.cancel()
         followTask = nil
+        watchdogTask?.cancel()
+        watchdogTask = nil
+        // Put back here, synchronously, rather than in the cancelled task's exit: `start()` takes
+        // a followed lane over and sets `running` itself, and a task exiting a moment later that
+        // set it false again would end the turn that had just begun.
+        if let turn = followed { turn.settle(); turn.finished = true }
+        followed = nil
+        catchUp = []
+        if replay == .reading { replay = .none }
         following = false
     }
 
@@ -1240,10 +1201,7 @@ final class SessionModel: Identifiable {
         }
         streamTask?.cancel()
         streamTask = nil
-        current?.settle()
-        running = false
-        preparing = nil
-        watchApprovals(false)
+        if let turn = current { close(turn) } else { running = false; preparing = nil; watchApprovals(false) }
         releaseQueued()
     }
 
@@ -1470,16 +1428,24 @@ final class SessionModel: Identifiable {
     /// token, on the main actor, for the whole of a turn.
     private let decoder = JSONDecoder()
 
-    func record(_ data: Data, into turn: Turn) {
-        if provider == .codex, recordCodex(data, into: turn) { return }
+    /// Returns whether this record closed the turn: an `assistant` record that stopped for
+    /// `end_turn` is the last thing a turn says, in the live stream and in the transcript alike.
+    @discardableResult
+    func record(_ data: Data, into turn: Turn) -> Bool {
+        if provider == .codex, recordCodex(data, into: turn) { return false }
         // A line Keel cannot read is still a line the agent produced. It used to return here —
         // no log, no counter, nothing on screen — so a shape the CLI changed emptied the UI with
         // no symptom. It is kept *and* counted, so the raw view is the answer rather than a shrug.
         guard let r = try? decoder.decode(Record.self, from: data) else {
             turn.unreadable += 1
             turn.note(raw: String(decoding: data, as: UTF8.self))
-            return
+            return false
         }
+        absorb(r, raw: data, into: turn)
+        return r.type == "assistant" && r.message?.stop_reason == "end_turn"
+    }
+
+    private func absorb(_ r: Record, raw data: Data, into turn: Turn) {
         // How long a replayed turn took, from the records themselves.
         //
         // A live turn gets `duration_ms` off its `result`; a transcript has no `result`, so the
@@ -2111,6 +2077,8 @@ final class SessionModel: Identifiable {
         stop()
         monitorTask?.cancel()
         monitorTask = nil
+        treeWatch?.cancel()
+        treeWatch = nil
         // A pane nobody is looking at must not keep polling a file every 400 ms.
         unfollow()
     }
@@ -2474,7 +2442,7 @@ final class SessionModel: Identifiable {
     var files: [String] = []
 
     func refreshTree() async {
-        guard let t: [Wire.Node] = try? await client.get("/api/tree", q()) else { return }
+        guard let t: [Wire.Node] = await read("the file tree", "/api/tree", q()) else { return }
         tree = t
         var flat: [String] = []
         func walk(_ nodes: [Wire.Node]) {
@@ -2572,6 +2540,12 @@ final class SessionModel: Identifiable {
               fresh != sessions else { return }
         // Only on a change, so a quiet poll invalidates nothing.
         sessions = fresh
+        // The list is also the backstop for a followed turn that ended without saying so — ⌃C
+        // in the terminal writes no `end_turn`. Claude Code's own pid file does say it.
+        if following, let s = fresh.first(where: { $0.id == sessionId }) {
+            if s.live != true { following = false }
+            if s.busy != true, running, let turn = followed { close(turn) }
+        }
     }
 
     func refreshState() async {
@@ -2612,17 +2586,45 @@ final class SessionModel: Identifiable {
         await refreshSuggestions()
     }
 
-    /// Open an existing conversation in this window: replay what it did, then carry on.
-    /// A transcript is being read into this lane. The conversation pane says so instead of
-    /// drawing nothing. (`opening` is taken: that one is a project switch.)
-    var replaying = false
+    /// Where the transcript read stands. One value, because the pane has to say which of the
+    /// three it is: a session still being read, one that could not be read, or one that is
+    /// simply empty. This was a Bool and the second case fell into the third — a tail stream
+    /// that failed drew "Nothing has run yet" over a conversation that had.
+    enum Replay: Equatable { case none, reading, failed(String) }
+    var replay: Replay = .none
+    /// A transcript is being read into this lane. (`opening` is taken: that one is a project
+    /// switch.)
+    var replaying: Bool {
+        get { replay == .reading }
+        set { replay = newValue ? .reading : .none }
+    }
 
     /// The session's transcript is being followed: it is running somewhere Keel does not own it,
     /// and what appears is arriving as it is written.
     var following = false
     /// How much of the conversation was dropped to keep the catch-up bounded.
     var replayDropped = 0
+    /// The sentence both panes draw when the daemon dropped the head of a long session. Static so
+    /// it can be asserted on; `nil` when nothing was dropped.
+    static func droppedNotice(_ dropped: Int) -> String? {
+        guard dropped > 0 else { return nil }
+        return "\(dropped) earlier record\(dropped == 1 ? " was" : "s were") not loaded — "
+            + "this session is longer than Keel replays."
+    }
     private var followTask: Task<Void, Never>?
+    /// Turns read from the transcript while `replay` is `.reading`, held back until the daemon
+    /// says it has caught up, so the pane lays the conversation out once rather than once per
+    /// turn. The reading state is the visible one; this is only where the turns wait.
+    private var catchUp: [Turn] = []
+    /// The turn a followed stream is writing into.
+    private var followed: Turn?
+    /// Whether the turn on screen is one this lane started.
+    ///
+    /// A live stream and a followed one carry the same records; what differs is whose turn it is
+    /// — and so whether a failure is news or history, whether Keel closes it, and whether Stop
+    /// can reach it. Internal rather than private so the parity test can run both paths.
+    var owned = false
+    private var watchdogTask: Task<Void, Never>?
 
     func open(session id: String) async {
         sessionId = id
@@ -2669,32 +2671,15 @@ final class SessionModel: Identifiable {
     /// decoder — which is why a reopened conversation now has its reasoning, its tool arguments
     /// and its raw lines, none of which the old two-endpoint replay carried.
     private func follow(session id: String) {
-        followTask?.cancel()
+        // Whatever this lane was reading before is over, put back synchronously so the cancelled
+        // task's own exit cannot race what starts here.
+        unfollow()
+        replay = .reading
+        owned = false
+        running = false
+        lastEventAt = Date()
+        watchdog()
         followTask = Task { [client] in
-            // The catch-up is built off to the side and handed over in one assignment.
-            //
-            // This is the difference between "opening a session" and "watching it load". Appending
-            // each turn to `self.turns` as its records arrived meant SwiftUI laid the transcript
-            // out again for every one of them — six hundred times, before a single finished frame,
-            // with a markdown parse and a group rebuild inside each. The pane was doing all of its
-            // work in front of you. Nothing here is observed until `caught-up`.
-            var replayed: [Turn] = []
-            var live: Turn?
-            /// Past the catch-up, turns go straight into the model: they are arriving one at a
-            /// time now, and that is the whole point of following.
-            var handedOver = false
-
-            @MainActor func adopt(_ turn: Turn) {
-                // Marked before a single record reaches it, not once the catch-up ends: `record`
-                // reads this to decide whether a failure in the transcript is history or news,
-                // and by the time `caught-up` arrives every one of them has already been read.
-                turn.replayed = !handedOver
-                live?.finished = true
-                live?.settle()
-                live = turn
-                if handedOver { self.turns.append(turn) } else { replayed.append(turn) }
-            }
-
             do {
                 for try await event in client.events("/api/session/tail",
                                                      self.sq(["id": id, "from": "0"])) {
@@ -2702,74 +2687,214 @@ final class SessionModel: Identifiable {
                     // out of "Opening this session…", and a lane closed mid-replay would
                     // otherwise leave a state that can be entered and not left.
                     if Task.isCancelled { break }
-                    switch event.name {
-                    case "truncated":
-                        self.replayDropped = Int(event.data) ?? 0
-
-                    case "caught-up":
-                        // The one assignment. Everything that had already happened is drawn at
-                        // once; records after this are the session running now.
-                        live?.finished = true
-                        replayed.forEach { $0.finished = true; $0.settle() }
-                        // Replaced only now, so a read that fails or is cancelled leaves the
-                        // conversation that was on screen rather than an empty pane.
-                        self.turns = replayed
-                        replayed = []
-                        handedOver = true
-                        self.replaying = false
-                        // The other half of `remember`. The transcript has been read; this puts
-                        // back what only Keel ever knew about those turns.
-                        await self.restoreRecords(session: id)
-                        // Only a session something is actually writing to is being *followed*.
-                        // Set unconditionally, this told you a conversation that finished last
-                        // week was "running outside Keel" — a statement about the machine that is
-                        // not true. `live` is the signal, from the transcript's own mtime.
-                        self.following = self.sessions.first { $0.id == id }?.live == true
-                        self.pinTick += 1
-                        // The tree as it is *now*, not as it was when the project opened. It is
-                        // also the baseline every followed turn is measured against.
-                        await self.refreshGit()
-                        await self.refreshTree()
-
-                    case "msg":
-                        guard let data = event.data.data(using: .utf8) else { continue }
-                        // A person asking opens a turn; everything else belongs to the one open.
-                        if let asked = Self.asked(in: data) {
-                            adopt(Turn(prompt: asked))
-                        } else if let turn = live {
-                            self.record(data, into: turn)
-                            if handedOver { self.watchTree(turn) }
-                        } else {
-                            // A transcript that opens with the agent speaking — a resumed or
-                            // compacted session. It still needs somewhere to go.
-                            adopt(Turn(prompt: self.title))
-                            self.record(data, into: live!)
-                        }
-
-                    case "fatal":
-                        self.lastError = event.data
-                        self.replaying = false
-
-                    default:
-                        continue
-                    }
+                    await self.apply(event)
                 }
             } catch {
                 // A stream that ends is a session no longer being followed, which is a fact about
-                // the pane rather than a failure of the turn.
-                if !Task.isCancelled { self.lastError = error.localizedDescription }
+                // the pane rather than a failure of the turn — unless it ended before the
+                // conversation was on screen, which is a read that failed, and the pane says so.
+                if !Task.isCancelled, self.replay == .reading {
+                    self.replay = .failed(error.localizedDescription)
+                }
             }
-            // Every exit, including a cancel mid-catch-up: whatever was read is better than the
-            // spinner it would otherwise be left under.
-            if !replayed.isEmpty {
-                replayed.forEach { $0.finished = true; $0.settle() }
-                self.turns = replayed
-                self.pinTick += 1
-            }
-            live?.settle()
-            self.replaying = false
-            self.following = false
+            // `unfollow` has already put the state back if this was cancelled.
+            if Task.isCancelled { return }
+            self.streamEnded()
         }
+    }
+
+    /// One consumer for both streams.
+    ///
+    /// The live chat and the transcript tail emit the same `msg` records, and the two loops that
+    /// read them had drifted: a followed turn was never `running`, was never closed, and had no
+    /// dead-stream check, so a session watched from a terminal showed no working bar, kept its
+    /// last turn "RUNNING" for ever, and sat under "Following this session" after the daemon
+    /// died. What differs between the paths is `owned`, and it is one flag here rather than two
+    /// loop bodies.
+    func apply(_ event: Client.Event) async {
+        // The daemon is alive. Nothing to draw — the point is that this moved, which is what
+        // tells a thinking agent apart from a stream that has quietly died.
+        lastEventAt = Date()
+        if event.name == Client.keepAlive { return }
+        // Past the heartbeat, so this is the agent itself.
+        lastProgressAt = Date()
+        switch event.name {
+        case "msg":
+            guard let data = event.data.data(using: .utf8) else { return }
+            if owned {
+                preparing = nil
+                // `record` keeps the line, because only `record` knows what it is: the raw log
+                // is capped at 2,000 lines and partial messages emit one line per token, so
+                // keeping every line here filled it with delta noise and dropped every
+                // meaningful record behind it.
+                if let turn = current { record(data, into: turn) }
+                return
+            }
+            // A person asking opens a turn; everything else belongs to the one open. A
+            // transcript that opens with the agent speaking — a resumed or compacted session —
+            // still needs somewhere to go.
+            if let asked = Self.asked(in: data) {
+                adopt(Turn(prompt: asked))
+            } else if followed == nil {
+                adopt(Turn(prompt: title))
+            }
+            guard let turn = followed else { return }
+            let reading = replay == .reading
+            // Past the catch-up this is a session being written right now.
+            if !reading { running = true; watchTree(turn) }
+            // The transcript's own end of turn: the last assistant record of a turn stops for
+            // `end_turn`, and everything after it is the next prompt. Keel was not there to close
+            // the turn, so the record does. Measured on this repository's sessions: every turn.
+            if record(data, into: turn), !reading { close(turn) }
+        case "truncated":
+            replayDropped = Int(event.data) ?? 0
+        case "caught-up":
+            await caughtUp()
+        case "err":
+            // stderr, as it happens. This is the half that used to escape only on a non-zero
+            // exit, so a run that hung reported nothing it had already said.
+            current?.note(raw: event.data, stream: .err)
+        case "fatal":
+            if owned {
+                fail(event.data, category: "daemon", fix: repoFix)
+                current?.failure = event.data
+                if Self.sessionIsGone(event.data) { sessionId = nil }
+            } else {
+                // The read failed: the transcript is not on this machine, or the daemon could not
+                // open it. One surface, in the pane, rather than a banner beside an empty pane.
+                replay = .failed(event.data)
+            }
+        case "starting":
+            // The daemon is reading the project. Seconds on a large one, and before this the
+            // screen simply stayed empty for all of it.
+            preparing = event.data + "…"
+        case "done":
+            preparing = nil
+            // The exit code was sent and thrown away, so a provider that died with nothing on
+            // stderr drew a finished turn with nothing in it.
+            let code = Int(event.data) ?? 0
+            if code != 0, let turn = current, turn.failure == nil {
+                let why = "The agent exited with code \(code)."
+                turn.failure = why
+                fail(why, category: "nonzero_exit", fix: Fix(label: "Retry") { self.retryLast() })
+            }
+        default:
+            // Never discard an event the daemon added. Keel not knowing what something means is
+            // not a reason for the person not to see it.
+            current?.note(raw: "\(event.name): \(event.data)")
+        }
+    }
+
+    /// The daemon has read everything that had already happened.
+    ///
+    /// One assignment, so the conversation is drawn at once: appending each turn as its records
+    /// arrived laid the transcript out again for every one of them — six hundred times before a
+    /// single finished frame. Records after this are the session running now.
+    private func caughtUp() async {
+        if replay == .reading { turns = catchUp }
+        catchUp = []
+        let session = sessions.first { $0.id == sessionId }
+        // Only a session something is actually writing to is being *followed*, and only one
+        // whose `claude` says it is mid-turn is *running*. Set unconditionally, the first told
+        // you a conversation that finished last week was "running outside Keel".
+        following = session?.live == true
+        let busy = following && session?.busy == true
+        for turn in turns {
+            turn.settle()
+            if !(busy && turn === followed) { turn.finished = true }
+        }
+        running = busy
+        replay = .none
+        // The other half of `remember`. The transcript has been read; this puts back what only
+        // Keel ever knew about those turns.
+        if let id = sessionId { await restoreRecords(session: id) }
+        pinTick += 1
+        // The tree as it is *now*, not as it was when the project opened. It is also the
+        // baseline every followed turn is measured against.
+        await refreshGit()
+        await refreshTree()
+    }
+
+    /// A turn read from a transcript.
+    ///
+    /// Foreign by construction — Keel was not there when it ran, or is not driving it now — so
+    /// nothing here grades it and its failures are history. It used to be marked foreign only
+    /// during the catch-up, so a turn that arrived while following was judged as Keel's own:
+    /// "GATE · no checks ran" over work Keel never gated, and a red banner for a failure that
+    /// happened in somebody's terminal.
+    private func adopt(_ turn: Turn) {
+        turn.replayed = true
+        if let previous = followed {
+            // Model-level state is left alone during the catch-up; nothing is on screen yet.
+            if replay == .reading { previous.settle(); previous.finished = true } else { close(previous) }
+        }
+        followed = turn
+        if replay == .reading { catchUp.append(turn) } else { turns.append(turn) }
+    }
+
+    /// The half of ending a turn that every path shares: what happens whichever way it ended —
+    /// done, stopped, closed by its own transcript, or cut off by a dead stream.
+    ///
+    /// The last deltas arrived inside the coalescing window and there is no next tick to draw
+    /// them: a turn that ended would otherwise sit a fraction of a second short of its own final
+    /// sentence, permanently. `editing` is cleared here because a followed turn that edited a UI
+    /// file used to set it and nothing ever cleared it.
+    private func close(_ turn: Turn) {
+        turn.settle()
+        turn.finished = true
+        running = false
+        preparing = nil
+        editing = nil
+        watchApprovals(false)
+    }
+
+    /// The tail stream closed on its own: the daemon went away, or the session it was following
+    /// did. Whatever was read is better than the spinner it would otherwise be left under, and
+    /// the turn that was open is over whether or not its last record said so.
+    private func streamEnded() {
+        // A read that failed keeps what was on screen; the pane says why, and Retry reads again.
+        if replay == .reading, !catchUp.isEmpty {
+            catchUp.forEach { $0.settle(); $0.finished = true }
+            turns = catchUp
+            pinTick += 1
+        }
+        catchUp = []
+        if let turn = followed { close(turn) }
+        followed = nil
+        if replay == .reading { replay = .none }
+        following = false
+        watchdogTask?.cancel()
+        watchdogTask = nil
+    }
+
+    /// A followed stream that goes silent — no records, no heartbeat — for a minute is a dead
+    /// daemon, not a quiet agent. The chat stream has always had this check, inside its approval
+    /// poll; a followed session polls for nothing, so it had no check at all, and a daemon that
+    /// died under it left "Following this session" up for good.
+    private func watchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let self, !Task.isCancelled else { return }
+                self.checkPulse()
+            }
+        }
+    }
+
+    /// One tick of the watchdog, separately so a test can run it without waiting a minute.
+    func checkPulse() {
+        guard !owned, following || replay == .reading,
+              Date().timeIntervalSince(lastEventAt) > Self.deadStream else { return }
+        let why = "The connection to Keel's daemon stopped responding."
+        followTask?.cancel()
+        followTask = nil
+        if let turn = followed { close(turn) }
+        followed = nil
+        catchUp = []
+        replay = .failed(why)
+        following = false
+        Telemetry.track("stream_died", ["mode": "follow"])
     }
 
     /// The working tree as a set of facts: a path and what git says about it.
@@ -3038,6 +3163,22 @@ final class SessionModel: Identifiable {
         refusedThisTurn.append(turn.toolName(of: id) ?? "unknown")
     }
 
+    /// A read that failed says so.
+    ///
+    /// `try?` on these was the quiet half of every "blank pane" report: the Changes panel and the
+    /// file tree simply kept whatever they last had, with nothing on screen saying the daemon had
+    /// stopped answering. Unlike `attempt`, success clears nothing — a turn's own error must not
+    /// be erased by the next `git status` that happens to work.
+    private func read<T: Decodable & Sendable>(_ what: String, _ path: String,
+                                    _ q: [String: String] = [:]) async -> T? {
+        do { return try await client.get(path, q) } catch {
+            lastError = "Could not read \(what): \(error.localizedDescription)"
+            let e = error as NSError
+            Telemetry.warn("read failed", ["what": what, "domain": e.domain, "code": "\(e.code)"])
+            return nil
+        }
+    }
+
     private func attempt(_ work: () async throws -> Void) async {
         do { try await work(); lastError = nil; lastFix = nil } catch {
             lastError = error.localizedDescription
@@ -3162,7 +3303,7 @@ final class SessionModel: Identifiable {
     var changesCollapsed = false
 
     func refreshGit() async {
-        if let s: Wire.GitStatus = try? await client.get("/api/git/status", q()) {
+        if let s: Wire.GitStatus = await read("git status", "/api/git/status", q()) {
             isRepo = s.isRepo
             branch = s.branch
             changes = s.changes
