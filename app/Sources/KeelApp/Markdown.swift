@@ -7,8 +7,8 @@ import SwiftUI
 /// that away, and a wall of monospace is the single fastest way to make a reply unreadable.
 ///
 /// Block structure is parsed here; inline emphasis and `code` are handed to `AttributedString`,
-/// which already does that correctly. Deliberately not a full CommonMark implementation — tables,
-/// footnotes and nested blockquotes are not what an agent writes back about a code change, and a
+/// which already does that correctly. Deliberately not a full CommonMark implementation —
+/// footnotes and reference links are not what an agent writes back about a code change, and a
 /// parser that handles them is a parser to maintain.
 struct Markdown: View {
     /// Already parsed. `body` does no parsing at all: a streaming reply re-parses once per delta
@@ -72,6 +72,14 @@ struct Markdown: View {
         case .table(let rows):
             Table(rows: rows)
 
+        case .quote(let blocks):
+            HStack(alignment: .top, spacing: K.S.md) {
+                Rectangle().fill(K.C.line).frame(width: 2)
+                Markdown(blocks: blocks)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
         case .rule:
             Rectangle().fill(K.C.line).frame(height: 1).padding(.vertical, K.S.xs)
         }
@@ -84,7 +92,7 @@ struct Markdown: View {
         return switch block {
         case .heading: K.S.xl
         case .rule: K.S.lg
-        case .code, .table: K.S.md
+        case .code, .table, .quote: K.S.md
         case .bullets: K.S.sm
         case .paragraph: K.S.md
         }
@@ -112,6 +120,11 @@ struct Markdown: View {
         case bullets([Item])
         case code(String?, String)
         case table([[String]])
+        /// A `>` run, parsed as its own document. An agent asked for something to send on —
+        /// a message, a release note — writes it as a quote, and every line of it starts with
+        /// the marker: rendered as prose that was a single paragraph of `>` punctuation with
+        /// the lists and headings inside it flattened into it.
+        case quote([Block])
         case rule
 
         struct Item { let marker: String; let text: AttributedString }
@@ -187,6 +200,18 @@ struct Markdown: View {
                 continue
             }
 
+            if trimmed.hasPrefix(">") {
+                flushAll()
+                var quoted = [unquote(trimmed)]
+                while let next = lines.first,
+                      next.trimmingCharacters(in: .whitespaces).hasPrefix(">") {
+                    lines = lines.dropFirst()
+                    quoted.append(unquote(next.trimmingCharacters(in: .whitespaces)))
+                }
+                out.append(.quote(blocks(quoted.joined(separator: "\n"))))
+                continue
+            }
+
             if trimmed == "---" || trimmed == "***" || trimmed == "___" {
                 flushAll()
                 out.append(.rule)
@@ -214,6 +239,14 @@ struct Markdown: View {
 
         flushAll()
         return out
+    }
+
+    /// One level of `>` off a quoted line. The space after the marker is part of the marker.
+    private static func unquote(_ line: String) -> String {
+        var body = line
+        body.removeFirst()
+        if body.hasPrefix(" ") { body.removeFirst() }
+        return body
     }
 
     /// `|---|:--:|` and friends: the row that turns the one above it into a header.

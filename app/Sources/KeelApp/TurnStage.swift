@@ -25,6 +25,14 @@ struct TurnStage: View {
     /// The last time the pane followed, so a stream of deltas is not a stream of scrolls.
     @State private var lastFollow = Date.distantPast
 
+    /// How many rows the pane shows before it offers the rest.
+    ///
+    /// The Trace answers "what did it just do", and a session has hundreds of turns behind that
+    /// question — so the newest is at the top and the older ones are a click away rather than a
+    /// scroll away. Five is what fits on a screen without becoming a list to search.
+    private static let shown = 5
+    @State private var showingAll = false
+
     /// Keep the live turn in view.
     ///
     /// Scrolls to the *row* id, which is not always the turn's: a run of quiet turns collapses
@@ -41,11 +49,11 @@ struct TurnStage: View {
     private func follow(_ proxy: ScrollViewProxy, force: Bool = false) {
         // Only when nothing is deliberately focused: yanking the view while someone reads an
         // older turn is how a streaming pane becomes unusable.
-        guard pinned, model.focusedTurn == nil, let id = rows.last?.id else { return }
+        guard pinned, model.focusedTurn == nil, let id = rows.first?.id else { return }
         let now = Date()
         guard force || now.timeIntervalSince(lastFollow) > 0.08 else { return }
         lastFollow = now
-        proxy.scrollTo(id, anchor: .bottom)
+        proxy.scrollTo(id, anchor: .top)
     }
 
     /// The row a turn is drawn in — its own card, or the quiet run it was folded into.
@@ -86,7 +94,9 @@ struct TurnStage: View {
             }
         }
         closeQuiet(model.turns.count)
-        return out
+        // Newest first. The turn you want is the one that just happened, and at the top it is
+        // there without a scroll — which is also why the follow below holds the *first* row.
+        return out.reversed()
     }
 
     var body: some View {
@@ -103,15 +113,23 @@ struct TurnStage: View {
                     // row: `row.id != rows.last?.id` inside the loop made drawing the list
                     // quadratic in its own length.
                     let rows = rows
-                    let lastRow = rows.last?.id
-                    ForEach(rows) { row in
+                    let shown = showingAll ? rows : Array(rows.prefix(Self.shown))
+                    let lastRow = shown.last?.id
+                    ForEach(shown) { row in
                         switch row.kind {
                         case .turn(let t, let n):
-                            TurnCard(turn: t, number: n, model: model).id(row.id)
+                            TurnCard(turn: t, number: n, model: model,
+                                     newest: row.id == rows.first?.id).id(row.id)
                         case .quiet(let first, let last, let prompt):
                             QuietRun(first: first, last: last, prompt: prompt).id(row.id)
                         }
                         if row.id != lastRow { Hairline() }
+                    }
+                    if !showingAll, rows.count > Self.shown {
+                        Hairline()
+                        ShowMore(count: rows.count - Self.shown) {
+                            withAnimation(K.M.flow) { showingAll = true }
+                        }
                     }
                 }
             }
@@ -126,9 +144,11 @@ struct TurnStage: View {
             .overlay { TailFollower(model: model) { follow(proxy) } }
             .onChange(of: model.pinTick) {
                 pinned = true
-                if let id = rows.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+                showingAll = false
+                if let id = rows.first?.id { proxy.scrollTo(id, anchor: .top) }
             }
-            .followsTail($pinned)
+            // The tail of this pane is its top: see `rows`.
+            .followsTail($pinned, top: true)
             .onChange(of: model.running) { follow(proxy, force: true) }
             .overlay(alignment: .bottom) {
                 if !pinned && model.running {
@@ -137,8 +157,8 @@ struct TurnStage: View {
                         // Going back to the tail is the gesture that says "stop holding me at
                         // that turn", and it is what releases `follow`.
                         model.focusedTurn = nil
-                        if let id = rows.last?.id {
-                            withAnimation(K.M.settle) { proxy.scrollTo(id, anchor: .bottom) }
+                        if let id = rows.first?.id {
+                            withAnimation(K.M.settle) { proxy.scrollTo(id, anchor: .top) }
                         }
                     }
                 }
@@ -154,11 +174,54 @@ struct TurnStage: View {
             // not fire on appear — so the jump never happened, and `focusedTurn` stayed set with
             // `follow` refusing to scroll for as long as it was. It is cleared by the next send
             // rather than here, so the wash that says which turn you landed on survives the frame.
+            //
+            // A turn below the fold has no card either, for the same reason and with the same
+            // symptom: the marker points at an older turn, the pane shows the five newest, and
+            // the jump lands on nothing. Asked for, the rest of the session opens.
             .onChange(of: model.focusedTurn, initial: true) {
                 guard let id = model.focusedTurn, let row = row(holding: id) else { return }
+                let drawn = (showingAll ? rows : Array(rows.prefix(Self.shown)))
+                    .contains { $0.id == row }
+                guard drawn else {
+                    showingAll = true
+                    // After the rows it just asked for exist. A `scrollTo` in the same frame
+                    // resolves against a list that does not hold that row yet.
+                    Task { @MainActor in
+                        withAnimation(K.M.settle) { proxy.scrollTo(row, anchor: .top) }
+                    }
+                    return
+                }
                 withAnimation(K.M.settle) { proxy.scrollTo(row, anchor: .top) }
             }
         }
+    }
+}
+
+/// The rest of the session, one click away.
+///
+/// A button rather than a scroll: the Trace is newest-first and the turn you came for is at the
+/// top, so everything below the fold is history — and drawing four hundred cards to keep it
+/// reachable is the thing that makes a long session slow to open.
+struct ShowMore: View {
+    let count: Int
+    /// Which way the rest of the session lies: below in the Trace, above in the conversation.
+    var up = false
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: K.S.sm) {
+            Image(systemName: up ? "chevron.up" : "chevron.down").font(K.F.tiny.weight(.bold))
+            Text("\(count) earlier turn\(count == 1 ? "" : "s")").font(K.F.small)
+            Spacer()
+        }
+        .foregroundStyle(hovering ? K.C.text : K.C.dim)
+        .padding(.horizontal, K.S.xl).padding(.vertical, K.S.md)
+        .background(hovering ? K.C.hover : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .asButton(action)
+        .accessibilityLabel("Show \(count) earlier turns")
     }
 }
 
@@ -228,6 +291,9 @@ struct TurnCard: View {
     let turn: Turn
     let number: Int
     let model: SessionModel
+    /// The top card. The pane lists newest first, so this is the turn you opened the window to
+    /// look at — its console is open without a click.
+    var newest = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
@@ -275,7 +341,7 @@ struct TurnCard: View {
             // the one place on screen whatever the stage is showing. Rendering them here too
             // would register every shortcut twice.
 
-            RawOutput(turn: turn)
+            RawOutput(turn: turn, newest: newest)
 
             TurnFooter(turn: turn)
         }
@@ -693,6 +759,10 @@ struct ProblemList: View {
 /// something nobody reads. Anything that is not JSON — stderr, the exit line — is left alone.
 struct RawOutput: View {
     let turn: Turn
+    /// The newest turn in the pane. Its console opens on load, because a session you have just
+    /// opened is one you are opening to see what happened — and the answer nothing can be wrong
+    /// about is this one. Every older turn stays folded: five open consoles is a wall.
+    var newest = false
     /// Set only by a click. `nil` follows the turn: open while it runs, folded once it is done,
     /// which is the same rule the command list used to have and the right one here — while it is
     /// running these lines are the only thing saying it has not hung.
@@ -701,7 +771,7 @@ struct RawOutput: View {
     @State private var lastFollow = Date.distantPast
     @State private var copied = false
 
-    private var open: Bool { userSet ?? !turn.finished }
+    private var open: Bool { userSet ?? (newest || !turn.finished) }
 
     /// The console as it is drawn, so what lands on the pasteboard is what you were looking at —
     /// including the indenting, and including the note about what was not kept.
@@ -812,6 +882,6 @@ struct RawOutput: View {
         let now = Date()
         guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
         lastFollow = now
-        proxy.scrollTo(id, anchor: .bottom)
+        proxy.scrollTo(id, anchor: .top)
     }
 }

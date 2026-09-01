@@ -693,6 +693,70 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(rows[1], ["1", "2"])
         if case .rule = blocks[1] {} else { XCTFail("no rule") }
     }
+
+    /// A quote is a document, not a paragraph of punctuation.
+    ///
+    /// Asked for something to send on — a message to another team, a release note — the agent
+    /// writes it as a block quote, and every line of it carries the marker. Read as prose, the
+    /// headings and the numbered list inside it flattened into one paragraph with a `>` between
+    /// every sentence, which is what "the text format is not great" was.
+    func testAQuoteKeepsTheStructureInsideIt() {
+        let blocks = Markdown.blocks("""
+        Two blocks.
+
+        > **Subject: it is built**
+        >
+        > Four things differ:
+        >
+        > 1. The page is `/self-serve`.
+        > 2. The toggle is optional.
+
+        after
+        """)
+        guard case .quote(let inner) = blocks[1] else { return XCTFail("no quote") }
+        guard case .paragraph(let subject) = inner[0] else { return XCTFail("no subject") }
+        XCTAssertEqual(String(subject.characters), "Subject: it is built")
+        guard case .bullets(let items) = inner.last else { return XCTFail("the list flattened") }
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].marker, "1.")
+        if case .paragraph = blocks[2] {} else { XCTFail("the quote swallowed what follows") }
+    }
+}
+
+/// What changed, when the tool that changed it named no path.
+@MainActor
+final class TreeAttributionTests: XCTestCase {
+
+    /// A session in a terminal writes with `cat > file <<'EOF'`, and `Bash` carries a command
+    /// rather than a path — so `writeTools` sees nothing and the turn reported no files while the
+    /// diff beside it was full of them. git is the evidence instead.
+    func testAFileThatOnlyTheTreeKnowsAboutIsAttributedToTheTurn() {
+        let m = SessionModel(client: Client(port: 0))
+        m.changes = [.init(path: "src/lib/meta.ts", status: "M", label: "modified")]
+        let before = m.treeFingerprint
+
+        let turn = Turn(prompt: "wire up the pixel")
+        m.changes = [
+            .init(path: "src/lib/meta.ts", status: "M", label: "modified"),
+            .init(path: "src/lib/meta-client.ts", status: "?", label: "untracked"),
+        ]
+        m.attribute(before, to: turn)
+        XCTAssertEqual(turn.files, ["src/lib/meta-client.ts"],
+                       "what was already dirty belongs to whatever dirtied it")
+
+        // `Edit` names a file absolutely; git names it from the root. One file, one row.
+        m.repoPath = "/repo"
+        let edited = Turn(prompt: "edit it")
+        edited.noteEdit("/repo/src/lib/meta-client.ts")
+        m.attribute(before, to: edited)
+        XCTAssertEqual(edited.files, ["/repo/src/lib/meta-client.ts"], "not twice, spelt two ways")
+
+        // A file whose status moves — staged, or newly tracked — moved in this turn too.
+        let next = Turn(prompt: "commit it")
+        m.changes = [.init(path: "src/lib/meta.ts", status: "A", label: "added")]
+        m.attribute(m.treeFingerprint.subtracting(["src/lib/meta.tsA"]), to: next)
+        XCTAssertEqual(next.files, ["src/lib/meta.ts"])
+    }
 }
 
 // MARK: - Usage

@@ -1004,6 +1004,10 @@ extension View {
 /// at the end follows again.
 struct FollowsTail: ViewModifier {
     @Binding var pinned: Bool
+    /// The pane's tail is its top, because it lists newest first — the Trace. The rule is the
+    /// same one; only which edge counts as "the end" differs, and having that as a flag here is
+    /// what keeps it from becoming a second copy of the rule with a second copy of the bug.
+    var top = false
     /// The scroll is the person's doing rather than the content's.
     @State private var byHand = false
 
@@ -1015,7 +1019,8 @@ struct FollowsTail: ViewModifier {
             .onScrollGeometryChange(for: Bool.self) { g in
                 // Within a line or two of the end counts as the end: demanding exactness means
                 // one stray pixel silently turns following off.
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
+                top ? g.contentOffset.y <= 24
+                    : g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
             } action: { was, atBottom in
                 // Only on a transition. Assigning on every scroll event republishes state for the
                 // whole pane mid-gesture, which is its own source of stutter.
@@ -1032,8 +1037,8 @@ struct FollowsTail: ViewModifier {
 }
 
 extension View {
-    func followsTail(_ pinned: Binding<Bool>) -> some View {
-        modifier(FollowsTail(pinned: pinned))
+    func followsTail(_ pinned: Binding<Bool>, top: Bool = false) -> some View {
+        modifier(FollowsTail(pinned: pinned, top: top))
     }
 }
 

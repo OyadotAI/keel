@@ -36,13 +36,19 @@ final class ThemeTests: XCTestCase {
     /// against is gone. The threshold is the whole viewport past the end, which a rubber band
     /// cannot reach, so a fling never trips it.
     func testAPaneScrolledOffItsOwnContentIsRecognisedAsBlank() {
-        XCTAssertTrue(ChatRail.blank(offset: 4000, content: 1200))
-        XCTAssertTrue(ChatRail.blank(offset: 1200, content: 1200))
-        // Overscrolling the end by a rubber band: the last rows are still on screen.
-        XCTAssertFalse(ChatRail.blank(offset: 1100, content: 1200))
-        XCTAssertFalse(ChatRail.blank(offset: 0, content: 1200))
+        XCTAssertTrue(ChatRail.blank(offset: 4000, content: 1200, viewport: 800))
+        XCTAssertTrue(ChatRail.blank(offset: 1200, content: 1200, viewport: 800))
+        // The state people actually report: a sliver of the last turn at the top, the rest of
+        // the window white. Past the legal maximum offset of 400, so no scroll made it.
+        XCTAssertTrue(ChatRail.blank(offset: 1100, content: 1200, viewport: 800))
+        // At rest at the end, and a rubber band a quarter of the way past it.
+        XCTAssertFalse(ChatRail.blank(offset: 400, content: 1200, viewport: 800))
+        XCTAssertFalse(ChatRail.blank(offset: 600, content: 1200, viewport: 800))
+        XCTAssertFalse(ChatRail.blank(offset: 0, content: 1200, viewport: 800))
         // Nothing laid out yet is not a blank pane, it is a pane that has not been measured.
-        XCTAssertFalse(ChatRail.blank(offset: 0, content: 0))
+        XCTAssertFalse(ChatRail.blank(offset: 0, content: 0, viewport: 800))
+        // A conversation shorter than the window cannot scroll away from itself.
+        XCTAssertFalse(ChatRail.blank(offset: 0, content: 200, viewport: 800))
     }
 
     private func resolve(_ color: Color, _ appearance: NSAppearance) -> NSColor {
