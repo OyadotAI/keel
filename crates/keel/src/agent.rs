@@ -699,6 +699,7 @@ pub async fn chat(
                     started: crate::turns::now(),
                     snapshot: None,
                     fingerprint: Default::default(),
+                    head: None,
                 })
         };
         let started_fact = crate::turns::Fact::Started {
