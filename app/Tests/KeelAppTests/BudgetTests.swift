@@ -170,14 +170,13 @@ final class BudgetTests: XCTestCase {
     /// is the abstraction the bar forbids. A source count is cruder and cannot be worked around.
     ///
     /// Survivors, as of this pin:
-    /// - `SessionModel` ×10: the design-change wait (100 ms ×60, then 400 ms) — leaves with
-    ///   `DesignerViewModel`; the dev-server URL wait (400 ms ×40) — leaves with `DevStore`; the
-    ///   monitors loop (2 s / 15 s) — leaves with `/api/events`; the approvals loop (700 ms) —
-    ///   leaves with `approval.asked` facts; the followed-tree debounce (600 ms) — leaves with
-    ///   `turn.files` facts; the follow watchdog (15 s, local, no request); and three fades
+    /// - `SessionModel` ×8: the design-change wait (100 ms ×60, then 400 ms) — leaves with
+    ///   `DesignerViewModel`; the monitors debounce (300 ms after the daemon's `monitors.changed`,
+    ///   a read, not a poll); the followed-tree debounce (600 ms) — leaves once `tree.changed`
+    ///   covers a lane's checkout; the watchdog (15 s, local, no request); and three fades
     ///   (`justOpened`, `remembered`, `discarded`) that are timers, not requests.
     /// - `Lanes` ×1: the daemon-startup backoff, bounded at 40 attempts.
-    /// - `SidePanel` ×1: the History poll (3 s) — leaves with the `sessions` frame.
+    /// - `SidePanel` ×0: nothing. History arrives on `/api/events`.
     func testTheMainPageDoesNotPoll() throws {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -187,7 +186,7 @@ final class BudgetTests: XCTestCase {
             let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
             sleeps[file] = text.components(separatedBy: "Task.sleep").count - 1
         }
-        XCTAssertEqual(sleeps, ["SessionModel.swift": 10, "Lanes.swift": 1, "SidePanel.swift": 1],
+        XCTAssertEqual(sleeps, ["SessionModel.swift": 8, "Lanes.swift": 1, "SidePanel.swift": 0],
                        "a sleep loop was added to the main page; name it in this test's comment or use an event")
     }
 }

@@ -121,12 +121,16 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     let waiting = id.clone();
     tokio::spawn(async move {
         let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
-        let mut all = jobs().locked();
-        if let Some(r) = all.iter_mut().find(|r| r.job.id == waiting) {
-            r.job.finished = Some(now());
-            r.job.exit = Some(code);
+        {
+            let mut all = jobs().locked();
+            if let Some(r) = all.iter_mut().find(|r| r.job.id == waiting) {
+                r.job.finished = Some(now());
+                r.job.exit = Some(code);
+            }
         }
+        crate::events::emit("monitors.changed", None, serde_json::Value::Null);
     });
+    crate::events::emit("monitors.changed", None, serde_json::Value::Null);
 
     Ok(id)
 }
@@ -167,6 +171,10 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
                 if len > MAX_LOG {
                     r.job.log.drain(..len - MAX_LOG);
                 }
+                drop(all);
+                // Per line; the window coalesces. A build prints hundreds and the panel shows
+                // the last forty, so what matters is that it moves while the job does.
+                crate::events::emit("monitors.changed", None, serde_json::Value::Null);
             }
             crate::lines::Next::Skipped => continue,
             crate::lines::Next::Done => return,

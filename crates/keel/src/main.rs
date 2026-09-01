@@ -12,6 +12,7 @@ mod aws;
 mod clitools;
 mod connect;
 mod dev;
+mod events;
 mod fsops;
 mod git;
 mod gitroots;

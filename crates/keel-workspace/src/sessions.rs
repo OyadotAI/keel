@@ -6,7 +6,7 @@ use serde_json::Value;
 ///
 /// Message bodies are deliberately absent. A session list needs to be scannable, and a transcript
 /// contains everything the user has ever said in that repository.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Session {
     /// The session UUID, which is what `claude --resume` takes.
     pub id: String,

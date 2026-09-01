@@ -439,54 +439,42 @@ final class OneTurnTests: XCTestCase {
     }
 }
 
-/// A lane that leaves the window takes everything it was running with it.
+/// The window learns what changed from the daemon, not by asking.
 @MainActor
-final class LaneShutdownTests: XCTestCase {
-    /// `newLane` hands back the spare empty lane rather than making a second one, so a test that
-    /// wants two lanes has to give the first a conversation first. Learned by writing it wrong.
-    private func twoLanes() -> (Lanes, SessionModel, SessionModel) {
+final class EventsTests: XCTestCase {
+
+    /// Every subscriber gets every event, in order.
+    func testTwoSubscribersEachGetEveryEvent() async {
+        let bus = DaemonEvents()
+        let a = bus.subscribe()
+        let b = bus.subscribe()
+        bus.inject(Wire.ProjectEvent(kind: "git.changed", wt: "lane", seq: 1, json: "{}"))
+        bus.inject(Wire.ProjectEvent(kind: "tree.changed", wt: nil, seq: 2, json: "{}"))
+        var ai = a.makeAsyncIterator()
+        var bi = b.makeAsyncIterator()
+        let (a1, a2) = (await ai.next(), await ai.next())
+        let (b1, b2) = (await bi.next(), await bi.next())
+        XCTAssertEqual(a1?.kind, "git.changed")
+        XCTAssertEqual(a1?.wt, "lane")
+        XCTAssertEqual(a2?.kind, "tree.changed")
+        XCTAssertEqual(b1?.kind, "git.changed")
+        XCTAssertEqual(b2?.kind, "tree.changed")
+    }
+
+    /// The session list arrives whole on its frame and replaces what every lane reads.
+    func testASessionsFrameReplacesTheList() async {
         let l = Lanes(client: Client(port: 0), port: 0)
-        let first = l.lanes[0]
-        first.sessionId = "already-talking"
-        let second = l.newLane()
-        XCTAssertNotEqual(first.id, second.id, "the second lane is a second lane")
-        return (l, first, second)
+        let json = #"{"seq":1,"kind":"sessions","data":[{"id":"s1","title":"t","messages":1,"live":true,"busy":false}]}"#
+        await l.route(Wire.ProjectEvent(kind: "sessions", wt: nil, seq: 1, json: json))
+        XCTAssertEqual(l.project.store.sessions.map(\.id), ["s1"])
+        XCTAssertEqual(l.newLane().sessions.map(\.id), ["s1"], "a new lane reads the same list")
     }
 
-    /// A lane looks for jobs from the moment it exists, not from its first turn.
-    ///
-    /// The Monitors panel draws what this loop fetches. Started at the first turn, a freshly
-    /// launched app — or any lane you open the panel on without typing first — had never fetched
-    /// anything, so "Nothing being watched" was a statement about the machine when it was a
-    /// statement about nobody having looked. Measured against a live daemon holding a finished
-    /// job: still unreported, because nothing had asked for it.
-    func testALaneWatchesForJobsBeforeItsFirstTurn() {
+    /// A payload of the wrong shape is a frame with nothing in it, not a crash.
+    func testAMalformedFrameIsDropped() async {
         let l = Lanes(client: Client(port: 0), port: 0)
-        XCTAssertTrue(l.lanes[0].isWatchingMonitors,
-                      "a panel that cannot tell 'nothing is running' from 'nobody looked' is worse "
-                      + "than one that says nothing")
-    }
-
-    func testClosingALaneEndsItsBackgroundWatch() {
-        let (l, first, second) = twoLanes()
-        second.watchMonitors()
-        XCTAssertTrue(second.isWatchingMonitors, "the loop is up")
-
-        l.close(second)
-        XCTAssertFalse(second.isWatchingMonitors, "closing the lane must end it")
-        XCTAssertEqual(l.lanes.map(\.id), [first.id])
-    }
-
-    /// Switching project drops every lane but the one that did the switching, and the same
-    /// applies: their loops were polling for jobs in a project that is no longer open.
-    func testSwitchingProjectEndsTheDroppedLanesWatches() async {
-        let (l, dropped, keep) = twoLanes()
-        dropped.watchMonitors()
-        l.activeID = keep.id
-
-        await l.switchProject(to: "/tmp/keel-test-other")
-        XCTAssertFalse(dropped.isWatchingMonitors)
-        XCTAssertEqual(l.lanes.map(\.id), [keep.id])
+        await l.route(Wire.ProjectEvent(kind: "sessions", wt: nil, seq: 1, json: "not json"))
+        XCTAssertTrue(l.project.store.sessions.isEmpty)
     }
 }
 
