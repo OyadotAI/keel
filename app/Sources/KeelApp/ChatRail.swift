@@ -35,6 +35,8 @@ struct ChatRail: View {
     /// A rescue is already running. Without it the geometry fires again on every scroll the
     /// rescue itself performs.
     @State private var rescuing = false
+    /// The geometry's last word on whether the pane is showing its conversation.
+    @State private var isBlank = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -219,6 +221,7 @@ struct ChatRail: View {
             Self.blank(offset: g.contentOffset.y, content: g.contentSize.height,
                        viewport: g.containerSize.height)
         } action: { _, blank in
+            isBlank = blank
             guard blank else { rescuing = false; return }
             rescue(proxy)
         }
@@ -331,14 +334,23 @@ struct ChatRail: View {
             "turns": "\(model.turns.count)",
             "replaying": "\(model.replaying)",
             "running": "\(model.running)",
+            "following": "\(model.following)",
             "expanded": "\(showingAll)",
         ])
         Task { @MainActor in
             pinned = true
-            for attempt in 0..<3 {
+            // Until it lands, not three times. Three was enough for a short conversation and not
+            // for a turn with a hundred steps still being built: every retry scrolled into an
+            // estimate that was corrected again before the next, and the pane stayed white after
+            // the third. `isBlank` is the geometry's own answer, so this stops the moment it is
+            // no longer true and never runs past a few seconds.
+            for attempt in 0..<25 where isBlank {
                 if attempt == 2 { showingAll = false }
                 toBottom(proxy)
                 try? await Task.sleep(for: .milliseconds(120))
+            }
+            if isBlank {
+                Telemetry.warn("transcript stayed blank after rescue", ["turns": "\(model.turns.count)"])
             }
             // Cleared here as well as by the geometry: a pane that is somehow still blank must
             // be able to ask again the next time anything moves.
