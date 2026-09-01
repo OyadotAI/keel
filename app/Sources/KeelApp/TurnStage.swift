@@ -215,12 +215,14 @@ private struct EmptyStage: View {
 
 // MARK: - One turn
 
-/// One turn, as a record of what it did to the repository.
+/// One turn, as a record of what it did to the repository: the files it changed, and the stream
+/// it produced while changing them.
 ///
 /// Deliberately not what it *said*: the prose reply lives in the conversation rail beside this,
-/// and showing it twice is what made the window unreadable. This pane answers one question —
-/// what changed and what ran — and answers it closed, because the shape of a turn is the count,
-/// not the contents. You open what you want to read.
+/// and showing it twice is what made the window unreadable. Deliberately not the command list
+/// either, which is on screen twice already — inline in the conversation, where each call keeps
+/// its input and its output, and folded in the Review pane, where it is evidence for the merge.
+/// A third copy was the widest thing in this pane and the one nobody read.
 struct TurnCard: View {
     let turn: Turn
     let number: Int
@@ -236,7 +238,6 @@ struct TurnCard: View {
                 .lineLimit(2).truncationMode(.tail)
 
             if !turn.files.isEmpty { ChangedFiles(turn: turn, model: model) }
-            if !turn.calls.isEmpty { CommandList(turn: turn) }
 
             if turn.truncated {
                 Text("This replay is capped at the most recent 300 calls — the session ran more.")
@@ -393,238 +394,12 @@ struct SectionBar: View {
     }
 }
 
-
-
-// MARK: - Commands
-
-/// Tool calls, one line each, with consecutive repeats collapsed. A turn that reads twenty files
-/// is one row, not twenty — the twenty are available, they are just not the point.
-private struct CommandList: View {
-    let turn: Turn
-
-    /// Set only when someone clicks the header. `nil` means "follow the turn", which is what makes
-    /// a running turn show its work and a finished one fold back out of the way.
-    @State private var userSet: Bool?
-    @State private var showAll = false
-
-    /// Open while the turn is running, closed once it is done — unless you said otherwise.
-    ///
-    /// Closed-by-default is right for reading back a finished turn: the shape is the count, and
-    /// twenty rows of `Bash` is not information. It is exactly wrong while the agent is working,
-    /// when the rows *are* the information and the only thing telling you it has not hung.
-    private var open: Bool { userSet ?? !turn.finished }
-
-    /// Fifteen rows is enough to see what kind of work happened once it is open; the rest are one
-    /// more click away and almost never wanted.
-    private static let visible = 15
-
-    private var failed: Int { turn.calls.count { $0.failed } }
-
-    private var accessory: AnyView? {
-        if failed > 0 {
-            return AnyView(Pill(text: "\(failed) FAILED", tone: .bad))
-        }
-        if !turn.finished {
-            return AnyView(Pill(text: "RUNNING", tone: .accent))
-        }
-        return nil
-    }
-
-    var body: some View {
-        let groups = turn.groups
-        // While it runs, the newest work is the point, so the cap keeps the tail. Once it is
-        // finished you are reading from the top, so the cap keeps the head.
-        let shown = showAll ? groups
-            : (turn.finished ? Array(groups.prefix(Self.visible))
-                             : Array(groups.suffix(Self.visible)))
-
-        VStack(alignment: .leading, spacing: 0) {
-            SectionBar(
-                title: "\(turn.calls.count) command\(turn.calls.count == 1 ? "" : "s")",
-                open: Binding(get: { open }, set: { userSet = $0 }),
-                accessory: accessory
-            )
-
-            if open {
-                ForEach(shown) { group in
-                    GroupRow(group: group,
-                             live: !turn.finished && group.id == groups.last?.id)
-                        .transition(.opacity)
-                }
-
-                if groups.count > Self.visible {
-                    Button(showAll
-                           ? "Show fewer"
-                           : (turn.finished
-                              ? "Show \(groups.count - Self.visible) more"
-                              : "Show \(groups.count - Self.visible) earlier")) {
-                        withAnimation(K.M.quick) { showAll.toggle() }
-                    }
-                    .buttonStyle(.plain)
-                    .font(K.F.micro).foregroundStyle(K.C.accent)
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .contentShape(Rectangle())
-                }
-            }
-        }
-        .padding(.bottom, open ? K.S.xs : 0)
-        .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.md))
-        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
-        .animation(K.M.flow, value: groups.count)
-    }
-}
-
-/// One run of calls to the same tool. Collapsed to a single line; expanding shows each call and
-/// what it printed.
-struct GroupRow: View {
-    let group: Turn.Group
-    /// The newest group of a turn still in flight — the one whose work is happening now.
-    var live = false
-    @State private var userSet: Bool?
-    @State private var hovering = false
-
-    /// Open while this is the live group, and only then.
-    ///
-    /// This used to key off `group.running`, which flipped every time a call finished and the next
-    /// began — so a section popped open and shut on every command and the pane looked broken.
-    /// Anchoring it to "newest group of a running turn" means one section is open for the duration
-    /// and the rest stay put.
-    private var open: Bool { userSet ?? live }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: K.S.sm) {
-                CallGlyph(risk: group.risk, failed: group.failed, running: group.running)
-                Text(group.tool)
-                    .font(K.F.codeSmall.weight(.medium))
-                    .foregroundStyle(group.failed ? K.C.del : K.C.dim)
-                    .frame(width: 56, alignment: .leading)
-
-                if group.calls.count == 1 {
-                    Subject(group.first.subject)
-                } else {
-                    Text("\(group.calls.count)×")
-                        .font(K.F.codeTiny.weight(.medium)).foregroundStyle(K.C.faint)
-                    Subject(group.first.subject)
-                }
-                // A subagent's work, as a count on its row rather than forty rows of its own.
-                let nested = group.calls.reduce(0) { $0 + $1.children.count }
-                if nested > 0 {
-                    Text("\(nested) call\(nested == 1 ? "" : "s")")
-                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
-                }
-
-                Spacer(minLength: K.S.sm)
-                Elapsed(started: group.calls.last?.started ?? group.first.started,
-                        duration: group.duration,
-                        running: group.running)
-                Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(K.F.tiny.weight(.bold))
-                    .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.45))
-            }
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.tight)
-            .background(live ? K.C.accent.wash
-                              : (hovering ? K.C.hover : .clear))
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .asButton { withAnimation(K.M.flow) { userSet = !open } }
-
-            if open {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(group.calls) { call in
-                        CallDetail(call: call,
-                                   live: live && call.id == group.calls.last?.id)
-                    }
-                }
-                .padding(.leading, K.S.xl)
-                .padding(.bottom, K.S.xs)
-                .transition(.opacity)
-            }
-        }
-        .animation(K.M.flow, value: open)
-    }
-}
-
-/// A command or a path, truncated at the *head*.
-///
-/// Middle truncation eats the filename, which is the part you were reading for — `…ling/api.py`
-/// tells you nothing that `/Users/mk/Dev/o…` did not.
-struct Subject: View {
-    let text: String
-    init(_ t: String) { text = t }
-
-    var body: some View {
-        Text(text)
-            .font(K.F.code)
-            .foregroundStyle(K.C.faint)
-            .lineLimit(1)
-            .truncationMode(.head)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .help(text)
-    }
-}
-
-private struct CallDetail: View {
-    let call: Turn.Call
-    /// The newest call of the live group.
-    var live = false
-    @State private var userSet: Bool?
-
-    /// Only the newest call shows its output unasked. Keying this off `call.running` meant every
-    /// call in a run opened and closed in turn, which is the same churn one level down. A call
-    /// with children is open while it is live, because the children are what is happening.
-    private var open: Bool { userSet ?? (live && (!call.output.isEmpty || !call.children.isEmpty)) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: K.S.sm) {
-                CallGlyph(risk: call.risk, failed: call.failed, running: call.running)
-                Subject(call.subject)
-                Elapsed(started: call.started, duration: call.duration, running: call.running)
-            }
-            .padding(.vertical, K.S.xxs).padding(.trailing, K.S.md)
-            .contentShape(Rectangle())
-            .asButton {
-                if !call.output.isEmpty || !call.children.isEmpty {
-                    withAnimation(K.M.flow) { userSet = !open }
-                }
-            }
-
-            // What the subagent did, indented under the call that started it. The live child
-            // is the newest running one, the same rule as one level up.
-            if open, !call.children.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(call.children) { child in
-                        CallDetail(call: child,
-                                   live: live && child.running
-                                       && child.id == call.children.last(where: \.running)?.id)
-                    }
-                }
-                .padding(.leading, K.S.lg)
-                        .transition(.opacity)
-            }
-
-            // A line at a time, in a lazy stack.
-            //
-            // This was one `Text` of twenty thousand characters, and a scroll view has to lay its
-            // content out whole to know how big it is — so CoreText encoded all of it, on the main
-            // thread, the moment a row opened. It is the same 2,000 ms hang `String.capped` was
-            // written for, at the one site that never got the fix.
-            if open, !call.output.isEmpty {
-                Lines(text: call.output)
-                    .padding(.trailing, K.S.md).padding(.bottom, K.S.xs)
-                    .transition(.opacity)
-            }
-        }
-        .animation(K.M.flow, value: open)
-    }
-}
+// MARK: - Shared row furniture
 
 /// What a call could do, as one glyph: reads, changes something, or destroys something.
 ///
-/// A column of identical grey dots said only "a tool ran", which is the one thing the row already
-/// said. Failure still wins over risk — a command that failed is a fact, where its risk was only
-/// ever a guess — and a running call keeps the pulse, because that is what says the turn is alive.
+/// Failure wins over risk — a command that failed is a fact, where its risk was only ever a guess
+/// — and a running call keeps the pulse, because that is what says the turn is alive.
 struct CallGlyph: View {
     let risk: Turn.Risk
     let failed: Bool
@@ -903,41 +678,50 @@ struct ProblemList: View {
 
 
 
-/// Exactly what the provider printed — the worst-case answer to "what is it doing".
+/// Exactly what the provider printed, as a console — the worst-case answer to "what is it doing",
+/// and now the pane's main event rather than a footnote under it.
 ///
 /// The guarantee: there is no state in which Keel saw something and the person cannot. Everything
 /// else in this app is an interpretation of these bytes, and every interpretation can be wrong or
-/// missing. This is always here, one click away, and costs nothing until it is opened.
+/// missing.
+///
+/// Two things make it readable rather than merely present. It **tails** while the turn runs, like
+/// the terminal it replaced, so the newest line is the one on screen — coalesced at 80ms, because
+/// a provider prints faster than a frame and a scroll per line fights the wheel. And a record is
+/// **indented**: the stream is one JSON object per line, and a four-thousand-character line is
+/// something nobody reads. Anything that is not JSON — stderr, the exit line — is left alone.
 struct RawOutput: View {
     let turn: Turn
-    @State private var open = false
+    /// Set only by a click. `nil` follows the turn: open while it runs, folded once it is done,
+    /// which is the same rule the command list used to have and the right one here — while it is
+    /// running these lines are the only thing saying it has not hung.
+    @State private var userSet: Bool?
+    @State private var indented = true
+    @State private var lastFollow = Date.distantPast
+
+    private var open: Bool { userSet ?? !turn.finished }
 
     var body: some View {
         if !turn.raw.isEmpty {
-            DisclosureGroup(isExpanded: $open) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(turn.raw) { line in
-                            Text(line.text)
-                                .font(K.F.codeTiny)
-                                .foregroundStyle(line.stream == .err ? K.C.del : K.C.dim)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, K.S.hair)
-                        }
-                        if turn.rawDropped > 0 {
-                            Text("…and \(turn.rawDropped) more lines, not kept")
-                                .font(K.F.micro).foregroundStyle(K.C.faint)
-                        }
-                    }
-                    .padding(K.S.sm)
-                }
-                .frame(maxHeight: 260)
-                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-            } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if open { console.transition(.opacity) }
+            }
+            .animation(K.M.flow, value: open)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: K.S.xs) {
+            Button { withAnimation(K.M.flow) { userSet = !open } } label: {
                 HStack(spacing: K.S.xs) {
-                    Text("Raw output").font(K.F.micro).foregroundStyle(K.C.faint)
-                    Text("\(turn.raw.count) lines").font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    Image(systemName: "chevron.right")
+                        .font(K.F.ui(7, .bold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .foregroundStyle(K.C.faint)
+                    Text("CONSOLE").sectionLabel().foregroundStyle(K.C.faint)
+                    Text("\(turn.raw.count) line\(turn.raw.count == 1 ? "" : "s")")
+                        .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                     // The two counts that say "Keel did not understand this" out loud.
                     if turn.unreadable > 0 {
                         Text("· \(turn.unreadable) unreadable")
@@ -948,8 +732,59 @@ struct RawOutput: View {
                             .font(K.F.codeTiny).foregroundStyle(K.C.faint)
                     }
                 }
+                .contentShape(Rectangle())
             }
-            .disclosureGroupStyle(.automatic)
+            .buttonStyle(.plain)
+            Spacer(minLength: K.S.sm)
+            if open {
+                Button(indented ? "one line each" : "indent JSON") { indented.toggle() }
+                    .buttonStyle(.plain)
+                    .font(K.F.micro).foregroundStyle(K.C.accent)
+                    .help(indented
+                          ? "Show each record as the single line it arrived as"
+                          : "Indent each record that is JSON")
+            }
         }
+        .padding(.vertical, K.S.xxs)
+    }
+
+    private var console: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(turn.raw) { line in
+                        // Formatted in the row rather than up front: the stack is lazy, so only
+                        // what is on screen is ever parsed. Two thousand records pretty-printed
+                        // eagerly is the hang `String.capped` exists for.
+                        Text(indented ? line.text.indentedJSON : line.text.capped(2_000))
+                            .font(K.F.codeTiny)
+                            .foregroundStyle(line.stream == .err ? K.C.del : K.C.dim)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, K.S.hair)
+                            .id(line.id)
+                    }
+                    if turn.rawDropped > 0 {
+                        Text("…and \(turn.rawDropped) more lines, not kept")
+                            .font(K.F.micro).foregroundStyle(K.C.faint)
+                    }
+                }
+                .padding(K.S.sm)
+            }
+            .frame(maxHeight: 300)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            .onChange(of: turn.raw.count, initial: true) { tail(proxy) }
+        }
+    }
+
+    /// Follow the newest line while the turn is live. A finished turn is read from wherever you
+    /// put it, so it is not dragged anywhere.
+    private func tail(_ proxy: ScrollViewProxy) {
+        guard !turn.finished, let id = turn.raw.last?.id else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastFollow) > 0.08 else { return }
+        lastFollow = now
+        proxy.scrollTo(id, anchor: .bottom)
     }
 }

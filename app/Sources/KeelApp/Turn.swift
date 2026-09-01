@@ -713,4 +713,24 @@ extension String {
     func capped(_ chars: Int) -> String {
         count <= chars ? self : String(prefix(chars)) + "…"
     }
+
+    /// One line of the provider's stream, indented — or unchanged if it is not JSON.
+    ///
+    /// `JSONSerialization` rather than a printer of our own: the console shows bytes Keel did not
+    /// necessarily understand, so the one thing it must not do is reformat them through a decoder
+    /// that has an opinion about their shape. A line that will not parse — stderr, the exit line,
+    /// the half-written record — is handed back as it came, which is the whole point of this view.
+    ///
+    /// Capped at both ends: a 200 KB record is not indented at all (parsing it costs more than
+    /// reading it is worth), and the result is cut, because a `Text` is laid out whole.
+    var indentedJSON: String {
+        guard count < 100_000, let data = data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data),
+              let out = try? JSONSerialization.data(
+                  withJSONObject: parsed,
+                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: out, encoding: .utf8)
+        else { return capped(4_000) }
+        return text.capped(20_000)
+    }
 }

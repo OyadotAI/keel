@@ -91,8 +91,11 @@ struct ReviewPacketView: View {
                 .font(K.F.display)
                 .foregroundStyle(tone)
             VStack(alignment: .leading, spacing: K.S.xxs) {
-                Text(blocked ? "Not ready for a pull request"
-                     : (unverified ? "Nothing here has been checked" : "Ready for a pull request"))
+                // The verdict is about the merge, which is the one thing it gates. Committing,
+                // pushing and opening a pull request stay available while it is red — those are
+                // how work leaves the machine to be looked at, and this is a warning about it.
+                Text(blocked ? "Not ready to merge"
+                     : (unverified ? "Nothing here has been checked" : "Ready to merge"))
                     .font(K.F.title).foregroundStyle(K.C.text)
                 Text(packet.blocker ?? (unverified
                      ? unverifiedReason

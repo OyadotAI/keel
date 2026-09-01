@@ -301,6 +301,9 @@ struct PullRequest: View {
                 }
             }
 
+            // A caveat, not a gate. A pull request is where work goes to *be* reviewed, so
+            // opening one before the checks are green is a normal thing to do — greying Create
+            // out for it meant the branch could not leave the machine until the lane was done.
             if let blocker = model.mergeBlocker {
                 Text(blocker).font(K.F.small).foregroundStyle(K.C.warn)
                     .fixedSize(horizontal: false, vertical: true)
@@ -337,7 +340,7 @@ struct PullRequest: View {
                 if url == nil {
                     Button(running ? "Opening…" : "Create") { create() }
                         .buttonStyle(FilledButton())
-                        .disabled(running || model.mergeBlocker != nil)
+                        .disabled(running)
                 }
             }
         }
