@@ -17,7 +17,7 @@ struct SettingsPage: View {
     @State private var section: Section = .connections
 
     enum Section: String, CaseIterable, Identifiable {
-        case connections, permissions, devices, appearance, privacy
+        case connections, permissions, devices, appearance, notifications, privacy
         var id: String { rawValue }
 
         var title: String {
@@ -26,6 +26,7 @@ struct SettingsPage: View {
             case .permissions: "Permissions"
             case .devices: "Devices"
             case .appearance: "Appearance"
+            case .notifications: "Notifications"
             case .privacy: "Privacy"
             }
         }
@@ -35,6 +36,7 @@ struct SettingsPage: View {
             case .permissions: "lock"
             case .devices: "iphone"
             case .appearance: "paintbrush"
+            case .notifications: "bell"
             case .privacy: "hand.raised"
             }
         }
@@ -44,6 +46,7 @@ struct SettingsPage: View {
             case .permissions: "what the agent may run here"
             case .devices: "what can reach this Mac"
             case .appearance: "how Keel looks"
+            case .notifications: "when Keel pings you"
             case .privacy: "crash reports and usage"
             }
         }
@@ -137,6 +140,7 @@ struct SettingsPage: View {
                                                        sessionId: model.sessionId)
                 case .devices: PairingSettings(model: pairing)
                 case .appearance: AppearanceSettings()
+                case .notifications: NotificationSettings()
                 case .privacy: PrivacySettings()
                 }
             }
@@ -174,6 +178,83 @@ struct AppearanceSettings: View {
             }
             .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+        }
+    }
+}
+
+
+/// When Keel pings you, one kind at a time.
+///
+/// Every kind is on out of the box and each one can be turned off on its own, because the thing
+/// that makes notifications useful and the thing that makes them intolerable are the same
+/// mechanism pointed at different events — and which is which is a matter of taste rather than
+/// something Keel can work out.
+struct NotificationSettings: View {
+    /// Toggles read `UserDefaults` through `Notifications.Kind`; this is what makes the view
+    /// redraw when one changes.
+    @State private var tick = 0
+    @State private var sound = Notifications.sound
+
+    @State private var permission = Notifications.permission
+    @State private var sent = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // First, because every switch below it is meaningless while macOS is saying no — and
+            // "all my switches are on and nothing arrives" is a bug report about Keel.
+            if permission != .allowed {
+                SettingsSection(
+                    "macOS is not letting these through",
+                    note: permission == .denied
+                        ? "Notifications for Keel are turned off in System Settings, so nothing "
+                            + "below can post. macOS only asks once, and it remembers a no."
+                        : "macOS has not been asked yet, or has not answered. Send a test and it "
+                            + "will ask."
+                ) {
+                    Button("Open System Settings › Notifications") {
+                        let url = "x-apple.systempreferences:com.apple.preference.notifications"
+                        if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+                    }
+                    .buttonStyle(QuietButton())
+                }
+            }
+
+            SettingsSection(
+                "What Keel tells you about",
+                note: "Nothing is posted while Keel is the app in front — a banner for something "
+                    + "you just watched happen is noise. Clicking one opens the lane it came from."
+            ) {
+                ForEach(Notifications.Kind.allCases) { kind in
+                    SettingsToggle(kind.title, note: kind.note, isOn: Binding(
+                        get: { _ = tick; return kind.enabled },
+                        set: { kind.enabled = $0; tick += 1 }))
+                }
+            }
+
+            SettingsSection(
+                "Sound",
+                note: "A silent banner in the corner of a screen you are not looking at is a "
+                    + "notification you did not get."
+            ) {
+                SettingsToggle("Play a sound", isOn: $sound)
+                    .onChange(of: sound) { Notifications.sound = sound }
+
+                // The same affordance the crash reporter has, for the same reason: the only way
+                // to tell "Keel is not posting" from "macOS is not showing" is to post one on
+                // purpose and watch for it.
+                Button(sent ? "Sent — look for the banner" : "Send a test notification") {
+                    Notifications.test()
+                    sent = true
+                    Task { await Notifications.refreshPermission(); permission = Notifications.permission }
+                }
+                .buttonStyle(QuietButton())
+                .padding(.top, K.S.xs)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task {
+            await Notifications.refreshPermission()
+            permission = Notifications.permission
         }
     }
 }

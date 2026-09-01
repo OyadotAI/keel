@@ -1647,6 +1647,13 @@ final class SessionModel: Identifiable {
                 // to write tools: every other result would be a refetch of everything for nothing.
                 if let name = turn.toolName(of: id), Turn.writeTools.contains(name) {
                     diffTick += 1
+                    // Here rather than when the call opens: the path is known at the start of a
+                    // write and the file only exists at the end of it, and a banner about a file
+                    // that is not on disk yet is a banner about nothing. Throttled in
+                    // `Notifications`, because a turn writes twenty of these.
+                    if let path = turn.files.last {
+                        Notifications.fileWritten(lane: self, path: path, count: turn.files.count)
+                    }
                 }
                 noteRefusal(in: output, call: id, turn: turn)
                 // The write landed; the dev server is about to rebuild. Arm the page again so a
@@ -2054,12 +2061,24 @@ final class SessionModel: Identifiable {
                 guard let self else { return }
                 let q: [String: String] = ["lane": self.id.uuidString]
                 if let jobs: [Wire.Job] = try? await client.get("/api/monitors", q) {
+                    // Said before the list is replaced, because "new" is what this poll knows and
+                    // the next one does not. Nobody is asked whether to monitor a command any
+                    // more, so the banner is where "something that outlives this turn just
+                    // started" is seen at all.
+                    let known = Set(self.monitors.map(\.id))
+                    for job in jobs where !known.contains(job.id) && job.running {
+                        Notifications.jobStarted(lane: self, command: job.command)
+                    }
                     self.monitors = jobs
                     // Acked before it is delivered, and by the one lane that owns it: the result
                     // reaching the conversation twice is worse than not reaching it at all.
                     for job in jobs where !job.running && !job.reported {
                         await self.ack(job)
                         self.deliver(job)
+                        // The one people walked away for: a job outlives its turn by design, so
+                        // the report landing in a conversation nobody is looking at is not news
+                        // reaching anybody.
+                        Notifications.jobFinished(lane: self, command: job.command, exit: job.exit)
                     }
                 }
                 // Two seconds while there is something to watch, fifteen when there is not. The

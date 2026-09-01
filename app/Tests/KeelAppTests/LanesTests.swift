@@ -548,3 +548,38 @@ final class SlashCommandTests: XCTestCase {
         XCTAssertTrue(second.loaded, "and must not draw Reading… over them")
     }
 }
+
+/// What Keel pings you about, and what it refuses to bury you in.
+@MainActor
+final class NotificationTests: XCTestCase {
+
+    /// A turn writes twenty files. Twenty banners is not twenty notifications, it is none — the
+    /// first nineteen are gone before you look and the twentieth is the only one you see.
+    func testFileNotificationsAreCoalescedAndTheRestAreNot() {
+        let now = Date()
+        XCTAssertTrue(Notifications.due(.file, since: nil, now: now), "the first one always posts")
+        XCTAssertFalse(Notifications.due(.file, since: now.addingTimeInterval(-5), now: now))
+        XCTAssertTrue(Notifications.due(.file, since: now.addingTimeInterval(-25), now: now))
+
+        // A turn ending, a job finishing and a question being asked happen once and are the
+        // reason somebody walked away. None of them waits.
+        for kind in [Notifications.Kind.turn, .approval, .job] {
+            XCTAssertTrue(Notifications.due(kind, since: now, now: now),
+                          "\(kind.rawValue) must never be held back")
+        }
+    }
+
+    /// `bool(forKey:)` is `false` for a key nobody has written, so a kind that asked
+    /// `UserDefaults` directly would ship switched off — every notification silently absent, with
+    /// the settings screen showing them all as off and nothing to explain it.
+    func testAKindNobodyHasTouchedIsOn() {
+        for kind in Notifications.Kind.allCases {
+            UserDefaults.standard.removeObject(forKey: "keel.notify.\(kind.rawValue)")
+            XCTAssertEqual(kind.enabled, kind.onByDefault, "\(kind.rawValue) out of the box")
+        }
+        Notifications.Kind.file.enabled = false
+        XCTAssertFalse(Notifications.Kind.file.enabled, "and a decision sticks")
+        XCTAssertTrue(Notifications.Kind.turn.enabled, "one kind off is not all of them off")
+        UserDefaults.standard.removeObject(forKey: "keel.notify.file")
+    }
+}
