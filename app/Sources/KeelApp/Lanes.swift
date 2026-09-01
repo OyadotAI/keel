@@ -168,9 +168,18 @@ final class Lanes {
     /// something you had to go and find in History — every time.
     func restore(repo: String) async {
         guard !repo.isEmpty,
-              let data = UserDefaults.standard.data(forKey: Self.key(repo)),
-              let saved = try? JSONDecoder().decode(Saved.self, from: data),
-              !saved.sessions.isEmpty else { return }
+              let data = UserDefaults.standard.data(forKey: Self.key(repo)) else { return }
+        let saved: Saved
+        do {
+            saved = try JSONDecoder().decode(Saved.self, from: data)
+        } catch {
+            // A restore that silently yields one empty tab reads as the app having forgotten
+            // your work. It has not; say what it could not read.
+            active.lastError = "Could not reopen the tabs you had open: \(error.localizedDescription)"
+            Telemetry.warn("remembered lanes did not decode")
+            return
+        }
+        guard !saved.sessions.isEmpty else { return }
 
         // Everything below is for *this* project. Checked after each await, because the switch
         // that invalidates it does not cancel this task.
