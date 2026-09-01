@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The centre of a window: what the agent just did, reviewed like a pull request.
@@ -698,8 +699,22 @@ struct RawOutput: View {
     @State private var userSet: Bool?
     @State private var indented = true
     @State private var lastFollow = Date.distantPast
+    @State private var copied = false
 
     private var open: Bool { userSet ?? !turn.finished }
+
+    /// The console as it is drawn, so what lands on the pasteboard is what you were looking at —
+    /// including the indenting, and including the note about what was not kept.
+    ///
+    /// Static so it can be tested without a view: what makes this worth a test is the dropped
+    /// count, and a silently short log is the failure it exists to prevent.
+    static func text(of turn: Turn, indented: Bool) -> String {
+        var out = turn.raw.map { indented ? $0.text.indentedJSON : $0.text }
+        if turn.rawDropped > 0 {
+            out.append("…and \(turn.rawDropped) more lines, not kept")
+        }
+        return out.joined(separator: "\n")
+    }
 
     var body: some View {
         if !turn.raw.isEmpty {
@@ -743,6 +758,11 @@ struct RawOutput: View {
                     .help(indented
                           ? "Show each record as the single line it arrived as"
                           : "Indent each record that is JSON")
+                // The whole console, not the selection. This is the pane a person reaches for
+                // when they are about to paste what happened into an issue, and dragging a
+                // selection through two thousand lines of a scroll view is not that.
+                CopyChip(label: "console", copied: copied) { copy() }
+                    .help("Copy every line of the console")
             }
         }
         .padding(.vertical, K.S.xxs)
@@ -776,6 +796,13 @@ struct RawOutput: View {
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
             .onChange(of: turn.raw.count, initial: true) { tail(proxy) }
         }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Self.text(of: turn, indented: indented), forType: .string)
+        copied = true
+        Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
     }
 
     /// Follow the newest line while the turn is live. A finished turn is read from wherever you
