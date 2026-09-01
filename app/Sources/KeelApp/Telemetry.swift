@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OSLog
 import PostHog
 import Sentry
 
@@ -97,8 +98,17 @@ enum Telemetry {
         PostHogSDK.shared.capture(event, properties: props)
     }
 
+    /// The same story, on this machine, whether or not any of it is sent anywhere.
+    ///
+    /// Sentry needs a key and a person's consent; a tester on a machine with neither, reporting
+    /// "the pane went white", had nothing anyone could read. `log show --predicate
+    /// 'subsystem == "ai.oya.keel"'` has it now. The same rule as the rest of this file: the
+    /// shape of what happened, never a prompt, a path or a repository name.
+    static let log = Logger(subsystem: "ai.oya.keel", category: "app")
+
     /// A line in the story a crash report tells: which pane, which action, no content.
     static func breadcrumb(_ message: String) {
+        log.info("\(message, privacy: .public)")
         guard crashReports, sentryOn else { return }
         let crumb = Breadcrumb(level: .info, category: "ui")
         crumb.message = message
@@ -114,6 +124,8 @@ enum Telemetry {
     /// Something that is not a crash but is worth knowing happened to a tester: a turn that
     /// went silent, a question nobody saw. Tags only — a tool name, a count — never content.
     static func warn(_ message: String, _ tags: [String: String] = [:]) {
+        let shape = tags.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        log.warning("\(message, privacy: .public) \(shape, privacy: .public)")
         guard crashReports, sentryOn else { return }
         SentrySDK.capture(message: message) { scope in
             scope.setLevel(.warning)
@@ -128,6 +140,7 @@ enum Telemetry {
     /// because a git error quotes branch names and a filesystem error quotes paths, and the rule
     /// here has always been that no call site passes a prompt, a path or a repository name.
     static func failure(_ category: String, _ message: String, _ tags: [String: String] = [:]) {
+        log.error("\(category, privacy: .public): \(redact(message), privacy: .public)")
         guard crashReports, sentryOn else { return }
         SentrySDK.capture(message: "\(category): \(redact(message))") { scope in
             scope.setLevel(.error)
