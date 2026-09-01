@@ -24,13 +24,14 @@ struct ChatRail: View {
 
     /// How many turns are drawn before the conversation offers the rest.
     ///
-    /// Ten, and in a plain stack rather than a lazy one. A lazy stack knows the height of the
-    /// rows it has built and *estimates* the rest, and a turn's card is anything from two lines
-    /// to a megabyte of tool output — so a jump to the end landed in a region with nothing built
-    /// in it, the offset sat inside empty estimated space where the geometry never moved again,
-    /// and no rescue could converge on an estimate. That was the white pane, on load and after a
-    /// replay. Ten built rows lay out in tens of milliseconds and have exact heights, so a scroll
-    /// to the end lands on the end. The rows you cannot see are one click away.
+    /// Ten. A lazy stack knows the height of the rows it has built and *estimates* the rest, and
+    /// a turn's card is anything from two lines to a megabyte of tool output — so a jump to the
+    /// end of three hundred of them landed in a region with nothing built in it. That was the
+    /// white pane. The stack is anchored to its bottom (`defaultScrollAnchor`) so the scroll view
+    /// keeps the end in view itself as rows grow, which is the thing a scroll-to-id into an
+    /// estimate never could; a plain stack was tried and cost the main thread most of its time
+    /// re-laying out every turn on every streamed token. Ten rows keeps the estimate bounded
+    /// either way, and the ones you cannot see are one click away.
     private static let shown = 10
     @State private var showingAll = false
     /// A rescue is already running. Without it the geometry fires again on every scroll the
@@ -124,7 +125,7 @@ struct ChatRail: View {
 
     private func transcript(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: K.S.xl) {
+            LazyVStack(alignment: .leading, spacing: K.S.xl) {
                 // A pane with nothing in it says which of the reasons it is. It used to
                 // draw the "ask for a change" hint over a session that was still being read,
                 // and nothing at all if the read had left the lane empty.
@@ -158,6 +159,9 @@ struct ChatRail: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollBounceBehavior(.basedOnSize)
+        // The end of the conversation is where this pane rests: the scroll view keeps it there
+        // as rows grow, without a scroll into an estimate.
+        .defaultScrollAnchor(.bottom)
         // The tail token is watched by a view of its own, not from here.
         //
         // Reading it in this `body` registered the dependency against the whole pane, so every

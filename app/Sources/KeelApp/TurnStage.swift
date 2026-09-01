@@ -102,9 +102,7 @@ struct TurnStage: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // A plain stack: the rows have exact heights, so a scroll to one lands on it.
-                // See `ChatRail.shown` for the white pane a lazy stack's estimates produced.
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if let undo = model.undoSnapshot {
                         UndoBar(model: model, undo: undo)
                     }
