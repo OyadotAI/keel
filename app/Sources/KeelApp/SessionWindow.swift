@@ -494,10 +494,7 @@ struct SessionWindow: View {
     }
 
     private func closeDetour() {
-        model.viewingDiff = nil
-        model.inspecting = nil
-        model.viewingCommit = nil
-        model.viewingFile = nil
+        model.workbench.detour = nil
     }
 
     /// Where you are, and the way back.
@@ -1082,10 +1079,7 @@ struct WindowEvents: ViewModifier {
             .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
                                   showSettings: $showSettings))
             .onWindowCommand(.keelReviewTask) { _ in
-                model.viewingDiff = nil
-                model.viewingFile = nil
-                model.viewingCommit = nil
-                model.inspecting = nil
+                model.workbench.detour = nil
                 withAnimation(K.M.quick) { stage = .review; showSettings = false }
             }
             .onWindowCommand(.keelPalette) { _ in
@@ -1319,7 +1313,11 @@ private struct StageEvents: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onChange(of: model.previewURL) { showPreviewIfIdle() }
-            .onChange(of: model.designTick) { followTheEdit() }
+            .onChange(of: model.designer.wantsStage) {
+                guard model.designer.wantsStage else { return }
+                model.designer.wantsStage = false
+                followTheEdit()
+            }
             .onChange(of: model.running) { followTheWork() }
             .onChange(of: model.focusedTurn) { showTrace() }
             .onWindowCommand(.keelShowStage) { note in
@@ -1329,10 +1327,7 @@ private struct StageEvents: ViewModifier {
                 withAnimation(K.M.quick) {
                     stage = s
                     showSettings = false
-                    model.viewingDiff = nil
-                    model.viewingFile = nil
-                    model.viewingCommit = nil
-                    model.inspecting = nil
+                    model.workbench.detour = nil
                 }
             }
     }

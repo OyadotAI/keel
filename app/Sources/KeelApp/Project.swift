@@ -96,6 +96,9 @@ final class RepoStore {
     var branches: Wire.Branches?
     /// The last read that failed, for the panel to say beside what it still has.
     var failure: Fault?
+    /// Climbs on every read of the tree: the one value a diff card compares to know its file
+    /// may have changed under it. It was a counter every caller had to remember to bump.
+    var treeVersion = 0
 
     init(worktree: String?) {
         self.worktree = worktree
@@ -117,6 +120,7 @@ final class RepoStore {
             repos = s.repos
             changesCollapsed = s.collapsed
             failure = nil
+            treeVersion += 1
         case .failure(let fault):
             failure = fault
             return fault

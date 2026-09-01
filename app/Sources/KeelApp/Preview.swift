@@ -186,15 +186,6 @@ struct PreviewPane: NSViewRepresentable {
             view.load(URLRequest(url: url))
         }
 
-        // The reload button used to re-poll the daemon and never touch the page. Now it asks
-        // the page to load again, which is what everyone pressing it meant.
-        if context.coordinator.reloaded != model.reloadTick {
-            context.coordinator.reloaded = model.reloadTick
-            let model = self.model
-            Task { @MainActor in model.previewProblem = nil }
-            view.reload()
-        }
-
         // Only on a change: this runs on every render pass, and re-posting the mode each time
         // was a message per keystroke to every frame.
         if context.coordinator.picking != picking {
@@ -211,7 +202,6 @@ struct PreviewPane: NSViewRepresentable {
         /// pass of `updateNSView` — which would restart the page under you on every keystroke.
         var loaded: URL?
         var picking = false
-        var reloaded = 0
         init(model: SessionModel) { self.model = model }
 
         /// A page that did not load says so, over the pane, rather than staying white.
@@ -552,7 +542,7 @@ struct PreviewSurface: View {
                     .buttonStyle(QuietButton())
             }
             Button {
-                model.reloadTick += 1
+                model.designer.reload()
                 Task { await model.refreshDev() }
             } label: {
                 Image(systemName: "arrow.clockwise").font(K.F.tiny)
@@ -691,7 +681,7 @@ private struct PreviewProblem: View {
                     Button("Start the dev server") { Task { await model.startDev() } }
                         .buttonStyle(QuietButton(tone: K.C.accent))
                 } else {
-                    Button("Reload") { model.reloadTick += 1 }.buttonStyle(QuietButton())
+                    Button("Reload") { model.designer.reload() }.buttonStyle(QuietButton())
                 }
                 if !lines.isEmpty {
                     Button(showLog ? "Hide output" : "Server output") { showLog.toggle() }
