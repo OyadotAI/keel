@@ -20,3 +20,4 @@ app/.build/
 # Sparkle command-line tools, fetched by make sparkle-tools
 packaging/sparkle/
 .env
+.keel/turns/

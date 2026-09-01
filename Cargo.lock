@@ -1089,6 +1089,7 @@ version = "0.2.68"
 dependencies = [
  "anyhow",
  "camino",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

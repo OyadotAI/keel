@@ -106,6 +106,7 @@ struct SessionsPanel: View {
         // Grouped once. It was read again for every row's detail line, which on a parent folder
         // with two hundred sessions is the same grouping done two hundred times.
         let groups = grouped
+        SwiftUI.Group {
         if !model.sessions.isEmpty {
             SearchField(prompt: "Find a session", text: $query)
         }
@@ -138,7 +139,8 @@ struct SessionsPanel: View {
             ForEach(group.sessions) { s in
                 PanelRow(name: s.title ?? String(s.id.prefix(8)),
                          detail: detail(s),
-                         selected: s.id == model.sessionId) {
+                         selected: s.id == model.sessionId,
+                         accent: s.live == true ? (s.busy == true ? K.C.accent : K.C.dim) : nil) {
                     // Resumed into its own lane, so opening an old session does not evict the one
                     // that is running.
                     Task { await model.lanes?.open(session: s.id) }
@@ -153,6 +155,19 @@ struct SessionsPanel: View {
             }
             }
         }
+        }
+        // The list was a snapshot from whenever the panel opened: a session started in a
+        // terminal did not appear and one that had ended kept saying it was running, because
+        // nothing asked again. Three seconds is one `stat` per transcript and a read of a few
+        // small files; the model drops a reply that changed nothing. Cancelled with the panel.
+        // A session moving between Running and Today slides rather than jumps.
+        .animation(.easeInOut(duration: 0.2), value: model.sessions)
+        .task {
+            while !Task.isCancelled {
+                await model.refreshSessions()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
     }
 
     struct Group: Identifiable {
@@ -161,14 +176,21 @@ struct SessionsPanel: View {
         var id: String { label }
     }
 
-    /// The group that starts unfolded: the first one with anything in it.
+    /// The groups that start unfolded: Running, and the newest bucket with anything in it.
     ///
     /// It was the literal "Today", so a person who had not run anything since yesterday opened
     /// History onto four folded headers and nothing to read — which looks like an empty panel with
-    /// extra steps. `grouped` drops empty buckets, so the first group is the newest that exists.
+    /// extra steps. `grouped` drops empty buckets, so the first bucket is the newest that exists.
     static func firstOpen(_ groups: [Group]) -> Set<String> {
-        groups.first.map { [$0.label] } ?? []
+        var open: Set<String> = [running]
+        if let first = groups.first(where: { $0.label != running }) { open.insert(first.label) }
+        return open
     }
+
+    /// Sessions with a `claude` behind them right now, above the dated ones. What is happening is
+    /// not history, and a running row filed under "Today" between two finished ones is a thing
+    /// you have to read the detail line to find.
+    static let running = "Running"
 
     /// The four buckets, in the order they are shown. `nil` days fall in the last one.
     static let buckets = ["Today", "This week", "This month", "Older"]
@@ -189,11 +211,14 @@ struct SessionsPanel: View {
 
         var byBucket: [String: [Wire.Session]] = [:]
         for s in visible {
-            byBucket[Self.bucket(String((s.lastActive ?? "").prefix(10)),
-                                 today: today, week: week, month: month), default: []].append(s)
+            let key = s.live == true
+                ? Self.running
+                : Self.bucket(String((s.lastActive ?? "").prefix(10)),
+                              today: today, week: week, month: month)
+            byBucket[key, default: []].append(s)
         }
         // `visible` is already most-recent-first, so each bucket is too.
-        return Self.buckets.compactMap { key in
+        return ([Self.running] + Self.buckets).compactMap { key in
             byBucket[key].map { Group(label: key, sessions: $0) }
         }
     }
@@ -220,7 +245,7 @@ struct SessionsPanel: View {
     private func detail(_ s: Wire.Session) -> String {
         // First, because it is the one thing here that is about right now rather than about the
         // past — and opening it shows the conversation as it is written rather than a snapshot.
-        var parts = s.live == true ? ["● running"] : []
+        var parts = s.live == true ? [s.busy == true ? "working" : "idle"] : []
         parts.append("\(s.messages) message\(s.messages == 1 ? "" : "s")")
         if let t = s.lastActive { parts.append(short(t)) }
         // Now that the headers are dates, where it ran is only ever said here.
@@ -289,7 +314,7 @@ struct ReadinessPanel: View {
     // MARK: The card: the score, what it is, where it runs, and the one thing to do next.
 
     private var card: some View {
-        Group {
+        SwiftUI.Group {
             if model.scan == nil {
                 unscanned
             } else {
