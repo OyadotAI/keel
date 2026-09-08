@@ -798,6 +798,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/cli/install-all", get(crate::clitools::install_all))
         .route("/api/cli/login", get(crate::clitools::login))
         .route(
+            "/api/kubernetes/contexts",
+            get(crate::clitools::kubernetes_contexts).post(crate::clitools::kubernetes_select),
+        )
+        .route(
             "/api/github/clone",
             axum::routing::post(crate::connect::clone),
         )

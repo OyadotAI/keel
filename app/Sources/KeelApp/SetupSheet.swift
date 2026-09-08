@@ -44,7 +44,7 @@ struct SetupSheet: View {
         }
         for t in m.tools where !t.installed || !t.authenticated {
             out.append(Item(id: "tool-" + t.id, icon: "wrench.and.screwdriver",
-                            title: t.installed ? "\(t.label) is not signed in" : "\(t.label) is not installed",
+                            title: t.installed ? "\(t.label) needs setup" : "\(t.label) is not installed",
                             detail: t.blocked ?? (t.installed ? "Sign in so deploys and clones work." : "Install it from Settings › Tools."),
                             action: "Open Settings › Tools", tone: t.installed ? .warn : .neutral) { settings() })
         }
@@ -59,7 +59,7 @@ struct SetupSheet: View {
             out.append(Item(id: "hooks", icon: "bolt.horizontal",
                             title: "\(repoHooks) hook\(repoHooks == 1 ? "" : "s") came with the repository",
                             detail: "A hook is a shell command that runs on this machine. Keel quarantined them; review before enabling.",
-                            action: "Review in Hooks", tone: .bad) { m.inspecting = nil; m.sheet = nil; NotificationCenter.default.post(name: .keelTogglePanel, object: nil) })
+                            action: "Review in Hooks", tone: .bad) { m.inspecting = nil; m.sheet = nil; NotificationCenter.default.post(name: .keelShowPanel, object: "hooks") })
         }
         if !m.trusted {
             out.append(Item(id: "trust", icon: "checkmark.shield",
@@ -98,6 +98,7 @@ struct SetupSheet: View {
                      + "each makes the agent more useful here.")
                     .font(K.F.small).foregroundStyle(K.C.dim)
                     .fixedSize(horizontal: false, vertical: true)
+                ScrollView {
                 VStack(spacing: 0) {
                     ForEach(items) { it in
                         HStack(alignment: .top, spacing: K.S.sm) {
@@ -125,6 +126,8 @@ struct SetupSheet: View {
                 }
                 .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.md))
                 .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+                }
+                .frame(maxHeight: 420)
             }
 
             HStack {

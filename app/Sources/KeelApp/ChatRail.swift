@@ -31,9 +31,6 @@ struct ChatRail: View {
     /// either way, and the ones you cannot see are one click away.
     private static let shown = 10
     @State private var showingAll = false
-    /// A rescue is already running. Without it the geometry fires again on every scroll the
-    /// rescue itself performs.
-    @State private var rescuing = false
     /// The geometry's last word on whether the pane is showing its conversation.
     @State private var isBlank = false
 
@@ -211,8 +208,12 @@ struct ChatRail: View {
                        viewport: g.containerSize.height)
         } action: { _, blank in
             isBlank = blank
-            guard blank else { rescuing = false; return }
-            rescue(proxy)
+        }
+        // SwiftUI owns cancellation when the pane disappears or the geometry recovers. An
+        // unstructured retry task survived both, and resetting its guard in the geometry
+        // callback let repeated blank/nonblank transitions run multiple scroll loops at once.
+        .task(id: isBlank) {
+            if isBlank { await rescue(proxy) }
         }
         // In the middle of the pane, not as the first row of it: a line of small grey text
         // at the top left of an empty transcript is a wait nobody sees, and the read it is
@@ -281,9 +282,8 @@ struct ChatRail: View {
     /// cannot explain — and the only reason it lasted this long is that it is silent. It crashes
     /// nothing and fails no request; a person scrolls out of it and carries on, and we never hear.
     /// Counts and flags only, never a prompt or a path.
-    private func rescue(_ proxy: ScrollViewProxy) {
-        guard !rescuing, model.turns.last != nil else { return }
-        rescuing = true
+    private func rescue(_ proxy: ScrollViewProxy) async {
+        guard !Task.isCancelled, model.turns.last != nil else { return }
         Telemetry.warn("transcript scrolled off its own content", [
             "turns": "\(model.turns.count)",
             "replaying": "\(model.replaying)",
@@ -291,23 +291,16 @@ struct ChatRail: View {
             "following": "\(model.following)",
             "expanded": "\(showingAll)",
         ])
-        Task { @MainActor in
-            pinned = true
-            // Until it lands, not three times. Three was enough for a short conversation and not
-            // for a turn with a hundred steps still being built: every retry scrolled into an
-            // estimate that was corrected again before the next, and the pane stayed white after
-            // the third. `isBlank` is the geometry's own answer, so this stops the moment it is
-            // no longer true and never runs past a few seconds.
-            for _ in 0..<10 where isBlank {
-                toBottom(proxy)
-                try? await Task.sleep(for: .milliseconds(120))
-            }
-            if isBlank {
-                Telemetry.warn("transcript stayed blank after rescue", ["turns": "\(model.turns.count)"])
-            }
-            // Cleared here as well as by the geometry: a pane that is somehow still blank must
-            // be able to ask again the next time anything moves.
-            rescuing = false
+        pinned = true
+        // Bounded retries, cancelled immediately when geometry recovers or the view disappears.
+        for _ in 0..<10 where isBlank {
+            guard !Task.isCancelled else { return }
+            toBottom(proxy)
+            do { try await Task.sleep(for: .milliseconds(120)) }
+            catch { return }
+        }
+        if isBlank {
+            Telemetry.warn("transcript stayed blank after rescue", ["turns": "\(model.turns.count)"])
         }
     }
 

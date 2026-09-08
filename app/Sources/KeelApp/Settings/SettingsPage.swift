@@ -126,7 +126,7 @@ struct SettingsPage: View {
         .background(K.C.surface)
     }
 
-    private var needsAttention: Int {
+    var needsAttention: Int {
         model.tools.count { !$0.installed || !$0.authenticated }
     }
 
@@ -136,7 +136,8 @@ struct SettingsPage: View {
                 Text(section.title).font(K.F.display).foregroundStyle(K.C.text)
 
                 switch section {
-                case .connections: ConnectionsSettings(client: model.client)
+                case .connections: ConnectionsSettings(client: model.client, tools: model.tools,
+                                                       onToolsChanged: { model.tools = $0 })
                 case .permissions: PermissionsSettings(client: model.client,
                                                        sessionId: model.sessionId)
                 case .devices: PairingSettings(model: pairing)

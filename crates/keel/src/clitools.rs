@@ -142,7 +142,7 @@ const TOOLS: &[Tool] = &[
         label: "GitHub CLI",
         binary: "gh",
         version: &["--version"],
-        whoami: &["auth", "status"],
+        whoami: &["auth", "status", "--active", "--hostname", "github.com"],
         install: &[("brew", &["install", "gh"])],
         // --web is the device flow; https keeps the credential usable for cloning with no SSH key.
         login: &[
@@ -154,7 +154,7 @@ const TOOLS: &[Tool] = &[
             "--hostname",
             "github.com",
         ],
-        identity: &["api", "user", "--jq", ".login"],
+        identity: &["api", "user", "--hostname", "github.com", "--jq", ".login"],
         manual: "https://github.com/cli/cli#installation",
         setup: "",
     },
@@ -163,7 +163,7 @@ const TOOLS: &[Tool] = &[
         label: "Wrangler",
         binary: "wrangler",
         version: &["--version"],
-        whoami: &["whoami"],
+        whoami: &["whoami", "--json"],
         // brew first, and its formula declares node as a dependency, so a bare machine gets both
         // from one command. bun and npm stay as fallbacks for anyone who has a runtime but not
         // Homebrew.
@@ -173,7 +173,7 @@ const TOOLS: &[Tool] = &[
             ("npm", &["install", "--global", "wrangler"]),
         ],
         login: &["login"],
-        identity: &["whoami"],
+        identity: &["whoami", "--json"],
         manual: "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
         setup: "",
     },
@@ -182,12 +182,7 @@ const TOOLS: &[Tool] = &[
         label: "Google Cloud",
         binary: "gcloud",
         version: &["--version"],
-        whoami: &[
-            "auth",
-            "list",
-            "--filter=status:ACTIVE",
-            "--format=value(account)",
-        ],
+        whoami: &["auth", "print-access-token"],
         install: &[("brew", &["install", "--cask", "google-cloud-sdk"])],
         // Opens a browser and waits. That is fine here: it is the user's own machine and their own
         // Google account, and there is no paste-a-key alternative worth offering instead.
@@ -218,9 +213,8 @@ const TOOLS: &[Tool] = &[
         login: &[],
         identity: &["config", "current-context"],
         manual: "https://kubernetes.io/docs/tasks/tools/",
-        // Credentials come from the provider. Listing what is already configured is the honest
-        // first step, and it is safe to run unprompted — unlike a half-typed `get-credentials`.
-        setup: "kubectl config get-contexts",
+        // Settings has a native chooser; a printed table has no selection action.
+        setup: "",
     },
     Tool {
         id: "docker",
@@ -296,15 +290,11 @@ const TOOLS: &[Tool] = &[
 /// `aws configure list-profiles` rather than parsing the INI: it sees SSO profiles in `config` and
 /// key-based ones in `credentials`, and it is the CLI's own answer to the question rather than
 /// Keel's guess at it.
-fn aws_profiles() -> Vec<String> {
-    std::process::Command::new("aws")
-        .args(["configure", "list-profiles"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
+async fn aws_profiles() -> Vec<String> {
+    run("aws", &["configure", "list-profiles"])
+        .await
         .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
+            o.lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty())
                 .map(str::to_string)
@@ -354,6 +344,8 @@ pub struct ToolStatus {
     pub setup: Option<String>,
     /// Set when the tool is installed but cannot be logged in from here, with the reason.
     pub blocked: Option<String>,
+    /// Provider whose browser login can recover this connection failure.
+    pub reconnect: Option<&'static str>,
     pub manual: &'static str,
 }
 
@@ -364,6 +356,20 @@ pub struct ToolStatus {
 fn condense(id: &str, raw: &str) -> String {
     match id {
         "wrangler" => {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
+                let email = json.get("email").and_then(|v| v.as_str());
+                let account = json
+                    .get("accounts")
+                    .and_then(|v| v.as_array())
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str());
+                return [email, account]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+            }
             let email = raw
                 .lines()
                 .find_map(|l| l.split("associated with the email").nth(1))
@@ -551,7 +557,22 @@ fn uncached_toolchain() -> (Option<&'static str>, Vec<&'static str>, Vec<&'stati
 #[cfg(test)]
 const BLOCKED_EXPLAINS: &[&str] = &["kubectl", "docker", "aws", "tailscale"];
 
-pub async fn status() -> axum::Json<Vec<ToolStatus>> {
+#[cfg(test)]
+#[test]
+fn kubernetes_setup_does_not_end_at_a_print_only_command() {
+    assert!(
+        tool("kubectl").unwrap().setup.is_empty(),
+        "Kubernetes setup needs a native context chooser, not a terminal table"
+    );
+}
+
+#[derive(Default, Deserialize)]
+pub struct StatusQuery {
+    pub aws_profile: Option<String>,
+}
+
+pub async fn status(Query(q): Query<StatusQuery>) -> axum::Json<Vec<ToolStatus>> {
+    let aws_profile = q.aws_profile.as_deref().filter(|p| !p.is_empty());
     let checks = TOOLS.iter().map(|t| async move {
         // Within one tool the calls are ordered — asking a missing binary who it is wastes a
         // process spawn, and asking an unauthenticated one wastes a network round trip.
@@ -559,10 +580,20 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             .await
             .and_then(|o| o.lines().next().map(|l| l.trim().to_owned()));
 
-        let authenticated = version.is_some() && run(t.binary, t.whoami).await.is_some();
+        let args = scoped_args(t.whoami, if t.id == "aws" { aws_profile } else { None });
+        let connection = if version.is_some() {
+            run_checked(t.binary, &args).await.and_then(|body| validate_connection(t.id, body))
+        } else {
+            Err("Tool is not installed.".to_string())
+        };
+        let authenticated = connection.is_ok();
+        let reconnect = (t.id == "kubectl"
+            && connection.as_ref().err().is_some_and(|e| google_reauthentication_needed(e)))
+            .then_some("gcloud");
 
-        let identity = if authenticated {
-            run(t.binary, t.identity)
+        // A selected context exists independently of credentials or cluster reachability.
+        let identity = if authenticated || (t.id == "kubectl" && version.is_some()) {
+            run(t.binary, &scoped_args(t.identity, if t.id == "aws" { aws_profile } else { None }))
                 .await
                 .map(|o| condense(t.id, &o))
                 .filter(|s| !s.is_empty())
@@ -579,7 +610,7 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             .map(|(mgr, args)| format!("{mgr} {}", args.join(" ")));
 
         let profiles = if t.id == "aws" {
-            aws_profiles()
+            aws_profiles().await
         } else {
             Vec::new()
         };
@@ -588,31 +619,43 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
         // credentials from somewhere else, and naming that is more use than a button that runs
         // nothing — but better still is a command, which the UI can hand to the terminal.
         let blocked = match t.id {
-            "kubectl" if version.is_some() && !authenticated => Some(
-                "No cluster is reachable. Pick one below, or point kubectl at it yourself."
-                    .to_string(),
-            ),
-            "docker" if version.is_some() && !authenticated => {
-                Some("Docker is installed but its daemon is not running.".to_string())
+            "gcloud" if version.is_some() && !authenticated => Some(format!(
+                "Google Cloud connection check failed. Sign in again if your credentials have expired.\n{}",
+                connection.as_ref().err().map(String::as_str).unwrap_or("Unknown error")
+            )),
+            "kubectl" if version.is_some() && !authenticated => {
+                Some(kubernetes_connection_message(
+                    identity.as_deref(),
+                    connection
+                        .as_ref()
+                        .err()
+                        .map(String::as_str)
+                        .unwrap_or("Unknown error"),
+                ))
             }
+            "docker" if version.is_some() && !authenticated => Some(format!(
+                "Docker engine check failed. Check the selected Docker context and its connection; start Docker Desktop if you use its local engine.\n{}",
+                connection.as_ref().err().map(String::as_str).unwrap_or("Unknown error")
+            )),
             "aws" if version.is_some() && profiles.is_empty() => Some(
                 "No AWS profile exists yet. Set one up with Identity Center below, or run \
                  `aws configure` for an access key — Keel never asks for one."
                     .to_string(),
             ),
-            "aws" if version.is_some() && !authenticated => Some(
-                "A profile exists but its credentials are not valid. If it uses Identity Center, \
-                 signing in again will refresh it."
-                    .to_string(),
-            ),
+            "aws" if version.is_some() && !authenticated => Some(format!(
+                "AWS check failed for {}. Select your profile; renew SSO sign-in if its session expired.\n{}",
+                aws_profile.unwrap_or("the default credential chain"),
+                connection.as_ref().err().map(String::as_str).unwrap_or("Unknown error")
+            )),
             // Installed and stopped is the ordinary state of a VPN, not a failure, so this says
             // what it is rather than reporting it broken. `tailscale up` opens a browser and can
             // ask for rights Keel does not have, which is why it is offered to the terminal as a
             // command rather than as a button that runs nothing.
-            "tailscale" if version.is_some() && !authenticated => Some(
-                "Tailscale is installed but not connected. Pairing over a tailnet needs it up."
-                    .to_string(),
-            ),
+            "tailscale" if version.is_some() && !authenticated => Some(format!(
+                "Tailscale connection check failed. Check the app's connection and permissions.\n{}",
+                connection.as_ref().err().map(String::as_str).unwrap_or("Unknown error")
+            )),
+            _ if version.is_some() && !authenticated => connection.as_ref().err().cloned(),
             _ => None,
         };
 
@@ -632,25 +675,350 @@ pub async fn status() -> axum::Json<Vec<ToolStatus>> {
             install_cmd,
             setup,
             blocked,
+            reconnect,
             manual: t.manual,
         }
     });
 
-    axum::Json(futures_util::future::join_all(checks).await)
+    let mut statuses = futures_util::future::join_all(checks).await;
+    if statuses.iter().any(|t| t.reconnect == Some("gcloud"))
+        && let Some(cloud) = statuses.iter_mut().find(|t| t.id == "gcloud")
+    {
+        cloud.authenticated = false;
+        cloud.blocked = Some("Your GKE connection requires Google Cloud reauthentication. Sign in again, then test the Kubernetes connection.".to_string());
+    }
+    axum::Json(statuses)
+}
+
+fn scoped_args<'a>(args: &[&'a str], profile: Option<&'a str>) -> Vec<&'a str> {
+    let mut out = args.to_vec();
+    if let Some(profile) = profile {
+        out.extend(["--profile", profile]);
+    }
+    out
+}
+
+fn validate_connection(id: &str, body: String) -> Result<String, String> {
+    if id == "wrangler" {
+        let json: serde_json::Value = serde_json::from_str(&body).map_err(|_| {
+            "Could not read Wrangler authentication status. Update Wrangler and retry.".to_string()
+        })?;
+        if json.get("loggedIn").and_then(|v| v.as_bool()) != Some(true) {
+            return Err(
+                "Cloudflare sign-in required. Sign in with Wrangler to connect your account."
+                    .to_string(),
+            );
+        }
+    }
+    Ok(body)
 }
 
 /// Run a command and give back its stdout, or nothing if it failed.
 async fn run(program: &str, args: &[&str]) -> Option<String> {
+    run_checked(program, args).await.ok()
+}
+
+fn kubernetes_connection_message(context: Option<&str>, error: &str) -> String {
+    if google_reauthentication_needed(error) {
+        return format!(
+            "Google Cloud reconnection needed. Renew your Google Cloud sign-in, then Test connection. Your Kubernetes context has not changed.\n{error}"
+        );
+    }
+    if context.is_some() {
+        format!(
+            "Context selected · connection check failed. Check your VPN or cluster credentials, then Test connection.\n{error}"
+        )
+    } else {
+        format!(
+            "No current context could be read. Choose a context to configure cluster access.\n{error}"
+        )
+    }
+}
+
+fn google_reauthentication_needed(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    (e.contains("gcloud")
+        || e.contains("gke-gcloud-auth-plugin")
+        || e.contains("accounts.google.com"))
+        && [
+            "invalid_grant",
+            "reauth",
+            "expired",
+            "revoked",
+            "gcloud auth login",
+            "refresh token",
+            "could not refresh access token",
+        ]
+        .iter()
+        .any(|reason| e.contains(reason))
+}
+
+#[cfg(test)]
+#[test]
+fn expired_google_credentials_have_provider_recovery_not_context_setup() {
+    let error = "gke-gcloud-auth-plugin: ERROR: (gcloud.config.config-helper) There was a problem refreshing your current auth tokens: invalid_grant: Token has been expired or revoked. Please run gcloud auth login";
+    assert!(google_reauthentication_needed(error));
+    assert!(
+        kubernetes_connection_message(Some("gke_project_cluster"), error)
+            .contains("Google Cloud reconnection needed")
+    );
+    assert!(!google_reauthentication_needed(
+        "gke-gcloud-auth-plugin: executable file not found"
+    ));
+    assert!(!google_reauthentication_needed(
+        "gcloud: dial tcp: network is unreachable"
+    ));
+    assert!(!google_reauthentication_needed(
+        "Forbidden: user cannot list namespaces"
+    ));
+    assert_eq!(
+        tool("gcloud").unwrap().whoami,
+        &["auth", "print-access-token"]
+    );
+}
+
+async fn run_checked(program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null()).kill_on_drop(true);
     let output = tokio::time::timeout(std::time::Duration::from_secs(8), command.output())
         .await
-        .ok()?
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
+        .map_err(|_| "Connection check timed out after 8 seconds.".to_string())?
+        .map_err(|e| format!("Could not run {program}: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail: String = stderr.trim().chars().take(1600).collect();
+        Err(if detail.is_empty() {
+            format!("{program} exited with {}.", output.status)
+        } else {
+            detail
+        })
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn selected_context_survives_a_failed_connection_message() {
+    let message = kubernetes_connection_message(Some("staging"), "credential plugin missing");
+    assert!(message.contains("Context selected · connection check failed"));
+    assert!(message.contains("credential plugin missing"));
+    assert!(!message.contains("Choose a context"));
+    assert!(kubernetes_connection_message(None, "missing config").contains("Choose a context"));
+}
+
+/// Only context metadata crosses the API, never kubeconfig credentials or certificates.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KubernetesContext {
+    pub name: String,
+    #[serde(default)]
+    pub context: KubernetesTarget,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct KubernetesTarget {
+    #[serde(default)]
+    pub cluster: String,
+    #[serde(default)]
+    pub namespace: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct KubernetesConfig {
+    #[serde(default, rename = "current-context")]
+    pub current: Option<String>,
+    // kubectl emits null, rather than [], when a config has no contexts.
+    #[serde(default)]
+    pub contexts: Option<Vec<KubernetesContext>>,
+}
+
+type KubernetesResult = Result<Json<KubernetesConfig>, (axum::http::StatusCode, String)>;
+
+async fn kubernetes_command(program: &std::ffi::OsStr, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(8), command.output())
+        .await
+        .map_err(|_| "kubectl timed out. Check your configuration and try Refresh.".to_owned())?
+        .map_err(|_| {
+            "Could not start kubectl. Install Kubernetes in Settings → Tools, then retry."
+                .to_owned()
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "kubectl could not update or read its configuration: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(1000)
+                .collect::<String>()
+                .trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+async fn read_kubernetes(program: &std::ffi::OsStr) -> Result<KubernetesConfig, String> {
+    // Local config only. Never --raw, never an API request or credential plugin execution.
+    let json = kubernetes_command(program, &["config", "view", "-o", "json"]).await?;
+    let mut config: KubernetesConfig = serde_json::from_str(&json).map_err(|_| {
+        "kubectl returned an unreadable configuration. Check your kubeconfig and retry.".to_owned()
+    })?;
+    if let Some(contexts) = &mut config.contexts {
+        contexts.sort_by(|a, b| a.name.cmp(&b.name));
+        contexts.dedup_by(|a, b| a.name == b.name);
+    }
+    Ok(config)
+}
+
+pub async fn kubernetes_contexts() -> KubernetesResult {
+    read_kubernetes(std::ffi::OsStr::new("kubectl"))
+        .await
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+pub struct KubernetesSelection {
+    pub name: String,
+}
+
+async fn select_kubernetes(
+    program: &std::ffi::OsStr,
+    name: &str,
+) -> Result<KubernetesConfig, String> {
+    let config = read_kubernetes(program).await?;
+    if !config
+        .contexts
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.name == name)
+    {
+        return Err(
+            "That context is no longer available. Refresh and choose another context.".to_owned(),
+        );
+    }
+    // An argv value, not shell text. -- prevents names from becoming kubectl flags.
+    kubernetes_command(program, &["config", "use-context", "--", name]).await?;
+    let updated = read_kubernetes(program).await?;
+    if updated.current.as_deref() != Some(name) {
+        return Err(
+            "The selected context was not saved. Refresh and check your kubeconfig permissions."
+                .to_owned(),
+        );
+    }
+    Ok(updated)
+}
+
+pub async fn kubernetes_select(Json(selection): Json<KubernetesSelection>) -> KubernetesResult {
+    select_kubernetes(std::ffi::OsStr::new("kubectl"), &selection.name)
+        .await
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+}
+
+#[cfg(test)]
+mod kubernetes_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn stub(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kubectl");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ncd '{}'\n{}\n", dir.path().display(), body),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn connection_check_preserves_provider_auth_errors() {
+        let (_dir, path) = stub(
+            "printf '%s' 'gcloud: invalid_grant: Token has been expired or revoked' >&2\nexit 1",
+        );
+        let error = run_checked(path.to_str().unwrap(), &[]).await.unwrap_err();
+        assert!(google_reauthentication_needed(&error));
+        assert!(error.contains("invalid_grant"));
+        assert!(run(path.to_str().unwrap(), &[]).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn metadata_excludes_credentials_and_accepts_empty_configs() {
+        let (_dir, path) = stub(
+            r#"printf '%s' '{"current-context":"dev","contexts":[{"name":"dev","context":{"cluster":"local","user":"secret-user","namespace":"apps"}}],"users":[{"user":{"token":"SECRET"}}]}'"#,
+        );
+        let config = read_kubernetes(path.as_os_str()).await.unwrap();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("SECRET"));
+        assert!(!json.contains("secret-user"));
+        assert_eq!(config.current.as_deref(), Some("dev"));
+        for json in ["{}", r#"{"contexts":null}"#, r#"{"contexts":[]}"#] {
+            let config: KubernetesConfig = serde_json::from_str(json).unwrap();
+            assert!(config.contexts.unwrap_or_default().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn context_selection_uses_literal_argv_and_verifies_saved_context() {
+        let (dir, path) = stub(
+            r#"
+if [ "$2" = view ]; then
+  if [ -f applied ]; then current='dev; echo injected'; else current=old; fi
+  printf '{"current-context":"%s","contexts":[{"name":"dev; echo injected","context":{"cluster":"local"}}]}' "$current"
+else
+  [ "$1" = config ] && [ "$2" = use-context ] && [ "$3" = -- ] && [ "$4" = 'dev; echo injected' ] && [ "$#" = 4 ] || exit 2
+  touch applied
+fi"#,
+        );
+        let config = select_kubernetes(path.as_os_str(), "dev; echo injected")
+            .await
+            .unwrap();
+        assert_eq!(config.current.as_deref(), Some("dev; echo injected"));
+        assert!(dir.path().join("applied").exists());
+        assert!(!dir.path().join("injected").exists());
+    }
+
+    #[tokio::test]
+    async fn stale_choices_are_rejected_without_running_use_context() {
+        let (dir, path) = stub(
+            r#"
+if [ "$2" = view ]; then printf '%s' '{"contexts":[]}'; else touch mutated; fi"#,
+        );
+        let error = select_kubernetes(path.as_os_str(), "missing")
+            .await
+            .unwrap_err();
+        assert!(error.contains("no longer available"));
+        assert!(!dir.path().join("mutated").exists());
+    }
+
+    #[tokio::test]
+    async fn failures_and_false_success_are_visible() {
+        let (_dir, path) = stub("echo 'permission denied' >&2; exit 1");
+        assert!(
+            read_kubernetes(path.as_os_str())
+                .await
+                .unwrap_err()
+                .contains("permission denied")
+        );
+        let (_dir, path) =
+            stub(r#"printf '%s' '{"current-context":"old","contexts":[{"name":"dev"}]}'"#);
+        assert!(
+            select_kubernetes(path.as_os_str(), "dev")
+                .await
+                .unwrap_err()
+                .contains("not saved")
+        );
+        let (_dir, path) = stub("echo not-json");
+        assert!(
+            read_kubernetes(path.as_os_str())
+                .await
+                .unwrap_err()
+                .contains("unreadable")
+        );
+    }
 }
 
 #[derive(Deserialize)]
@@ -801,6 +1169,33 @@ pub async fn login(Query(q): Query<ToolQuery>) -> Sse<ReceiverStream<Result<Even
 mod tests {
     use super::*;
 
+    #[test]
+    fn provider_checks_use_auth_state_and_matching_scope() {
+        assert!(validate_connection("wrangler", r#"{"loggedIn":false}"#.into()).is_err());
+        assert!(validate_connection("wrangler", "You are not authenticated".into()).is_err());
+        assert!(validate_connection("wrangler", r#"{"loggedIn":true}"#.into()).is_ok());
+        assert_eq!(
+            condense(
+                "wrangler",
+                r#"{"loggedIn":true,"email":"dev@example.com","accounts":[{"name":"Example"}]}"#
+            ),
+            "dev@example.com · Example"
+        );
+        assert_eq!(tool("wrangler").unwrap().whoami, &["whoami", "--json"]);
+        assert_eq!(
+            tool("gh").unwrap().whoami,
+            &["auth", "status", "--active", "--hostname", "github.com"]
+        );
+        assert_eq!(
+            scoped_args(&["sts", "get-caller-identity"], Some("team-prod")),
+            vec!["sts", "get-caller-identity", "--profile", "team-prod"]
+        );
+        assert_eq!(
+            scoped_args(&["sts", "get-caller-identity"], None),
+            vec!["sts", "get-caller-identity"]
+        );
+    }
+
     #[tokio::test]
     async fn disconnecting_setup_reaps_a_silent_process() {
         use axum::response::IntoResponse;
@@ -940,7 +1335,7 @@ mod tests {
     fn a_tool_without_a_login_is_one_we_explain() {
         for t in TOOLS.iter().filter(|t| t.login.is_empty()) {
             assert!(
-                !t.setup.is_empty(),
+                !t.setup.is_empty() || t.id == "kubectl",
                 "{} has no login and no setup command, so Settings can offer nothing",
                 t.id
             );

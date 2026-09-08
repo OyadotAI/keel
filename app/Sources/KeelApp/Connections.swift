@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// Stream closure is not success. Keep fatal errors sticky even if a later exit code is zero.
+struct SetupCommandResult {
+    private(set) var finished = false
+    private var error: String?
+    mutating func receive(_ event: Client.Event) {
+        if event.name == "fatal" { error = event.data.isEmpty ? "Setup failed. Try again." : event.data }
+        if event.name == "done" {
+            finished = true
+            if event.data != "0" { error = "Setup exited with code \(event.data). Check the output and retry." }
+        }
+    }
+    var failure: String? { error ?? (finished ? nil : "Setup disconnected before it finished. Check the output and retry.") }
+    var succeeded: Bool { finished && error == nil }
+    static func credentialProvider(for path: String) -> String { String(path.split(separator: "/").last ?? "") }
+    static func awsConfigureCommand(profile: String) -> String {
+        profile.isEmpty ? "aws configure" : "aws configure --profile '" + profile.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 /// The CLIs Keel drives, and how to get them working.
 ///
 /// Keel never asks for a long-lived token. Every one of these tools has its own login — a browser
@@ -15,9 +34,17 @@ struct ConnectionsSettings: View {
     @State private var stored: Stored?
     @State private var failure: String?
     @State private var claude: ClaudeSetup
+    @State private var choosingContext = false
+    @State private var refreshing = false
+    @State private var outputTool: String?
+    @State private var awsProfile = ""
 
-    init(client: Client, tools: [Tool] = [], claudeStatus: ClaudeSetup.Status? = nil) {
+    private let onToolsChanged: ([Tool]) -> Void
+
+    init(client: Client, tools: [Tool] = [], claudeStatus: ClaudeSetup.Status? = nil,
+         onToolsChanged: @escaping ([Tool]) -> Void = { _ in }) {
         self.client = client
+        self.onToolsChanged = onToolsChanged
         _tools = State(initialValue: tools)
         _claude = State(initialValue: ClaudeSetup(client: client, status: claudeStatus))
     }
@@ -25,6 +52,11 @@ struct ConnectionsSettings: View {
     struct Stored: Decodable {
         var github: JSONValue?
         var cloudflare: JSONValue?
+        var github_via_gh: Bool?
+        var github_stored: Bool?
+        var cloudflare_stored: Bool?
+        var hasGitHubToken: Bool { github_stored ?? (github != nil && github_via_gh != true) }
+        var hasCloudflareToken: Bool { cloudflare_stored ?? (cloudflare != nil) }
     }
 
     struct Tool: Decodable, Identifiable, Sendable {
@@ -40,6 +72,16 @@ struct ConnectionsSettings: View {
         var setup: String?
         var install_cmd: String?
         var manual: String?
+        var reconnect: String?
+        var profiles: [String]?
+
+        var statusLabel: String {
+            if !installed { return "MISSING" }
+            if authenticated { return "READY" }
+            if reconnect != nil { return "SIGN IN" }
+            if id == "kubectl", identity != nil { return "CHECK" }
+            return ["kubectl", "docker", "tailscale"].contains(id) ? "SET UP" : "SIGN IN"
+        }
     }
 
     private var broken: [Tool] { tools.filter { !$0.installed || !$0.authenticated } }
@@ -71,7 +113,7 @@ struct ConnectionsSettings: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(K.F.micro).foregroundStyle(K.C.add)
                             .accessibilityHidden(true)
-                        Text("All \(tools.count) tools installed and signed in.")
+                        Text("All \(tools.count) optional tools ready.")
                             .font(K.F.small).foregroundStyle(K.C.dim)
                     }
                 } else {
@@ -89,6 +131,9 @@ struct ConnectionsSettings: View {
                 }
             }
 
+            Button(refreshing ? "Checking tools…" : "Refresh tools") { Task { await refresh() } }
+                .buttonStyle(QuietButton()).disabled(refreshing || busy != nil)
+
             // One row per tool, the broken ones first. A grid of cards had ragged heights and
             // a command you had to retype; a row has the state, the account, and the button.
             SettingsSection("Command-line tools", note: "Installers show the command before running it. Sign-in uses each tool's own account flow.") {
@@ -96,7 +141,18 @@ struct ConnectionsSettings: View {
                     ForEach(orderedTools) { t in
                         ToolRow(tool: t, busy: busy == t.id, anyBusy: busy != nil,
                                 install: { stream("/api/cli/install", ["id": t.id], t.id) },
-                                login: { stream("/api/cli/login", ["id": t.id], t.id) })
+                                login: { stream("/api/cli/login", ["id": t.id], t.id) },
+                                chooseContext: { choosingContext = true },
+                                checking: refreshing, testConnection: { Task { await refresh() } },
+                                reconnectCloud: { stream("/api/cli/login", ["id": "gcloud"], t.id) },
+                                configureAws: {
+                                    NotificationCenter.default.post(name: .keelRunInTerminal,
+                                        object: SetupCommandResult.awsConfigureCommand(profile: awsProfile))
+                                })
+                        if t.id == "aws", t.installed {
+                            awsProfileControls(t).padding(K.S.md)
+                        }
+                        if outputTool == t.id { setupOutput.padding(K.S.md) }
                         if t.id != orderedTools.last?.id { Hairline() }
                     }
                 }
@@ -111,50 +167,60 @@ struct ConnectionsSettings: View {
                     + "repository, never in Keel's files."
             ) {
                 boxed {
-                    TokenRow(client: client, label: "GitHub token", stored: stored?.github != nil,
+                    if stored?.github_via_gh == true {
+                        Text("GitHub is connected through GitHub CLI. No Keel-managed token is needed.")
+                            .font(K.F.small).foregroundStyle(K.C.dim).padding(K.S.md)
+                    }
+                    TokenRow(client: client, label: "GitHub token", stored: stored?.hasGitHubToken == true,
                              path: "/api/connect/github",
                              help: "A personal access token, kept in the login keychain. Only "
                                  + "needed for what `gh` cannot do for you.")
                     Hairline()
                     TokenRow(client: client, label: "Cloudflare token",
-                             stored: stored?.cloudflare != nil,
+                             stored: stored?.hasCloudflareToken == true,
                              path: "/api/connect/cloudflare",
                              help: "A scoped, rotatable API token, kept in the login keychain. "
-                                 + "Cloudflare has no keyless deploy, so this is the only way.")
+                                 + "Optional when Wrangler is signed in with its browser login.")
                     Hairline()
-                    AwsSso(client: client) { Task { await refresh() } }
+                    AwsSso(client: client) { profile in
+                        awsProfile = profile
+                        Task { await refresh() }
+                    }
                 }
             }
 
-            if !log.isEmpty {
-                SettingsSection("Output") {
-                    ForEach(Array(ClaudeSetup.loginLinks(in: log).prefix(6)), id: \.self) { url in
-                        Link("Open in browser · \(url.host ?? "sign in") ↗", destination: url)
-                            .font(K.F.small)
-                    }
-                    ScrollView {
-                        Text(log).font(K.F.codeTiny).foregroundStyle(K.C.dim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .padding(K.S.sm)
-                    }
-                    .frame(height: 160)
-                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.md)
-                        .stroke(K.C.line, lineWidth: 1))
-                }
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $choosingContext, onDismiss: { Task { await refresh() } }) {
+            KubernetesContextSheet(client: client) { choosingContext = false }
+        }
         .task {
             async let provider: () = claude.refresh()
             await refresh()
-            stored = try? await client.get("/api/connections")
             await provider
         }
         .onDisappear { claude.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if busy == nil { Task { await refresh(); await claude.refresh() } }
+        }
+    }
+
+    private var setupOutput: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            if busy != nil {
+                HStack { ProgressView().controlSize(.small); Text("Setup is running…").font(K.F.small) }
+            }
+            ForEach(Array(ClaudeSetup.loginLinks(in: log).prefix(6)), id: \.self) { url in
+                Link("Open in browser · \(url.host ?? "sign in") ↗", destination: url).font(K.F.small)
+            }
+            ScrollView {
+                Text(log).font(K.F.codeTiny).foregroundStyle(K.C.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled).padding(K.S.sm)
+            }
+            .frame(height: 160)
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+            .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
         }
     }
 
@@ -168,21 +234,51 @@ struct ConnectionsSettings: View {
     }
 
     private func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         do {
-            tools = try await client.get("/api/cli")
+            tools = try await client.get("/api/cli", awsProfile.isEmpty ? [:] : ["aws_profile": awsProfile])
+            onToolsChanged(tools)
+            stored = try? await client.get("/api/connections")
             failure = nil
         } catch { failure = "Could not check tools: \(error.localizedDescription)" }
+    }
+
+    private func awsProfileControls(_ tool: Tool) -> some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            Picker("AWS profile", selection: $awsProfile) {
+                Text("Default credential chain").tag("")
+                ForEach(tool.profiles ?? [], id: \.self) { Text($0).tag($0) }
+            }
+            .disabled(refreshing || busy != nil)
+            .onChange(of: awsProfile) { Task { await refresh() } }
+            HStack {
+                Button("SSO sign in") {
+                    stream("/api/cli/login", ["id": "aws", "profile": awsProfile], "aws")
+                }.buttonStyle(QuietButton(tone: K.C.accent))
+                    .disabled(awsProfile.isEmpty || busy != nil || refreshing)
+                Button("Test selected profile") { Task { await refresh() } }
+                    .buttonStyle(QuietButton()).disabled(busy != nil || refreshing)
+            }
+            Text("Selection is used for this check and SSO sign-in. It does not change AWS_PROFILE in your terminals or agents. For access-key profiles, use Configure credentials above.")
+                .font(K.F.micro).foregroundStyle(K.C.dim)
+        }
     }
 
     /// Install and login both stream, because these commands print things you have to act on —
     /// `gh` shows a one-time code for the browser.
     private func stream(_ path: String, _ query: [String: String], _ id: String) {
+        guard busy == nil else { return }
         busy = id
+        outputTool = id
         log = ""
         Task {
             defer { busy = nil }
+            var result = SetupCommandResult()
             do {
                 for try await e in client.events(path, query) {
+                    result.receive(e)
                     switch e.name {
                     case "line", "fatal": log += e.data + "\n"
                     case "done":
@@ -191,6 +287,7 @@ struct ConnectionsSettings: View {
                     default: break
                     }
                 }
+                if let failure = result.failure { log += failure + "\n" }
             } catch {
                 log += error.localizedDescription
             }
@@ -207,6 +304,8 @@ private struct TokenRow: View {
     let client: Client
     let label: String
     let stored: Bool
+    @State private var storedOverride: Bool?
+    private var connected: Bool { storedOverride ?? stored }
     let path: String
     let help: String
 
@@ -221,13 +320,13 @@ private struct TokenRow: View {
 
     var body: some View {
         HStack(spacing: K.S.sm) {
-            Pill(text: stored ? "OK" : "NONE", tone: stored ? .good : .neutral)
+            Pill(text: connected ? "OK" : "NONE", tone: connected ? .good : .neutral)
                 .frame(width: 58, alignment: .leading)
             Text(label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                 .frame(width: 110, alignment: .leading)
-            Text(status ?? (stored ? "in the keychain" : "not connected"))
+            Text(status ?? (connected ? "in the keychain" : "not connected"))
                 .font(K.F.small)
-                .foregroundStyle(failed ? K.C.del : (stored ? K.C.dim : K.C.faint))
+                .foregroundStyle(failed ? K.C.del : (connected ? K.C.dim : K.C.faint))
                 .lineLimit(1)
             Spacer(minLength: K.S.sm)
             if editing {
@@ -238,9 +337,9 @@ private struct TokenRow: View {
                     .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button("Cancel") { editing = false; token = "" }.buttonStyle(QuietButton())
             } else {
-                Button(stored ? "Replace" : "Add token") { editing = true }
-                    .buttonStyle(QuietButton(tone: stored ? K.C.dim : K.C.accent))
-                if stored {
+                Button(connected ? "Replace" : "Add token") { editing = true }
+                    .buttonStyle(QuietButton(tone: connected ? K.C.dim : K.C.accent))
+                if connected {
                     // Confirmed: this removes a credential from the keychain.
                     Button("Disconnect") { confirming = true }
                         .buttonStyle(QuietButton(tone: K.C.del))
@@ -264,9 +363,10 @@ private struct TokenRow: View {
         Task {
             do {
                 _ = try await client.post("/api/disconnect",
-                                          body: ProviderBody(provider: label.lowercased()),
+                                          body: ProviderBody(provider: SetupCommandResult.credentialProvider(for: path)),
                                           as: Bool.self)
                 status = "Disconnected."
+                storedOverride = false
                 failed = false
             } catch {
                 status = error.localizedDescription
@@ -274,6 +374,7 @@ private struct TokenRow: View {
             }
         }
     }
+
 
     private func connect() {
         Task {
@@ -284,6 +385,7 @@ private struct TokenRow: View {
                 failed = false
                 token = ""
                 editing = false
+                storedOverride = true
             } catch {
                 status = error.localizedDescription
                 failed = true
@@ -300,7 +402,7 @@ private struct TokenRow: View {
 /// CLI runs itself, so it can be filled in here.
 private struct AwsSso: View {
     let client: Client
-    let done: () -> Void
+    let done: (String) -> Void
 
     @State private var startURL = ""
     @State private var ssoRegion = ""
@@ -321,6 +423,7 @@ private struct AwsSso: View {
     struct Configured: Decodable { var profile: String }
 
     @State private var open = false
+    @State private var saving = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
@@ -346,9 +449,9 @@ private struct AwsSso: View {
                     TextField("Profile name  (keel)", text: $profile).field()
                     HStack {
                         Spacer()
-                        Button("Write profile and sign in") { configure() }
+                        Button(saving ? "Saving…" : "Save profile") { configure() }
                             .buttonStyle(QuietButton(tone: K.C.accent))
-                            .disabled(startURL.isEmpty || account.isEmpty || role.isEmpty)
+                            .disabled(saving || startURL.isEmpty || account.count != 12 || role.isEmpty)
                     }
                 }
                 .font(K.F.small)
@@ -356,12 +459,15 @@ private struct AwsSso: View {
             }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .help("Keel writes a named AWS profile and signs in with `aws sso login`. It never asks "
+        .help("Save a named AWS profile, then use SSO sign in in the AWS row. Keel never asks "
               + "for an access key and never stores one.")
     }
 
     private func configure() {
+        guard !saving else { return }
+        saving = true
         Task {
+            defer { saving = false }
             do {
                 let made: Configured = try await client.post(
                     "/api/aws/sso",
@@ -370,9 +476,9 @@ private struct AwsSso: View {
                                 account: account, role: role,
                                 profile: profile.isEmpty ? "keel" : profile,
                                 region: ssoRegion.isEmpty ? "us-east-1" : ssoRegion))
-                status = "Profile `\(made.profile)` written. Sign in from the row above."
+                status = "Profile \(made.profile) selected. Use SSO sign in in the AWS row."
                 failed = false
-                done()
+                done(made.profile)
             } catch {
                 status = error.localizedDescription
                 failed = true
@@ -389,6 +495,11 @@ private struct ToolRow: View {
     let anyBusy: Bool
     let install: () -> Void
     let login: () -> Void
+    let chooseContext: () -> Void
+    let checking: Bool
+    let testConnection: () -> Void
+    let reconnectCloud: () -> Void
+    let configureAws: () -> Void
     @State private var copied = false
     @State private var confirmingInstall = false
 
@@ -418,12 +529,12 @@ private struct ToolRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             HStack(spacing: K.S.sm) {
-                Pill(text: tool.authenticated ? "OK" : (tool.installed ? "SIGN IN" : "MISSING"),
+                Pill(text: tool.statusLabel,
                      tone: tool.authenticated ? .good : (tool.installed ? .warn : .neutral))
                     .frame(width: 58, alignment: .leading)
                 Text(tool.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                     .frame(width: 110, alignment: .leading)
-                Text(tool.identity ?? (tool.installed ? "not signed in" : "not installed"))
+                Text(tool.identity ?? (tool.installed ? (tool.id == "kubectl" ? "no current context" : "not ready") : "not installed"))
                     .font(K.F.small).foregroundStyle(tool.authenticated ? K.C.dim : K.C.faint)
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: K.S.sm)
@@ -432,7 +543,13 @@ private struct ToolRow: View {
             }
             if let why = tool.blocked, !tool.authenticated {
                 Text(why).font(K.F.micro).foregroundStyle(K.C.dim)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 58 + 110 + 2 * K.S.sm)
+            }
+            if tool.installed && tool.reconnect == "gcloud" {
+                Button(busy ? "Reconnecting…" : "Reconnect Google Cloud", action: reconnectCloud)
+                    .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy || checking)
                     .padding(.leading, 58 + 110 + 2 * K.S.sm)
             }
         }
@@ -472,9 +589,19 @@ private struct ToolRow: View {
                 if let page = tool.manual ?? Self.installers[tool.id], let url = URL(string: page) {
                     Button("Download") { NSWorkspace.shared.open(url) }.buttonStyle(QuietButton())
                 }
+            } else if tool.id == "kubectl" {
+                Button(checking ? "Testing…" : "Test connection", action: testConnection)
+                    .buttonStyle(QuietButton()).disabled(anyBusy || checking)
+                Button("Choose context…", action: chooseContext)
+                    .buttonStyle(QuietButton(tone: K.C.accent)).disabled(anyBusy)
+            } else if tool.id == "aws" {
+                Button("Configure credentials…", action: configureAws)
+                    .buttonStyle(QuietButton()).disabled(anyBusy)
             } else if !tool.authenticated {
+                Button(checking ? "Testing…" : "Test connection", action: testConnection)
+                    .buttonStyle(QuietButton()).disabled(anyBusy || checking)
                 if let setup {
-                    Button("Run in Terminal") {
+                    Button(tool.id == "docker" ? "Open Docker Desktop" : (tool.id == "tailscale" ? "Connect Tailscale…" : "Run in Terminal")) {
                         NotificationCenter.default.post(name: .keelRunInTerminal, object: setup)
                     }
                     .buttonStyle(QuietButton(tone: K.C.accent))

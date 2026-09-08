@@ -17,13 +17,13 @@ import XCTest
 /// leaf that measures its own text puts AppKit back inside every frame.
 @MainActor
 final class LayoutBudgetTests: XCTestCase {
-    private func session(turns n: Int) -> SessionModel {
+    private func session(turns n: Int, callsPerTurn: Int = 14) -> SessionModel {
         let m = SessionModel(client: Client(port: 0))
         m.loaded = true
         var out: [Turn] = []
         for k in 0..<n {
             let t = Turn(prompt: "ask number \(k)")
-            for i in 0..<14 {
+            for i in 0..<callsPerTurn {
                 let id = "c-\(k)-\(i)"
                 m.record(Data(#"""
                 {"type":"assistant","timestamp":"2026-01-01T10:00:0\#(i % 10)Z","message":{
@@ -88,5 +88,47 @@ final class LayoutBudgetTests: XCTestCase {
         m.prompt = String(repeating: "a long prompt that wraps over many lines ", count: 36)
         XCTAssertLessThan(time("ChatRail, card entering", ChatRail(model: m)), 0.060)
         XCTAssertLessThan(time("TurnStage", TurnStage(model: m)), 0.060)
+    }
+
+    func testLargeRepositoryPanelsStayResponsive() {
+        let m = session(turns: 12)
+        m.tree = (0..<2000).map { Wire.Node(name: "file-\($0).swift", path: "file-\($0).swift", dir: false) }
+        XCTAssertLessThan(time("Files, 2000 entries", SidePanel(panel: .files, model: m), passes: 3), 0.060)
+        XCTAssertLessThan(time("Review, 168 calls", ReviewPacketView(model: m), passes: 3), 0.060)
+    }
+
+    func testLargeSourceFileLaysOutInsideAFrame() {
+        let m = SessionModel(client: Client(port: 0))
+        let text = String(repeating: "let value = \"a moderately long line of source code\"\n", count: 5000)
+        XCTAssertLessThan(time("Source file, 5000 lines", FileSurface(model: m, path: "large.swift", data: Data(text.utf8)), passes: 3), 0.060)
+    }
+
+    func testLongAgentTurnLaysOutInsideAFrame() {
+        let m = session(turns: 1, callsPerTurn: 400)
+        XCTAssertLessThan(time("Chat, 400 calls in one turn", ChatRail(model: m), passes: 3), 0.060)
+    }
+
+    func testNativeSourceViewerKeepsSelectionAndBothScrollAxes() throws {
+        let source = String(repeating: "x", count: 1000) + "\n" + String(repeating: "line of source\n", count: 4999)
+        let host = NSHostingView(rootView: SourceTextView(text: source))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        func find(_ view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView { return text }
+            return view.subviews.lazy.compactMap { find($0) }.first
+        }
+        let text = try XCTUnwrap(find(host))
+        XCTAssertEqual(text.string, source)
+        XCTAssertFalse(text.isEditable)
+        XCTAssertGreaterThan(text.frame.height, 400)
+        XCTAssertGreaterThan(text.frame.width, 600)
+        text.setSelectedRange(NSRange(location: 0, length: 1000))
+        XCTAssertEqual((text.string as NSString).substring(with: text.selectedRange()), String(repeating: "x", count: 1000))
+        text.scrollToEndOfDocument(nil)
+        XCTAssertGreaterThan(text.visibleRect.minY, 0)
     }
 }

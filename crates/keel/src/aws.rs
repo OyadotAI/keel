@@ -15,9 +15,15 @@
 
 use axum::{Json, http::StatusCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// The session block Keel writes. One name, so re-running setup updates rather than accumulates.
-const SESSION: &str = "keel";
+fn session_name(req: &SsoSetup) -> String {
+    // Immutable provider identity: configuring a second organization must never rewrite the
+    // session referenced by an existing profile (including the old shared `keel` session).
+    let identity = format!("{}\n{}", req.start_url.trim(), req.sso_region.trim());
+    format!("keel-{:x}", Sha256::digest(identity.as_bytes()))
+}
 
 #[derive(Deserialize)]
 pub struct SsoSetup {
@@ -66,6 +72,15 @@ fn set(profile: &str, key: &str, value: &str) -> Result<(), String> {
 pub async fn configure_sso(
     Json(req): Json<SsoSetup>,
 ) -> Result<Json<Configured>, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || configure(req))
+        .await
+        .map_err(bad)?
+        .map(Json)
+}
+
+fn configure(req: SsoSetup) -> Result<Configured, (StatusCode, String)> {
+    static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = CONFIG_LOCK.lock().map_err(bad)?;
     if !req.start_url.starts_with("https://") {
         return Err(bad(
             "The start URL is the https:// address your organisation gave you.",
@@ -81,7 +96,7 @@ pub async fn configure_sso(
             return Err(bad(format!("That {label} does not look right.")));
         }
     }
-    if !req.account.chars().all(|c| c.is_ascii_digit()) {
+    if req.account.len() != 12 || !req.account.chars().all(|c| c.is_ascii_digit()) {
         return Err(bad("An AWS account id is twelve digits."));
     }
 
@@ -103,7 +118,7 @@ pub async fn configure_sso(
     // `aws sso login` with a message about the session, which reads like the wrong failure.
     write_session(&req).map_err(bad)?;
 
-    set(&profile, "sso_session", SESSION).map_err(bad)?;
+    set(&profile, "sso_session", &session_name(&req)).map_err(bad)?;
     set(&profile, "sso_account_id", &req.account).map_err(bad)?;
     set(&profile, "sso_role_name", &req.role).map_err(bad)?;
     let region = if req.region.trim().is_empty() {
@@ -113,7 +128,7 @@ pub async fn configure_sso(
     };
     set(&profile, "region", &region).map_err(bad)?;
 
-    Ok(Json(Configured { profile }))
+    Ok(Configured { profile })
 }
 
 /// Append or replace `[sso-session keel]` in `~/.aws/config`.
@@ -127,8 +142,17 @@ fn write_session(req: &SsoSetup) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("config");
 
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let header = format!("[sso-session {SESSION}]");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let updated = session_config(&existing, req);
+    std::fs::write(&path, updated).map_err(|e| e.to_string())
+}
+
+fn session_config(existing: &str, req: &SsoSetup) -> String {
+    let header = format!("[sso-session {}]", session_name(req));
 
     let block = format!(
         "{header}\nsso_start_url = {}\nsso_region = {}\nsso_registration_scopes = sso:account:access\n",
@@ -136,9 +160,9 @@ fn write_session(req: &SsoSetup) -> Result<(), String> {
         req.sso_region.trim()
     );
 
-    let updated = match existing.find(&header) {
+    match existing.find(&header) {
         None => {
-            let mut out = existing;
+            let mut out = existing.to_string();
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
             }
@@ -157,14 +181,38 @@ fn write_session(req: &SsoSetup) -> Result<(), String> {
                 .unwrap_or(existing.len());
             format!("{}{block}{}", &existing[..at], &existing[end..])
         }
-    };
-
-    std::fs::write(&path, updated).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn different_organizations_never_overwrite_shared_sessions() {
+        let mut request = SsoSetup {
+            start_url: "https://a.awsapps.com/start".into(),
+            sso_region: "us-east-1".into(),
+            account: "123456789012".into(),
+            role: "Developer".into(),
+            profile: "team-a".into(),
+            region: String::new(),
+        };
+        let legacy = "[sso-session keel]\nsso_start_url = https://legacy.awsapps.com/start\n[profile old]\nsso_session = keel\n";
+        let first_name = session_name(&request);
+        let first = session_config(legacy, &request);
+        assert_eq!(session_config(&first, &request), first);
+        request.start_url = "https://b.awsapps.com/start".into();
+        request.profile = "team-b".into();
+        let second_name = session_name(&request);
+        assert_ne!(first_name, second_name);
+        let second = session_config(&first, &request);
+        assert!(second.starts_with(legacy));
+        assert!(second.contains(&format!("[sso-session {first_name}]")));
+        assert!(second.contains(&format!("[sso-session {second_name}]")));
+        assert!(second.contains("https://a.awsapps.com/start"));
+        assert!(second.contains("https://b.awsapps.com/start"));
+    }
 
     #[test]
     fn a_value_cannot_carry_ini_structure() {

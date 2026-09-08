@@ -24,6 +24,8 @@ pub struct Connections {
     pub github: Option<github::Account>,
     /// True when the GitHub credential came from the `gh` CLI rather than one Keel stores.
     pub github_via_gh: bool,
+    pub github_stored: bool,
+    pub cloudflare_stored: bool,
     pub cloudflare: Option<Vec<cloudflare::Account>>,
 }
 
@@ -33,6 +35,8 @@ pub async fn status() -> Json<Connections> {
         claude: which_claude(),
         github: github::current().await,
         github_via_gh: !stored && credentials::github_from_gh_cli().is_some(),
+        github_stored: stored,
+        cloudflare_stored: credentials::load(credentials::Kind::Cloudflare).is_some(),
         cloudflare: cloudflare::current().await,
     })
 }

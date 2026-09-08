@@ -11,6 +11,17 @@ struct SkillCatalog: View {
     @State private var query = ""
     @State private var installing: String?
     @State private var log = ""
+    @State private var loading = true
+    @State private var failure: String?
+
+    init(client: Client, catalog: Catalog? = nil, failure: String? = nil, done: @escaping () -> Void) {
+        self.client = client
+        self.done = done
+        _suggested = State(initialValue: catalog?.suggested ?? [])
+        _all = State(initialValue: catalog?.all ?? [])
+        _loading = State(initialValue: catalog == nil && failure == nil)
+        _failure = State(initialValue: failure)
+    }
 
     struct Catalog: Decodable { var suggested: [Entry]; var all: [Entry] }
     struct Entry: Decodable, Identifiable, Sendable {
@@ -22,14 +33,17 @@ struct SkillCatalog: View {
         var id: String { marketplace + name }
     }
 
-    private var hits: [Entry] {
-        guard !query.isEmpty else { return suggested }
+    static func results(suggested: [Entry], all: [Entry], query: String) -> [Entry] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return suggested.isEmpty ? all : suggested }
         return all.filter {
             $0.name.localizedCaseInsensitiveContains(query)
                 || ($0.description ?? "").localizedCaseInsensitiveContains(query)
         }
         .prefix(60).map { $0 }
     }
+
+    private var hits: [Entry] { Self.results(suggested: suggested, all: all, query: query) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,6 +66,19 @@ struct SkillCatalog: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if loading {
+                        HStack { ProgressView().controlSize(.small); Text("Loading skills and plugins…").font(K.F.small) }
+                            .padding(K.S.md)
+                    } else if let failure {
+                        EmptyState(icon: "exclamationmark.triangle", title: "Could not load the catalog",
+                                   failure, actionLabel: "Try again") { Task { await refresh() } }
+                    } else if hits.isEmpty {
+                        EmptyState(icon: "magnifyingglass", title: query.isEmpty ? "No plugins available" : "No matches",
+                                   query.isEmpty ? "No marketplaces returned plugins. Refresh after configuring a marketplace in Claude Code." : "Try a different skill or plugin name.",
+                                   actionLabel: query.isEmpty ? "Refresh" : "Clear search") {
+                            if query.isEmpty { Task { await refresh() } } else { query = "" }
+                        }
+                    }
                     ForEach(hits) { e in row(e) }
                 }
             }
@@ -70,12 +97,18 @@ struct SkillCatalog: View {
         }
         .frame(width: 560)
         .background(K.C.bg)
-        .task {
-            if let c: Catalog = try? await client.get("/api/plugins") {
-                suggested = c.suggested
-                all = c.all
-            }
-        }
+        .task { if loading { await refresh() } }
+    }
+
+    private func refresh() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let c: Catalog = try await client.get("/api/plugins")
+            suggested = c.suggested
+            all = c.all
+            failure = nil
+        } catch { failure = error.localizedDescription }
     }
 
     private func row(_ e: Entry) -> some View {
@@ -111,9 +144,11 @@ struct SkillCatalog: View {
         log = ""
         Task {
             defer { installing = nil }
+            var result = SetupCommandResult()
             do {
                 for try await ev in client.events("/api/plugins/install",
                                                   ["name": e.name, "marketplace": e.marketplace]) {
+                    result.receive(ev)
                     switch ev.name {
                     case "line", "fatal": log += ev.data + "\n"
                     case "done":
@@ -124,6 +159,7 @@ struct SkillCatalog: View {
                     default: break
                     }
                 }
+                if let failure = result.failure { log += failure + "\n" }
             } catch { log += error.localizedDescription }
         }
     }
@@ -138,6 +174,7 @@ struct AddMCP: View {
     @State private var target = ""
     @State private var scope = "local"
     @State private var log = ""
+    @State private var adding = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
@@ -168,13 +205,14 @@ struct AddMCP: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { done() }.buttonStyle(QuietButton())
-                Button("Add") { add() }
+                Button("Cancel") { done() }.buttonStyle(QuietButton()).disabled(adding)
+                Button(adding ? "Adding…" : "Add server") { add() }
                     .buttonStyle(FilledButton())
-                    .disabled(name.isEmpty || target.isEmpty)
+                    .disabled(adding || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(K.S.xl).frame(width: 440).background(K.C.bg)
+        .interactiveDismissDisabled(adding)
     }
 
     private func field(_ label: String, _ hint: String, _ value: Binding<String>) -> some View {
@@ -189,17 +227,25 @@ struct AddMCP: View {
     }
 
     private func add() {
+        guard !adding else { return }
+        adding = true
+        log = ""
         Task {
+            defer { adding = false }
+            var result = SetupCommandResult()
             do {
                 for try await e in client.events("/api/mcp/add", [
                     "name": name, "transport": transport, "target": target, "scope": scope,
                 ]) {
+                    result.receive(e)
                     switch e.name {
                     case "line", "fatal": log += e.data + "\n"
-                    case "done": done()
+                    case "done": break
                     default: break
                     }
                 }
+                if result.succeeded { done() }
+                else if let failure = result.failure { log += failure + "\n" }
             } catch { log += error.localizedDescription }
         }
     }
