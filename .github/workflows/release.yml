@@ -8,8 +8,8 @@ on:
   push:
     tags: ["v*"]
 
-# The default token only reads this repository. Publishing goes to the *public* releases repo with
-# a separate token, because Sparkle on a tester's Mac cannot authenticate to a private one.
+# Keep the legacy update repository for installed copies. The publishing job also writes a
+# release here, so visitors to the source repository see the current downloadable version.
 permissions:
   contents: read
 
@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   publish:
+    permissions:
+      contents: write
     # macos-15 is Xcode 16.4, and 16.4's Swift is 6.1 — which does not know isolated conformances
     # (`@MainActor TerminalViewDelegate` in TerminalPane.swift), so it reads the attribute as
     # unknown and then rejects every delegate method under it. macos-26 is Xcode 26. The app still
@@ -117,3 +119,20 @@ jobs:
             --notes "Signed and notarised. Installed copies are offered the update." --latest \
           || gh release upload "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
             -R OyadotAI/keel-releases --clobber
+
+      # Mirror the exact signed artifacts, not a second build. The appcast deliberately keeps
+      # pointing at keel-releases so existing installations continue to receive updates.
+      - name: Publish to the source repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" -R "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
+              -R "$RELEASE_REPO" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
+              -R "$RELEASE_REPO" --verify-tag --title "Keel ${GITHUB_REF_NAME#v}" \
+              --notes "Signed and notarised. Download Keel.dmg to install. Existing installations continue to receive updates from the original update feed." \
+              --latest
+          fi
