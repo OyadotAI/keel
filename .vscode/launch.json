@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:keel}/app",
+            "name": "Debug KeelApp (app)",
+            "target": "KeelApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug KeelApp (app)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:keel}/app",
+            "name": "Release KeelApp (app)",
+            "target": "KeelApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release KeelApp (app)"
+        }
+    ]
+}

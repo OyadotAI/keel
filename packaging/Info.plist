@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Keel</string>
+  <key>CFBundleDisplayName</key><string>Keel</string>
+  <key>CFBundleIdentifier</key><string>ai.oya.keel</string>
+  <key>CFBundleExecutable</key><string>KeelApp</string>
+  <key>CFBundleIconFile</key><string>Keel</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <!-- App Transport Security does not have to be loosened for the whole app to reach one loopback
+       port. This key covers local addresses and nothing else; NSAllowsArbitraryLoads would have
+       worked too, and would also have permitted every insecure request the webview could ever
+       make. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key><true/>
+  </dict>
+  <!-- Written by packaging/build-app.sh from the environment. Empty means off. -->
+  <key>KeelSentryDSN</key><string>__SENTRY_DSN__</string>
+  <key>KeelPostHogKey</key><string>__POSTHOG_KEY__</string>
+  <key>KeelPostHogHost</key><string>__POSTHOG_HOST__</string>
+  <!-- Sparkle. The feed is the latest GitHub release's appcast; the public key pairs with the
+       private one on the release machine's keychain. Empty key = updater never starts. -->
+  <key>SUFeedURL</key><string>https://github.com/OyadotAI/keel-releases/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>__SU_PUBLIC_KEY__</string>
+  <!-- Both were true and both were wrong. The installer launcher service is for sandboxed
+       apps; in a non-sandboxed one it puts a synchronous XPC wait on the install path, which
+       is the mach_msg2_trap in Sentry's App Hang reports. Automatic update meant Sparkle
+       downloaded a 9 MB DMG and started installing it while somebody was working — the
+       breadcrumb right before every one of those hangs. Checks stay daily and cost 874 bytes;
+       the update is offered, and installs when the person says so. -->
+  <key>SUEnableInstallerLauncherService</key><false/>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>NSHumanReadableCopyright</key><string>Keel</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>

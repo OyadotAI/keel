@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a better workflow for developers and product engineers.
+title: "Feature: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe who encounters it, when it happens, and what is difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a good experience look like?
+      description: Describe the workflow or outcome. A proposed interface or sketch is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or current workaround
+      description: What have you tried? Why does it fall short?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mention affected tools or workflows. Do not include private code or account data.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Would you like to help?
+      options:
+        - label: I can help test a proposed solution.
+        - label: I would like to discuss contributing an implementation.

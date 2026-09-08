@@ -1,0 +1,635 @@
+import SwiftUI
+
+/// The panel the activity rail opens. One surface, five contents.
+struct SidePanel: View {
+    let panel: SessionWindow.Panel
+    @Bindable var model: SessionModel
+    /// Closing the panel. The rail icon toggles it and ⌘⇧E toggles it, and neither is visible.
+    var onClose: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            RailHeader(panel.title, trailing: count, onClose: onClose)
+            Hairline()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // Before the daemon has answered once, an empty list means "not yet", and
+                    // showing "nothing here" for it is a lie that lasts half a second and is
+                    // believed for longer.
+                    if let why = model.loadFailed, !model.loaded {
+                        EmptyState(icon: "exclamationmark.triangle",
+                                   title: "Keel cannot read this project",
+                                   why, actionLabel: "Try again") {
+                            Task { await model.refreshState() }
+                        }
+                    } else if !model.loaded {
+                        Loading()
+                    } else {
+                    switch panel {
+                    case .changes: ChangesTreeView(model: model)
+                    case .git: GitPanel(model: model)
+                    case .files: FileTree(model: model)
+                    case .sessions: SessionsPanel(model: model)
+                    case .readiness: ReadinessPanel(model: model)
+                    case .monitors: MonitorsPanel(model: model)
+                    case .skills: SkillsPanel(model: model)
+                    case .agents: AgentsPanel(model: model)
+                    case .mcp: MCPPanel(model: model)
+                    case .hooks: HooksPanel(model: model)
+                    case .plugins: PluginsPanel(model: model)
+                    }
+                    }
+                }
+                .padding(.bottom, K.S.md)
+            }
+        }
+        .background(K.C.surface)
+        // The one destructive question in the panels, anchored here for the same reason as
+        // the sheets below: a row can be recycled under its own dialog.
+        // Renaming a past session, asked from the panel root for the same reason: the list is a
+        // lazy stack, and a dialog presented from a row it has not built does not appear at all.
+        .alert("Rename feature", isPresented: Binding(
+            get: { model.renamingSession != nil },
+            set: { if !$0 { model.renamingSession = nil } })) {
+            TextField("Name", text: $model.renameDraft)
+            Button("Cancel", role: .cancel) { model.renamingSession = nil }
+            Button("Rename") {
+                if let id = model.renamingSession {
+                    let name = model.renameDraft
+                    Task { await model.rename(session: id, to: name) }
+                }
+                model.renamingSession = nil
+            }
+        }
+    }
+
+    private var count: String? {
+        let n: Int
+        switch panel {
+        // What the tree below actually shows. It counted every uncommitted file while the tree
+        // listed only what the agent wrote here, so the header disagreed with the list under it.
+        case .changes: n = model.editedThisSession.count
+        case .git: return nil
+        case .sessions: n = model.sessions.count
+        case .readiness: n = model.findings.count
+        case .monitors: n = model.visibleMonitors.count
+        case .skills: n = model.workspace.skills.count
+        case .agents: n = model.workspace.agents.count
+        case .mcp: n = model.workspace.mcpServers.count
+        case .hooks: n = model.workspace.hooks.count
+        case .plugins: n = model.workspace.plugins.count
+        case .files: return nil
+        }
+        return n == 0 ? nil : "\(n)"
+    }
+}
+
+// MARK: - Sessions
+
+struct SessionsPanel: View {
+    @Bindable var model: SessionModel
+    @State private var query = ""
+    /// Which time buckets are unfolded, once one has been folded or unfolded by hand. `nil` until
+    /// then, and `firstOpen` decides instead.
+    @State private var opened: Set<String>?
+
+    private var visible: [Wire.Session] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return model.sessions }
+        return model.sessions.filter {
+            ($0.title ?? $0.id).localizedCaseInsensitiveContains(q)
+            || ($0.cwd ?? "").localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    var body: some View {
+        // Grouped once. It was read again for every row's detail line, which on a parent folder
+        // with two hundred sessions is the same grouping done two hundred times.
+        let groups = grouped
+        SwiftUI.Group {
+        if !model.sessions.isEmpty {
+            SearchField(prompt: "Find a session", text: $query)
+        }
+        if model.sessions.isEmpty {
+            EmptyState(icon: "clock.arrow.circlepath", title: "No past sessions",
+                       "Sessions appear here once a task has run. Current work stays in the task "
+                       + "tabs above.")
+        } else if visible.isEmpty {
+            EmptyState(icon: "magnifyingglass", title: "Nothing matches",
+                       "No past session mentions “\(query)”.")
+        }
+        ForEach(groups) { group in
+            // The newest group open, the rest folded. 158 sessions is a scroll bar with no
+            // landmarks in it; what you came for is nearly always the most recent thing, and the
+            // other headers say where the rest went rather than hiding it. A search opens all of
+            // them, because a match inside a folded group is a search that looks broken.
+            PanelSection(title: group.label, count: group.sessions.count,
+                         open: Binding(get: {
+                                           !query.isEmpty
+                                           || (opened ?? Self.firstOpen(groups))
+                                               .contains(group.label)
+                                       },
+                                       set: { want in
+                                           var set = opened ?? Self.firstOpen(groups)
+                                           if want { set.insert(group.label) }
+                                           else { set.remove(group.label) }
+                                           opened = set
+                                       })) {
+            VStack(alignment: .leading, spacing: 0) {
+            ForEach(group.sessions) { s in
+                PanelRow(name: s.title ?? String(s.id.prefix(8)),
+                         detail: detail(s),
+                         selected: s.id == model.sessionId,
+                         accent: s.live == true ? (s.busy == true ? K.C.accent : K.C.dim) : nil) {
+                    // Resumed into its own lane, so opening an old session does not evict the one
+                    // that is running.
+                    Task { await model.lanes?.open(session: s.id) }
+                }
+                .contextMenu {
+                    Button("Rename…") {
+                        model.renameDraft = s.title ?? ""
+                        model.renamingSession = s.id
+                    }
+                }
+            }
+            }
+            }
+        }
+        }
+        // A session moving between Running and Today slides rather than jumps. The list itself
+        // arrives from the daemon's own watch on Claude Code's files — nothing here asks.
+        .animation(.easeInOut(duration: 0.2), value: model.sessions)
+    }
+
+    struct Group: Identifiable {
+        var label: String
+        var sessions: [Wire.Session]
+        var id: String { label }
+    }
+
+    /// The groups that start unfolded: Running, and the newest bucket with anything in it.
+    ///
+    /// It was the literal "Today", so a person who had not run anything since yesterday opened
+    /// History onto four folded headers and nothing to read — which looks like an empty panel with
+    /// extra steps. `grouped` drops empty buckets, so the first bucket is the newest that exists.
+    static func firstOpen(_ groups: [Group]) -> Set<String> {
+        var open: Set<String> = [running]
+        if let first = groups.first(where: { $0.label != running }) { open.insert(first.label) }
+        return open
+    }
+
+    /// Sessions with a `claude` behind them right now, above the dated ones. What is happening is
+    /// not history, and a running row filed under "Today" between two finished ones is a thing
+    /// you have to read the detail line to find.
+    static let running = "Running"
+
+    /// The four buckets, in the order they are shown. `nil` days fall in the last one.
+    static let buckets = ["Today", "This week", "This month", "Older"]
+
+    /// Sessions by when they last ran.
+    ///
+    /// It grouped by the folder each one ran in, which on a single repository is one header
+    /// reading `keel` over all 138 rows — a label for something you already know. When you go
+    /// looking in History you are looking for *the one from this morning*, so time is what the
+    /// headers should say. Which folder it ran in stays on the row that is not from here.
+    private var grouped: [Group] {
+        // ISO days sort as strings, so the boundaries are three comparisons and no date parsing
+        // per row — this list redraws on every state refresh with hundreds of rows in it.
+        let now = Date.now
+        let today = Self.day(now)
+        let week = Self.day(now.addingTimeInterval(-7 * 86_400))
+        let month = Self.day(now.addingTimeInterval(-30 * 86_400))
+
+        var byBucket: [String: [Wire.Session]] = [:]
+        for s in visible {
+            let key = s.live == true
+                ? Self.running
+                : Self.bucket(String((s.lastActive ?? "").prefix(10)),
+                              today: today, week: week, month: month)
+            byBucket[key, default: []].append(s)
+        }
+        // `visible` is already most-recent-first, so each bucket is too.
+        return ([Self.running] + Self.buckets).compactMap { key in
+            byBucket[key].map { Group(label: key, sessions: $0) }
+        }
+    }
+
+    /// Which bucket an ISO day falls in. A day Keel cannot read — missing, or a shape it does
+    /// not expect — is old rather than today: the top of the list is where you look for what you
+    /// just did, and a row with no date is not that.
+    static func bucket(_ day: String, today: String, week: String, month: String) -> String {
+        guard day.count == 10 else { return "Older" }
+        if day >= today { return "Today" }
+        if day >= week { return "This week" }
+        if day >= month { return "This month" }
+        return "Older"
+    }
+
+    /// `2026-08-31` for a date, the same shape the daemon sends.
+    static func day(_ d: Date) -> String {
+        String(d.formatted(.iso8601.year().month().day()).prefix(10))
+    }
+
+    /// One line under the title: how much was said, when, and — because resuming runs the agent
+    /// there — whether it started somewhere other than this folder. It was three monospace
+    /// fragments with no separators, reading `42 msg 09:14`.
+    private func detail(_ s: Wire.Session) -> String {
+        // First, because it is the one thing here that is about right now rather than about the
+        // past — and opening it shows the conversation as it is written rather than a snapshot.
+        var parts = s.live == true ? [s.busy == true ? "working" : "idle"] : []
+        parts.append("\(s.messages) message\(s.messages == 1 ? "" : "s")")
+        if let t = s.lastActive { parts.append(short(t)) }
+        // Now that the headers are dates, where it ran is only ever said here.
+        if let from = s.elsewhere { parts.append("in \(from)/") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// `2026-08-29T04:12:…` is not a time. The date, or the clock if it is today.
+    private func short(_ iso: String) -> String {
+        guard iso.count >= 16 else { return iso }
+        let day = String(iso.prefix(10))
+        // An `ISO8601DateFormatter` allocated per row, in a list that redraws on every state
+        // refresh. `.iso8601` is a value type and free to make.
+        return day == Self.day(.now) ? String(iso.dropFirst(11).prefix(5)) : day
+    }
+}
+
+// MARK: - Readiness
+
+/// Not a list of complaints: what the repository is, where it runs, and the road from here
+/// to production in order — with the two actions that start the road, and the review a
+/// person would give beyond what a scanner can see.
+struct ReadinessPanel: View {
+    let model: SessionModel
+    @State private var saved: String?
+    @State private var busy = false
+    @State private var opened: Set<String> = []
+    @State private var openFinding: String?
+
+    var body: some View {
+        card
+        if model.scan == nil {
+            // Nothing below the card until there is something to say — the card is already the
+            // whole state, and a second empty state under it read as a panel that had broken.
+            EmptyView()
+        } else if model.findings.isEmpty {
+            EmptyState(icon: "checkmark.seal", title: "Nothing outstanding",
+                       "Keel checks again whenever the repository changes.")
+        } else if let plan = model.scan?.plan, !plan.isEmpty {
+            if let next = model.findings.first { nextAction(next) }
+            ForEach(Array(plan.enumerated()), id: \.element.id) { i, phase in
+                phaseRows(i, phase, expanded: opened.contains(phase.id))
+            }
+        } else {
+            ForEach(model.findings.prefix(40)) { f in row(f) }
+        }
+        ignoredRow
+    }
+
+    private func nextAction(_ finding: Wire.Finding) -> some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            Text("FIX NEXT").sectionLabel()
+                .foregroundStyle(K.C.warn)
+            Text(finding.title).font(K.F.body.weight(.semibold)).foregroundStyle(K.C.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(finding.detail).font(K.F.micro).foregroundStyle(K.C.dim).lineLimit(3)
+            Button("Fix this") { Task { await model.fix(finding) } }
+                .buttonStyle(FilledButton()).disabled(model.running)
+        }
+        .padding(K.S.md)
+        .background(K.C.warn.wash, in: RoundedRectangle(cornerRadius: K.R.md))
+        .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.warn.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, K.S.sm).padding(.vertical, K.S.sm)
+    }
+
+    // MARK: The card: the score, what it is, where it runs, and the one thing to do next.
+
+    private var card: some View {
+        SwiftUI.Group {
+            if model.scan == nil {
+                unscanned
+            } else {
+                scanned
+            }
+        }
+    }
+
+    /// Never scanned, or scanned and it failed. The second case used to be indistinguishable from
+    /// the first: `rescan` went through a `try?`, so a scan that could not run left the panel
+    /// saying "not checked" with a Scan button that appeared to do nothing.
+    @ViewBuilder
+    private var unscanned: some View {
+        if model.scanning {
+            Loading("Scanning the repository…")
+        } else if let why = model.loadFailed {
+            EmptyState(icon: "exclamationmark.triangle", title: "The scan did not run", why,
+                       actionLabel: "Try again") { Task { await model.rescan() } }
+        } else {
+            EmptyState(icon: "checkmark.shield", title: "Readiness not checked",
+                       "Keel reads the repository for release blockers — no network, nothing sent.",
+                       actionLabel: "Scan") { Task { await model.rescan() } }
+        }
+    }
+
+    private var scanned: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: K.S.xs) {
+                Text("\(score)").font(K.F.mono(22, .semibold))
+                    .foregroundStyle(score < 60 ? K.C.del : score < 85 ? K.C.warn : K.C.add)
+                Text("/100").font(K.F.micro).foregroundStyle(K.C.faint)
+                Spacer()
+                if model.scanning {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Button { Task { await model.rescan() } } label: {
+                        Image(systemName: "arrow.clockwise").font(K.F.tiny)
+                    }
+                    .buttonStyle(QuietButton())
+                    .hint("Scan again — re-reads the repository and re-runs every check.")
+                }
+            }
+            if let p = model.scan?.profile {
+                VStack(alignment: .leading, spacing: K.S.xxs) {
+                    if p.template != "blank" {
+                        HStack(spacing: K.S.xs) {
+                            Text(p.template_title).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                            if !p.like.isEmpty { Text("like \(p.like)").font(K.F.micro).foregroundStyle(K.C.accent) }
+                        }
+                        .help("Closest template, \(p.confidence)% from: \(p.signals.joined(separator: ", ")). Its practices are the target shape.")
+                    }
+                    if !p.hosting.isEmpty || !p.stack.isEmpty {
+                        Text(whereLine(p)).font(K.F.micro).foregroundStyle(K.C.faint).lineLimit(2)
+                    }
+                }
+            }
+            primary
+        }
+        .padding(K.S.md)
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.lg)
+        .overlay(alignment: .bottom) { Hairline() }
+    }
+
+    /// One button. What it does depends on where the project is: review first; after a
+    /// review, keep it as the contract and fix the docs it judged.
+    @ViewBuilder
+    private var primary: some View {
+        let lane = model.reviewLane
+        let reviewed = model.lastReview != nil && !(lane?.turns.last?.text.isEmpty ?? true) && !(lane?.running ?? true)
+        HStack(spacing: K.S.xs) {
+            Button {
+                busy = true
+                Task { await model.requestReview(); busy = false }
+            } label: {
+                Label(model.lastReview == nil ? "Staff-engineer review" : "Review again",
+                      systemImage: "person.crop.rectangle.stack")
+            }
+            .buttonStyle(FilledButton())
+            .disabled(busy || (model.reviewLane?.running ?? false))
+            .help("Runs in its own lane, beside this one. Reads the code the way a staff engineer would — hot path, threat model, tests, pipeline, docs — and ranks what hurts first. Plan mode: changes nothing. Runs on its own once a day.")
+            if reviewed {
+                Menu {
+                    Button(saved == nil ? "Save as the contract" : "Saved \(saved!)") { Task { saved = await model.saveReview() } }
+                        .disabled(saved != nil)
+                    Button("Fix CLAUDE.md and AGENTS.md") { busy = true; Task { await model.fixDocs(); busy = false } }
+                } label: {
+                    Image(systemName: "ellipsis").font(K.F.micro.weight(.semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .hint("Keep the review as .claude/agents/contract.md (yours to correct; every turn reads "
+                      + "it), or rewrite the agent instructions from the code.")
+            }
+            Spacer()
+            if let last = model.lastReview {
+                Text(Self.ago(last)).font(K.F.micro).foregroundStyle(K.C.faint)
+            }
+        }
+        // Where the background review is: running, or ready to open.
+        if let lane = model.reviewLane, lane !== model {
+            HStack(spacing: K.S.xs) {
+                if lane.running {
+                    ProgressView().controlSize(.mini)
+                    Text("Reviewing in the background…").font(K.F.micro).foregroundStyle(K.C.faint)
+                } else if !(lane.turns.last?.text.isEmpty ?? true) {
+                    Image(systemName: "doc.text").font(K.F.tiny).foregroundStyle(K.C.accent)
+                    Button("Open the review") { model.openReview() }
+                        .buttonStyle(.plain).font(K.F.small.weight(.semibold)).foregroundStyle(K.C.accent)
+                    Text("· opens as a tab").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: Phases: a heading with a count; open one to see its findings, click one to fix it.
+
+    @ViewBuilder
+    private func phaseRows(_ i: Int, _ phase: Wire.Phase, expanded: Bool) -> some View {
+        HoverRow {
+            HStack(spacing: K.S.xs) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(K.F.tiny.weight(.semibold)).foregroundStyle(K.C.faint).frame(width: 10)
+                Text("\(i + 1). \(phase.title)").font(K.F.small.weight(.semibold)).foregroundStyle(K.C.text)
+                Spacer()
+                Text("\(phase.findings.count)").font(K.F.codeTiny).foregroundStyle(K.C.faint)
+            }
+        } action: {
+            withAnimation(K.M.quick) {
+                if opened.contains(phase.id) { opened.remove(phase.id) } else { opened.insert(phase.id) }
+            }
+        }
+        .help(phase.why)
+        if expanded {
+            ForEach(phase.findings, id: \.self) { id in
+                if let f = model.findings.first(where: { $0.id == id }) { row(f) }
+            }
+        }
+    }
+
+    /// "on Vercel + Supabase · next · postgres · zod"
+    private func whereLine(_ p: Wire.Profile) -> String {
+        var parts: [String] = []
+        if !p.hosting.isEmpty { parts.append("on " + p.hosting.map(hostName).joined(separator: " + ")) }
+        let stack = p.stack.prefix(5).joined(separator: " · ")
+        if !stack.isEmpty { parts.append(stack) }
+        return parts.joined(separator: " · ")
+    }
+
+    private var score: Int { model.scan?.score ?? 0 }
+    static func ago(_ d: Date) -> String {
+        let s = Int(Date().timeIntervalSince(d))
+        return s < 3600 ? "\(max(1, s / 60)) min ago" : s < 86_400 ? "\(s / 3600) h ago" : "\(s / 86_400) d ago"
+    }
+    private func hostName(_ h: String) -> String {
+        switch h {
+        case "Gcp": "Google Cloud"
+        case "Aws": "AWS"
+        case "Fly": "Fly.io"
+        default: h
+        }
+    }
+
+    /// A finding opens where it is: what it is, why it matters, and the two answers — fix it
+    /// now, or set it aside. Clicking used to start a turn with no warning and no way back.
+    @ViewBuilder
+    private func row(_ f: Wire.Finding) -> some View {
+        let isOpen = openFinding == f.id
+        VStack(alignment: .leading, spacing: 0) {
+            HoverRow(selected: isOpen) {
+                HStack(alignment: .top, spacing: K.S.sm) {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(K.F.tiny.weight(.semibold)).foregroundStyle(K.C.faint)
+                        .frame(width: 10).padding(.top, K.S.xxs)
+                    Pill(text: String(f.severity.prefix(4)).uppercased(), tone: tone(f.severity))
+                        .padding(.top, K.S.hair)
+                    Text(f.title).font(K.F.small).foregroundStyle(K.C.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, K.S.sm)
+            } action: {
+                withAnimation(K.M.quick) { openFinding = isOpen ? nil : f.id }
+            }
+
+            if isOpen {
+                VStack(alignment: .leading, spacing: K.S.sm) {
+                    Text(f.detail).font(K.F.small).foregroundStyle(K.C.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let path = f.path, !path.isEmpty {
+                        Text(path).font(K.F.codeTiny).foregroundStyle(K.C.faint).lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    HStack(spacing: K.S.xs) {
+                        Button("Fix it") { openFinding = nil; Task { await model.fix(f) } }
+                            .buttonStyle(FilledButton())
+                            .disabled(model.running)
+                            .help("Starts a turn that fixes this, in a mode that may edit, then runs the gate.")
+                        Button("Ignore") { openFinding = nil; Task { await model.ignore(f.id, true) } }
+                            .buttonStyle(QuietButton())
+                            .help("Sets it aside in .keel/ignored.json. The score is unchanged and `keel scan` still reports it.")
+                        Spacer()
+                        Text(f.id).font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, K.S.md).padding(.top, K.S.xs).padding(.bottom, K.S.sm)
+                .padding(.leading, K.S.sm)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    /// What was set aside, so it is not lost — one line, and a way back.
+    @ViewBuilder
+    private var ignoredRow: some View {
+        let ids = model.scan?.ignored ?? []
+        if !ids.isEmpty {
+            RailHeader("Ignored", trailing: "\(ids.count)")
+            ForEach(ids, id: \.self) { id in
+                HoverRow {
+                    HStack(spacing: K.S.sm) {
+                        Image(systemName: "eye.slash").font(K.F.tiny).foregroundStyle(K.C.faint)
+                        Text(id).font(K.F.codeSmall).foregroundStyle(K.C.dim).lineLimit(1)
+                        Spacer()
+                        Text("restore").font(K.F.micro).foregroundStyle(K.C.accent)
+                    }
+                    .padding(.leading, K.S.sm)
+                } action: {
+                    Task { await model.ignore(id, false) }
+                }
+                .hint("Bring this finding back into the report.")
+            }
+        }
+    }
+
+    private func tone(_ s: String) -> Pill.Tone {
+        switch s {
+        case "critical", "high": .bad
+        case "medium": .warn
+        default: .neutral
+        }
+    }
+}
+
+
+// MARK: - Monitors
+
+/// The background commands Keel is running for this conversation.
+///
+/// They are here rather than in the trace because they are not part of any one turn — that is the
+/// whole reason they exist. A turn is one `claude -p` and the CLI kills its own background shells
+/// when it ends, so a job that must outlive the turn belongs to the daemon, and the place to see
+/// what the daemon is holding is a panel of its own.
+struct MonitorsPanel: View {
+    let model: SessionModel
+
+    var body: some View {
+        if model.visibleMonitors.isEmpty {
+            EmptyState(icon: "binoculars",
+                       title: "Nothing being watched",
+                       "When the agent leaves a command running — a CI run, a build, a dev "
+                       + "server — Keel takes it off the turn and runs it here, so it survives "
+                       + "the turn and reports back when it finishes. Stop is on the row. A "
+                       + "session running in a terminal keeps its own; those are listed here as "
+                       + "the transcript reports them.")
+        } else {
+            ForEach(model.visibleMonitors) { job in
+                MonitorRow(job: job, model: model)
+                Hairline()
+            }
+        }
+    }
+}
+
+private struct MonitorRow: View {
+    let job: Wire.Job
+    let model: SessionModel
+    @State private var open = false
+
+    private var took: String {
+        let s = Int(job.elapsed)
+        return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
+    }
+
+    /// Running, or how it ended. The exit code is the thing being looked for on a finished job.
+    /// A job from a transcript: Claude Code's own shell, which Keel can list but not stop.
+    private var elsewhere: Bool { job.lane == "transcript" }
+
+    private var status: (text: String, tone: Color) {
+        if job.running { return (elsewhere ? "running in the terminal · \(took)" : "running · \(took)", K.C.accent) }
+        guard let code = job.exit else { return ("done in \(took)", K.C.add) }
+        return code == 0 ? ("done in \(took)", K.C.add) : ("exit \(code) after \(took)", K.C.del)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.sm) {
+                Text(job.id).font(K.F.micro.monospaced()).foregroundStyle(K.C.faint)
+                Text(status.text).font(K.F.micro).foregroundStyle(status.tone)
+                Spacer(minLength: 0)
+                if job.running, !elsewhere {
+                    Button("Stop") { model.stopMonitor(job) }
+                        .buttonStyle(QuietButton(tone: K.C.del))
+                        .help("Interrupt it. The agent is told what it printed before it stopped.")
+                }
+            }
+            Text(job.command)
+                .font(K.F.codeSmall).foregroundStyle(K.C.text)
+                .lineLimit(open ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if open, !job.log.isEmpty {
+                Text(job.log.suffix(40).joined(separator: "\n"))
+                    .font(K.F.codeSmall).foregroundStyle(K.C.dim)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(K.S.xs)
+                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            }
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .contentShape(Rectangle())
+        .asButton { withAnimation(K.M.quick) { open.toggle() } }
+    }
+}

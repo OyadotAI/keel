@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible problem with Keel.
+title: "Bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. Do not post secrets, complete transcripts, or private code.
+        For vulnerabilities, follow our [security policy](https://github.com/OyadotAI/keel/security/policy)
+        or email mk@getoya.ai instead of opening a public report.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, and what did you expect?
+      description: Describe the user-visible problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a small disposable project when possible. If intermittent, say how often it happens.
+      placeholder: |
+        1. Open...
+        2. Run or click...
+        3. Observe...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Keel version or commit
+      description: Include whether this is a downloaded release or a local build.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: macOS version, Apple silicon or Intel
+    validations:
+      required: true
+  - type: dropdown
+    id: origin
+    attributes:
+      label: Where did the agent session start?
+      options:
+        - Not a session issue
+        - Keel
+        - Claude Code CLI
+        - VS Code
+        - Orca
+        - Another front-end
+        - Not sure
+  - type: input
+    id: cli-version
+    attributes:
+      label: Claude Code or other relevant tool version
+      description: For Claude, use claude --version. Do not include authentication output.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted error, screenshots, or small reproduction
+      description: Remove account details, login URLs, private code, tokens, and personal paths before sharing.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked for existing reports and removed secrets and private data.
+          required: true

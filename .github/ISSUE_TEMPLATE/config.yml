@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/OyadotAI/keel/security/policy
+    about: Read the security policy or email mk@getoya.ai. Do not post vulnerabilities publicly.
+  - name: Contribution guide
+    url: https://github.com/OyadotAI/keel/blob/main/CONTRIBUTING.md
+    about: Build Keel, run the checks, and prepare a focused pull request.
+  - name: Community conduct
+    url: https://github.com/OyadotAI/keel/blob/main/CODE_OF_CONDUCT.md
+    about: Participation rules and private reporting for conduct concerns.

@@ -1,0 +1,32 @@
+/target
+docs/reviews
+node_modules/
+dist/
+.DS_Store
+
+# Local audit captures and machine-specific project state are never release assets.
+.gstack/
+.keel/permissions.json
+.keel/ignored.json
+.keel/worktrees/
+
+# Quarantined repository-supplied agent config. Never committed: it is untrusted by definition.
+.keel/quarantine/
+
+# What someone dropped or pasted into the composer. Belongs to the machine, not the repository.
+.keel/attachments/
+
+.env
+.env.*
+!.env.example
+ui/node_modules/
+
+# SwiftPM's build directory: four thousand files, and the Changes panel counts every one of them.
+app/.build/
+
+# Sparkle command-line tools, fetched by make sparkle-tools
+packaging/sparkle/
+.keel/turns/
+
+# Local Python environment for packaging/icon.py.
+.venv/

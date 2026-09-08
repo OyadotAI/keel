@@ -1,0 +1,712 @@
+import AppKit
+import SwiftUI
+import WebKit
+
+/// What you picked in the running app, and where it probably came from.
+struct Picked: Decodable {
+    var selector: String
+    var tag: String
+    var text: String
+    var html: String
+    var style: [String: String]
+    var hints: [Hint]
+    var rect: Rect
+    /// Whether the selector resolves to this element and nothing else. Optional because a page
+    /// running an older injected script does not say — and a missing answer is not a "no".
+    var unique: Bool?
+    /// The element is a custom element with a shadow root, or lives inside one. Said out loud
+    /// rather than quietly describing the host as if it were what was clicked.
+    var shadow: Bool?
+
+    struct Hint: Decodable, Identifiable, Equatable {
+        /// `attribute`, `fiber`, or `component` — in descending order of how much it is worth.
+        var kind: String
+        var value: String
+        var id: String { kind + value }
+    }
+
+    struct Rect: Decodable {
+        var x: Double, y: Double, width: Double, height: Double
+    }
+
+    /// The selection in one line: what it is, how big, and how it is painted.
+    ///
+    /// The 23 computed properties were collected, sent to the agent, and never shown to the person
+    /// asking for the change — who could not see what they were asking to change.
+    var summary: String {
+        var bits = [tag, "\(Int(rect.width))×\(Int(rect.height))"]
+        if let size = style["font-size"] {
+            bits.append(size + (style["font-weight"].map { "/" + $0 } ?? ""))
+        }
+        if let fg = style["color"] { bits.append(Self.short(fg)) }
+        if let bg = style["background-color"], bg != "rgba(0, 0, 0, 0)" {
+            bits.append("on " + Self.short(bg))
+        }
+        return bits.joined(separator: " · ")
+    }
+
+    /// `rgb(59, 130, 246)` → `#3b82f6`. A hex is what anyone reads a colour as.
+    ///
+    /// The clamp is not defensive tidiness. `Int(_: Double)` **traps** — SIGTRAP, the whole app
+    /// gone, no catch — for anything outside `Int`'s range, and every number here was parsed out
+    /// of a string the page handed us. `getComputedStyle` normalises `color` to a clamped
+    /// `rgb()`, which is why this has never fired; "the page cannot say that" is a promise about
+    /// somebody else's renderer, and it is not the sort of promise worth a crash if it is wrong.
+    static func short(_ css: String) -> String {
+        let numbers = css.split(whereSeparator: { !$0.isNumber && $0 != "." })
+            .compactMap { Double($0) }
+        guard numbers.count >= 3 else { return css }
+        let byte = { (d: Double) -> Int in d.isFinite ? Int(min(max(d, 0), 255)) : 0 }
+        return String(format: "#%02x%02x%02x", byte(numbers[0]), byte(numbers[1]), byte(numbers[2]))
+    }
+
+    /// The element, described — without an instruction, so several can share one.
+    func describe() -> String {
+        var out = ""
+        out += "selector: \(selector)\n"
+        if shadow == true {
+            out += "(this element is a shadow root or inside one — a document selector cannot "
+                + "reach into it, so the element described may be the custom element that hosts "
+                + "what was clicked)\n"
+        }
+        if unique == false {
+            out += "(this selector matches more than one element — the pin is on the one "
+                + "described below)\n"
+        }
+        if !text.isEmpty { out += "text: \(text)\n" }
+        if !hints.isEmpty {
+            out += "\nLikely source, best first — check before editing, and say which you used:\n"
+            for h in hints { out += "  - \(h.value)  (\(h.kind))\n" }
+            out += "If none of these is right, find the component that renders it and edit that "
+                + "one. Do not create a new component: this element already exists somewhere.\n"
+        }
+        out += "\ncomputed style:\n"
+        for (k, v) in style.sorted(by: { $0.key < $1.key }) { out += "  \(k): \(v)\n" }
+        out += "\nmarkup:\n\(html)"
+        return out
+    }
+}
+
+/// A region of the page the agent's last write changed, as the page reported it.
+struct Region: Decodable, Identifiable, Equatable {
+    var selector: String
+    var rect: Picked.Rect
+    var tag: String
+    var text: String
+    var id: String { selector }
+    static func == (a: Region, b: Region) -> Bool { a.selector == b.selector }
+}
+
+extension Picked.Rect: Equatable {
+    /// The smallest rect holding all of these.
+    static func union(_ rects: [Picked.Rect]) -> Picked.Rect? {
+        guard let f = rects.first else { return nil }
+        var x0 = f.x, y0 = f.y, x1 = f.x + f.width, y1 = f.y + f.height
+        for r in rects.dropFirst() {
+            x0 = min(x0, r.x); y0 = min(y0, r.y)
+            x1 = max(x1, r.x + r.width); y1 = max(y1, r.y + r.height)
+        }
+        return Picked.Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+}
+
+/// The preview, and the picker that turns a click into a prompt.
+/// What the page can do for the model: photograph itself, say where its elements are now, take
+/// a message, and reload. The page is the only thing that can do any of it, so the pane that
+/// owns the `WKWebView` lends the model this — and a test lends it a fake, which is the seam
+/// three closures set from inside SwiftUI's update pass never had.
+@MainActor
+protocol PreviewCanvas: AnyObject {
+    func snapshot(_ rect: Picked.Rect) async -> NSImage?
+    func rects(for selectors: [String]) async -> [String: Picked.Rect]
+    func send(_ message: [String: Any])
+    func reload()
+}
+
+struct PreviewPane: NSViewRepresentable {
+    let url: URL
+    let model: SessionModel
+    @Binding var picking: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        // The whole trick: `forMainFrameOnly: false` puts the picker inside the dev server's frame
+        // regardless of its origin. A page script cannot reach across that boundary; a user script
+        // is installed by the host and does not have to.
+        if let source = Resources.text("Picker", "js") {
+            config.userContentController.addUserScript(
+                WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        }
+        // The address bar goes wherever you type, and half of what you want to look at while
+        // building this stack is your own API. WebKit renders `application/json` as one unwrapped
+        // line of text; this makes it a tree. It touches nothing that is not JSON.
+        if let source = Resources.text("JSONView", "js") {
+            config.userContentController.addUserScript(
+                WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        }
+        config.userContentController.add(context.coordinator, name: "keel")
+
+        let view = WKWebView(frame: .zero, configuration: config)
+        // ⌥⌘I opens the real Web Inspector on the preview. Unset, there were no devtools at all —
+        // and "why is this element like that" is a question the page can answer better than we can.
+        view.isInspectable = true
+        view.navigationDelegate = context.coordinator
+        view.load(URLRequest(url: url))
+        context.coordinator.web = view
+        context.coordinator.loaded = url
+
+        // The page is the only thing that can photograph itself or draw on itself, so the
+        // coordinator that owns it lends the model both. Cleared when the pane goes away, which is
+        // what makes an un-photographable comparison report `unstable` instead of passing.
+        let coordinator = context.coordinator
+        let model = self.model
+        // Off the update pass: writing observed state while SwiftUI is installing the view is
+        // an invalidation loop, and one it does not always survive.
+        Task { @MainActor in model.attach(canvas: coordinator) }
+        return view
+    }
+
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        let model = coordinator.model
+        Task { @MainActor in model.detach(canvas: coordinator) }
+        view.navigationDelegate = nil
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "keel")
+    }
+
+    func updateNSView(_ view: WKWebView, context: Context) {
+        context.coordinator.web = view
+
+        // Navigate when the address changes. The URL was loaded once in `makeNSView` and never
+        // again, so typing a new one updated the field and nothing else — the pane just kept
+        // showing whatever it had first.
+        if context.coordinator.loaded != url {
+            context.coordinator.loaded = url
+            view.load(URLRequest(url: url))
+        }
+
+        // Only on a change: this runs on every render pass, and re-posting the mode each time
+        // was a message per keystroke to every frame.
+        if context.coordinator.picking != picking {
+            context.coordinator.picking = picking
+            context.coordinator.send(["keel": picking ? "pick-on" : "pick-off"])
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, PreviewCanvas {
+        let model: SessionModel
+        weak var web: WKWebView?
+        /// What the view was last told to load, so an unchanged address is not reloaded on every
+        /// pass of `updateNSView` — which would restart the page under you on every keystroke.
+        var loaded: URL?
+        var picking = false
+        init(model: SessionModel) { self.model = model }
+
+        /// A page that did not load says so, over the pane, rather than staying white.
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            model.previewProblem = error.localizedDescription
+            Task { await model.refreshDev() }
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            model.previewProblem = error.localizedDescription
+        }
+
+        /// A message to the canvas script, in every frame — the one the dev server owns is the
+        /// one that matters, and it is not the main frame.
+        ///
+        /// Posted to the top frame only: the script in each frame passes what it received to its
+        /// own children. Fanning out from here walked `window.frames` one level and stopped, so a
+        /// frame nested inside a frame never armed its observer and never answered a pick.
+        func reload() { web?.reload() }
+
+        func send(_ message: [String: Any]) {
+            guard let web,
+                  let data = try? JSONSerialization.data(withJSONObject: message),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            web.evaluateJavaScript("window.postMessage(\(json), '*');")
+        }
+
+        /// Where these elements are *now*, asked of every frame.
+        ///
+        /// The rect captured when you clicked is viewport-relative and goes stale the moment
+        /// anything scrolls — and the whole verdict rests on photographing the same element, not
+        /// the same square of screen. Frames answer independently and only for what they can
+        /// resolve, so a selector nobody answers for is an element that is gone.
+        func rects(for selectors: [String]) async -> [String: Picked.Rect] {
+            guard web != nil, !selectors.isEmpty else { return [:] }
+            rectSeq += 1
+            let id = rectSeq
+            rectAnswers[id] = [:]
+            send(["keel": "rects", "id": id, "selectors": selectors])
+            try? await Task.sleep(for: .milliseconds(250))
+            return rectAnswers.removeValue(forKey: id) ?? [:]
+        }
+
+        private var rectSeq = 0
+        private var rectAnswers: [Int: [String: Picked.Rect]] = [:]
+
+        func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let dict = message.body as? [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+            switch dict["type"] as? String {
+            case "picking":
+                // Esc in the page. The toggle in the bar has to agree with the page, or Pick
+                // reads as stuck on.
+                model.picking = (dict["on"] as? Bool) ?? false
+            case "rects":
+                struct Answer: Decodable { var id: Int; var found: [String: Picked.Rect] }
+                if let a = try? JSONDecoder().decode(Answer.self, from: data),
+                   rectAnswers[a.id] != nil {
+                    rectAnswers[a.id]?.merge(a.found) { old, _ in old }
+                }
+            case "nudge":
+                struct Nudged: Decodable { var label: String; var pick: Picked }
+                if let n = try? JSONDecoder().decode(Nudged.self, from: data) {
+                    model.designNudge(n.pick, label: n.label)
+                }
+            case "changed":
+                struct Changed: Decodable { var regions: [Region] }
+                if let c = try? JSONDecoder().decode(Changed.self, from: data) {
+                    model.regionsChanged(c.regions)
+                }
+            default:
+                if let picked = try? JSONDecoder().decode(Picked.self, from: data) {
+                    Task { await capture(picked) }
+                }
+            }
+        }
+
+        /// The page loaded — or reloaded under a turn. Re-draw the pins, and if the agent is
+        /// mid-edit, watch for the change to land: the `expect` sent before this load was lost
+        /// with the old document.
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            model.previewProblem = nil
+            model.syncCanvas()
+            if model.running, model.editing != nil { send(["keel": "expect"]) }
+            // A page that loaded and painted nothing is the other blank: a 200 with an empty
+            // body, a client render that threw, a framework error overlay that is itself blank.
+            // Give it two seconds, then ask.
+            Task { [weak self, weak webView] in
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, let webView else { return }
+                let js = "(document.body && document.body.innerText.trim().length) || 0"
+                if let n = try? await webView.evaluateJavaScript(js) as? Int, n == 0 {
+                    await self.model.refreshDev()
+                    self.model.previewProblem = "The page loaded but rendered nothing."
+                }
+            }
+        }
+
+        /// A rect of the page, as it is right now — or nothing, never a trap.
+        ///
+        /// Two things about `takeSnapshot` that crashed the app on other people's machines:
+        /// its result is declared `_Nullable` rather than `_Nullable_result`, so the async
+        /// import is a non-optional `NSImage` and the generated thunk force-unwraps the nil
+        /// WebKit hands back; and WebKit hands back nil for any rect outside the view's bounds,
+        /// which a viewport-relative rect from a scrolled page routinely is. So: the completion
+        /// form, through our own continuation, on a rect clamped to the bounds.
+        func snapshot(_ rect: Picked.Rect) async -> NSImage? {
+            guard let web else { return nil }
+            let wanted = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+            let clamped = wanted.intersection(web.bounds)
+            guard !clamped.isNull, clamped.width > 1, clamped.height > 1 else { return nil }
+            let config = WKSnapshotConfiguration()
+            config.rect = clamped
+            return await withCheckedContinuation { (k: CheckedContinuation<NSImage?, Never>) in
+                web.takeSnapshot(with: config) { image, _ in k.resume(returning: image) }
+            }
+        }
+
+        /// The before image, cropped to the element.
+        ///
+        /// `takeSnapshot` with a rect is exact and native — no screen recording permission, no
+        /// window capture, and it sees the element as the page actually rendered it. This is the
+        /// half nobody else has: a UI change gets a pixel diff, not only a text one.
+        private func capture(_ picked: Picked) async {
+            model.designPick(picked, before: await snapshot(picked.rect))
+        }
+    }
+}
+
+/// The preview tab: an address, the dev server, and the pick toggle.
+struct PreviewSurface: View {
+    @Bindable var model: SessionModel
+
+    @State private var starting = false
+    @State private var typed = ""
+    @State private var editing = false
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    /// True in the torn-out window itself, which has nothing to tear out.
+    var detached = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            bar
+            Hairline()
+            if let file = model.editing {
+                // The agent is writing the page you are looking at. Said here, over the page,
+                // so the ripple that follows is not a surprise.
+                HStack(spacing: K.S.sm) {
+                    Sweep()
+                    Text("Editing \((file as NSString).lastPathComponent)…")
+                        .font(K.F.codeSmall).foregroundStyle(K.C.text).lineLimit(1)
+                    if let route = model.pageShowing(file) {
+                        Image(systemName: "arrow.right").font(K.F.ui(8, .bold))
+                            .foregroundStyle(K.C.faint)
+                        Text(route).font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.snug)
+                .background(K.C.accent.wash)
+                Hairline()
+            } else if !model.changedRegions.isEmpty {
+                HStack(spacing: K.S.sm) {
+                    Image(systemName: "sparkles").font(K.F.tiny).foregroundStyle(K.C.accent)
+                    Text("\(model.changedRegions.count) region\(model.changedRegions.count == 1 ? "" : "s") changed — "
+                         + "click a dot to pin a note there")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
+                    Spacer()
+                    Button("Clear") { model.clearRegions() }.buttonStyle(QuietButton())
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                .background(K.C.accent.wash)
+                Hairline()
+            }
+            if model.picking {
+                // The keys exist; nobody would guess them. A control that only exists on hover
+                // does not exist for the keyboard, and one nothing announces does not exist at all.
+                HStack(spacing: K.S.md) {
+                    key("click", "pin it")
+                    key("↑ ↓", "parent · child")
+                    key("← →", "siblings")
+                    key("⌥", "measure to a pin")
+                    key("esc", "stop")
+                    Spacer()
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
+                .background(K.C.accent.wash)
+                Hairline()
+            }
+            if let problem = model.previewProblem {
+                PreviewProblem(model: model, problem: problem)
+                Hairline()
+            }
+            if model.detachedPreview, !detached {
+                // The web view moved to its own window. Rendering a second one here would give
+                // the model two panes to photograph through and no way to say which.
+                EmptyState(icon: "macwindow.on.rectangle", title: "Open in its own window",
+                           "The preview is in a window of its own. Close that window to bring it "
+                           + "back here.",
+                           actionLabel: "Bring it back") {
+                    dismissWindow(id: "designer", value: model.id)
+                }
+                .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
+            } else if let s = model.previewURL, let url = URL(string: s) {
+                // The page is rendered at a real width and scaled to fit, rather than squeezed
+                // into the pane. The pane is 340–720pt, so a responsive site was correctly
+                // rendering its phone layout — and there was no way to ask for anything else.
+                GeometryReader { geo in
+                    // A zero-width proposal arrives on the first layout and mid-animation. It
+                    // made `scale` zero, the height infinite, and the layer geometry invalid —
+                    // the crash on the way into the Designer. Nothing is drawn until there is
+                    // room to draw it in, and the scale never reaches zero.
+                    if geo.size.width > 8, geo.size.height > 8 {
+                        let target = model.previewWidth.points
+                        let scale = max(0.05, min(1, (geo.size.width - 2) / target))
+                        PreviewPane(url: url, model: model, picking: $model.picking)
+                            .frame(width: target, height: geo.size.height / scale)
+                            .scaleEffect(scale, anchor: .top)
+                            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                            .clipped()
+                    } else {
+                        Color.clear
+                    }
+                }
+                .background(K.C.well)
+            } else if starting {
+                waiting
+            } else {
+                empty
+            }
+        }
+        // Opening the preview is asking to see the app. If the project declares how to run one and
+        // nothing is running, run it — a tab whose only content is a button saying "run the thing
+        // you just asked to see" is a tab that has not done its job.
+        .task {
+            await model.refreshDev()
+            guard model.previewURL == nil, !model.devRunning, model.devDetected != nil,
+                  !starting else { return }
+            starting = true
+            await model.startDev()
+            starting = false
+        }
+    }
+
+    private func key(_ stroke: String, _ what: String) -> some View {
+        HStack(spacing: K.S.xs) {
+            Text(stroke)
+                .font(K.F.codeTiny).foregroundStyle(K.C.dim)
+                .padding(.horizontal, K.S.xs)
+                .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm - 2))
+            Text(what).font(K.F.micro).foregroundStyle(K.C.faint)
+        }
+    }
+
+    private var waiting: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Sweep()
+                Text("Starting \(model.devDetected ?? "the dev server")…")
+                    .font(K.F.small).foregroundStyle(K.C.dim)
+            }
+            Text("Keel points the preview at whatever URL it announces.")
+                .font(K.F.micro).foregroundStyle(K.C.faint)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private var bar: some View {
+        HStack(spacing: K.S.sm) {
+            TextField("localhost:3000", text: $typed)
+                .textFieldStyle(.plain)
+                .font(K.F.code)
+                .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                // Committed on Enter, not on every keystroke. Normalising as you typed rewrote
+                // the field under the cursor — the first character became `http://l` and it went
+                // downhill from there.
+                .onSubmit { go() }
+                .onAppear { typed = model.previewURL ?? "" }
+                .onChange(of: model.previewURL) { _, new in
+                    // Follow the model when something else sets it (a dev server starting, a URL
+                    // noticed in output), but never while you are mid-edit.
+                    if let new, !editing { typed = new }
+                }
+                .onChange(of: typed) { editing = true }
+
+            Button("Go") { go() }
+                .buttonStyle(QuietButton())
+                .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
+
+            // Desktop first: a preview exists to show the app, and the app is a desktop app until
+            // someone says otherwise.
+            HStack(spacing: 0) {
+                ForEach(PreviewWidth.allCases) { w in
+                    let on = model.previewWidth == w
+                    Image(systemName: w.icon)
+                        .font(K.F.tiny)
+                        .foregroundStyle(on ? K.C.text : K.C.faint)
+                        .frame(width: 24, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: K.R.sm - 1)
+                                .fill(on ? K.C.raised : .clear)
+                                .padding(K.S.hair)
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.previewWidth = w }
+                        .hint("\(w.title) — \(Int(w.points))pt wide")
+                }
+            }
+            .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+
+            Toggle(isOn: $model.picking) {
+                Label("Pick", systemImage: "cursorarrow.rays")
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Click an element to pin a note on it — ↑↓ walk to parent and child, "
+                  + "⌥ measures to the nearest pin, Esc stops")
+
+            Toggle(isOn: $model.followEdits) {
+                Label("Follow", systemImage: "eye")
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Bring this pane forward and go to the page whenever the agent edits the "
+                  + "frontend")
+
+            if model.devRunning {
+                HStack(spacing: K.S.xs) {
+                    Circle().fill(K.C.add).frame(width: 5, height: 5)
+                    Text("running").font(K.F.micro).foregroundStyle(K.C.add)
+                }
+                Button("Stop") { Task { await model.stopDev() } }.buttonStyle(QuietButton())
+            } else if let d = model.devDetected {
+                Button("Run \(d)") { Task { await model.startDev() } }
+                    .buttonStyle(QuietButton())
+            }
+            Button {
+                model.designer.reload()
+                Task { await model.refreshDev() }
+            } label: {
+                Image(systemName: "arrow.clockwise").font(K.F.tiny)
+                    .frame(width: 20, height: 18).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(K.C.faint)
+            .hint("Reload the page (⌘R)")
+            .keyboardShortcut("r", modifiers: .command)
+
+            if !detached {
+                Button {
+                    openWindow(id: "designer", value: model.id)
+                } label: {
+                    Image(systemName: "macwindow.on.rectangle").font(K.F.tiny)
+                        .frame(width: 20, height: 18).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(K.C.faint)
+                .hint("Open the preview in its own window — same page, same session, and ⌥⌘I "
+                      + "opens the Web Inspector on it")
+            }
+        }
+        .padding(K.S.sm)
+    }
+
+    private var empty: some View {
+        Group {
+            // Keel runs one dev server. Said, rather than shown as this lane's — a preview of
+            // another lane's worktree beside this lane's diff is the wrong page reviewed with
+            // confidence, and it is what the pixel check would photograph.
+            if let owner = model.devElsewhere {
+                EmptyState(
+                    icon: "rectangle.on.rectangle.slash",
+                    title: "The dev server belongs to \(owner)",
+                    "Keel runs one at a time, and it is serving that checkout — so a preview here "
+                    + "would show its code, not this feature's. Stop it there to run one for this "
+                    + "feature.",
+                    actionLabel: "Stop it and run one here"
+                ) { Task { await model.stopDev(); await model.startDev() } }
+            } else if let command = model.devDetected {
+                EmptyState(
+                    icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
+                    "Keel points the preview at whatever URL `\(command)` announces"
+                    + (model.devDir.map { ", run in `\($0)`" } ?? "") + ".",
+                    actionLabel: "Run \(command)"
+                ) { Task { await model.startDev() } }
+            } else {
+                EmptyState(
+                    icon: "cursorarrow.motionlines", title: "Nothing to preview yet",
+                    "No `dev` script in this repository, its packages, or under `apps/` and "
+                    + "`packages/`. Paste a URL above — a deploy URL works too."
+                )
+            }
+        }
+        .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func go() {
+        let url = Self.normalise(typed)
+        guard !url.isEmpty else { return }
+        typed = url
+        editing = false
+        model.previewURL = url
+    }
+
+    /// What someone types is not a URL yet. `localhost:3000` parses as a URL whose *scheme* is
+    /// `localhost`, so it never throws and never loads; a bare number is a port.
+    static func normalise(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return t }
+        if t.contains("://") { return t }
+        if t.allSatisfy(\.isNumber) { return "http://127.0.0.1:\(t)" }
+        return "http://" + t
+    }
+}
+
+
+/// The width a page is rendered at, independent of how wide the pane happens to be.
+enum PreviewWidth: String, CaseIterable, Identifiable {
+    case desktop, tablet, phone
+    var id: String { rawValue }
+
+    /// Real CSS widths, not approximations: a site's breakpoints are written against these
+    /// numbers, and rendering at 900 tells you about a layout nobody will ever see.
+    var points: CGFloat {
+        switch self {
+        case .desktop: 1280
+        case .tablet: 834
+        case .phone: 390
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .desktop: "display"
+        case .tablet: "ipad"
+        case .phone: "iphone"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .desktop: "Desktop"
+        case .tablet: "Tablet"
+        case .phone: "Phone"
+        }
+    }
+}
+
+
+/// Why the pane is blank, with the dev server's own last words underneath.
+///
+/// "It said it finished but the preview is white" was the report. White is what a page that
+/// failed to load, a page that threw during render, and a dev server that died all look like.
+/// The difference is in the error and in the log, so both go on screen.
+private struct PreviewProblem: View {
+    let model: SessionModel
+    let problem: String
+    @State private var showLog = false
+
+    /// The lines worth reading: the last ones, and any that say error.
+    private var lines: [String] {
+        let all = model.devLog
+        let bad = all.filter { $0.range(of: "error", options: .caseInsensitive) != nil }
+        return Array((bad.suffix(6) + all.suffix(6)).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: K.S.xs) {
+            HStack(spacing: K.S.sm) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(K.F.tiny).foregroundStyle(K.C.warn)
+                Text(problem).font(K.F.small).foregroundStyle(K.C.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if !model.devRunning, model.devDetected != nil {
+                    Button("Start the dev server") { Task { await model.startDev() } }
+                        .buttonStyle(QuietButton(tone: K.C.accent))
+                } else {
+                    Button("Reload") { model.designer.reload() }.buttonStyle(QuietButton())
+                }
+                if !lines.isEmpty {
+                    Button(showLog ? "Hide output" : "Server output") { showLog.toggle() }
+                        .buttonStyle(QuietButton())
+                }
+            }
+            if !model.devRunning {
+                Text(model.devDetected == nil
+                     ? "No dev server is running and this project declares no dev command."
+                     : "The dev server is not running.")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+            }
+            if showLog {
+                ScrollView {
+                    Text(lines.joined(separator: "\n"))
+                        .font(K.F.codeSmall).foregroundStyle(K.C.dim)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .padding(K.S.sm)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+            }
+        }
+        .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+        .background(K.C.warn.wash)
+    }
+}
