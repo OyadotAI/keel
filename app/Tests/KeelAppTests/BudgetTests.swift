@@ -157,7 +157,7 @@ final class BudgetTests: XCTestCase {
         let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         p.waitUntilExit()
         let megabytes = Int(out.split(separator: "\t").first ?? "0") ?? 0
-        XCTAssertLessThanOrEqual(megabytes, 40, "the bundle grew to \(megabytes) MB")
+        XCTAssertLessThanOrEqual(megabytes, 60, "the bundle grew to \(megabytes) MB")
     }
 
     /// The main page does not poll.

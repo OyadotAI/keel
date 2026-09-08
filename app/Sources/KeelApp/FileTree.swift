@@ -10,7 +10,9 @@ struct FileTree: View {
     @State private var filter = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.xxs) {
+        // The surrounding panel owns the scroll view. Keep its file rows lazy as well:
+        // an eager inner stack still measures the entire repository on every resize.
+        LazyVStack(alignment: .leading, spacing: K.S.xxs) {
             SearchField(prompt: "Find a file", text: $filter)
 
             if filter.isEmpty {

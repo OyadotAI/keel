@@ -21,7 +21,7 @@ cd "$root"
 # A bundle of its own, rather than debug binaries swapped into the release one.
 #
 # `BudgetTests.testBundleStaysSmall` measures dist/Keel.app, and a debug build of it is 86 MB
-# against a 40 MB ceiling. `make check` rebuilds the release bundle first so the gate is honest
+# against a 60 MB ceiling. `make check` rebuilds the release bundle first so the gate is honest
 # either way — but a bare `swift test` after a `make dev` failed on a budget nobody had touched,
 # which is a confusing failure to leave lying around for the sake of one `cp` path.
 release="dist/Keel.app"
