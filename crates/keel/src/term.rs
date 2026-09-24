@@ -20,6 +20,7 @@ pub async fn ws(
     ws: WebSocketUpgrade,
     crate::serve::Checkout(repo): crate::serve::Checkout,
 ) -> Response {
+    // no-blocking: a WebSocket upgrade; the PTY runs in its own task and threads.
     ws.on_upgrade(move |socket| session(socket, repo.to_string()))
 }
 

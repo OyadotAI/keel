@@ -38,6 +38,7 @@ pub enum Next {
 
 /// The next line, with "undecodable" and "broken" told apart.
 pub async fn next<R: AsyncBufRead + Unpin>(lines: &mut Lines<R>) -> Next {
+    // no-blocking: not a handler — an async line read, which is the point of it.
     match lines.next_line().await {
         Ok(Some(line)) => Next::Line(line),
         Ok(None) => Next::Done,

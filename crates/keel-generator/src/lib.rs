@@ -15,7 +15,9 @@
 
 pub mod cloudflare;
 pub mod packs;
+pub mod skills;
 pub mod stack;
+pub mod team;
 
 /// A workload's shape, which determines where it is allowed to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

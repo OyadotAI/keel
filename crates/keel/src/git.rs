@@ -75,7 +75,16 @@ pub fn tokio_command(root: &Utf8Path) -> tokio::process::Command {
 ///
 /// Signing goes with it: a per-turn checkpoint that raises a pinentry dialog is a checkpoint that
 /// stops the turn.
-pub const AUTOMATIC: &[&str] = &["-c", "commit.gpgsign=false"];
+///
+/// And every hook, not only the two `--no-verify` skips: `post-commit` still ran (measured, a
+/// `sleep 8` there made one checkpoint take 8.5 s), and it is the same author's code for the same
+/// reasons. `core.hooksPath` pointed at nothing turns them all off for this one command.
+pub const AUTOMATIC: &[&str] = &[
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+];
 
 /// How long any one synchronous git may take before Keel stops it.
 ///
@@ -100,6 +109,10 @@ pub fn output(command: Command) -> std::io::Result<Output> {
 
 /// The same, with the ceiling named — so a test can assert the timeout without sitting through it.
 pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result<Output> {
+    use std::os::unix::process::CommandExt;
+    // Its own group, so a timeout ends everything it started (`crate::signals`): a `claude` or a
+    // credential helper that forks and hangs left its children reparented to init.
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -130,8 +143,8 @@ pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result
         match child.try_wait()? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
-                // The readers end when the pipes close, which killing does.
-                let _ = child.kill();
+                // The readers end when the pipes close, which ending the whole group does.
+                crate::signals::end_tree(child.id());
                 let _ = child.wait();
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
@@ -221,6 +234,28 @@ fn finish(out: std::io::Result<Output>, args: &[&str], trim: bool) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A timeout ends the whole tree: a command that forked and hung left its child reparented
+    /// to init with its pipes held open.
+    #[test]
+    fn a_timeout_ends_what_the_command_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let mut c = Command::new("sh");
+        c.arg("-c")
+            .arg(format!("sleep 300 & echo $! > {}; wait", pidfile.display()));
+        let err = output_within(c, Duration::from_millis(500)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        // Safety: signal 0 only asks whether the pid exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "the grandchild outlived the timeout");
+    }
 
     /// A command that will not end is ended, rather than held forever.
     #[test]

@@ -12,7 +12,7 @@
 //! writes one.
 
 use axum::{Json, extract::State, http::StatusCode};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -32,12 +32,18 @@ pub struct NewAgent {
     /// `project` writes `.claude/agents`; `user` writes `~/.claude/agents`.
     #[serde(default)]
     pub scope: String,
+    /// The person's "commit after every turn" setting; a project agent is then committed on
+    /// its own rather than swept into the next turn's checkpoint under that turn's prompt.
+    #[serde(default)]
+    pub commit: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct Created {
     /// Repository-relative when it is in the project, absolute when it is in the user's home.
     pub path: String,
+    /// Why it was not committed, when a commit was asked for and failed.
+    pub note: Option<String>,
 }
 
 fn bad(m: impl std::fmt::Display) -> (StatusCode, String) {
@@ -45,7 +51,7 @@ fn bad(m: impl std::fmt::Display) -> (StatusCode, String) {
 }
 
 /// A name that is safe as a filename and valid as the frontmatter's `name`.
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && !name.starts_with('-')
@@ -59,17 +65,48 @@ fn valid_name(name: &str) -> bool {
 /// A description is a sentence, and sentences contain colons. Unquoted, `Use this: for reviews`
 /// parses as a nested mapping and the file loads with no description at all — which reads to the
 /// main agent as an agent it has no reason to ever call.
-fn yaml(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+///
+/// One line, too: the field is a text editor, and a newline followed by `---` ends the
+/// frontmatter inside the quotes, while one followed by `name: x` renames the file's owner to
+/// every line-by-line reader. A description is one sentence to the model either way.
+pub(crate) fn yaml(value: &str) -> String {
+    let line = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("\"{}\"", line.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewAgent>,
 ) -> Result<Json<Created>, (StatusCode, String)> {
+    let repo = state.repo();
+    crate::serve::blocking(
+        move || {
+            // A project agent is a write into the tree a turn may be writing; a user one is not.
+            let _held = if req.scope == "user" {
+                None
+            } else {
+                Some(crate::writes::hold(&state, &repo, "agent")?)
+            };
+            let commit = req.commit && req.scope != "user";
+            let rel = format!(".claude/agents/{}.md", req.name);
+            let mut made = write(&repo, req)?;
+            if commit {
+                made.note = crate::writes::commit_only(&repo, &[rel], "Add a subagent").note;
+            }
+            Ok(made)
+        },
+        Err(bad("the write was cancelled")),
+    )
+    .await
+    .map(Json)
+}
+
+/// What `create` does, off the executor: it creates directories, checks for a file and writes.
+fn write(repo: &Utf8Path, req: NewAgent) -> Result<Created, (StatusCode, String)> {
     if !valid_name(&req.name) {
         return Err(bad(
-            "Use lowercase letters, digits and hyphens — the name becomes a filename.",
+            "Use lowercase letters, digits and hyphens, at most 64 characters — the name becomes \
+             a filename.",
         ));
     }
     let description = req.description.trim();
@@ -84,13 +121,12 @@ pub async fn create(
         let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
         Utf8PathBuf::from(home).join(".claude/agents")
     } else {
-        state.repo().join(".claude/agents")
+        repo.join(".claude/agents")
     };
-    std::fs::create_dir_all(&dir).map_err(bad)?;
-
     let path = dir.join(format!("{}.md", req.name));
-    if path.exists() {
-        return Err(bad(format!("{}.md already exists", req.name)));
+    if req.scope != "user" {
+        crate::writes::no_link_under(repo, &format!(".claude/agents/{}.md", req.name))
+            .map_err(|e| (StatusCode::CONFLICT, e))?;
     }
 
     let mut front = format!(
@@ -98,6 +134,10 @@ pub async fn create(
         req.name,
         yaml(description)
     );
+    // A tool list is one line of frontmatter; a newline in it writes whatever keys follow.
+    if req.tools.chars().any(char::is_control) {
+        return Err(bad("Tools are a comma-separated list on one line."));
+    }
     let tools: Vec<&str> = req
         .tools
         .split(',')
@@ -120,9 +160,14 @@ pub async fn create(
         format!("{}\n", req.prompt.trim())
     };
 
-    std::fs::write(&path, front + &body).map_err(bad)?;
+    // Never over a file, never through a link, and two creates of one name cannot both win.
+    if !crate::writes::create_new(&path, (front + &body).as_bytes()).map_err(bad)? {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("{}.md already exists — pick another name.", req.name),
+        ));
+    }
 
-    let repo = state.repo();
     let shown = match repo.canonicalize_utf8() {
         Ok(root) => path
             .strip_prefix(&root)
@@ -130,12 +175,49 @@ pub async fn create(
             .unwrap_or_else(|_| path.to_string()),
         Err(_) => path.to_string(),
     };
-    Ok(Json(Created { path: shown }))
+    Ok(Created {
+        path: shown,
+        note: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ask(name: &str, tools: &str) -> NewAgent {
+        NewAgent {
+            name: name.into(),
+            description: "d".into(),
+            tools: tools.into(),
+            prompt: String::new(),
+            scope: String::new(),
+            commit: false,
+        }
+    }
+
+    /// A newline in the tool list wrote `name:` and `description:` of the caller's choosing.
+    #[test]
+    fn a_tool_list_cannot_add_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap();
+        let err = write(repo, ask("tooly", "Read\nname: hijack")).unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(!repo.join(".claude/agents/tooly.md").exists());
+        write(repo, ask("tooly", "Read, Bash(git commit:*)")).unwrap();
+    }
+
+    /// Check-then-write let two creates of one name both succeed, the last silently winning.
+    #[test]
+    fn a_second_create_of_one_name_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap();
+        write(repo, ask("a", "")).unwrap();
+        let err = write(repo, ask("a", "Read")).unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        let body = std::fs::read_to_string(repo.join(".claude/agents/a.md")).unwrap();
+        assert!(!body.contains("tools:"), "{body}");
+    }
 
     #[test]
     fn a_name_has_to_work_as_a_filename() {
@@ -157,5 +239,7 @@ mod tests {
             "\"Use this: after any change\""
         );
         assert_eq!(yaml("says \"hi\""), "\"says \\\"hi\\\"\"");
+        // A newline is how the text editor ends a line, and how YAML ends the frontmatter.
+        assert_eq!(yaml("notes\n---\nname: x"), "\"notes --- name: x\"");
     }
 }

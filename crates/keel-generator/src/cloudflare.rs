@@ -33,22 +33,35 @@ pub fn valid_name(name: &str) -> bool {
         && !name.starts_with('-')
 }
 
+/// Every template gets the agent team and the lifecycle that runs it (`crate::team`), even the
+/// empty one: that is the part of a project an agent works *with*, and it costs no code.
 pub fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
+    let mut files = template_files(name, template);
+    for (path, body) in crate::team::agents() {
+        files.retain(|(p, _)| *p != path);
+        files.push((path, body.to_string()));
+    }
+    if template != Template::Empty {
+        files.push((
+            crate::team::FRONTEND_SKILL_PATH,
+            crate::team::FRONTEND_SKILL.to_string(),
+        ));
+    }
+    for (path, body) in files.iter_mut() {
+        if *path == "CLAUDE.md" {
+            *body = crate::team::with_guidance(body);
+        }
+    }
+    files
+}
+
+fn template_files(name: &str, template: Template) -> Vec<(&'static str, String)> {
     let f = |s: &str| s.replace("{{NAME}}", name);
 
     if template == Template::Stack {
         let mut files = crate::stack::files(name);
         files.push(("CLAUDE.md", crate::stack::claude_md(name)));
         files.push(("README.md", f(STACK_README_MD)));
-        files.push((".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()));
-        files.push((
-            ".claude/agents/security.md",
-            crate::stack::SECURITY_AGENT.to_string(),
-        ));
-        files.push((
-            ".claude/agents/reliability.md",
-            crate::stack::RELIABILITY_AGENT.to_string(),
-        ));
         return files;
     }
 
@@ -68,16 +81,7 @@ pub fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
         // ── infra ────────────────────────────────────────────────────────────────────────────
         ("infra/README.md", f(INFRA_README)),
         ("infra/deploy.sh", DEPLOY_SH.to_string()),
-        // ── the agent's own setup ────────────────────────────────────────────────────────────
-        (".claude/agents/reviewer.md", REVIEWER_AGENT.to_string()),
-        (
-            ".claude/agents/security.md",
-            crate::stack::SECURITY_AGENT.to_string(),
-        ),
-        (
-            ".claude/agents/reliability.md",
-            crate::stack::RELIABILITY_AGENT.to_string(),
-        ),
+        // ── the agent's own setup (the team is added by `scaffold`) ────────────────────────
         (
             ".claude/agents/platform-limits.md",
             LIMITS_AGENT.to_string(),
@@ -108,8 +112,9 @@ pub fn scaffold(name: &str, template: Template) -> Vec<(&'static str, String)> {
 
 // ═══ the agent's own setup ═══════════════════════════════════════════════════════════════════
 //
-// Two subagents, not five. Each earns its place by doing something a fresh context does better
-// than the agent that just wrote the code, which is the only reason to spend a delegation on it.
+// The team (`crate::team`) plus `platform-limits`, which only this template has a use for. Each
+// earns its place by doing something a fresh context does better than the agent that just wrote
+// the code, which is the only reason to spend a delegation on it.
 //
 // What is deliberately absent: `.claude/settings.json` and `.mcp.json`. Both are repository-
 // supplied agent configuration, both are quarantined by `keel-harness::trust` before any agent

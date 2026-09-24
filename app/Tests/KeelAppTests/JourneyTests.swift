@@ -171,6 +171,36 @@ final class JourneyTests: XCTestCase {
         XCTAssertTrue(SkillCatalog.results(suggested: [], all: [entry], query: "missing").isEmpty)
     }
 
+    /// Keel's own skill row: filtered by the same search, its licence and its script said before
+    /// Add, and the log says whether the files were committed — and why not, when they were not.
+    func testKeelSkillRowSaysWhatItWritesBeforeAndAfter() {
+        let s = SkillCatalog.KeelSkill(id: "ui-ux-pro-max", description: "Generate a design system", license: "MIT",
+                                       author: "Next Level Builder", files: 43, bytes: 2_000_000,
+                                       script: "python3", present: nil, python: true)
+        XCTAssertEqual(SkillCatalog.keelHits([s], query: "").count, 1)
+        XCTAssertEqual(SkillCatalog.keelHits([s], query: " DESIGN ").count, 1)
+        XCTAssertTrue(SkillCatalog.keelHits([s], query: "docker").isEmpty)
+        let facts = SkillCatalog.facts(s)
+        XCTAssertTrue(facts.hasPrefix("MIT · Next Level Builder · "), facts)
+        XCTAssertTrue(facts.hasSuffix(" · includes a Python script"), facts)
+
+        let path = ".claude/skills/ui-ux-pro-max"
+        XCTAssertEqual(SkillCatalog.added(.init(path: path, files: 43, committed: "abc123", note: nil), asked: true),
+                       "Wrote 43 files to \(path)/ and committed them.")
+        XCTAssertEqual(SkillCatalog.added(.init(path: path, files: 43, committed: nil, note: "not a git repository"), asked: true),
+                       "Wrote 43 files to \(path)/ — not committed: not a git repository")
+        XCTAssertEqual(SkillCatalog.added(.init(path: path, files: 1, committed: nil, note: nil), asked: false),
+                       "Wrote 1 file to \(path)/ — not committed.")
+    }
+
+    /// The form refuses what the daemon would, before the round trip.
+    func testNewSkillNameFollowsTheDaemonsRule() {
+        for good in ["release-notes", "a", "x2"] { XCTAssertTrue(NewSkill.validName(good), good) }
+        for bad in ["", "Release", "../x", "a/b", "-x", "a b", "é", String(repeating: "a", count: 65)] {
+            XCTAssertFalse(NewSkill.validName(bad), bad)
+        }
+    }
+
     func testReviewHooksOpensHooksInsteadOfTogglingAnArbitraryPanel() throws {
         let model = SessionModel(client: Client(port: 0))
         model.workspace.hooks = [try JSONDecoder().decode(Wire.Hook.self, from: Data(#"{"event":"Stop","command":"make check","scope":"project","source":".claude/settings.json"}"#.utf8))]
@@ -251,6 +281,15 @@ final class JourneyTests: XCTestCase {
         try capture(SkillCatalog(client: c, catalog: .init(suggested: [], all: [entry])) {}, name: "skill-catalog-available", directory: raw, width: 600, height: 480)
         try capture(SkillCatalog(client: c, catalog: .init(suggested: [], all: [])) {}, name: "skill-catalog-empty", directory: raw, width: 600, height: 480)
         try capture(SkillCatalog(client: c, failure: "The daemon could not be reached. Check Keel is running and retry.") {}, name: "skill-catalog-error", directory: raw, width: 600, height: 480)
+        let keel = SkillCatalog.KeelSkill(id: "ui-ux-pro-max", description: "Before building a UI: a design system — style, palette, font pairing, layout and a pre-delivery checklist — from a local knowledge base.",
+                                          license: "MIT", author: "Next Level Builder", files: 44, bytes: 1_975_794,
+                                          script: "python3", present: nil, python: true)
+        var noPython = keel; noPython.python = false
+        var present = keel; present.present = "project"
+        try capture(SkillCatalog(client: c, catalog: .init(suggested: [], all: [entry]), keel: [keel]) {}, name: "skill-catalog-keel", directory: raw, width: 600, height: 520)
+        try capture(SkillCatalog(client: c, catalog: .init(suggested: [], all: [entry]), keel: [noPython]) {}, name: "skill-catalog-keel-nopython", directory: raw, width: 600, height: 520)
+        try capture(SkillCatalog(client: c, catalog: .init(suggested: [], all: [entry]), keel: [present]) {}, name: "skill-catalog-keel-present", directory: raw, width: 600, height: 520)
+        try capture(NewSkill(client: c) {}, name: "new-skill", directory: raw, width: 600, height: 620)
         try capture(AddMCP(client: c) {}, name: "add-mcp", directory: raw, width: 480, height: 550)
         try capture(NewSubagent(client: c) {}, name: "new-subagent", directory: raw, width: 600, height: 700)
         try capture(StartProject(client: c, start: .clone) { _, _, _ in }, name: "clone-project", directory: raw, width: 680, height: 760)

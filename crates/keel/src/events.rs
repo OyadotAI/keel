@@ -122,6 +122,7 @@ pub async fn after_mutation(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // no-blocking: middleware; emitting is a broadcast in memory.
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let wt = req
@@ -161,9 +162,19 @@ pub async fn after_mutation(
             emit("monitors.changed", None, serde_json::Value::Null)
         }
         "/api/session/rename" => poke_sessions(),
+        // A skill or subagent is written to the project root and, for a skill, maybe committed.
+        p if p.starts_with("/api/skills") || p.starts_with("/api/agents") => {
+            emit("state.changed", None, serde_json::Value::Null);
+            emit("git.changed", None, serde_json::Value::Null);
+            emit("tree.changed", None, serde_json::Value::Null);
+        }
+        p if p.starts_with("/api/adopt") => {
+            emit("state.changed", None, serde_json::Value::Null);
+            emit("git.changed", wt, serde_json::Value::Null);
+            emit("tree.changed", wt, serde_json::Value::Null);
+        }
         p if p.starts_with("/api/open")
             || p.starts_with("/api/readiness")
-            || p.starts_with("/api/adopt")
             || p.starts_with("/api/plugins")
             || p.starts_with("/api/mcp")
             || p.starts_with("/api/cli") =>

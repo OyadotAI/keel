@@ -513,7 +513,7 @@ struct Template: Identifiable, Hashable {
                  wants: "the n8n workflow export (.json)"),
         // ── starting points ───────────────────────────────────────────────────────────────
         Template(id: "blank", category: .starting, title: "Blank", like: "", icon: "doc",
-                 blurb: "Agent scaffolding only — a CLAUDE.md, a gate, the reviewer agents. No application code.",
+                 blurb: "Agent scaffolding only — a CLAUDE.md with the lifecycle and engineering rules, and the seven-agent team. No application code.",
                  scaffold: "empty", components: [], flow: [], practices: [], brief: "", wants: nil),
     ]
 }

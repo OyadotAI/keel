@@ -67,6 +67,19 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewProject>,
 ) -> Result<Json<Created>, (StatusCode, String)> {
+    // A scaffold is a hundred file writes and a scan: off the executor.
+    crate::serve::blocking(
+        move || scaffold_project(&state, req),
+        Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the scaffold was cancelled".into(),
+        )),
+    )
+    .await
+    .map(Json)
+}
+
+fn scaffold_project(state: &AppState, req: NewProject) -> Result<Created, (StatusCode, String)> {
     let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
 
     if !valid_name(&req.name) {
@@ -110,6 +123,12 @@ pub async fn create(
         for (rel, body) in packed {
             files.retain(|(p, _)| *p != rel);
             files.push((rel, body));
+        }
+        // The pack's CLAUDE.md replaced the one `scaffold` gave the lifecycle to.
+        for (rel, body) in files.iter_mut() {
+            if *rel == "CLAUDE.md" {
+                *body = keel_generator::team::with_guidance(body);
+            }
         }
     }
     for (rel, body) in files {
@@ -155,13 +174,50 @@ pub async fn create(
         std::fs::write(&claude, body).map_err(|e| bad(&e.to_string()))?;
     }
 
+    // Finished by the same function the Fix button runs, so a new project already has everything
+    // adopting would add — the production checklist derived from what was just written — and the
+    // two cannot drift into disagreeing about what "the team" is.
+    crate::review::adopt(&root).map_err(|e| bad(&e))?;
+
     // A repository from the start, so the diff view and the readiness scan both have a baseline.
     let mut init = crate::git::command(&root);
     init.arg("init").arg("--quiet");
     let _ = crate::git::output(init);
 
     state.set_repo(root.clone());
-    Ok(Json(Created {
+    Ok(Created {
         path: root.to_string(),
-    }))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino::Utf8Path;
+
+    /// A scaffold ends where the Fix button would: adopting a fresh project changes nothing, for
+    /// every template, so the two can never disagree about what "the team" is.
+    #[test]
+    fn a_fresh_scaffold_is_already_adopted() {
+        for template in ["app", "empty", "stack"] {
+            let dir = tempfile::tempdir().unwrap();
+            let parent = Utf8Path::from_path(dir.path()).unwrap().to_owned();
+            let state = AppState::new(parent.clone());
+            let req = NewProject {
+                parent: parent.to_string(),
+                name: "demo".into(),
+                template: Some(template.into()),
+                notes: None,
+                patterns: None,
+                pack: None,
+            };
+            let made = scaffold_project(&state, req).unwrap();
+            let again = crate::review::adopt(Utf8Path::new(&made.path)).unwrap();
+            assert!(
+                again.written.is_empty(),
+                "{template}: adopt wrote {:?}",
+                again.written
+            );
+        }
+    }
 }

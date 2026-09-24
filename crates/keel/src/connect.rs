@@ -30,22 +30,34 @@ pub struct Connections {
 }
 
 pub async fn status() -> Json<Connections> {
-    let stored = credentials::load(credentials::Kind::GitHub).is_some();
+    // Two process spawns (`claude --version`, `gh auth token`) and two credential reads: off the
+    // executor, and only then the two network checks, which are async.
+    let (claude, stored, via_gh, cloudflare_stored) = crate::serve::in_blocking(|| {
+        let stored = credentials::load(credentials::Kind::GitHub).is_some();
+        (
+            which_claude(),
+            stored,
+            !stored && credentials::github_from_gh_cli().is_some(),
+            credentials::load(credentials::Kind::Cloudflare).is_some(),
+        )
+    })
+    .await;
     Json(Connections {
-        claude: which_claude(),
+        claude,
         github: github::current().await,
-        github_via_gh: !stored && credentials::github_from_gh_cli().is_some(),
+        github_via_gh: via_gh,
         github_stored: stored,
-        cloudflare_stored: credentials::load(credentials::Kind::Cloudflare).is_some(),
+        cloudflare_stored,
         cloudflare: cloudflare::current().await,
     })
 }
 
 /// Whether the `claude` binary Keel drives is actually installed.
 pub fn which_claude() -> bool {
-    std::process::Command::new("claude")
-        .arg("--version")
-        .output()
+    let mut command = std::process::Command::new("claude");
+    command.arg("--version");
+    // Bounded: a `claude` that hangs on start must not hold the connections panel for ever.
+    crate::git::output_within(command, std::time::Duration::from_secs(10))
         .is_ok_and(|o| o.status.success())
 }
 
@@ -60,7 +72,10 @@ pub struct TokenBody {
 /// middle of some other operation, with nothing pointing at the credential as the cause.
 pub async fn connect_github(Json(body): Json<TokenBody>) -> ApiResult<github::Account> {
     let account = github::verify(body.token.trim()).await.map_err(bad)?;
-    credentials::store(credentials::Kind::GitHub, body.token.trim()).map_err(bad)?;
+    let token = body.token.trim().to_string();
+    crate::serve::in_blocking(move || credentials::store(credentials::Kind::GitHub, &token))
+        .await
+        .map_err(bad)?;
     Ok(Json(account))
 }
 
@@ -68,7 +83,10 @@ pub async fn connect_cloudflare(
     Json(body): Json<TokenBody>,
 ) -> ApiResult<Vec<cloudflare::Account>> {
     let accounts = cloudflare::verify(body.token.trim()).await.map_err(bad)?;
-    credentials::store(credentials::Kind::Cloudflare, body.token.trim()).map_err(bad)?;
+    let token = body.token.trim().to_string();
+    crate::serve::in_blocking(move || credentials::store(credentials::Kind::Cloudflare, &token))
+        .await
+        .map_err(bad)?;
     Ok(Json(accounts))
 }
 
@@ -78,17 +96,22 @@ pub struct ProviderBody {
 }
 
 pub async fn disconnect(Json(body): Json<ProviderBody>) -> ApiResult<bool> {
-    let kind = match body.provider.as_str() {
-        "github" => credentials::Kind::GitHub,
-        "cloudflare" => credentials::Kind::Cloudflare,
-        other => return Err(bad(format!("unknown provider `{other}`"))),
-    };
-    credentials::clear(kind).map_err(bad)?;
-    Ok(Json(true))
+    crate::serve::in_blocking(move || {
+        let kind = match body.provider.as_str() {
+            "github" => credentials::Kind::GitHub,
+            "cloudflare" => credentials::Kind::Cloudflare,
+            other => return Err(bad(format!("unknown provider `{other}`"))),
+        };
+        credentials::clear(kind).map_err(bad)?;
+        Ok(Json(true))
+    })
+    .await
 }
 
 pub async fn repos() -> ApiResult<Vec<github::Repo>> {
-    let token = credentials::github_token().ok_or_else(|| bad("connect GitHub first"))?;
+    let token = crate::serve::in_blocking(credentials::github_token)
+        .await
+        .ok_or_else(|| bad("connect GitHub first"))?;
     github::repos(&token).await.map(Json).map_err(bad)
 }
 
@@ -149,28 +172,31 @@ pub async fn open_repo(
     State(state): State<Arc<AppState>>,
     Json(body): Json<OpenBody>,
 ) -> ApiResult<OpenedRepo> {
-    let path = Utf8PathBuf::from(shellexpand(&body.path));
-    let path = path
-        .canonicalize_utf8()
-        .map_err(|_| bad(format!("no such directory: {path}")))?;
-    if !path.is_dir() {
-        return Err(bad("that path is not a directory"));
-    }
-    // Git-managed only, and refused here rather than in one window: every route in — the welcome
-    // screen, the recents list, the project menu, a URL — ends at this handler. A lane is a branch
-    // is a worktree, the auto-commit is what makes a turn reviewable, and rewind is a git tree, so
-    // a folder with no `.git` is a Keel with three of its features quietly missing.
-    if !path.join(".git").exists() {
-        return Err(bad(format!(
-            "{} is not a git repository. Keel works with git-managed folders only — \
-             run `git init` in it first, or open one that is already tracked.",
-            path.file_name().unwrap_or(path.as_str())
-        )));
-    }
-    state.set_repo(path.clone());
-    Ok(Json(OpenedRepo {
-        path: path.to_string(),
-    }))
+    crate::serve::in_blocking(move || {
+        let path = Utf8PathBuf::from(shellexpand(&body.path));
+        let path = path
+            .canonicalize_utf8()
+            .map_err(|_| bad(format!("no such directory: {path}")))?;
+        if !path.is_dir() {
+            return Err(bad("that path is not a directory"));
+        }
+        // Git-managed only, and refused here rather than in one window: every route in — the welcome
+        // screen, the recents list, the project menu, a URL — ends at this handler. A lane is a branch
+        // is a worktree, the auto-commit is what makes a turn reviewable, and rewind is a git tree, so
+        // a folder with no `.git` is a Keel with three of its features quietly missing.
+        if !path.join(".git").exists() {
+            return Err(bad(format!(
+                "{} is not a git repository. Keel works with git-managed folders only — \
+                 run `git init` in it first, or open one that is already tracked.",
+                path.file_name().unwrap_or(path.as_str())
+            )));
+        }
+        state.set_repo(path.clone());
+        Ok(Json(OpenedRepo {
+            path: path.to_string(),
+        }))
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -203,57 +229,60 @@ pub struct Listing {
 /// loopback server, so an unbounded filesystem enumerator would be a real disclosure. Home covers
 /// essentially every project location while keeping the rest of the disk out of reach.
 pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
-    let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
-    let home = Utf8PathBuf::from(home)
-        .canonicalize_utf8()
-        .map_err(|_| bad("home directory is unreadable"))?;
+    crate::serve::in_blocking(move || {
+        let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
+        let home = Utf8PathBuf::from(home)
+            .canonicalize_utf8()
+            .map_err(|_| bad("home directory is unreadable"))?;
 
-    let requested = q
-        .path
-        .as_deref()
-        .filter(|p| !p.is_empty())
-        .map(|p| Utf8PathBuf::from(shellexpand(p)))
-        .unwrap_or_else(|| home.clone());
+        let requested = q
+            .path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .map(|p| Utf8PathBuf::from(shellexpand(p)))
+            .unwrap_or_else(|| home.clone());
 
-    let path = requested
-        .canonicalize_utf8()
-        .map_err(|_| bad(format!("no such directory: {requested}")))?;
-    if !path.starts_with(&home) {
-        return Err(bad("Keel browses inside your home directory only."));
-    }
-    if !path.is_dir() {
-        return Err(bad("that path is not a directory"));
-    }
+        let path = requested
+            .canonicalize_utf8()
+            .map_err(|_| bad(format!("no such directory: {requested}")))?;
+        if !path.starts_with(&home) {
+            return Err(bad("Keel browses inside your home directory only."));
+        }
+        if !path.is_dir() {
+            return Err(bad("that path is not a directory"));
+        }
 
-    let mut entries: Vec<Entry> = std::fs::read_dir(&path)
-        .map_err(|e| bad(e.to_string()))?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
-        .filter(|p| {
-            // Hidden directories are noise in a project picker, and node_modules is worse.
-            let name = p.file_name().unwrap_or("");
-            !name.starts_with('.') && name != "node_modules" && name != "target"
-        })
-        .map(|p| Entry {
-            name: p.file_name().unwrap_or("").to_string(),
-            repo: p.join(".git").exists(),
-            path: p.to_string(),
-        })
-        .collect();
-    entries.sort_by_key(|e| e.name.to_lowercase());
+        let mut entries: Vec<Entry> = std::fs::read_dir(&path)
+            .map_err(|e| bad(e.to_string()))?
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+            .filter(|p| {
+                // Hidden directories are noise in a project picker, and node_modules is worse.
+                let name = p.file_name().unwrap_or("");
+                !name.starts_with('.') && name != "node_modules" && name != "target"
+            })
+            .map(|p| Entry {
+                name: p.file_name().unwrap_or("").to_string(),
+                repo: p.join(".git").exists(),
+                path: p.to_string(),
+            })
+            .collect();
+        entries.sort_by_key(|e| e.name.to_lowercase());
 
-    Ok(Json(Listing {
-        parent: (path != home).then(|| {
-            path.parent()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| home.clone())
-                .to_string()
-        }),
-        is_repo: path.join(".git").exists(),
-        path: path.to_string(),
-        entries,
-    }))
+        Ok(Json(Listing {
+            parent: (path != home).then(|| {
+                path.parent()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| home.clone())
+                    .to_string()
+            }),
+            is_repo: path.join(".git").exists(),
+            path: path.to_string(),
+            entries,
+        }))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -270,40 +299,43 @@ pub async fn browse_files(
     State(state): State<Arc<AppState>>,
     Query(q): Query<BrowseQuery>,
 ) -> ApiResult<Vec<FileEntry>> {
-    let requested = q.path.unwrap_or_default();
-    let dir = Utf8PathBuf::from(shellexpand(&requested))
-        .canonicalize_utf8()
-        .map_err(|_| bad("no such directory"))?;
+    crate::serve::in_blocking(move || {
+        let requested = q.path.unwrap_or_default();
+        let dir = Utf8PathBuf::from(shellexpand(&requested))
+            .canonicalize_utf8()
+            .map_err(|_| bad("no such directory"))?;
 
-    let repo = state.repo();
-    let mut allowed: Vec<Utf8PathBuf> = repo.canonicalize_utf8().into_iter().collect();
-    if let Some(home) = keel_workspace::claude_home()
-        && let Ok(c) = home.canonicalize_utf8()
-    {
-        allowed.push(c);
-    }
-    if !allowed.iter().any(|r| dir.starts_with(r)) {
-        return Err(bad(
-            "that directory is outside the repository and your Claude config",
-        ));
-    }
+        let repo = state.repo();
+        let mut allowed: Vec<Utf8PathBuf> = repo.canonicalize_utf8().into_iter().collect();
+        if let Some(home) = keel_workspace::claude_home()
+            && let Ok(c) = home.canonicalize_utf8()
+        {
+            allowed.push(c);
+        }
+        if !allowed.iter().any(|r| dir.starts_with(r)) {
+            return Err(bad(
+                "that directory is outside the repository and your Claude config",
+            ));
+        }
 
-    let mut files: Vec<FileEntry> = std::fs::read_dir(&dir)
-        .map_err(|e| bad(e.to_string()))?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
-        .map(|p| FileEntry {
-            name: p.file_name().unwrap_or("").to_string(),
-            path: p.to_string(),
-        })
-        .collect();
-    // The manifest first, then everything else alphabetically.
-    files.sort_by(|a, b| {
-        (a.name != "SKILL.md", a.name.to_lowercase())
-            .cmp(&(b.name != "SKILL.md", b.name.to_lowercase()))
-    });
-    Ok(Json(files))
+        let mut files: Vec<FileEntry> = std::fs::read_dir(&dir)
+            .map_err(|e| bad(e.to_string()))?
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+            .map(|p| FileEntry {
+                name: p.file_name().unwrap_or("").to_string(),
+                path: p.to_string(),
+            })
+            .collect();
+        // The manifest first, then everything else alphabetically.
+        files.sort_by(|a, b| {
+            (a.name != "SKILL.md", a.name.to_lowercase())
+                .cmp(&(b.name != "SKILL.md", b.name.to_lowercase()))
+        });
+        Ok(Json(files))
+    })
+    .await
 }
 
 /// Expand a leading `~`, which is what people type.

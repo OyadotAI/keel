@@ -52,7 +52,11 @@ bin="$(swift build --package-path app -c release --show-bin-path)"
 # traps without it; the app looks in Contents/Resources first (Resources.swift), so the files
 # go there — and the bundle itself rides along for anything that still asks by that name.
 if [ -d "$bin/KeelApp_KeelApp.bundle" ]; then
-  cp -R "$bin/KeelApp_KeelApp.bundle/." "$app/Contents/Resources/"
+  # The newer build system writes a real bundle (Contents/Resources/…); the older one wrote the
+  # files flat. Copying the wrong level shipped Picker.js at Resources/Contents/Resources/.
+  flat="$bin/KeelApp_KeelApp.bundle"
+  [ -d "$flat/Contents/Resources" ] && flat="$flat/Contents/Resources"
+  cp -R "$flat/." "$app/Contents/Resources/"
   cp -R "$bin/KeelApp_KeelApp.bundle" "$app/Contents/Resources/"
 fi
 if [ -d "$bin/Sparkle.framework" ]; then

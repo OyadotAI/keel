@@ -75,6 +75,7 @@ pub struct ClaudeStatus {
 /// things before the application will do anything is not an onboarding flow. This is the one that
 /// matters: without `claude` there is no agent, and Keel is a window over a scanner.
 pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: spawns a tokio process and streams it.
     // Echoed before it runs. Piping a downloaded script into a shell is a reasonable thing to do
     // with a vendor's own installer and an unreasonable thing to do invisibly.
     const COMMAND: &str = "echo '$ curl -fsSL https://claude.ai/install.sh | bash'; \
@@ -87,6 +88,7 @@ pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> 
 }
 
 pub async fn login_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: spawns a tokio process and streams it.
     let mut command = Command::new("claude");
     command.args(["auth", "login"]);
     stream(command)
@@ -101,6 +103,7 @@ pub async fn login_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
 pub const BREW_INSTALL: &str = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
 
 pub async fn claude_status() -> Json<ClaudeStatus> {
+    // no-blocking: tokio processes with timeouts; nothing blocks.
     let mut out = ClaudeStatus {
         brew: run("brew", &["--version"]).await.is_some(),
         brew_install: BREW_INSTALL,
@@ -307,23 +310,27 @@ fn tool(id: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.id == id)
 }
 
-/// Whether a binary is there and runnable.
-///
-/// Asks it the way its own [`Tool`] says to, rather than assuming `--version`. `kubectl` rejects
-/// that flag outright — it wants `version --client` — so the generic form reported it as missing
-/// on a machine where it was installed, and the sign-in path refused with "not installed yet".
-fn exists(binary: &str) -> bool {
+/// Whether a tool runs — the same question, the same way, as `status` asks it, so "Install all"
+/// and the panel cannot disagree. A version manager's shim (mise, asdf, volta) is on PATH and
+/// fails until a version is chosen; that is not installed.
+async fn works(binary: &str) -> bool {
     let args: &[&str] = TOOLS
         .iter()
         .find(|t| t.binary == binary)
         .map(|t| t.version)
-        // A package manager, which is the other caller here, and those all take `--version`.
         .unwrap_or(&["--version"]);
+    run(binary, args).await.is_some()
+}
 
-    std::process::Command::new(binary)
-        .args(args)
-        .output()
-        .is_ok_and(|o| o.status.success())
+/// Whether a binary is on PATH.
+///
+/// It used to run the binary with its version flag, which misreported `kubectl` (it rejects
+/// `--version`) and put a synchronous spawn per tool on the executor for every status request.
+/// Whether it *works* is what `status` asks next, with a timeout, through `run`.
+fn exists(binary: &str) -> bool {
+    // Read from PATH, never run: this is asked from async handlers, and a spawn per tool per
+    // request on the executor is how a status panel stalls every other request behind it.
+    crate::permissions::usable_on_path(binary)
 }
 
 #[derive(Serialize)]
@@ -436,7 +443,12 @@ pub async fn install_all() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
             return;
         }
 
-        let missing: Vec<&Tool> = TOOLS.iter().filter(|t| !exists(t.binary)).collect();
+        let mut missing: Vec<&Tool> = Vec::new();
+        for t in TOOLS {
+            if !works(t.binary).await {
+                missing.push(t);
+            }
+        }
         if missing.is_empty() {
             say("Everything is already installed.".into()).await;
             let _ = tx.send(Ok(Event::default().event("done").data("0"))).await;
@@ -572,6 +584,7 @@ pub struct StatusQuery {
 }
 
 pub async fn status(Query(q): Query<StatusQuery>) -> axum::Json<Vec<ToolStatus>> {
+    // no-blocking: tokio processes with timeouts; `exists` reads PATH, spawns nothing.
     let aws_profile = q.aws_profile.as_deref().filter(|p| !p.is_empty());
     let checks = TOOLS.iter().map(|t| async move {
         // Within one tool the calls are ordered — asking a missing binary who it is wastes a
@@ -779,11 +792,30 @@ fn expired_google_credentials_have_provider_recovery_not_context_setup() {
 
 async fn run_checked(program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).kill_on_drop(true);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(8), command.output())
-        .await
-        .map_err(|_| "Connection check timed out after 8 seconds.".to_string())?
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+    let child = command
+        .spawn()
         .map_err(|e| format!("Could not run {program}: {e}"))?;
+    let pid = child.id();
+    let output =
+        match tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
+            .await
+        {
+            Ok(done) => done.map_err(|e| format!("Could not run {program}: {e}"))?,
+            Err(_) => {
+                // The group, not the leader: a tool that forked and hung left its children behind.
+                if let Some(pid) = pid {
+                    crate::signals::end_tree(pid);
+                }
+                return Err("Connection check timed out after 8 seconds.".to_string());
+            }
+        };
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -871,6 +903,7 @@ async fn read_kubernetes(program: &std::ffi::OsStr) -> Result<KubernetesConfig, 
 }
 
 pub async fn kubernetes_contexts() -> KubernetesResult {
+    // no-blocking: a tokio process with a timeout.
     read_kubernetes(std::ffi::OsStr::new("kubectl"))
         .await
         .map(Json)
@@ -911,6 +944,7 @@ async fn select_kubernetes(
 }
 
 pub async fn kubernetes_select(Json(selection): Json<KubernetesSelection>) -> KubernetesResult {
+    // no-blocking: a tokio process with a timeout.
     select_kubernetes(std::ffi::OsStr::new("kubectl"), &selection.name)
         .await
         .map(Json)
@@ -1128,7 +1162,7 @@ pub async fn login(Query(q): Query<ToolQuery>) -> Sse<ReceiverStream<Result<Even
     let Some(t) = tool(&q.id) else {
         return refuse("unknown tool");
     };
-    if !exists(t.binary) {
+    if !works(t.binary).await {
         return refuse(&format!("{} is not installed yet", t.label));
     }
     // Some tools have no login of their own — kubectl and docker take credentials from elsewhere.

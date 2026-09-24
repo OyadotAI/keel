@@ -798,11 +798,36 @@ fn head(checkout: &Utf8Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// What is uncommitted, as `path \0 status blob` — the status alone is not enough: a file already
+/// modified before the turn is still ` M` after the agent edits it again, and that edit then
+/// appeared nowhere — no files, no gate, no commit. The blob is the content, not the mtime: a
+/// save that changes nothing (a formatter, an editor, `next-env.d.ts` rewritten identically)
+/// must not make a turn that wrote nothing into one that commits the person's earlier work.
 fn fingerprint(checkout: &Utf8Path) -> HashSet<String> {
-    crate::repo::git_status(checkout)
-        .changes
+    // One `hash-object` for all of them, bounded: past this many dirty files the status letters
+    // are what is compared, as before.
+    const HASHED: usize = 500;
+    let changes = crate::repo::git_status(checkout).changes;
+    let files: Vec<&str> = changes
         .iter()
-        .map(|c| format!("{}{}", c.path, c.status))
+        .map(|c| c.path.as_str())
+        .filter(|p| checkout.join(p).is_file())
+        .take(HASHED)
+        .collect();
+    let mut blobs = std::collections::HashMap::new();
+    if !files.is_empty() && changes.len() <= HASHED {
+        let mut args = vec!["hash-object", "--"];
+        args.extend(&files);
+        if let Ok(out) = crate::git::run(checkout, &args) {
+            blobs.extend(files.iter().copied().zip(out.lines().map(str::to_string)));
+        }
+    }
+    changes
+        .iter()
+        .map(|c| {
+            let blob = blobs.get(c.path.as_str()).map(String::as_str).unwrap_or("");
+            format!("{}\0{}{blob}", c.path, c.status)
+        })
         .collect()
 }
 
@@ -893,7 +918,7 @@ pub async fn finish(
             move || {
                 let mut moved: Vec<String> = fingerprint(&checkout)
                     .difference(&before)
-                    .map(|entry| entry[..entry.len().saturating_sub(2)].to_string())
+                    .map(|entry| entry.split('\0').next().unwrap_or(entry).to_string())
                     .collect();
                 moved.sort();
                 moved.dedup();
@@ -1340,6 +1365,7 @@ impl Follower {
     /// One pass of the poll. The boundary is the turn-end note or the pid file saying idle, and
     /// then nothing written for a moment — the note lands before the last record does.
     pub async fn tick(&mut self) {
+        // no-blocking: not a request handler — the follower's own task, and one pid-file read.
         let Some(open) = &self.open else { return };
         // Idle is a thing the process said. No word at all is not idle: a pid file has no
         // `status` until Claude Code's first update, and a turn closed on that would be closed
@@ -1354,6 +1380,7 @@ impl Follower {
     /// The follower is going away. A turn still open is finished only if the session is idle:
     /// finishing under a `claude` mid-write would commit half a turn.
     pub async fn close(&mut self) {
+        // no-blocking: not a request handler — the follower's own task, and one pid-file read.
         let idle =
             keel_workspace::status(&self.home, &self.session) == Some(keel_workspace::Status::Idle);
         if idle {
@@ -1409,11 +1436,11 @@ pub struct DesignRequest {
 /// record holds is the daemon's own observation.
 ///
 /// `emit_for_lane` does its writing on its own thread.
-// no-blocking: the write is spawned inside `emit_for_lane`.
 pub async fn record(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DesignRequest>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
+    // no-blocking: the write is spawned inside `emit_for_lane`.
     if req.lane.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1427,6 +1454,55 @@ pub async fn record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file already modified before the turn is still ` M` after the agent edits it again;
+    /// that edit appeared nowhere — no files, no gate, no commit.
+    /// A save that changes nothing — a formatter, an editor — is not the turn's work: counted,
+    /// it made a turn that wrote nothing commit the person's earlier uncommitted changes.
+    #[test]
+    fn an_identical_rewrite_is_not_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            crate::git::run(root, args).unwrap();
+        }
+        std::fs::write(root.join("a.txt"), "base\n").unwrap();
+        crate::git::run(root, &["add", "a.txt"]).unwrap();
+        crate::git::run(root, &["commit", "-qm", "a"]).unwrap();
+        std::fs::write(root.join("a.txt"), "base\nmine\n").unwrap();
+        let before = fingerprint(root);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("a.txt"), "base\nmine\n").unwrap();
+        assert_eq!(fingerprint(root), before);
+    }
+
+    #[test]
+    fn an_edit_to_an_already_modified_file_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            crate::git::run(root, args).unwrap();
+        }
+        std::fs::write(root.join("a.txt"), "base\n").unwrap();
+        crate::git::run(root, &["add", "a.txt"]).unwrap();
+        crate::git::run(root, &["commit", "-qm", "a"]).unwrap();
+        std::fs::write(root.join("a.txt"), "base\nmine\n").unwrap();
+        let before = fingerprint(root);
+        std::fs::write(root.join("a.txt"), "base\nmine\nthe agent's\n").unwrap();
+        let moved: Vec<String> = fingerprint(root)
+            .difference(&before)
+            .map(|e| e.split('\0').next().unwrap().to_string())
+            .collect();
+        assert_eq!(moved, ["a.txt"]);
+    }
 
     /// A directory of its own per call, not per process. Two tests writing one store is the
     /// `keel-index-{pid}` bug in miniature, and it fails the way that one did: rarely.

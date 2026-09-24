@@ -1085,6 +1085,7 @@ dependencies = [
  "anyhow",
  "camino",
  "keyring",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

@@ -14,6 +14,9 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
 
+/// How long a `claude plugin …` query may take before it is stopped and reported as failed.
+const CLAUDE_CEILING: std::time::Duration = std::time::Duration::from_secs(20);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
@@ -191,49 +194,52 @@ pub struct CatalogQuery {
 }
 
 pub async fn list(Query(q): Query<CatalogQuery>) -> axum::Json<CatalogResponse> {
-    let have = installed();
-    let mut all = catalog();
-    for p in &mut all {
-        p.installed = have.contains(&p.name);
-    }
-
-    let repo = q.repo.map(Utf8PathBuf::from);
-    let relevant = |markers: &[&str]| -> bool {
-        if markers.is_empty() {
-            return true;
+    crate::serve::in_blocking(move || {
+        let have = installed();
+        let mut all = catalog();
+        for p in &mut all {
+            p.installed = have.contains(&p.name);
         }
-        let Some(root) = &repo else { return true };
-        // Shallow check: a marker at the root, or one directory down for monorepos.
-        markers.iter().any(|m| {
-            root.join(m).exists()
-                || std::fs::read_dir(root).is_ok_and(|entries| {
-                    entries
-                        .flatten()
-                        .take(64)
-                        .any(|e| e.path().join(m).exists())
-                })
-        })
-    };
 
-    let suggested = SUGGESTED
-        .iter()
-        .filter(|s| relevant(s.when))
-        .map(|s| {
-            let known = all.iter().find(|p| p.name == s.name);
-            Plugin {
-                name: s.name.to_string(),
-                description: known.map(|p| p.description.clone()).unwrap_or_default(),
-                author: known.and_then(|p| p.author.clone()),
-                category: known.and_then(|p| p.category.clone()),
-                homepage: known.and_then(|p| p.homepage.clone()),
-                marketplace: s.marketplace.to_string(),
-                installed: have.contains(&s.name.to_string()),
-                reason: Some(s.reason.to_string()),
+        let repo = q.repo.map(Utf8PathBuf::from);
+        let relevant = |markers: &[&str]| -> bool {
+            if markers.is_empty() {
+                return true;
             }
-        })
-        .collect();
+            let Some(root) = &repo else { return true };
+            // Shallow check: a marker at the root, or one directory down for monorepos.
+            markers.iter().any(|m| {
+                root.join(m).exists()
+                    || std::fs::read_dir(root).is_ok_and(|entries| {
+                        entries
+                            .flatten()
+                            .take(64)
+                            .any(|e| e.path().join(m).exists())
+                    })
+            })
+        };
 
-    axum::Json(CatalogResponse { suggested, all })
+        let suggested = SUGGESTED
+            .iter()
+            .filter(|s| relevant(s.when))
+            .map(|s| {
+                let known = all.iter().find(|p| p.name == s.name);
+                Plugin {
+                    name: s.name.to_string(),
+                    description: known.map(|p| p.description.clone()).unwrap_or_default(),
+                    author: known.and_then(|p| p.author.clone()),
+                    category: known.and_then(|p| p.category.clone()),
+                    homepage: known.and_then(|p| p.homepage.clone()),
+                    marketplace: s.marketplace.to_string(),
+                    installed: have.contains(&s.name.to_string()),
+                    reason: Some(s.reason.to_string()),
+                }
+            })
+            .collect();
+
+        axum::Json(CatalogResponse { suggested, all })
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -268,41 +274,46 @@ pub struct DetailsQuery {
 
 /// Read a plugin's component inventory.
 pub async fn details(Query(q): Query<DetailsQuery>) -> axum::Json<Details> {
-    if !valid(&q.name) {
-        return axum::Json(Details {
-            error: Some("invalid plugin name".into()),
-            ..Default::default()
-        });
-    }
+    crate::serve::in_blocking(move || {
+        if !valid(&q.name) {
+            return axum::Json(Details {
+                error: Some("invalid plugin name".into()),
+                ..Default::default()
+            });
+        }
 
-    let out = std::process::Command::new("claude")
-        .args(["plugin", "details", &q.name])
-        .output();
-    let Ok(out) = out else {
-        return axum::Json(Details {
-            name: q.name,
-            error: Some("could not run `claude`".into()),
-            ..Default::default()
-        });
-    };
-    if !out.status.success() {
-        return axum::Json(Details {
-            name: q.name,
-            error: Some(
-                String::from_utf8_lossy(&out.stderr)
-                    .lines()
-                    .next()
-                    .unwrap_or("not installed")
-                    .to_string(),
-            ),
-            ..Default::default()
-        });
-    }
+        let mut command = std::process::Command::new("claude");
+        command.args(["plugin", "details", &q.name]);
+        // Bounded and killed on the way out: a `claude` that never answers must not hold the
+        // request, or a thread, for ever.
+        let out = crate::git::output_within(command, CLAUDE_CEILING);
+        let Ok(out) = out else {
+            return axum::Json(Details {
+                name: q.name,
+                error: Some("could not run `claude`".into()),
+                ..Default::default()
+            });
+        };
+        if !out.status.success() {
+            return axum::Json(Details {
+                name: q.name,
+                error: Some(
+                    String::from_utf8_lossy(&out.stderr)
+                        .lines()
+                        .next()
+                        .unwrap_or("not installed")
+                        .to_string(),
+                ),
+                ..Default::default()
+            });
+        }
 
-    axum::Json(parse_details(
-        &q.name,
-        &String::from_utf8_lossy(&out.stdout),
-    ))
+        axum::Json(parse_details(
+            &q.name,
+            &String::from_utf8_lossy(&out.stdout),
+        ))
+    })
+    .await
 }
 
 /// Parse the human-readable inventory.
@@ -385,30 +396,33 @@ pub struct Marketplace {
 ///
 /// Shelling out rather than reading a file: the on-disk layout is not a contract, and the CLI is.
 pub async fn marketplaces() -> axum::Json<Vec<Marketplace>> {
-    let out = std::process::Command::new("claude")
-        .args(["plugin", "marketplace", "list"])
-        .output();
-    let Ok(out) = out else {
-        return axum::Json(Vec::new());
-    };
+    crate::serve::in_blocking(move || {
+        let mut command = std::process::Command::new("claude");
+        command.args(["plugin", "marketplace", "list"]);
+        let out = crate::git::output_within(command, CLAUDE_CEILING);
+        let Ok(out) = out else {
+            return axum::Json(Vec::new());
+        };
 
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut list = Vec::new();
-    let mut name: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix('❯') {
-            name = Some(rest.trim().to_string());
-        } else if let Some(src) = t.strip_prefix("Source:")
-            && let Some(n) = name.take()
-        {
-            list.push(Marketplace {
-                name: n,
-                source: src.trim().to_string(),
-            });
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut list = Vec::new();
+        let mut name: Option<String> = None;
+        for line in text.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix('❯') {
+                name = Some(rest.trim().to_string());
+            } else if let Some(src) = t.strip_prefix("Source:")
+                && let Some(n) = name.take()
+            {
+                list.push(Marketplace {
+                    name: n,
+                    source: src.trim().to_string(),
+                });
+            }
         }
-    }
-    axum::Json(list)
+        axum::Json(list)
+    })
+    .await
 }
 
 /// Run one plugin lifecycle action.

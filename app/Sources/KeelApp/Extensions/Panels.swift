@@ -28,6 +28,7 @@ struct SkillsPanel: View {
                 EmptyState(icon: "sparkles", title: "No skills yet",
                       "Add reusable instructions for reviews, deployments, and tools.",
                       actionLabel: "Browse skills") { model.sheet = .skills }
+                PanelFooter("New skill…", icon: "square.and.pencil") { model.sheet = .newSkill }
             } else {
                 ForEach(model.workspace.skills) { s in
                     PanelRow(name: s.name, detail: s.description, fromRepo: s.fromRepo,
@@ -36,6 +37,7 @@ struct SkillsPanel: View {
                     }
                 }
                 PanelFooter("Add skills…") { model.sheet = .skills }
+                PanelFooter("New skill…", icon: "square.and.pencil") { model.sheet = .newSkill }
             }
         }
     }

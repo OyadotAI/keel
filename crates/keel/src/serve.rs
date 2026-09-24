@@ -459,13 +459,20 @@ impl AppState {
     /// half-finished files under the wrong message.
     #[cfg(test)]
     pub fn writer_in(&self, checkout: &Utf8Path) -> bool {
+        self.writer_of(checkout).is_some()
+    }
+
+    /// Who holds this checkout's writer claim — a lane, `term:<session>`, or one of Keel's own
+    /// writes (`writes::hold`) — so a refusal can say which of those to wait for.
+    pub fn writer_of(&self, checkout: &Utf8Path) -> Option<String> {
         let checkout = self
             .claim_checkout(checkout)
             .unwrap_or_else(|_| checkout.to_owned());
         self.running
             .locked()
-            .values()
-            .any(|t| t.writes && t.checkout == checkout)
+            .iter()
+            .find(|(_, t)| t.writes && t.checkout == checkout)
+            .map(|(lane, _)| lane.clone())
     }
 
     /// Stop the turn in one conversation, the way ⌃C would.
@@ -562,6 +569,7 @@ struct StateResponse {
 }
 
 pub async fn run(repo: Utf8PathBuf, port: u16) -> Result<()> {
+    // no-blocking: the daemon's entry point, before any executor work is shared.
     serve(AppState::new(repo), port).await
 }
 
@@ -570,6 +578,7 @@ pub async fn run(repo: Utf8PathBuf, port: u16) -> Result<()> {
 /// This is how the application is launched from the Dock, where there is no working directory to
 /// infer a project from — the Finder hands a process `/` and it would be a strange thing to open.
 pub async fn run_app(port: u16) -> Result<()> {
+    // no-blocking: the daemon's entry point, before any executor work is shared.
     let state = match crate::prefs::Prefs::load().resume() {
         Some(project) => AppState::new(project),
         None => AppState::empty(),
@@ -783,6 +792,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             "/api/agents/create",
             axum::routing::post(crate::agents::create),
         )
+        .route("/api/skills/catalog", get(crate::skills::catalog))
+        .route("/api/skills/add", axum::routing::post(crate::skills::add))
+        .route(
+            "/api/skills/create",
+            axum::routing::post(crate::skills::create),
+        )
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))
         .route(
@@ -959,6 +974,16 @@ async fn api_importers(
 /// The caller supplies what to return if the task panics, rather than the helper requiring
 /// `Default` — a scan report has no meaningful empty value, and inventing one to satisfy a
 /// signature is the wrong way round.
+/// A handler's whole body, off the executor, handing back what it returns — for a body with
+/// no natural fallback value. A panic in it panics here, as it would have inline.
+pub(crate) async fn in_blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(v) => v,
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(_) => panic!("a blocking handler was cancelled by runtime shutdown"),
+    }
+}
+
 pub(crate) async fn blocking<T, F>(work: F, fallback: T) -> T
 where
     F: FnOnce() -> T + Send + 'static,
@@ -1692,24 +1717,31 @@ mod tests {
     /// say so with `// no-blocking:` and a reason.
     #[test]
     fn every_handler_keeps_blocking_work_off_the_executor() {
-        // Every module with a handler in it, not only this one: the rule with the worst failure
-        // mode in the daemon was kept for `serve.rs` alone, and `dev::status` walked a checkout's
-        // `package.json`s on the executor for its whole life.
-        let sources: [(&str, &str); 10] = [
-            ("serve.rs", include_str!("serve.rs")),
-            ("agent.rs", include_str!("agent.rs")),
-            ("approve.rs", include_str!("approve.rs")),
-            ("dev.rs", include_str!("dev.rs")),
-            ("monitor.rs", include_str!("monitor.rs")),
-            ("turns.rs", include_str!("turns.rs")),
-            ("worktree.rs", include_str!("worktree.rs")),
-            ("snapshot.rs", include_str!("snapshot.rs")),
-            ("verify.rs", include_str!("verify.rs")),
-            ("permissions.rs", include_str!("permissions.rs")),
-        ];
+        // Every module, read from disk, not a list: the rule with the worst failure mode in the
+        // daemon was kept for `serve.rs` alone, and `dev::status` walked a checkout's
+        // `package.json`s on the executor for its whole life; a hand-kept list later missed
+        // thirteen modules, `project::create` among them.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read_to_string(&p).unwrap())
+            })
+            .collect();
+        sources.sort();
+        assert!(
+            sources.iter().any(|(f, _)| f == "serve.rs"),
+            "read the wrong folder"
+        );
         let mut offenders = Vec::new();
-        for (file, source) in sources {
-            let body = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+        for (file, source) in &sources {
+            let (file, source) = (file.as_str(), source.as_str());
+            // The test module, not the first `#[cfg(test)]`: a test-only method in the middle of
+            // `serve.rs` once cut the check off there, and nothing after line 460 was read.
+            let body = &source[..source.find("\n#[cfg(test)]\nmod ").unwrap_or(source.len())];
             for part in body.split("async fn ").skip(1) {
                 let name = part
                     .split(['(', '<', ' '])

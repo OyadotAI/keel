@@ -36,12 +36,14 @@ mod repo;
 mod review;
 mod serve;
 mod signals;
+mod skills;
 mod snapshot;
 mod term;
 mod tree;
 mod turns;
 mod verify;
 mod worktree;
+mod writes;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;

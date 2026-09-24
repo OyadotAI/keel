@@ -17,6 +17,35 @@ use camino::Utf8Path;
 
 pub struct ProductionPractices;
 
+/// The agent team every Keel project ships (`keel_generator::team::agents`).
+const TEAM: &[&str] = &[
+    "pm",
+    "designer",
+    "principal",
+    "qa",
+    "reviewer",
+    "security",
+    "reliability",
+];
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// Present in the walk, or on disk. The walk honours `.gitignore`, and plenty of repositories
+/// ignore `.claude/` wholesale — there the files adopt writes are invisible to the walk, and a
+/// finding whose own fix cannot clear it is one nobody can ever leave.
+fn on_disk(ctx: &RepoContext, rel: &str) -> bool {
+    ctx.has(rel) || ctx.root().join(rel).is_file()
+}
+
+/// Lowercased `keel_generator::team::LIFECYCLE_HEADING`, without the `##`.
+const LIFECYCLE_HEADING: &str = "how a request becomes a change";
+
 /// Source files that look like a server: routes, handlers, an app — in any of the languages.
 fn server_files(ctx: &RepoContext) -> Vec<&Utf8Path> {
     ctx.files()
@@ -203,25 +232,62 @@ impl Check for ProductionPractices {
             ));
         }
 
-        // ── reviewers ───────────────────────────────────────────────────────────────────
-        let agents_dir = ctx
-            .files()
-            .filter(|p| p.as_str().starts_with(".claude/agents/"))
-            .count();
-        if agents_dir == 0 {
+        // ── the agent team and the lifecycle that runs it ───────────────────────────────
+        // The names are `keel_generator::team`'s, repeated because this crate depends on
+        // nothing; `review::tests::adopting_clears_the_team_finding` fails if the two drift.
+        let missing: Vec<&str> = TEAM
+            .iter()
+            .copied()
+            .filter(|n| !on_disk(ctx, &format!(".claude/agents/{n}.md")))
+            .collect();
+        // Only asked of a CLAUDE.md that exists: a repository with none is `agent/no-instructions`.
+        let no_lifecycle = ["CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md"]
+            .iter()
+            .filter_map(|f| ctx.read(f))
+            .reduce(|a, b| a + &b)
+            .is_some_and(|all| !all.to_lowercase().contains(LIFECYCLE_HEADING));
+        // Any skill with "frontend" in its directory counts: a project that installed Anthropic's
+        // `frontend-design` has made the choice this finding is about.
+        let no_frontend_skill = crate::profile::has_frontend(ctx)
+            && !ctx.files().any(|p| {
+                p.as_str().starts_with(".claude/skills/")
+                    && p.as_str().contains("frontend")
+                    && p.file_name() == Some("SKILL.md")
+            })
+            && !on_disk(ctx, ".claude/skills/frontend/SKILL.md");
+        if !missing.is_empty() || no_lifecycle || no_frontend_skill {
+            let none = missing.len() == TEAM.len();
+            let mut lacks = Vec::new();
+            if !missing.is_empty() {
+                lacks.push(format!("`{}`", missing.join("`, `")));
+            }
+            if no_lifecycle {
+                lacks.push("the lifecycle in CLAUDE.md".to_string());
+            }
+            if no_frontend_skill {
+                lacks.push("the frontend skill".to_string());
+            }
             out.push(Finding::new(
                 "agent/no-reviewers",
                 Dimension::AgentLegibility,
-                Severity::Medium,
-                "No reviewer subagents",
-                "Every Keel template ships three reviewers under `.claude/agents/`: a code reviewer, \
-                 a security reviewer that reads a change as an attacker, and a reliability reviewer \
-                 that reads it as the on-call engineer. A repository without them relies on one \
-                 agent grading its own work.",
+                // A repository with some of the team has already chosen to delegate; the rest is
+                // a smaller gap than one agent grading its own work.
+                if none {
+                    Severity::Medium
+                } else {
+                    Severity::Low
+                },
+                format!("Agent team incomplete: missing {}", and_list(&lacks)),
+                "Every Keel project ships a team under `.claude/agents/` and a lifecycle in \
+                 CLAUDE.md that runs it: `pm` scopes the ask, `designer` owns what people see, \
+                 `principal` designs the change, `reviewer`, `security` and `reliability` read the \
+                 diff, and `qa` runs the result. Without them one agent plans, builds and grades \
+                 its own work.",
                 Fix::Automatic {
-                    description: "Add `.claude/agents/{reviewer,security,reliability}.md` and the \
-                                  production checklist they enforce (`docs/PRODUCTION.md`). Keel \
-                                  writes these without touching anything else."
+                    description: "Add the missing agents under `.claude/agents/`, the production \
+                                  checklist they enforce (`docs/PRODUCTION.md`), the lifecycle and \
+                                  engineering rules in CLAUDE.md, and the `frontend` skill when \
+                                  there is a frontend. Keel never overwrites a file that exists."
                         .to_string(),
                 },
             ));
@@ -728,9 +794,28 @@ mod tests {
         }
     }
 
+    /// `files` plus the whole agent team, as a generated project has it.
+    fn with_team(files: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
+        let mut all = files.to_vec();
+        for (path, _) in TEAM_FILES {
+            all.push((path, ""));
+        }
+        all
+    }
+
+    const TEAM_FILES: [(&str, &str); 7] = [
+        (".claude/agents/pm.md", ""),
+        (".claude/agents/designer.md", ""),
+        (".claude/agents/principal.md", ""),
+        (".claude/agents/qa.md", ""),
+        (".claude/agents/reviewer.md", ""),
+        (".claude/agents/security.md", ""),
+        (".claude/agents/reliability.md", ""),
+    ];
+
     #[test]
     fn a_generated_project_is_silent() {
-        let (_d, ctx) = fixture(&[
+        let (_d, ctx) = fixture(&with_team(&[
             (
                 "backend/package.json",
                 r#"{"scripts":{"typecheck":"tsc","test":"bun test"},"dependencies":{"hono":"4","zod":"3","postgres":"3"}}"#,
@@ -738,7 +823,6 @@ mod tests {
             ("Makefile", "check: check-backend\n"),
             ("README.md", "# x"),
             (".dockerignore", "node_modules"),
-            (".claude/agents/reviewer.md", "---\nname: reviewer\n---"),
             (".github/workflows/deploy-dev.yaml", "name: deploy"),
             ("k8s/overlays/prod/kustomization.yaml", ""),
             ("backend/Dockerfile", "FROM node\nUSER api\nCMD node"),
@@ -748,7 +832,7 @@ mod tests {
                 "process.on('SIGTERM', () => {}); c.header('RateLimit-Limit', '1'); console.error(JSON.stringify({level:'info'}))",
             ),
             ("backend/src/app.ts", "app.get('/api/health')"),
-        ]);
+        ]));
         assert!(ids(&ctx).is_empty(), "{:?}", ids(&ctx));
     }
 
@@ -792,7 +876,7 @@ mod tests {
         ] {
             assert!(got.contains(&want), "missing {want} in {got:?}");
         }
-        let (_d2, ok) = fixture(&[
+        let (_d2, ok) = fixture(&with_team(&[
             (
                 "go.mod",
                 "module x\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.1.0\n\tgorm.io/gorm v1.25.12\n\tgithub.com/golang-migrate/migrate/v4 v4.18.1\n\tgithub.com/go-playground/validator/v10 v10.0.0\n\tgithub.com/go-chi/httprate v0.9.0\n\tgithub.com/rs/zerolog v1.33.0\n)\n",
@@ -806,27 +890,26 @@ mod tests {
             ("README.md", "# x"),
             (
                 "CLAUDE.md",
-                "# x\n\n## Gate\nmake test\n\n## Architecture\n| Area | Path |\n|---|---|\n| api | cmd/api |\n\n## Rules\n- never log secrets\n- always migrate first\n1\n2\n3\n4\n",
+                "# x\n\n## How a request becomes a change\n\n## Gate\nmake test\n\n## Architecture\n| Area | Path |\n|---|---|\n| api | cmd/api |\n\n## Rules\n- never log secrets\n- always migrate first\n1\n2\n3\n4\n",
             ),
             (".dockerignore", ".git"),
-            (".claude/agents/reviewer.md", ""),
             (".github/workflows/deploy.yml", "name: deploy"),
             ("terraform/environments/prod/main.tf", ""),
             ("Dockerfile", "FROM golang\nUSER app\nCMD [\"/app\"]"),
-        ]);
+        ]));
         assert!(ids(&ok).is_empty(), "{:?}", ids(&ok));
     }
 
     #[test]
     fn a_static_site_is_left_alone() {
-        let (_d, ctx) = fixture(&[
+        let (_d, ctx) = fixture(&with_team(&[
             (
                 "package.json",
                 r#"{"scripts":{"build":"astro build","test":"vitest","typecheck":"astro check"},"dependencies":{"astro":"4"}}"#,
             ),
             ("README.md", "# site"),
-            (".claude/agents/reviewer.md", ""),
-        ]);
+            (".claude/skills/frontend/SKILL.md", ""),
+        ]));
         assert!(ids(&ctx).is_empty(), "{:?}", ids(&ctx));
     }
 }

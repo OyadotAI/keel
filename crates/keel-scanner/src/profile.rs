@@ -492,6 +492,26 @@ pub(crate) fn dependencies(ctx: &RepoContext) -> BTreeSet<String> {
     out
 }
 
+/// UI frameworks whose presence means the repository has pages a person looks at.
+const FRONTEND_DEPS: &[&str] = &[
+    "react",
+    "next",
+    "vue",
+    "nuxt",
+    "svelte",
+    "@sveltejs/kit",
+    "solid-js",
+    "astro",
+    "@angular/core",
+    "preact",
+];
+
+/// Whether the repository has a frontend, which is when the `frontend` skill earns its place.
+pub fn has_frontend(ctx: &RepoContext) -> bool {
+    let deps = dependencies(ctx);
+    FRONTEND_DEPS.iter().any(|d| deps.contains(*d))
+}
+
 pub fn detect(ctx: &RepoContext) -> Profile {
     let mut deps = dependencies(ctx);
     deps.extend(other_dependencies(ctx));

@@ -91,86 +91,95 @@ pub async fn create(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<CreateRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    valid_name(&req.name)?;
+    crate::serve::in_blocking(move || {
+        valid_name(&req.name)?;
 
-    // The parent must already exist and be inside the boundary; the new entry is then a name within
-    // it, which is why the name is validated separately and never resolved.
-    let parent = if req.parent.is_empty() || req.parent == "." {
-        repo.canonicalize_utf8().map_err(bad)?
-    } else {
-        crate::tree::resolve_dir(&repo, &req.parent).map_err(bad)?
-    };
+        // The parent must already exist and be inside the boundary; the new entry is then a name within
+        // it, which is why the name is validated separately and never resolved.
+        let parent = if req.parent.is_empty() || req.parent == "." {
+            repo.canonicalize_utf8().map_err(bad)?
+        } else {
+            crate::tree::resolve_dir(&repo, &req.parent).map_err(bad)?
+        };
 
-    let target = parent.join(&req.name);
-    if target.exists() {
-        return Err(bad(format!("{} already exists", req.name)));
-    }
+        let target = parent.join(&req.name);
+        if target.exists() {
+            return Err(bad(format!("{} already exists", req.name)));
+        }
 
-    match req.kind.as_str() {
-        "dir" => std::fs::create_dir(&target).map_err(bad)?,
-        _ => std::fs::write(&target, "").map_err(bad)?,
-    }
+        match req.kind.as_str() {
+            "dir" => std::fs::create_dir(&target).map_err(bad)?,
+            _ => std::fs::write(&target, "").map_err(bad)?,
+        }
 
-    Ok(Json(PathResponse {
-        path: relative(&repo, &target),
-    }))
+        Ok(Json(PathResponse {
+            path: relative(&repo, &target),
+        }))
+    })
+    .await
 }
 
 pub async fn rename(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<RenameRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    valid_name(&req.name)?;
-    let from = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
+    crate::serve::in_blocking(move || {
+        valid_name(&req.name)?;
+        let from = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
-    if Some(&from) == repo.canonicalize_utf8().ok().as_ref() {
-        return Err(bad("that is the repository itself"));
-    }
+        if Some(&from) == repo.canonicalize_utf8().ok().as_ref() {
+            return Err(bad("that is the repository itself"));
+        }
 
-    let parent: Utf8PathBuf = from.parent().ok_or_else(|| bad("invalid path"))?.to_owned();
-    let to = parent.join(&req.name);
-    if to.exists() {
-        return Err(bad(format!("{} already exists", req.name)));
-    }
+        let parent: Utf8PathBuf = from.parent().ok_or_else(|| bad("invalid path"))?.to_owned();
+        let to = parent.join(&req.name);
+        if to.exists() {
+            return Err(bad(format!("{} already exists", req.name)));
+        }
 
-    std::fs::rename(&from, &to).map_err(bad)?;
-    Ok(Json(PathResponse {
-        path: relative(&repo, &to),
-    }))
+        std::fs::rename(&from, &to).map_err(bad)?;
+        Ok(Json(PathResponse {
+            path: relative(&repo, &to),
+        }))
+    })
+    .await
 }
 
 pub async fn delete(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
+    crate::serve::in_blocking(move || {
+        let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
-    // Deleting the repository from inside the IDE that has it open is never what was meant.
-    if Some(&target) == repo.canonicalize_utf8().ok().as_ref() {
-        return Err(bad("that is the repository itself"));
-    }
+        // Deleting the repository from inside the IDE that has it open is never what was meant.
+        if Some(&target) == repo.canonicalize_utf8().ok().as_ref() {
+            return Err(bad("that is the repository itself"));
+        }
 
-    // The open folder is not always a project — it is often the folder projects live in, and then
-    // every project inside it is one confirmation away from the trash. A directory holding a git
-    // repository is somebody's work with its own history, so it costs a typed name. This is
-    // enforced here and not only in the dialog: the check has to hold for anything that can reach
-    // the endpoint.
-    if target.is_dir() {
-        let (_, nested, _) = survey(&target);
-        if nested || target.join(".git").exists() {
-            let name = target.file_name().unwrap_or_default();
-            if req.confirm.as_deref() != Some(name) {
-                return Err(bad(format!(
-                    "{name} contains a git repository — type its name to confirm"
-                )));
+        // The open folder is not always a project — it is often the folder projects live in, and then
+        // every project inside it is one confirmation away from the trash. A directory holding a git
+        // repository is somebody's work with its own history, so it costs a typed name. This is
+        // enforced here and not only in the dialog: the check has to hold for anything that can reach
+        // the endpoint.
+        if target.is_dir() {
+            let (_, nested, _) = survey(&target);
+            if nested || target.join(".git").exists() {
+                let name = target.file_name().unwrap_or_default();
+                if req.confirm.as_deref() != Some(name) {
+                    return Err(bad(format!(
+                        "{name} contains a git repository — type its name to confirm"
+                    )));
+                }
             }
         }
-    }
 
-    trash(target.as_std_path()).map_err(bad)?;
-    Ok(Json(PathResponse {
-        path: req.path.clone(),
-    }))
+        trash(target.as_std_path()).map_err(bad)?;
+        Ok(Json(PathResponse {
+            path: req.path.clone(),
+        }))
+    })
+    .await
 }
 
 /// Count entries under a directory, and notice whether a git repository is in there.
@@ -214,24 +223,27 @@ pub async fn stat(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<Stat>, (StatusCode, String)> {
-    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
+    crate::serve::in_blocking(move || {
+        let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
-    if !target.is_dir() {
-        return Ok(Json(Stat {
-            kind: "file".into(),
-            entries: None,
-            more: false,
-            repository: false,
-        }));
-    }
+        if !target.is_dir() {
+            return Ok(Json(Stat {
+                kind: "file".into(),
+                entries: None,
+                more: false,
+                repository: false,
+            }));
+        }
 
-    let (entries, repository, more) = survey(&target);
-    Ok(Json(Stat {
-        kind: "dir".into(),
-        entries: Some(entries),
-        more,
-        repository: repository || target.join(".git").exists(),
-    }))
+        let (entries, repository, more) = survey(&target);
+        Ok(Json(Stat {
+            kind: "dir".into(),
+            entries: Some(entries),
+            more,
+            repository: repository || target.join(".git").exists(),
+        }))
+    })
+    .await
 }
 
 /// Move a path to the platform's Trash.
@@ -278,23 +290,26 @@ pub async fn reveal(
     crate::serve::Checkout(repo): crate::serve::Checkout,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, (StatusCode, String)> {
-    let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
+    crate::serve::in_blocking(move || {
+        let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
-    #[cfg(target_os = "macos")]
-    let spawned = std::process::Command::new("open")
-        .arg("-R")
-        .arg(target.as_str())
-        .spawn();
-    #[cfg(target_os = "linux")]
-    let spawned = std::process::Command::new("xdg-open")
-        .arg(target.parent().unwrap_or(&target).as_str())
-        .spawn();
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let spawned: std::io::Result<std::process::Child> =
-        Err(std::io::Error::other("unsupported platform"));
+        #[cfg(target_os = "macos")]
+        let spawned = std::process::Command::new("open")
+            .arg("-R")
+            .arg(target.as_str())
+            .spawn();
+        #[cfg(target_os = "linux")]
+        let spawned = std::process::Command::new("xdg-open")
+            .arg(target.parent().unwrap_or(&target).as_str())
+            .spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let spawned: std::io::Result<std::process::Child> =
+            Err(std::io::Error::other("unsupported platform"));
 
-    spawned.map_err(|e| bad(format!("could not open the file manager: {e}")))?;
-    Ok(Json(PathResponse { path: req.path }))
+        spawned.map_err(|e| bad(format!("could not open the file manager: {e}")))?;
+        Ok(Json(PathResponse { path: req.path }))
+    })
+    .await
 }
 
 /// Open a URL in the real browser.
@@ -307,13 +322,16 @@ pub async fn reveal(
 /// Lives here rather than in its own module because it is the same kind of thing as `reveal`:
 /// Keel asking the host to do something it deliberately will not do itself.
 pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (StatusCode, String)> {
-    // The handler hands a string to the system's URL opener, which will happily launch a `file://`
-    // or a custom scheme registered by some other application. Two schemes is the whole allowance.
-    if !(body.url.starts_with("https://") || body.url.starts_with("http://")) {
-        return Err(bad("only http and https links can be opened"));
-    }
-    open::that_detached(&body.url).map_err(|e| bad(e.to_string()))?;
-    Ok(Json(true))
+    crate::serve::in_blocking(move || {
+        // The handler hands a string to the system's URL opener, which will happily launch a `file://`
+        // or a custom scheme registered by some other application. Two schemes is the whole allowance.
+        if !(body.url.starts_with("https://") || body.url.starts_with("http://")) {
+            return Err(bad("only http and https links can be opened"));
+        }
+        open::that_detached(&body.url).map_err(|e| bad(e.to_string()))?;
+        Ok(Json(true))
+    })
+    .await
 }
 
 #[derive(serde::Deserialize)]

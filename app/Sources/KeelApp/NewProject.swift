@@ -222,10 +222,10 @@ struct StartProject: View {
                 section("You get", "shippingbox")
                 Flow(spacing: K.S.xs) {
                     ForEach(template.scaffold == "empty"
-                            ? ["CLAUDE.md", "gate", "3 reviewer agents"]
+                            ? ["CLAUDE.md + lifecycle + rules", "7 agents"]
                             : stack == "stack"
-                                ? ["Next.js image", "Hono image", "compose: Postgres · Redis · nginx", "k8s base + dev/prod", "env → secrets", "CI → ghcr → cluster", "CLAUDE.md + architecture", "3 reviewer agents"]
-                                : ["Next.js on Workers", "Hono on Workers", "service binding", "infra/deploy dev/prod", "CLAUDE.md + architecture", "3 reviewer agents"],
+                                ? ["Next.js image", "Hono image", "compose: Postgres · Redis · nginx", "k8s base + dev/prod", "env → secrets", "CI → ghcr → cluster", "CLAUDE.md + architecture", "7 agents + lifecycle", "frontend skill"]
+                                : ["Next.js on Workers", "Hono on Workers", "service binding", "infra/deploy dev/prod", "CLAUDE.md + architecture", "8 agents + lifecycle", "frontend skill"],
                             id: \.self) { item in
                         Text(item).font(K.F.small).foregroundStyle(K.C.dim)
                             .padding(.horizontal, K.S.sm).padding(.vertical, K.S.tight)

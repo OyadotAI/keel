@@ -63,13 +63,41 @@ pub fn clear(kind: Kind) -> Result<(), String> {
 /// personal access token when a working credential is already on the machine is friction for its own
 /// sake. Keel never stores this one — it reads it per call, so revoking `gh` revokes Keel.
 pub fn github_from_gh_cli() -> Option<String> {
-    let out = std::process::Command::new("gh")
+    use std::io::Read;
+    // Bounded, and killed past the bound: a `gh` waiting on a keychain prompt or a network it
+    // cannot reach held the connections panel with no end. Its output is one token, so polling
+    // cannot fill a pipe.
+    const CEILING: std::time::Duration = std::time::Duration::from_secs(10);
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new("gh")
         .args(["auth", "token"])
-        .output()
+        // Its own group, so a timeout ends whatever `gh` started as well.
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    out.status
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
+        if started.elapsed() > CEILING {
+            // Safety: the group this process spawned `gh` as the leader of, negated to address it.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    status
         .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .then(|| out.trim().to_string())
         .filter(|t| !t.is_empty())
 }
 

@@ -13,3 +13,4 @@ keyring.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+libc = "0.2"

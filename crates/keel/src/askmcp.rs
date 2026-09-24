@@ -76,6 +76,7 @@ fn rpc_err(id: Value, code: i64, message: &str) -> Value {
 /// Queue the questions for the lane and wait for the answer. Public so a test can drive it
 /// without HTTP.
 pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
+    // no-blocking: an in-memory queue and a oneshot the person answers; nothing blocks.
     let questions = args
         .get("questions")
         .and_then(|q| q.as_array())
@@ -135,6 +136,7 @@ pub async fn post(
     [(&'static str, &'static str); 1],
     Json<Value>,
 ) {
+    // no-blocking: JSON-RPC over the queue in memory; nothing blocks.
     let hdr = [("Mcp-Session-Id", "keel")];
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
@@ -183,6 +185,7 @@ pub async fn post(
 }
 
 pub async fn get() -> axum::http::StatusCode {
+    // no-blocking: returns a status and touches nothing.
     axum::http::StatusCode::METHOD_NOT_ALLOWED
 }
 

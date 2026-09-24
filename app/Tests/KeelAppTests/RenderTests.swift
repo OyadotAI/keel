@@ -44,6 +44,17 @@ final class RenderTests: XCTestCase {
         }
         layout(LaneTabs(lanes: lanes))
         layout(DiffSurface(model: m, path: "a/b.txt"))
+        // The two skill sheets, in every state the FROM KEEL row can draw.
+        layout(NewSkill(client: Client(port: 0)) {})
+        let skill = SkillCatalog.KeelSkill(id: "ui-ux-pro-max", description: "Design system", license: "MIT",
+                                           author: "Next Level Builder", files: 43, bytes: 1_975_781,
+                                           script: "python3", present: nil, python: false)
+        for present in [nil, "project", "user"] {
+            var s = skill
+            s.present = present
+            layout(SkillCatalog(client: Client(port: 0), catalog: .init(suggested: [], all: []), keel: [s]) {})
+        }
+        layout(SkillCatalog(client: Client(port: 0), failure: "down") {})
     }
 
     /// Switching lanes must not carry the scroll anchor across.

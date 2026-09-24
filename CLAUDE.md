@@ -78,7 +78,19 @@ reader means using these, not re-deriving them.
   same author `.claude/settings.json` hooks are quarantined for, it runs on Keel's initiative
   after every turn, it has no ceiling (8.4s measured with a trivial hook; `lint-staged` is tens of
   seconds), and it re-runs the checks the gate already ran and showed. The explicit commit keeps
-  its hooks, because that one is an act the person chose.
+  its hooks, because that one is an act the person chose. `AUTOMATIC` also points
+  `core.hooksPath` at nothing: `--no-verify` skips two hooks, and `post-commit` still ran.
+- **`writes::`** — every file Keel writes into a project on the person's behalf (adopt, a
+  subagent, a skill) goes through it. `hold` takes the tree's writer claim like a turn, because
+  adopting mid-turn committed the whole team under that turn's prompt. `create_new` and
+  `no_link_under` never write over a file, through a link, or into another repository — a
+  dangling `pm.md` link once had adopt create a file outside the repo. `commit_only` commits its
+  own paths and nothing of the person's: not during a merge, not an ignored path, not an
+  instructions file whose content (not `git diff`, which trusts `assume-unchanged`) differs from
+  HEAD, and it backs out what `add` staged when anything fails.
+- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor` reads every module from
+  disk.** A hand-kept list of ten missed thirteen modules; before that the test stopped reading
+  at the first `#[cfg(test)]` attribute and checked a third of `serve.rs`.
 - **`lines::next()`** — never `Err(_) => continue` on `next_line()`. Undecodable bytes must be
   skipped, because stopping there leaves the pipe to fill and blocks the child mid-write; a reader
   that is actually broken must end the loop, because `continue` on an error that does not go away
@@ -254,7 +266,7 @@ to be read and cleared at every site.
 the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already
 existed; it was scattered across four panels. `make check` runs both halves (`cargo test` and
 `swift test`), and the Swift side includes budgets that can fail: no `claude` left running at rest,
-no more than one daemon from the app, a bundle under 40 MB, and — the one that matters — a real
+no more than one daemon from the app, and — the one that matters — a real
 launch-and-quit cycle proving **the daemon dies with the app**.
 
 That last one is why `keel serve` takes `--exit-with-parent`. macOS has no `PR_SET_PDEATHSIG`, and
@@ -677,7 +689,11 @@ dependency is the point: the daemon knows about them, none of them knows about t
   that way: it ships before any credential exists.
 - `keel-generator` — the templates. `cloudflare` (the three-folder golden path), `stack` (the
   container/kustomize production shape) and `packs` (working code laid over either), plus the
-  workload placement rules. Pure functions from a project name to a list of files: no HTTP, no
+  workload placement rules. `team` is what every project gets whatever its template, and what
+  `/api/adopt` writes into an existing one: the seven agents this file's own pipeline runs,
+  generalised; the lifecycle and the engineering rules for `CLAUDE.md`; and a `frontend` skill
+  where there is a frontend. `agent/no-reviewers` asks for exactly that set, and
+  `review::tests::adopting_clears_the_team_finding` fails if the scanner's list drifts from it. Pure functions from a project name to a list of files: no HTTP, no
   tokio, no git.
 - `keel-harness` — `claude` supervision and trust quarantine.
 - `keel-mcp` — the tool surface.
@@ -784,6 +800,46 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 - **D1 is single-writer at ~50 writes/sec.** Above that, Hyperdrive to a managed Postgres.
 - **KV is eventually consistent**, up to 60s propagation.
 - **Cloudflare has no OIDC/keyless deploy** as of Aug 2026 — scoped, rotated API tokens instead.
+
+## How a request becomes a change
+
+Every request that changes the product runs this pipeline, in this order, and the person sees one
+report at the end of it — not a stream of half-decisions along the way. The stages are the agents
+in `.claude/agents/`. They run **one after another**, never in parallel, because each one reads
+what the last one returned; and what a stage returned is handed to the next **verbatim**, because
+a subagent starts with an empty context and a paraphrase is where a scope quietly grows.
+
+1. **`pm`** — given the ask in the person's own words. Returns build / change / cut / not yet,
+   and the smallest version worth shipping with its out-list. *Build* and *change* carry on, to
+   the scope the PM set. **`cut` and `not yet` stop the pipeline and go back to the person**, with
+   the reasoning: this is the one early exit, because hours spent building what the PM said not to
+   build is the expensive way to have that conversation. They can overrule it in one word.
+2. **`designer`** — given the ask and the PM's scope, whenever anything a person reads changes: a
+   view, a label, a refusal's wording, CLI output. Returns the states table, the layout, the copy.
+   Skipped — and said to be skipped — when nothing visible moves.
+3. **`principal`** — given the ask, the scope and the design. Reviews both for what they missed
+   (a state the daemon cannot actually report, a scope that breaks an invariant), then returns the
+   technical design: the modules touched, the shared primitives to use, the invariants at risk,
+   and the tests that will pin it. If it says the scope or the design cannot stand, that goes back
+   through the stage that owns it once, not around it.
+4. **Implementation** — the main loop, not a subagent, so the work is visible as it is written.
+   It follows the principal's design; a deviation is written down with its reason, not made
+   silently. Done means `make check` is green, then `reviewer` on the diff — and `security` or
+   `reliability` when their descriptions say the change is theirs.
+5. **`qa`** — given the ask, the scope and what changed. *Do not ship* means fix and run `qa`
+   again, **twice at most**; after that the person gets the change and the open bug list rather
+   than a loop with no end, because a pipeline is a wait and every wait ends.
+
+**What the person is shown** is one report: what was asked, what the PM scoped in and out, what
+the designer and the principal decided in a line each, the files changed, the gate's result, QA's
+verdict with what it covered and did not, and anything any stage was overruled on. Faithfully — a
+stage that could not run (a build the machine cannot do, an app QA may not quit) is named as not
+run, never implied.
+
+**What does not go through it:** a question, an explanation, running or launching something, git
+and release chores, edits to docs and to these agents, and a change with no decision in it — a
+typo, a rename, a version bump. Say in one line that it was skipped. "Just do it" and "skip the
+pipeline" skip it; naming stages ("no PM", "QA only") runs the ones named.
 
 ## Verification
 

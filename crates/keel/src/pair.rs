@@ -67,13 +67,23 @@ fn load() -> Store {
         .unwrap_or_default()
 }
 
+/// Load, change and save the device list under its file lock (`writes::locked`).
+fn changed<T>(change: impl FnOnce(&mut Store) -> T) -> Result<T, String> {
+    let p = store_path().ok_or("no home directory")?;
+    crate::writes::locked(std::path::Path::new(p.as_str()), || {
+        let mut store = load();
+        let out = change(&mut store);
+        save(&store).map(|_| out)
+    })?
+}
+
 fn save(store: &Store) -> Result<(), String> {
     let p = store_path().ok_or("no home directory")?;
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let body = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    std::fs::write(&p, body).map_err(|e| e.to_string())
+    crate::writes::replace(std::path::Path::new(p.as_str()), body.as_bytes())
 }
 
 pub fn any_paired() -> bool {
@@ -118,6 +128,7 @@ pub struct CodeView {
 
 /// Start pairing. Loopback only — see [`guard`].
 pub async fn begin() -> Result<Json<CodeView>, (StatusCode, String)> {
+    // no-blocking: four bytes from /dev/urandom and a mutex.
     let bytes = random_bytes(4).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % 1_000_000;
     let code = format!("{n:06}");
@@ -151,65 +162,69 @@ pub struct Paired {
 pub async fn complete(
     Json(body): Json<CompleteBody>,
 ) -> Result<Json<Paired>, (StatusCode, String)> {
-    let refused = || {
-        (
-            StatusCode::FORBIDDEN,
-            "That code is not valid. Start pairing again in Keel.".to_string(),
-        )
-    };
-
-    {
-        let mut slot = pending().locked();
-        let Some(p) = slot.as_mut() else {
-            return Err(refused());
+    crate::serve::in_blocking(move || {
+        let refused = || {
+            (
+                StatusCode::FORBIDDEN,
+                "That code is not valid. Start pairing again in Keel.".to_string(),
+            )
         };
-        if std::time::Instant::now() > p.expires {
-            *slot = None;
-            return Err(refused());
-        }
-        p.attempts += 1;
-        // Burn the code on too many tries rather than letting the window be spent guessing.
-        if p.attempts > MAX_ATTEMPTS || p.code != body.code {
-            if p.attempts >= MAX_ATTEMPTS {
+
+        {
+            let mut slot = pending().locked();
+            let Some(p) = slot.as_mut() else {
+                return Err(refused());
+            };
+            if std::time::Instant::now() > p.expires {
                 *slot = None;
+                return Err(refused());
             }
-            return Err(refused());
+            p.attempts += 1;
+            // Burn the code on too many tries rather than letting the window be spent guessing.
+            if p.attempts > MAX_ATTEMPTS || p.code != body.code {
+                if p.attempts >= MAX_ATTEMPTS {
+                    *slot = None;
+                }
+                return Err(refused());
+            }
+            // Single use.
+            *slot = None;
         }
-        // Single use.
-        *slot = None;
-    }
 
-    let token: String = random_bytes(32)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let id: String = random_bytes(8)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+        let token: String = random_bytes(32)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let id: String = random_bytes(8)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
-    let name = body.device_name.trim();
-    let device = Device {
-        id: id.clone(),
-        name: if name.is_empty() {
-            "A device".to_string()
-        } else {
-            name.chars().take(60).collect()
-        },
-        token_sha256: sha256_hex(&token),
-        issued: now_stamp(),
-    };
+        let name = body.device_name.trim();
+        let device = Device {
+            id: id.clone(),
+            name: if name.is_empty() {
+                "A device".to_string()
+            } else {
+                name.chars().take(60).collect()
+            },
+            token_sha256: sha256_hex(&token),
+            issued: now_stamp(),
+        };
 
-    let mut store = load();
-    store.devices.push(device);
-    save(&store).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        // Across every daemon on this HOME: a pairing and a revoke at once each saved the list
+        // without the other's change, and a revoked device came back.
+        changed(|store| store.devices.push(device))
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    Ok(Json(Paired {
-        token,
-        device_id: id,
-    }))
+        Ok(Json(Paired {
+            token,
+            device_id: id,
+        }))
+    })
+    .await
 }
 
 fn now_stamp() -> String {
@@ -228,28 +243,36 @@ pub struct DeviceView {
 }
 
 pub async fn devices() -> Json<Vec<DeviceView>> {
-    Json(
-        load()
-            .devices
-            .into_iter()
-            .map(|d| DeviceView {
-                id: d.id,
-                name: d.name,
-                issued: d.issued,
-            })
-            .collect(),
-    )
+    crate::serve::in_blocking(move || {
+        Json(
+            load()
+                .devices
+                .into_iter()
+                .map(|d| DeviceView {
+                    id: d.id,
+                    name: d.name,
+                    issued: d.issued,
+                })
+                .collect(),
+        )
+    })
+    .await
 }
 
 pub async fn revoke(Path(id): Path<String>) -> Result<Json<bool>, (StatusCode, String)> {
-    let mut store = load();
-    let before = store.devices.len();
-    store.devices.retain(|d| d.id != id);
-    if store.devices.len() == before {
-        return Err((StatusCode::NOT_FOUND, "No such device.".into()));
-    }
-    save(&store).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(true))
+    crate::serve::in_blocking(move || {
+        let removed = changed(|store| {
+            let before = store.devices.len();
+            store.devices.retain(|d| d.id != id);
+            store.devices.len() != before
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        if !removed {
+            return Err((StatusCode::NOT_FOUND, "No such device.".into()));
+        }
+        Ok(Json(true))
+    })
+    .await
 }
 
 /// Whether a bearer token matches a paired device.
@@ -275,6 +298,7 @@ pub async fn guard(
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
+    // no-blocking: middleware; off loopback only, one small read of the device list.
     if peer.ip().is_loopback() {
         return Ok(next.run(req).await);
     }

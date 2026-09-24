@@ -376,7 +376,10 @@ fn commit_one(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     if message.is_empty() {
         return Err("a commit needs a message".into());
     }
-    git(checkout, &["add", "-A"])?;
+    // `AUTOMATIC` on the `add` too: `post-index-change` is a hook, and `add` is what fires it.
+    let mut add = crate::git::AUTOMATIC.to_vec();
+    add.extend_from_slice(&["add", "-A"]);
+    git(checkout, &add)?;
     if git(checkout, &["diff", "--cached", "--name-only"])?
         .trim()
         .is_empty()

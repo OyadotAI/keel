@@ -267,12 +267,17 @@ struct SessionWindow: View {
             case .pr:
                 PullRequest(model: model) { model.sheet = nil }
             case .skills:
-                SkillCatalog(client: model.client) {
+                SkillCatalog(client: model.client, autoCommit: model.autoCommit) {
                     model.sheet = nil
                     Task { await model.refreshState(); await model.refreshSuggestions() }
                 }
+            case .newSkill:
+                NewSkill(client: model.client, autoCommit: model.autoCommit) {
+                    model.sheet = nil
+                    Task { await model.refreshState() }
+                }
             case .subagent:
-                NewSubagent(client: model.client) {
+                NewSubagent(client: model.client, autoCommit: model.autoCommit) {
                     model.sheet = nil
                     Task { await model.refreshState() }
                 }

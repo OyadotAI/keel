@@ -724,7 +724,7 @@ final class SessionModel: Identifiable {
     /// from a row: a `.sheet` on a row inside a lazy stack loses its anchor when the row is
     /// recycled, and a sheet with no anchor is a crash on the way out of it.
     enum Sheet: String, Identifiable {
-        case pr, skills, subagent, mcp, setup
+        case pr, skills, newSkill, subagent, mcp, setup
         var id: String { rawValue }
     }
     var sheet: Sheet? { get { workbench.sheet } set { workbench.sheet = newValue } }
@@ -2154,7 +2154,7 @@ final class SessionModel: Identifiable {
     /// The whole scan: score, profile, plan. `findings` stays the list the badge counts.
     var scan: Wire.Scan? { get { project.store.scan } set { project.store.scan = newValue } }
 
-    struct Adopted: Decodable { var written: [String]; var skipped: [String] }
+    struct Adopted: Decodable { var written: [String]; var skipped: [String]; var committed: String?; var note: String? }
     struct ReviewPrompt: Decodable { var system: String; var evidence: String; var prompt: String }
     /// System prompt for the next turn only: a persona and its evidence, consumed by `start`.
     var nextSystem: String?
@@ -2186,11 +2186,20 @@ final class SessionModel: Identifiable {
 
     func adoptPractices() async -> [String] {
         var written: [String] = []
+        var note: String?
         await attempt {
-            let a: Adopted = try await client.post("/api/adopt", body: Wire.None(), q(), as: Adopted.self)
+            let a: Adopted = try await client.post("/api/adopt", body: Wire.None(),
+                                                    q(["commit": autoCommit ? "true" : "false"]), as: Adopted.self)
             written = a.written
+            note = a.note
         }
         await refreshState()
+        // Written and not committed says why: otherwise the next turn's checkpoint takes the
+        // files under its own prompt with nobody told. After `attempt` and the refresh, both of
+        // which clear `lastError` on success.
+        if let note, !note.isEmpty {
+            fail("Added the agent team — " + note, category: "keel-commit")
+        }
         return written
     }
 

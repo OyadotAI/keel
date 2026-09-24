@@ -216,15 +216,43 @@ fn sane(rule: &str) -> bool {
 /// Reads the directories rather than spawning the program: this runs over every stored rule, and
 /// two hundred process spawns to answer a question about filenames would be its own problem.
 fn on_path(name: &str) -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
-    path.split(':').any(|dir| {
-        !dir.is_empty() && {
-            let candidate = std::path::Path::new(dir).join(name);
-            candidate.is_file()
-        }
-    })
+    find_on_path(name).is_some()
+}
+
+/// Whether `name` is on `PATH` and will actually run. `/usr/bin/git`, `/usr/bin/python3` and the
+/// rest of Apple's developer shims exist on every Mac, and on one without the Command Line Tools
+/// running them opens an installer window instead — so a shim counts only when the tools behind
+/// it are installed. Read from disk; nothing is run.
+pub(crate) fn usable_on_path(name: &str) -> bool {
+    match find_on_path(name) {
+        Some(p) if p.parent() == Some(std::path::Path::new("/usr/bin")) && developer_shim(&p) => [
+            "/Library/Developer/CommandLineTools/usr/bin",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin",
+        ]
+        .iter()
+        .any(|dir| std::path::Path::new(dir).join(name).is_file()),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Apple's shims are all one small binary that asks `xcrun`; a real `/usr/bin` tool is not.
+fn developer_shim(path: &std::path::Path) -> bool {
+    const SHIMS: &[&str] = &[
+        "git", "python3", "pip3", "make", "clang", "cc", "swift", "xcrun",
+    ];
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| SHIMS.contains(&n))
+}
+
+/// The first `name` on `PATH`, found by reading the directories — never by running it.
+pub(crate) fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var("PATH").ok()?;
+    path.split(':')
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| std::path::Path::new(dir).join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Whether this project has been trusted. Never true unless somebody said so.

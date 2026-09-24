@@ -15,7 +15,7 @@ pub(crate) mod testutil;
 pub use checks::default_checks;
 pub use context::RepoContext;
 pub use finding::{Dimension, Finding, Fix, Severity};
-pub use profile::{Hosting, Profile, detect};
+pub use profile::{Hosting, Profile, detect, has_frontend};
 pub use report::{Phase, Report};
 
 /// Run every default check against `ctx` and collect the results into a report.

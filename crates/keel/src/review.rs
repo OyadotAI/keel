@@ -5,7 +5,7 @@
 //! entry points, environment variables, tables, tests, CI, images, the agent instructions —
 //! so the model starts from facts and spends its reading on judgement. It is sent in plan
 //! mode, so the agent reads and changes nothing. `POST /api/review/save` writes the finished
-//! review into `docs/REVIEW.md`. `POST /api/adopt` writes the three reviewer subagents and a
+//! review into `docs/REVIEW.md`. `POST /api/adopt` writes the agent team (`keel_generator::team`), a
 //! `docs/PRODUCTION.md` **derived from this repository** — its languages, gate, hosting and
 //! current findings — never the stack's boilerplate.
 
@@ -823,6 +823,18 @@ pub async fn api_review_save(
     Checkout(repo): Checkout,
     Json(b): Json<SaveBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    crate::serve::blocking(
+        move || save_review(&repo, &b.text),
+        Err((
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "the save was cancelled".into(),
+        )),
+    )
+    .await
+    .map(Json)
+}
+
+fn save_review(repo: &Utf8Path, text: &str) -> Result<String, (axum::http::StatusCode, String)> {
     let err = |e: std::io::Error| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let dir = repo.join("docs");
     std::fs::create_dir_all(&dir).map_err(err)?;
@@ -837,11 +849,11 @@ pub async fn api_review_save(
     let today = humantime_date(std::time::SystemTime::now());
     let body = format!(
         "# Staff-engineer review — {today}\n\nWritten by Keel's review turn; the scanner's findings are evidence, this is judgement. Re-run from Readiness.\n\n{}\n",
-        b.text.trim()
+        text.trim()
     );
     std::fs::write(&path, body).map_err(err)?;
-    write_contract(&repo, &today, b.text.trim()).map_err(err)?;
-    Ok(Json("docs/REVIEW.md and .claude/agents/contract.md".into()))
+    write_contract(repo, &today, text.trim()).map_err(err)?;
+    Ok("docs/REVIEW.md and .claude/agents/contract.md".into())
 }
 
 const CONTRACT_MARK: &str = "## Latest review";
@@ -964,9 +976,14 @@ pub async fn api_memory(
             "nothing to remember".into(),
         ));
     }
-    remember(&repo, text)
-        .map(Json)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+    let text = text.to_string();
+    crate::serve::blocking(
+        move || remember(&repo, &text),
+        Err("the write was cancelled".into()),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 const MEMORY_HEADING: &str = "## Project memory";
@@ -1011,74 +1028,228 @@ pub fn remember(repo: &Utf8Path, text: &str) -> Result<String, String> {
     Ok("CLAUDE.md".into())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct Adopted {
+    /// Repository-relative paths written or appended to.
     pub written: Vec<String>,
+    /// What was left alone, each with why: already there, or a `CLAUDE.md` Keel will not edit.
     pub skipped: Vec<String>,
+    /// The short sha of the commit holding `written`, when one was asked for and made.
+    pub committed: Option<String>,
+    /// Why it was not committed, when a commit was asked for.
+    pub note: Option<String>,
 }
 
-/// Write the reviewers and a production checklist derived from this repository, never
-/// overwriting.
+#[derive(Deserialize)]
+pub struct AdoptQuery {
+    /// The person's "commit after every turn" setting. Adopting is a write into the tree like a
+    /// turn's, so it is checkpointed like one — on its own, under its own message.
+    #[serde(default)]
+    pub commit: bool,
+}
+
+/// Write the agent team, a production checklist derived from this repository, and the lifecycle
+/// that runs the team — never overwriting, and under the tree's writer claim: written while a
+/// turn runs, all of it was committed under that turn's prompt and reported as its work.
 pub async fn api_adopt(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
-) -> Result<Json<Adopted>, (axum::http::StatusCode, String)> {
-    let name = repo
-        .file_name()
-        .map(str::to_string)
-        .unwrap_or_else(|| "project".into());
-    let r2 = repo.clone();
-    let report = tokio::task::spawn_blocking(move || {
-        keel_scanner::RepoContext::load(&r2)
-            .map(|ctx| keel_scanner::scan(&ctx))
-            .unwrap_or_else(|_| Report::new(Vec::new()))
-    })
+    axum::extract::Query(query): axum::extract::Query<AdoptQuery>,
+) -> Result<Json<Adopted>, crate::writes::Failure> {
+    let failed = |e: String| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e);
+    crate::serve::blocking(
+        move || adopt_and_commit(&state, &repo, query.commit),
+        Err(failed("the write was cancelled".into())),
+    )
     .await
-    .unwrap_or_else(|_| Report::new(Vec::new()));
-    let files: Vec<(&str, String)> = vec![
-        (
-            ".claude/agents/reviewer.md",
-            keel_generator::cloudflare::REVIEWER_AGENT.to_string(),
-        ),
-        (
-            ".claude/agents/security.md",
-            keel_generator::stack::SECURITY_AGENT.to_string(),
-        ),
-        (
-            ".claude/agents/reliability.md",
-            keel_generator::stack::RELIABILITY_AGENT.to_string(),
-        ),
-        ("docs/PRODUCTION.md", production_md(&name, &report)),
-    ];
+    .map(Json)
+}
+
+/// Adopt under the tree's writer claim, then commit what Keel wrote — never the person's work.
+fn adopt_and_commit(
+    state: &Arc<AppState>,
+    repo: &Utf8Path,
+    commit: bool,
+) -> Result<Adopted, crate::writes::Failure> {
+    let _held = crate::writes::hold(state, repo, "adopt")?;
+    // Read before writing: an instructions file holding anything of the person's that is not
+    // committed is appended to but not committed, or Keel's commit would carry their work.
+    let theirs: Vec<String> = instructions_file(repo)
+        .ok()
+        .map(|(_, rel)| rel)
+        .filter(|rel| !crate::writes::clean_before(repo, rel))
+        .into_iter()
+        .collect();
+    let mut done = adopt(repo).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if commit {
+        let (ours, kept): (Vec<String>, Vec<String>) = done
+            .written
+            .iter()
+            .cloned()
+            .partition(|p| !theirs.contains(p));
+        let mut notes = Vec::new();
+        if !ours.is_empty() {
+            let c = crate::writes::commit_only(repo, &ours, "Add the agent team");
+            done.committed = c.sha;
+            notes.extend(c.note);
+        }
+        for p in kept {
+            notes.push(format!(
+                "{p} has your own uncommitted edits, so Keel's sections are in it but not committed"
+            ));
+        }
+        done.note = (!notes.is_empty()).then(|| notes.join("; "));
+    }
+    Ok(done)
+}
+
+/// What `api_adopt` writes, synchronously. A path that is taken — a file, a link, a folder that is
+/// a file — is left alone and said so, one path at a time, so one odd path never stops the rest;
+/// `CLAUDE.md` is the one file appended to, and only with what it lacks.
+pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
+    let name = repo.file_name().unwrap_or("project").to_string();
+    let ctx = keel_scanner::RepoContext::load(repo).ok();
+    let report = ctx
+        .as_ref()
+        .map(keel_scanner::scan)
+        .unwrap_or_else(|| Report::new(Vec::new()));
+    let mut files: Vec<(&str, String)> = keel_generator::team::agents()
+        .into_iter()
+        .map(|(p, b)| (p, b.to_string()))
+        .collect();
+    if ctx.as_ref().is_some_and(keel_scanner::has_frontend) {
+        files.push((
+            keel_generator::team::FRONTEND_SKILL_PATH,
+            keel_generator::team::FRONTEND_SKILL.to_string(),
+        ));
+    }
+    files.push(("docs/PRODUCTION.md", production_md(&name, &report)));
     let mut written = Vec::new();
     let mut skipped = Vec::new();
-    let err = |e: std::io::Error| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     for (rel, body) in files {
-        let path = repo.join(rel);
-        if path.exists() {
-            skipped.push(rel.to_string());
-            continue;
+        let wrote = crate::writes::no_link_under(repo, rel)
+            .and_then(|_| crate::writes::create_new(&repo.join(rel), body.as_bytes()));
+        match wrote {
+            Ok(true) => written.push(rel.to_string()),
+            Ok(false) => skipped.push(format!("{rel} (already there)")),
+            Err(why) => skipped.push(format!("{rel} ({})", short(repo, &why))),
         }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(err)?;
-        }
-        std::fs::write(&path, body).map_err(err)?;
-        written.push(rel.to_string());
     }
-    let claude = repo.join("CLAUDE.md");
-    let pointer = "\n## Production\n\nThe production checklist the reviewers enforce is in `docs/PRODUCTION.md`. It applies.\n";
-    match std::fs::read_to_string(&claude) {
-        Ok(existing) if !existing.contains("docs/PRODUCTION.md") => {
-            std::fs::write(&claude, existing + pointer).map_err(err)?;
-            written.push("CLAUDE.md (appended)".into());
-        }
-        Err(_) => {
-            std::fs::write(&claude, format!("# {name}\n{pointer}")).map_err(err)?;
-            written.push("CLAUDE.md".into());
-        }
-        _ => skipped.push("CLAUDE.md".into()),
+    match claude_md(repo, &name) {
+        Ok(Some(rel)) => written.push(rel),
+        Ok(None) => skipped.push("CLAUDE.md (already says it)".into()),
+        Err(why) => skipped.push(format!("CLAUDE.md ({})", short(repo, &why))),
     }
-    Ok(Json(Adopted { written, skipped }))
+    Ok(Adopted {
+        written,
+        skipped,
+        committed: None,
+        note: None,
+    })
+}
+
+/// A reason without the absolute path in front of it: the person knows where their project is.
+fn short(repo: &Utf8Path, why: &str) -> String {
+    why.strip_prefix(repo.as_str())
+        .map(|r| r.trim_start_matches('/'))
+        .unwrap_or(why)
+        .to_string()
+}
+
+/// The file `claude_md` edits, absolute and repository-relative: `CLAUDE.md` under the name it
+/// actually has on disk (a case-insensitive Mac opens `claude.md` for it, and git only knows the
+/// real one), or — when it is a link, as `CLAUDE.md -> AGENTS.md` conventionally is — the file
+/// behind it, as long as that is a file inside the repository.
+fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
+    let name = std::fs::read_dir(repo)
+        .ok()
+        .and_then(|entries| {
+            let names: Vec<String> = entries
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|n| n.eq_ignore_ascii_case("CLAUDE.md"))
+                .collect();
+            names
+                .iter()
+                .find(|n| *n == "CLAUDE.md")
+                .or(names.first())
+                .cloned()
+        })
+        .unwrap_or_else(|| "CLAUDE.md".into());
+    let link = repo.join(&name);
+    match std::fs::symlink_metadata(&link) {
+        Ok(m) if m.file_type().is_symlink() => {
+            let root = repo.canonicalize_utf8().map_err(|e| e.to_string())?;
+            let target = link
+                .canonicalize_utf8()
+                .map_err(|_| "a symbolic link to nothing — left alone".to_string())?;
+            let rel = target
+                .strip_prefix(&root)
+                .map_err(|_| "a symbolic link to outside the repository — left alone".to_string())?
+                .to_string();
+            if !target.is_file() {
+                return Err("a symbolic link to a folder — left alone".into());
+            }
+            // Inside the repository is not enough: `.git/config` is inside it, and so is a
+            // submodule's file. The same rule every other write keeps — no git internals, no
+            // other repository on the way.
+            let git_dirs = ["--absolute-git-dir", "--git-common-dir"].map(|flag| {
+                crate::git::trimmed(repo, &["rev-parse", flag])
+                    .ok()
+                    .map(|d| repo.join(d))
+                    .and_then(|d| d.canonicalize_utf8().ok())
+            });
+            // By name, and by where git actually keeps it: `--separate-git-dir` can put it
+            // anywhere, under any name, inside the tree.
+            if rel.split('/').any(|c| c.eq_ignore_ascii_case(".git"))
+                || git_dirs.iter().flatten().any(|d| target.starts_with(d))
+            {
+                return Err("a symbolic link into .git — left alone".into());
+            }
+            crate::writes::no_link_under(&root, &rel)
+                .map_err(|why| format!("a symbolic link to {rel}, where {why}"))?;
+            Ok((target, rel))
+        }
+        Ok(m) if !m.is_file() => Err("not a file — left alone".into()),
+        _ => Ok((link, name)),
+    }
+}
+
+/// Append what the instructions lack, and return the repository-relative path written, or `None`
+/// when they already say it.
+fn claude_md(repo: &Utf8Path, name: &str) -> Result<Option<String>, String> {
+    let (path, rel) = instructions_file(repo)?;
+    let existing = match std::fs::read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("could not be read: {e}")),
+        Ok(bytes) => {
+            Some(String::from_utf8(bytes).map_err(|_| "not UTF-8 text — left alone".to_string())?)
+        }
+    };
+    // Worked on with `\n` and written back in the file's own line endings.
+    let crlf = existing.as_deref().is_some_and(|s| s.contains("\r\n"));
+    let plain = existing.as_deref().map(|s| s.replace("\r\n", "\n"));
+    let mut next = plain.clone().unwrap_or_else(|| format!("# {name}\n"));
+    if !next.contains("docs/PRODUCTION.md") {
+        next.push_str("\n## Production\n\nThe production checklist the reviewers enforce is in `docs/PRODUCTION.md`. It applies.\n");
+    }
+    let next = keel_generator::team::with_guidance(&next);
+    if plain.as_deref() == Some(next.as_str()) {
+        return Ok(None);
+    }
+    let next = if crlf {
+        next.replace('\n', "\r\n")
+    } else {
+        next
+    };
+    if existing.is_none() {
+        // Created, not written through: a link that appeared since the check is refused.
+        return match crate::writes::create_new(&path, next.as_bytes())? {
+            true => Ok(Some(rel)),
+            false => Err("appeared meanwhile — left alone".into()),
+        };
+    }
+    std::fs::write(&path, next).map_err(|e| format!("{path}: {e}"))?;
+    Ok(Some(rel))
 }
 
 /// The production checklist, for this repository: its languages, its gate, where it runs,
@@ -1260,6 +1431,394 @@ mod tests {
         assert!(m.contains("`users`"));
         assert!(m.contains("1 test files"));
         assert!(m.contains("`CLAUDE.md` — absent"));
+    }
+
+    fn team_finding(root: &Utf8Path) -> Option<keel_scanner::Finding> {
+        let ctx = keel_scanner::RepoContext::load(root).unwrap();
+        keel_scanner::scan(&ctx)
+            .findings
+            .into_iter()
+            .find(|f| f.id == "agent/no-reviewers")
+    }
+
+    /// The finding's Fix is this function, so the function must clear it — which it can only do
+    /// if the scanner's list of the team and the generator's are the same list. And Claude Code
+    /// must actually load what was written, under the names the lifecycle calls.
+    #[test]
+    fn adopting_clears_the_team_finding() {
+        let (_d, root) = go_repo();
+        let before = team_finding(&root).expect("a bare repo lacks the team");
+        assert_eq!(before.severity, keel_scanner::Severity::Medium);
+
+        let first = adopt(&root).unwrap();
+        for (path, _) in keel_generator::team::agents() {
+            assert!(
+                first.written.iter().any(|w| w == path),
+                "{path} not written"
+            );
+        }
+        assert!(first.written.iter().any(|w| w == "CLAUDE.md"));
+        assert_eq!(team_finding(&root), None, "adopting must clear it");
+
+        let loaded: Vec<String> = keel_workspace::discover_agents(&root, &root.join("no-home"))
+            .into_iter()
+            .filter(|a| a.description.is_some())
+            .map(|a| a.name)
+            .collect();
+        for name in [
+            "pm",
+            "designer",
+            "principal",
+            "qa",
+            "reviewer",
+            "security",
+            "reliability",
+        ] {
+            assert!(
+                loaded.iter().any(|n| n == name),
+                "{name} does not load: {loaded:?}"
+            );
+        }
+
+        let again = adopt(&root).unwrap();
+        assert!(
+            again.written.is_empty(),
+            "second adopt wrote {:?}",
+            again.written
+        );
+    }
+
+    /// A team the project already wrote is the project's. Adopting fills the gaps around it and
+    /// appends to CLAUDE.md without touching a line that was there.
+    #[test]
+    fn adopting_fills_gaps_and_never_overwrites() {
+        let (_d, root) = go_repo();
+        std::fs::create_dir_all(root.join(".claude/agents")).unwrap();
+        let ours = "---\nname: reviewer\ndescription: \"ours\"\n---\nkeep me\n";
+        std::fs::write(root.join(".claude/agents/reviewer.md"), ours).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# ours\n\nhouse rules\n").unwrap();
+
+        let partial = team_finding(&root).expect("six are missing");
+        assert_eq!(partial.severity, keel_scanner::Severity::Low);
+        assert!(partial.title.contains("`pm`") && !partial.title.contains("`reviewer`"));
+
+        let r = adopt(&root).unwrap();
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.starts_with(".claude/agents/reviewer.md"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".claude/agents/reviewer.md")).unwrap(),
+            ours
+        );
+        let claude = std::fs::read_to_string(root.join("CLAUDE.md")).unwrap();
+        assert!(claude.starts_with("# ours\n\nhouse rules\n"), "{claude}");
+        assert_eq!(
+            claude.matches("## How a request becomes a change").count(),
+            1
+        );
+        assert_eq!(claude.matches("docs/PRODUCTION.md").count(), 1);
+        assert_eq!(team_finding(&root), None);
+    }
+
+    /// The frontend skill goes where there is a frontend and nowhere else, and the scanner asks
+    /// for it on exactly the same condition — otherwise the fix could not clear the finding.
+    #[test]
+    fn the_frontend_skill_goes_only_where_there_is_a_frontend() {
+        let (_d, go) = go_repo();
+        adopt(&go).unwrap();
+        assert!(!go.join(keel_generator::team::FRONTEND_SKILL_PATH).exists());
+        assert!(
+            std::fs::read_to_string(go.join("CLAUDE.md"))
+                .unwrap()
+                .contains(keel_generator::team::RULES_HEADING)
+        );
+
+        let (_d2, web) = go_repo();
+        std::fs::write(
+            web.join("package.json"),
+            r#"{"dependencies":{"react":"19","next":"16"}}"#,
+        )
+        .unwrap();
+        let before = team_finding(&web).expect("no team, no skill");
+        assert!(
+            before.title.contains("the frontend skill"),
+            "{}",
+            before.title
+        );
+        adopt(&web).unwrap();
+        let skills: Vec<String> = keel_workspace::discover_skills(&web, &web.join("no-home"))
+            .into_iter()
+            .filter(|s| s.description.is_some())
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(skills, ["frontend"]);
+        assert_eq!(team_finding(&web), None);
+    }
+
+    /// A repository that gitignores `.claude/` hides the team from the scan's walk; the fix must
+    /// still clear the finding it was offered for.
+    #[test]
+    fn adopting_clears_the_finding_when_claude_is_gitignored() {
+        let (_d, root) = go_repo();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"react":"19"}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join(".gitignore"), ".claude/\n").unwrap();
+        adopt(&root).unwrap();
+        assert_eq!(team_finding(&root), None);
+    }
+
+    /// A repository cannot point Keel's write somewhere else with a link, even a dangling one.
+    #[test]
+    fn adopting_never_writes_through_a_link() {
+        let (_d, root) = go_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let target = Utf8Path::from_path(outside.path())
+            .unwrap()
+            .join("pwned.md");
+        std::fs::create_dir_all(root.join(".claude/agents")).unwrap();
+        std::os::unix::fs::symlink(&target, root.join(".claude/agents/pm.md")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("c.md"), root.join("CLAUDE.md")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(!target.exists() && !outside.path().join("c.md").exists());
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.starts_with(".claude/agents/pm.md"))
+        );
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.starts_with("CLAUDE.md (a symbolic link")),
+            "{r:?}"
+        );
+    }
+
+    /// A CLAUDE.md Keel cannot append to is left alone and said so; the rest is still written,
+    /// and a retry does not fail forever.
+    #[test]
+    fn a_claude_md_that_is_not_text_is_left_alone() {
+        let (_d, root) = go_repo();
+        std::fs::write(root.join("CLAUDE.md"), b"# x\n\xff\xfe bad\n").unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s == "CLAUDE.md (not UTF-8 text — left alone)"),
+            "{r:?}"
+        );
+        assert!(r.written.iter().any(|w| w == ".claude/agents/pm.md"));
+        assert_eq!(
+            std::fs::read(root.join("CLAUDE.md")).unwrap(),
+            b"# x\n\xff\xfe bad\n"
+        );
+        assert!(adopt(&root).is_ok());
+    }
+
+    fn git_repo() -> (tempfile::TempDir, Utf8PathBuf) {
+        let (d, root) = go_repo();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+            &["add", "-A"],
+            &["commit", "-qm", "base"],
+        ] {
+            crate::git::run(&root, args).unwrap();
+        }
+        (d, root)
+    }
+
+    /// The person's half-written CLAUDE.md is theirs: Keel appends to it and does not commit it.
+    #[test]
+    fn a_commit_never_takes_the_persons_claude_md_edits() {
+        let (_d, root) = git_repo();
+        std::fs::write(root.join("CLAUDE.md"), "# x\n").unwrap();
+        crate::git::run(&root, &["add", "CLAUDE.md"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "claude"]).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# x\nMY WIP\n").unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let done = adopt_and_commit(&state, &root, true).unwrap();
+        assert!(done.committed.is_some(), "{done:?}");
+        assert!(
+            done.note
+                .as_deref()
+                .unwrap_or("")
+                .contains("CLAUDE.md has your own uncommitted edits")
+        );
+        let shown = crate::git::run(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
+        assert!(
+            !shown.contains("CLAUDE.md") && shown.contains(".claude/agents/pm.md"),
+            "{shown}"
+        );
+        let status = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
+        assert_eq!(status.trim(), "M CLAUDE.md");
+    }
+
+    /// A clean CLAUDE.md is Keel's to commit along with the team, and adopting is then silent.
+    #[test]
+    fn a_clean_tree_is_committed_whole() {
+        let (_d, root) = git_repo();
+        let state = Arc::new(AppState::new(root.clone()));
+        let done = adopt_and_commit(&state, &root, true).unwrap();
+        assert!(done.committed.is_some() && done.note.is_none(), "{done:?}");
+        let status = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
+        assert!(status.trim().is_empty(), "{status}");
+    }
+
+    /// One odd path — a file where a folder should be — is skipped; the rest is written.
+    #[test]
+    fn a_file_named_docs_does_not_stop_the_rest() {
+        let (_d, root) = go_repo();
+        std::fs::write(root.join("docs"), "a file").unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.starts_with("docs/PRODUCTION.md (docs is a file")),
+            "{r:?}"
+        );
+        assert!(r.written.iter().any(|w| w == "CLAUDE.md"));
+        assert_eq!(team_finding(&root), None);
+    }
+
+    /// `CLAUDE.md -> AGENTS.md` is a convention; the file behind it is the one appended to.
+    #[test]
+    fn a_claude_md_linked_to_agents_md_is_followed() {
+        let (_d, root) = go_repo();
+        std::fs::write(root.join("AGENTS.md"), "# rules\n").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(r.written.iter().any(|w| w == "AGENTS.md"), "{r:?}");
+        assert!(
+            std::fs::symlink_metadata(root.join("CLAUDE.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(root.join("AGENTS.md"))
+                .unwrap()
+                .contains(keel_generator::team::LIFECYCLE_HEADING)
+        );
+        assert_eq!(team_finding(&root), None);
+    }
+
+    /// A case-insensitive disk opens `claude.md` for `CLAUDE.md`; git only knows the real name,
+    /// and committing the other one failed the whole commit.
+    #[test]
+    fn a_lowercase_claude_md_is_committed_under_its_own_name() {
+        let (_d, root) = git_repo();
+        std::fs::write(root.join("claude.md"), "# lower\n").unwrap();
+        crate::git::run(&root, &["add", "claude.md"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "c"]).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let done = adopt_and_commit(&state, &root, true).unwrap();
+        assert!(done.committed.is_some() && done.note.is_none(), "{done:?}");
+        assert!(done.written.iter().any(|w| w == "claude.md"), "{done:?}");
+        let status = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
+        assert!(status.trim().is_empty(), "{status}");
+    }
+
+    /// A link to some other file than AGENTS.md is still the person's file when they have edited it.
+    #[test]
+    fn a_linked_instructions_file_with_edits_is_not_committed() {
+        let (_d, root) = git_repo();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/INSTR.md"), "# i\n").unwrap();
+        std::os::unix::fs::symlink("notes/INSTR.md", root.join("CLAUDE.md")).unwrap();
+        crate::git::run(&root, &["add", "-A"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "l"]).unwrap();
+        std::fs::write(root.join("notes/INSTR.md"), "# i\nPRIVATE\n").unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let done = adopt_and_commit(&state, &root, true).unwrap();
+        let shown = crate::git::run(&root, &["show", "HEAD:notes/INSTR.md"]).unwrap();
+        assert!(!shown.contains("PRIVATE"), "{done:?}");
+        assert!(
+            done.note
+                .as_deref()
+                .unwrap_or("")
+                .contains("notes/INSTR.md has your own")
+        );
+    }
+
+    /// Inside the repository is not enough: `.git/config` is inside it, and so is a submodule.
+    #[test]
+    fn a_link_into_git_internals_or_another_repository_is_left_alone() {
+        let (_d, root) = git_repo();
+        std::os::unix::fs::symlink(".git/config", root.join("CLAUDE.md")).unwrap();
+        let config = std::fs::read(root.join(".git/config")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert_eq!(std::fs::read(root.join(".git/config")).unwrap(), config);
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s == "CLAUDE.md (a symbolic link into .git — left alone)"),
+            "{r:?}"
+        );
+
+        let (_d2, root) = git_repo();
+        std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+        std::fs::write(root.join("sub/INSTR.md"), "# sub\n").unwrap();
+        std::os::unix::fs::symlink("sub/INSTR.md", root.join("CLAUDE.md")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("sub/INSTR.md")).unwrap(),
+            "# sub\n"
+        );
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.contains("another git repository")),
+            "{r:?}"
+        );
+    }
+
+    /// `--separate-git-dir` puts the git dir anywhere, under any name, inside the tree.
+    #[test]
+    fn a_link_into_a_git_dir_by_another_name_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path())
+            .unwrap()
+            .canonicalize_utf8()
+            .unwrap();
+        let meta = root.join("meta");
+        crate::git::run(&root, &["init", "-q", "--separate-git-dir", meta.as_str()]).unwrap();
+        std::os::unix::fs::symlink("meta/config", root.join("CLAUDE.md")).unwrap();
+        let before = std::fs::read(meta.join("config")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert_eq!(std::fs::read(meta.join("config")).unwrap(), before);
+        assert!(r.skipped.iter().any(|s| s.contains("into .git")), "{r:?}");
+    }
+
+    #[test]
+    fn a_crlf_claude_md_stays_crlf() {
+        let (_d, root) = go_repo();
+        std::fs::write(root.join("CLAUDE.md"), "# x\r\nrules\r\n").unwrap();
+        adopt(&root).unwrap();
+        let body = std::fs::read_to_string(root.join("CLAUDE.md")).unwrap();
+        assert!(body.starts_with("# x\r\nrules\r\n"));
+        assert!(
+            !body.replace("\r\n", "").contains('\n'),
+            "a bare newline was written"
+        );
+    }
+
+    /// Every agent present but a CLAUDE.md that never says when to call them: files nobody runs.
+    #[test]
+    fn a_team_with_no_lifecycle_is_still_a_finding() {
+        let (_d, root) = go_repo();
+        adopt(&root).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# plain\n").unwrap();
+        let f = team_finding(&root).expect("no lifecycle");
+        assert_eq!(
+            f.title,
+            "Agent team incomplete: missing the lifecycle in CLAUDE.md"
+        );
     }
 
     #[test]

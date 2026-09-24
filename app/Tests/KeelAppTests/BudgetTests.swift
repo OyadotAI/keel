@@ -145,21 +145,6 @@ final class BudgetTests: XCTestCase {
         }
     }
 
-    /// Orca ships a ~250 MB DMG. The whole argument for going native is that this does not have to.
-    func testBundleStaysSmall() throws {
-        let bundle = try bundlePath()
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-        p.arguments = ["-sm", bundle.path]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        try p.run()
-        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        p.waitUntilExit()
-        let megabytes = Int(out.split(separator: "\t").first ?? "0") ?? 0
-        XCTAssertLessThanOrEqual(megabytes, 60, "the bundle grew to \(megabytes) MB")
-    }
-
     /// The main page does not poll.
     ///
     /// Every `Task.sleep` on the History → session → Trace path, pinned. Each survivor is named

@@ -29,7 +29,7 @@ fn save(map: &BTreeMap<String, String>) -> Result<(), String> {
     };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let body = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
-    std::fs::write(path, body).map_err(|e| e.to_string())
+    crate::writes::replace(path.as_std_path(), body.as_bytes())
 }
 
 /// Apply the overrides to a discovered list.
@@ -58,37 +58,47 @@ pub struct Renamed {
 }
 
 pub async fn rename(Json(body): Json<RenameBody>) -> Result<Json<Renamed>, (StatusCode, String)> {
-    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    crate::serve::in_blocking(move || {
+        let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
 
-    // The id is a map key here rather than a path, but it is the same id that becomes a filename
-    // elsewhere and the same rule keeps both honest.
-    if body.id.is_empty()
-        || !body
-            .id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
-        return Err(bad("that is not a session id"));
-    }
-    let name = body.name.trim();
-    if name.chars().count() > 80 {
-        return Err(bad("keep it under 80 characters"));
-    }
-    if name.contains('\n') {
-        return Err(bad("a name is one line"));
-    }
+        // The id is a map key here rather than a path, but it is the same id that becomes a filename
+        // elsewhere and the same rule keeps both honest.
+        if body.id.is_empty()
+            || !body
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(bad("that is not a session id"));
+        }
+        let name = body.name.trim();
+        if name.chars().count() > 80 {
+            return Err(bad("keep it under 80 characters"));
+        }
+        if name.contains('\n') {
+            return Err(bad("a name is one line"));
+        }
 
-    let mut names = load();
-    if name.is_empty() {
-        names.remove(&body.id);
-    } else {
-        names.insert(body.id.clone(), name.to_string());
-    }
-    save(&names).map_err(|e| bad(&e))?;
+        // One rename at a time, across every daemon on this HOME: load, change, save is a
+        // read-modify-write, and two at once each saved the list without the other's name.
+        let file = path().ok_or_else(|| bad("no home directory"))?;
+        crate::writes::locked(file.as_std_path(), || {
+            let mut names = load();
+            if name.is_empty() {
+                names.remove(&body.id);
+            } else {
+                names.insert(body.id.clone(), name.to_string());
+            }
+            save(&names)
+        })
+        .and_then(|r| r)
+        .map_err(|e| bad(&e))?;
 
-    Ok(Json(Renamed {
-        name: name.to_string(),
-    }))
+        Ok(Json(Renamed {
+            name: name.to_string(),
+        }))
+    })
+    .await
 }
 
 #[cfg(test)]

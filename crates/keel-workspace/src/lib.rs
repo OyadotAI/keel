@@ -139,12 +139,37 @@ pub(crate) fn frontmatter(contents: &str) -> (Option<String>, Option<String>) {
             break;
         }
         if let Some(rest) = trimmed.strip_prefix("name:") {
-            name = Some(rest.trim().trim_matches('"').to_string());
+            name = Some(scalar(rest));
         } else if let Some(rest) = trimmed.strip_prefix("description:") {
-            description = Some(rest.trim().trim_matches('"').to_string());
+            description = Some(scalar(rest));
         }
     }
     (name, description)
+}
+
+/// A one-line YAML scalar as its text: a double-quoted one has its `\"` and `\\` undone, so a
+/// description Keel wrote quoted reads back as it was typed.
+fn scalar(raw: &str) -> String {
+    let raw = raw.trim();
+    let Some(inner) = raw
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .filter(|_| raw.len() >= 2)
+    else {
+        return raw.trim_matches('"').to_string();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('"' | '\\'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Truncate on a character boundary, appending an ellipsis when anything was removed.
@@ -159,6 +184,15 @@ pub fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keel quotes what it writes (`agents::yaml`); the list must show it as it was typed.
+    #[test]
+    fn a_quoted_description_reads_back_unescaped() {
+        let (_, d) = frontmatter("---\nname: n\ndescription: \"say \\\"hi\\\": a \\\\ b\"\n---\n");
+        assert_eq!(d.as_deref(), Some("say \"hi\": a \\ b"));
+        let (_, plain) = frontmatter("---\ndescription: C:\\path\n---\n");
+        assert_eq!(plain.as_deref(), Some("C:\\path"));
+    }
 
     #[test]
     fn reads_frontmatter_fields() {
