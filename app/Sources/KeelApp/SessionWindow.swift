@@ -207,7 +207,10 @@ struct SessionWindow: View {
         }
     }
 
-    private var workbench: some View {
+    /// Split from `workbench` on purpose: the layout and the modifier chain together were one
+    /// expression the release compiler (`-O`) could not type-check in reasonable time. Debug
+    /// built it, so it reached CI before anyone saw it.
+    private var workbenchColumns: some View {
         VStack(spacing: 0) {
             // The lanes are always on screen, across the top. They are the reason this is a
             // window and not a terminal: several agents working at once, and you can see all
@@ -268,6 +271,10 @@ struct SessionWindow: View {
                 terminalPane
             }
         }
+    }
+
+    private var workbench: some View {
+        workbenchColumns
         // The agent is in control: light around the whole window, gone when it stops. Not for a
         // turn followed from a terminal — Keel is not the one driving it.
         .overlay {
@@ -288,34 +295,7 @@ struct SessionWindow: View {
         // `SidePanel` leaves the hierarchy when the panel is collapsed (⌘⇧E), and a sheet attached
         // to a view that is not in the hierarchy simply never appears: ⌘K → "Project setup" with
         // the panel closed set the state and drew nothing. The window is always there.
-        .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 })) { which in
-            switch which {
-            case .pr:
-                PullRequest(model: model) { model.sheet = nil }
-            case .skills:
-                SkillCatalog(client: model.client, autoCommit: model.autoCommit) {
-                    model.sheet = nil
-                    Task { await model.refreshState(); await model.refreshSuggestions() }
-                }
-            case .newSkill:
-                NewSkill(client: model.client, autoCommit: model.autoCommit) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .subagent:
-                NewSubagent(client: model.client, autoCommit: model.autoCommit) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .mcp:
-                AddMCP(client: model.client) {
-                    model.sheet = nil
-                    Task { await model.refreshState() }
-                }
-            case .setup:
-                SetupSheet(model: model) { model.sheet = nil }
-            }
-        }
+        .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 })) { sheet(for: $0) }
         .onWindowCommand(.keelNewFeatureSheet) { _ in
             // Only the window you are in: a sheet in every window at once is a modal maze.
             startingFeature = true
@@ -341,7 +321,7 @@ struct SessionWindow: View {
             compactSidebar = panel != nil && layout.sidebar == 0
             if panel == nil { model.focusComposerTick += 1 }
         }
-        .transaction { if reduceMotion { $0.animation = nil } }
+        .transaction { (t: inout Transaction) in if reduceMotion { t.animation = nil } }
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
@@ -372,6 +352,36 @@ struct SessionWindow: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func sheet(for which: SessionModel.Sheet) -> some View {
+        switch which {
+        case .pr:
+            PullRequest(model: model) { model.sheet = nil }
+        case .skills:
+            SkillCatalog(client: model.client, autoCommit: model.autoCommit) {
+                model.sheet = nil
+                Task { await model.refreshState(); await model.refreshSuggestions() }
+            }
+        case .newSkill:
+            NewSkill(client: model.client, autoCommit: model.autoCommit) {
+                model.sheet = nil
+                Task { await model.refreshState() }
+            }
+        case .subagent:
+            NewSubagent(client: model.client, autoCommit: model.autoCommit) {
+                model.sheet = nil
+                Task { await model.refreshState() }
+            }
+        case .mcp:
+            AddMCP(client: model.client) {
+                model.sheet = nil
+                Task { await model.refreshState() }
+            }
+        case .setup:
+            SetupSheet(model: model) { model.sheet = nil }
         }
     }
 
