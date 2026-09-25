@@ -1,0 +1,15 @@
+{
+  "name": "generate_pdf",
+  "description": "Render plain text (with an optional title) into a paginated PDF file on disk and return its path.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {"type": "string", "description": "Body text. Newlines are preserved and long lines wrap automatically."},
+      "title": {"type": "string", "description": "Optional bold heading on page 1, also set as the PDF document title."},
+      "output_path": {"type": "string", "description": "Where to write the PDF. Defaults to document.pdf. Parent folders are created if missing."},
+      "font_size": {"type": "number", "description": "Body font size in points, from 6 to 72. Defaults to 11."}
+    },
+    "required": ["text"]
+  },
+  "env": []
+}
