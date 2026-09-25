@@ -273,7 +273,7 @@ struct SessionWindow: View {
         }
     }
 
-    private var workbench: some View {
+    private var workbenchChrome: some View {
         workbenchColumns
         // The agent is in control: light around the whole window, gone when it stops. Not for a
         // turn followed from a terminal — Keel is not the one driving it.
@@ -296,6 +296,12 @@ struct SessionWindow: View {
         // to a view that is not in the hierarchy simply never appears: ⌘K → "Project setup" with
         // the panel closed set the state and drew nothing. The window is always there.
         .sheet(item: Binding(get: { model.sheet }, set: { model.sheet = $0 })) { sheet(for: $0) }
+    }
+
+    /// The window's reactions, on the chrome above. Three properties rather than one chain: on
+    /// CI's compiler the chain as one expression still timed out after the first split.
+    private var workbenchWatched: some View {
+        workbenchChrome
         .onWindowCommand(.keelNewFeatureSheet) { _ in
             // Only the window you are in: a sheet in every window at once is a modal maze.
             startingFeature = true
@@ -318,9 +324,14 @@ struct SessionWindow: View {
         }
         .onChange(of: panel) {
             if let panel { lastSidebarPanel = panel }
-            compactSidebar = panel != nil && layout.sidebar == 0
+            let collapsed: Bool = layout.sidebar == 0
+            compactSidebar = panel != nil && collapsed
             if panel == nil { model.focusComposerTick += 1 }
         }
+    }
+
+    private var workbench: some View {
+        workbenchWatched
         .transaction { (t: inout Transaction) in if reduceMotion { t.animation = nil } }
         .modifier(WindowEvents(
             lanes: lanes, model: model,
