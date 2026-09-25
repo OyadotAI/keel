@@ -141,7 +141,15 @@ struct SessionWindow: View {
                 }
             } else if lanes.atStart {
                 Welcome(model: model, daemonFailure: app?.failure,
-                        onSettings: { showSettings = true }) { lanes.atStart = false }
+                        onSettings: { showSettings = true }) {
+                    lanes.atStart = false
+                    // Coming back to the project you left brings its tabs back. Reopening the
+                    // same project moves nothing, so `onChange(of: repoPath)` below never fires
+                    // and this is the only caller; for a different project both fire, and
+                    // `switchProject` bumps the generation first thing, so exactly one adopts.
+                    // The hidden review lane ends here as it does on any switch.
+                    Task { await lanes.switchProject(to: model.repoPath) }
+                }
             } else if model.projectOpen {
                 workbench
             } else {
