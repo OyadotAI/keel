@@ -37,7 +37,10 @@ struct ApprovalCard: View {
                 Spacer(minLength: 0)
             }
 
-            Text(pending.command.isEmpty ? pending.tool : pending.command)
+            // Named first: a ternary at the head of this chain is the slowest expression the
+            // release compiler sees in the app.
+            let shown: String = pending.command.isEmpty ? pending.tool : pending.command
+            Text(shown)
                 .font(K.F.code)
                 .foregroundStyle(K.C.text)
                 .textSelection(.enabled)
