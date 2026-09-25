@@ -209,11 +209,18 @@ final class WorkbenchViewModel {
         case commit(Wire.Commit)
         case inspect(SessionModel.Inspect)
     }
-    var detour: Detour?
+    /// A repeated selection should reopen an inspector the user closed.
+    var inspectorRequest = 0
+    var detour: Detour? {
+        didSet { if detour != nil { inspectorRequest += 1 } }
+    }
     var sheet: SessionModel.Sheet?
     /// The turn the person clicked into, which both panes scroll to and the trace stops
     /// following for.
-    var focusedTurn: UUID?
+    var traceRequest = 0
+    var focusedTurn: UUID? {
+        didSet { if focusedTurn != nil { traceRequest += 1 } }
+    }
     var renamingSession: String?
     var renameDraft = ""
     var confirmingDiscard = false

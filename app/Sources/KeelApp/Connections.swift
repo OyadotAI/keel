@@ -432,7 +432,7 @@ private struct AwsSso: View {
                 Text("AWS Identity Center").font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                     .frame(width: 110, alignment: .leading)
                 Text(status ?? "writes a profile, then `aws sso login` signs in")
-                    .font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.faint).lineLimit(1)
+                    .font(K.F.small).foregroundStyle(failed ? K.C.del : K.C.dim).lineLimit(1)
                 Spacer(minLength: K.S.sm)
                 Button(open ? "Hide" : "Set up…") { withAnimation(K.M.quick) { open.toggle() } }
                     .buttonStyle(QuietButton(tone: open ? K.C.dim : K.C.accent))
@@ -535,7 +535,7 @@ private struct ToolRow: View {
                 Text(tool.label).font(K.F.body.weight(.medium)).foregroundStyle(K.C.text)
                     .frame(width: 110, alignment: .leading)
                 Text(tool.identity ?? (tool.installed ? (tool.id == "kubectl" ? "no current context" : "not ready") : "not installed"))
-                    .font(K.F.small).foregroundStyle(tool.authenticated ? K.C.dim : K.C.faint)
+                    .font(K.F.small).foregroundStyle(tool.authenticated ? K.C.dim : K.C.dim)
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: K.S.sm)
                 if let version { Text(version).font(K.F.codeTiny).foregroundStyle(K.C.faint) }

@@ -38,6 +38,17 @@ final class RenderTests: XCTestCase {
         let lanes = Lanes(client: Client(port: 0), port: 0)
         layout(PreviewSurface(model: m))
         layout(TurnStage(model: m))
+        // The header's narrowest `ViewThatFits` fallback, and every verdict, at 0×0.
+        for gate in [Turn.Gate.failed("cargo test", []), .passed("make check", 4.2), .running("pnpm test"),
+                     .none("none"), .notRun] {
+            let t = Turn(prompt: "Add rate limiting to the upload endpoint")
+            t.finished = true
+            t.gate = gate
+            t.commit = "a1b2c3d"
+            t.durationMS = 134_000
+            t.cost = 0.84
+            layout(TurnCard(turn: t, number: 3, model: m))
+        }
         layout(ChatRail(model: m))
         for p in SessionWindow.Panel.allCases {
             layout(SidePanel(panel: p, model: m))
@@ -46,6 +57,11 @@ final class RenderTests: XCTestCase {
         layout(DiffSurface(model: m, path: "a/b.txt"))
         // The two skill sheets, in every state the FROM KEEL row can draw.
         layout(NewSkill(client: Client(port: 0)) {})
+        for json in [#"{"name":"x","description":"d","scope":"project","path":"/r/.claude/skills/x/SKILL.md","generated":true}"#,
+                     #"{"name":"y","scope":"plugin","plugin":"kit","path":"/p/skills/y/SKILL.md"}"#] {
+            let named = try! JSONDecoder().decode(Wire.Named.self, from: Data(json.utf8))
+            layout(SkillPane(model: m, skill: named))
+        }
         let skill = SkillCatalog.KeelSkill(id: "ui-ux-pro-max", description: "Design system", license: "MIT",
                                            author: "Next Level Builder", files: 43, bytes: 1_975_781,
                                            script: "python3", present: nil, python: false)

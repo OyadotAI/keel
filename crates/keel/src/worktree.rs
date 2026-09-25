@@ -332,7 +332,20 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
 /// with the same message. Not atomic, because two repositories cannot commit atomically and
 /// pretending otherwise would be a lie about what was saved. Every repository is attempted; a
 /// partial failure reports both the saved repositories and the failures, leaving commits intact.
+/// The person's commit (the button, a lane's finish): refuses only unresolved conflicts — a
+/// merge whose conflicts are resolved is finished by exactly this commit.
 pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
+    commit_every(checkout, message, false)
+}
+
+/// Keel's checkpoint after a turn: also refuses while a merge, rebase, cherry-pick, revert or
+/// `am` is under way, because finishing the person's operation under a turn's prompt is not
+/// Keel's to do.
+pub fn checkpoint(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
+    commit_every(checkout, message, true)
+}
+
+fn commit_every(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<bool, String> {
     let found = crate::gitroots::find(checkout);
     // Said in words, with the thing that fixes it, rather than passing git's own
     // "fatal: not a git repository (or any of the parent directories): .git" to somebody who
@@ -351,7 +364,7 @@ pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
         let mut committed = Vec::new();
         let mut failures = Vec::new();
         for root in &found {
-            match commit_one(&checkout.join(&root.dir), message) {
+            match commit_one(&checkout.join(&root.dir), message, automatic) {
                 Ok(true) => committed.push(root.dir.as_str()),
                 Ok(false) => {}
                 // One repository refusing must not lose the commit in the other.
@@ -368,17 +381,48 @@ pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
         }
         return Ok(!committed.is_empty());
     }
-    commit_one(checkout, message)
+    commit_one(checkout, message, automatic)
 }
 
-fn commit_one(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
+fn commit_one(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<bool, String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("a commit needs a message".into());
     }
+    // Never in the middle of the person's merge, rebase, cherry-pick or revert: `add -A` stages
+    // the conflict markers and the commit finishes their operation under a turn's prompt.
+    if let Some(what) = crate::writes::in_progress(checkout)
+        && (automatic || what == "conflict")
+    {
+        return Err(if what == "conflict" {
+            "there are unresolved conflicts — resolve them first".to_string()
+        } else {
+            format!("a {what} is in progress — finish or abort it first")
+        });
+    }
+    // The index file itself, copied, so a commit that fails puts it back byte for byte: `add -A`
+    // stages the person's untracked files too, and a failed commit used to leave them all staged.
+    // A copy rather than `write-tree`/`read-tree`: that pair drops `add -N` entries and index
+    // flags, and `write-tree` rewrites the index and fires `post-index-change`.
+    let index = git(checkout, &["rev-parse", "--git-path", "index"])
+        .ok()
+        .map(|p| checkout.join(p.trim()));
+    let saved = index.as_ref().and_then(|i| {
+        let copy = tempfile::NamedTempFile::new_in(i.parent()?).ok()?;
+        std::fs::copy(i, copy.path()).ok()?;
+        Some(copy)
+    });
     // `AUTOMATIC` on the `add` too: `post-index-change` is a hook, and `add` is what fires it.
     let mut add = crate::git::AUTOMATIC.to_vec();
-    add.extend_from_slice(&["add", "-A"]);
+    add.extend_from_slice(&["add", "-A", "--", "."]);
+    // What Keel quarantined is Keel's doing, not the turn's or the person's: committing it
+    // deleted the repository's shared config on the branch under somebody's prompt.
+    let excluded: Vec<String> = keel_harness::trust::UNTRUSTED
+        .iter()
+        .chain(&[".keel/quarantine"])
+        .map(|p| format!(":(exclude){p}"))
+        .collect();
+    add.extend(excluded.iter().map(String::as_str));
     git(checkout, &add)?;
     if git(checkout, &["diff", "--cached", "--name-only"])?
         .trim()
@@ -392,7 +436,12 @@ fn commit_one(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
     // the button, keeps its hooks.
     let mut args = crate::git::AUTOMATIC.to_vec();
     args.extend_from_slice(&["commit", "-q", "--no-verify", "-m", message]);
-    git(checkout, &args).map(|_| true)
+    git(checkout, &args).map(|_| true).inspect_err(|_| {
+        if let (Some(index), Some(saved)) = (&index, saved) {
+            // Renamed over it: the index is replaced whole, never half-written.
+            let _ = saved.persist(index);
+        }
+    })
 }
 
 /// Merge the lane into the project's branch and remove the checkout.
@@ -628,6 +677,136 @@ pub async fn api_commit(
 mod tests {
     use super::*;
 
+    fn scratch_git() -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            crate::git::run(&root, args).unwrap();
+        }
+        std::fs::write(root.join("f"), "base\n").unwrap();
+        crate::git::run(&root, &["add", "f"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "base"]).unwrap();
+        (dir, root)
+    }
+
+    /// A checkpoint in the middle of the person's merge committed the conflict markers and
+    /// finished their merge under a turn's prompt.
+    #[test]
+    fn a_checkpoint_never_finishes_the_persons_merge() {
+        let (_d, root) = scratch_git();
+        crate::git::run(&root, &["checkout", "-qb", "other"]).unwrap();
+        std::fs::write(root.join("f"), "other\n").unwrap();
+        crate::git::run(&root, &["commit", "-qam", "other"]).unwrap();
+        crate::git::run(&root, &["checkout", "-q", "-"]).unwrap();
+        std::fs::write(root.join("f"), "mine\n").unwrap();
+        crate::git::run(&root, &["commit", "-qam", "mine"]).unwrap();
+        let _ = crate::git::run(&root, &["merge", "other"]);
+        std::fs::write(root.join("agent.txt"), "x").unwrap();
+        let err = checkpoint(&root, "a turn").unwrap_err();
+        assert!(
+            err.contains("merge is in progress") || err.contains("unresolved conflicts"),
+            "{err}"
+        );
+        assert_eq!(
+            crate::git::trimmed(&root, &["log", "-1", "--format=%s"]).unwrap(),
+            "mine"
+        );
+        assert!(root.join(".git/MERGE_HEAD").exists());
+    }
+
+    /// `stash pop` leaves a conflict and no MERGE_HEAD; the checkpoint committed the markers.
+    #[test]
+    fn a_conflict_with_no_merge_in_progress_is_not_committed() {
+        let (_d, root) = scratch_git();
+        std::fs::write(root.join("f"), "stashed\n").unwrap();
+        crate::git::run(&root, &["stash", "-q"]).unwrap();
+        std::fs::write(root.join("f"), "committed\n").unwrap();
+        crate::git::run(&root, &["commit", "-qam", "c2"]).unwrap();
+        let _ = crate::git::run(&root, &["stash", "pop"]);
+        let err = commit_all(&root, "a turn").unwrap_err();
+        assert!(err.contains("unresolved conflicts"), "{err}");
+        assert_eq!(
+            crate::git::trimmed(&root, &["log", "-1", "--format=%s"]).unwrap(),
+            "c2"
+        );
+    }
+
+    /// The person resolved their merge and pressed Commit: that commit is how a merge finishes,
+    /// and only the automatic checkpoint may refuse it.
+    #[test]
+    fn a_resolved_merge_is_finished_by_the_persons_commit_not_by_a_checkpoint() {
+        let (_d, root) = scratch_git();
+        crate::git::run(&root, &["checkout", "-qb", "other"]).unwrap();
+        std::fs::write(root.join("f"), "other\n").unwrap();
+        crate::git::run(&root, &["commit", "-qam", "other"]).unwrap();
+        crate::git::run(&root, &["checkout", "-q", "-"]).unwrap();
+        std::fs::write(root.join("f"), "mine\n").unwrap();
+        crate::git::run(&root, &["commit", "-qam", "mine"]).unwrap();
+        let _ = crate::git::run(&root, &["merge", "other"]);
+        std::fs::write(root.join("f"), "resolved\n").unwrap();
+        crate::git::run(&root, &["add", "f"]).unwrap();
+        assert!(checkpoint(&root, "a turn").is_err());
+        assert_eq!(commit_all(&root, "merge other"), Ok(true));
+        assert!(!root.join(".git/MERGE_HEAD").exists());
+    }
+
+    /// `git bisect reset` drops a commit made on bisect's detached HEAD.
+    #[test]
+    fn a_checkpoint_never_lands_on_a_bisect() {
+        let (_d, root) = scratch_git();
+        for n in 0..3 {
+            std::fs::write(root.join("f"), format!("{n}\n")).unwrap();
+            crate::git::run(&root, &["commit", "-qam", &format!("c{n}")]).unwrap();
+        }
+        crate::git::run(&root, &["bisect", "start"]).unwrap();
+        crate::git::run(&root, &["bisect", "bad", "HEAD"]).unwrap();
+        let _ = crate::git::run(&root, &["bisect", "good", "HEAD~3"]);
+        std::fs::write(root.join("u.txt"), "x").unwrap();
+        let err = checkpoint(&root, "a turn").unwrap_err();
+        assert!(err.contains("bisect"), "{err}");
+    }
+
+    /// What Keel quarantined is not the turn's work: committing it deleted the repository's
+    /// shared config on the branch.
+    #[test]
+    fn a_checkpoint_never_commits_the_quarantine() {
+        let (_d, root) = scratch_git();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
+        std::fs::write(root.join(".mcp.json"), "{}").unwrap();
+        crate::git::run(&root, &["add", "-A"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "config"]).unwrap();
+        keel_harness::quarantine(&root).unwrap();
+        std::fs::write(root.join("work.txt"), "x").unwrap();
+        assert_eq!(checkpoint(&root, "a turn"), Ok(true));
+        let shown = crate::git::run(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
+        assert_eq!(shown.trim(), "work.txt", "{shown}");
+    }
+
+    /// A failed checkpoint put everything the person had — untracked files included — in the
+    /// index; the index goes back to exactly what it was, `add -N` entries and all.
+    #[test]
+    fn a_failed_checkpoint_leaves_the_index_as_it_was() {
+        let (_d, root) = scratch_git();
+        std::fs::write(root.join("staged.txt"), "s").unwrap();
+        crate::git::run(&root, &["add", "staged.txt"]).unwrap();
+        std::fs::write(root.join("ita.txt"), "i").unwrap();
+        crate::git::run(&root, &["add", "-N", "ita.txt"]).unwrap();
+        std::fs::write(root.join("untracked.txt"), "u").unwrap();
+        let before = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
+        // A held ref lock makes the commit fail for certain, after `add` has staged everything.
+        let branch = crate::git::trimmed(&root, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        std::fs::write(root.join(format!(".git/refs/heads/{branch}.lock")), "").unwrap();
+        assert!(commit_all(&root, "a turn").is_err());
+        assert_eq!(
+            crate::git::run(&root, &["status", "--porcelain"]).unwrap(),
+            before
+        );
+    }
     fn repo() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();

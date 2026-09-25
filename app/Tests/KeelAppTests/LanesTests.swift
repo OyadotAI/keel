@@ -595,4 +595,20 @@ final class NotificationTests: XCTestCase {
         XCTAssertTrue(Notifications.Kind.turn.enabled, "one kind off is not all of them off")
         UserDefaults.standard.removeObject(forKey: "keel.notify.file")
     }
+
+    /// The counter's click goes to the first waiting lane *in tab order* — not the one you are in,
+    /// which is the lane you can already see.
+    func testTheCounterGoesToTheFirstLaneThatNeedsYou() throws {
+        let l = Lanes(client: Client(port: 0), port: 0, remembers: false)
+        let second = l.newLane()
+        let third = l.newLane()
+        XCTAssertNil(l.firstWaiting)
+        let ask = try JSONDecoder().decode(Wire.Pending.self, from: Data(
+            #"{"id":"1","tool":"Bash","command":"rm -rf dist","rules":[],"session_id":"s"}"#.utf8))
+        third.pending = [ask]
+        second.pending = [ask]
+        l.activeID = third.id
+        XCTAssertEqual(l.firstWaiting?.id, Optional(second.id))
+        XCTAssertEqual(second.activity, SessionModel.Activity.waiting)
+    }
 }

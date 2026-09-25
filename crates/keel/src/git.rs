@@ -32,6 +32,10 @@ const QUIET: &[(&str, &str)] = &[
     ("GIT_TERMINAL_PROMPT", "0"),
     ("GIT_ASKPASS", "/usr/bin/true"),
     ("GCM_INTERACTIVE", "never"),
+    // Keel's reads (`status` every two seconds) must not write the index: an optional refresh
+    // takes `index.lock`, so the person's own `git add` failed now and then, and it fired the
+    // repository's `post-index-change` hook on nobody's request.
+    ("GIT_OPTIONAL_LOCKS", "0"),
 ];
 
 /// `git`, in `root`, that will never stop to ask a human something.
@@ -119,32 +123,57 @@ pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result
         .stderr(Stdio::piped())
         .spawn()?;
 
-    let mut out = child.stdout.take();
-    let mut err = child.stderr.take();
-    let stdout = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out.as_mut() {
-            use std::io::Read;
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let stderr = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = err.as_mut() {
-            use std::io::Read;
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
+    // The readers append to shared buffers as bytes arrive and say when their pipe closed,
+    // rather than being joined: a command can exit and leave a child of its own holding the pipes
+    // open (`sleep 300 &`, an auto-updater), and a join then waits as long as that child lives —
+    // past any ceiling. One that left the group (`setsid`) cannot even be ended, so what already
+    // arrived is what is returned.
+    type Shared = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+    let (out_buf, err_buf): (Shared, Shared) = Default::default();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    for (buf, pipe) in [
+        (
+            out_buf.clone(),
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        ),
+        (
+            err_buf.clone(),
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        ),
+    ] {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            if let Some(mut p) = pipe {
+                let mut chunk = [0u8; 64 * 1024];
+                loop {
+                    match p.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            use crate::lock::Locked;
+                            buf.locked().extend_from_slice(&chunk[..n]);
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(());
+        });
+    }
+    drop(tx);
 
     let deadline = Instant::now() + ceiling;
+    let pid = child.id();
     let status = loop {
         match child.try_wait()? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
                 // The readers end when the pipes close, which ending the whole group does.
-                crate::signals::end_tree(child.id());
+                crate::signals::end_tree(pid);
                 let _ = child.wait();
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
@@ -156,10 +185,38 @@ pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result
         }
     };
 
+    // Both pipes, within what is left of the ceiling. Past it, whatever the command left behind
+    // in its group is holding them: end it, and take what arrived.
+    // A moment, not the rest of the ceiling: output that is coming arrives within a pipe buffer
+    // of the exit, and what is still open after that is a child the command left behind.
+    const GRACE: Duration = Duration::from_millis(500);
+    let deadline = deadline.min(Instant::now() + GRACE);
+    let mut ended = false;
+    for _ in 0..2 {
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(50));
+        if rx.recv_timeout(wait).is_ok() {
+            continue;
+        }
+        if ended {
+            break;
+        }
+        ended = true;
+        crate::signals::end_tree(pid);
+        if rx.recv_timeout(Duration::from_secs(1)).is_err() {
+            break;
+        }
+    }
+    let take = |b: &Shared| {
+        use crate::lock::Locked;
+        std::mem::take(&mut *b.locked())
+    };
+    let (stdout, stderr) = (take(&out_buf), take(&err_buf));
     Ok(Output {
         status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
+        stdout,
+        stderr,
     })
 }
 
@@ -234,6 +291,61 @@ fn finish(out: std::io::Result<Output>, args: &[&str], trim: bool) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keel reads git every two seconds; a read that refreshed the index took `index.lock` from
+    /// the person's own `git add` and fired `post-index-change`.
+    #[test]
+    fn a_read_writes_nothing_and_runs_no_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        run(root, &["init", "-q"]).unwrap();
+        std::fs::write(root.join("a"), "x").unwrap();
+        run(root, &["add", "a"]).unwrap();
+        let hook = root.join(".git/hooks/post-index-change");
+        std::fs::write(&hook, "#!/bin/sh\ntouch fired\n").unwrap();
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(root.join("a"), "x").unwrap(); // same content, new mtime: a stale stat
+        run(root, &["status", "--porcelain"]).unwrap();
+        assert!(
+            !root.join("fired").exists(),
+            "a read ran the repository's hook"
+        );
+    }
+
+    /// A child that left the group (an auto-updater calls `setsid`) cannot be ended; what the
+    /// command already printed is returned rather than thrown away.
+    #[test]
+    fn output_survives_a_child_that_escaped_the_group() {
+        let mut c = Command::new("sh");
+        c.arg("-c")
+            .arg("echo hi; perl -e 'setpgrp(0,0); sleep 30' & exit 0");
+        let started = Instant::now();
+        let out = output_within(c, Duration::from_secs(20)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
+    }
+
+    /// A command that exits and leaves a child holding its pipes answers at once, not at the
+    /// ceiling.
+    #[test]
+    fn a_leftover_child_does_not_hold_a_finished_command() {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg("echo hi; sleep 30 & exit 0");
+        let started = Instant::now();
+        let out = output_within(c, Duration::from_secs(20)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
+    }
 
     /// A timeout ends the whole tree: a command that forked and hung left its child reparented
     /// to init with its pipes held open.

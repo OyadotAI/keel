@@ -217,4 +217,41 @@ final class TurnLifecycleTests: XCTestCase {
         XCTAssertEqual(TurnTransport.received("/api/chat").count, 1,
                        "a network failure is not evidence that the conversation is missing")
     }
+
+    /// The settling window after the stream ends — the gate still running — is its own state.
+    /// Falling through to "Not checked" would tell a person nothing ran while it is running.
+    func testATurnWhoseGateIsRunningReadsChecking() {
+        let t = Turn(prompt: "x")
+        t.finished = true
+        t.gate = .running("make check")
+        XCTAssertEqual(TurnVerdict.parts(t).1, "Checking")
+        XCTAssertEqual(TurnVerdict.bar(t), K.C.accent)
+        t.gate = .notRun
+        t.replayed = true
+        XCTAssertNotEqual(TurnVerdict.parts(t).1, "Not checked", "a replayed turn skipped nothing")
+    }
+
+    /// A failed agent does not hide the gate: the daemon still checks the tree it left.
+    func testAFailureDoesNotHideTheGate() {
+        let t = Turn(prompt: "x")
+        t.finished = true
+        t.failure = "agent exited"
+        t.gate = .passed("make check", 3)
+        XCTAssertEqual(TurnVerdict.parts(t).1, "Passed")
+        t.gate = .running("make check")
+        XCTAssertEqual(TurnVerdict.parts(t).1, "Checking")
+        t.gate = .notRun
+        XCTAssertEqual(TurnVerdict.parts(t).1, "Did not finish")
+        XCTAssertEqual(TurnVerdict.bar(t), K.C.del)
+    }
+
+    /// `.none` is three things — nothing configured, stopped part way, would not start — and
+    /// the verdict carries which.
+    func testAGateThatDidNotRunSaysWhy() {
+        let t = Turn(prompt: "x")
+        t.finished = true
+        t.gate = .none("the checks were stopped before they finished — make check")
+        XCTAssertEqual(TurnVerdict.parts(t).1, "Not checked")
+        XCTAssertEqual(TurnVerdict.why(t), "the checks were stopped before they finished — make check")
+    }
 }

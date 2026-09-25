@@ -77,7 +77,7 @@ struct FileSurface: View {
             }
         } else if data != nil {
             Text("Binary file — nothing to show. Attach it and the agent can read it.")
-                .font(K.F.small).foregroundStyle(K.C.faint)
+                .font(K.F.small).foregroundStyle(K.C.dim)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Text("Could not read this file.").font(K.F.small).foregroundStyle(K.C.del)

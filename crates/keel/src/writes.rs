@@ -189,6 +189,16 @@ pub fn clean_before(root: &Utf8Path, rel: &str) -> bool {
     head.is_some() && head == index && head == disk
 }
 
+/// Whether `rel` is gone from disk while git still has it — in HEAD or in the index — which is
+/// the person deleting it, not a file that was never there.
+pub fn deleted_by_person(root: &Utf8Path, rel: &str) -> bool {
+    if std::fs::symlink_metadata(root.join(rel)).is_ok() {
+        return false;
+    }
+    let known = |spec: String| crate::git::run(root, &["cat-file", "-e", &spec]).is_ok();
+    known(format!("HEAD:{rel}")) || known(format!(":{rel}"))
+}
+
 /// The outcome of [`commit_only`]: the commit, and anything the person should be told.
 #[derive(Debug, Default)]
 pub struct Committed {
@@ -212,7 +222,11 @@ pub fn commit_only(root: &Utf8Path, paths: &[String], message: &str) -> Committe
         return say("not a git repository — not committed".into());
     }
     if let Some(what) = in_progress(root) {
-        return say(format!("a {what} is in progress — not committed"));
+        return say(if what == "conflict" {
+            "there are unresolved conflicts — not committed".to_string()
+        } else {
+            format!("a {what} is in progress — not committed")
+        });
     }
     let ignored = ignored(root, paths);
     let paths: Vec<String> = paths
@@ -268,7 +282,9 @@ pub fn commit_only(root: &Utf8Path, paths: &[String], message: &str) -> Committe
     // A lock still held after the retries when `add` ran means it never got the index: nothing
     // to undo. At the commit step it is different — `add` staged, so the backout below runs.
     let staged = match run(with(&["add"])) {
-        Err(e) if e.contains("index.lock") => return say(short(root, &reason(&e))),
+        Err(e) if e.contains("index.lock") => {
+            return say(format!("not committed: {}", short(root, &reason(&e))));
+        }
         Err(e) => Err(e),
         Ok(_) => run(with(&commit)),
     };
@@ -290,7 +306,7 @@ pub fn commit_only(root: &Utf8Path, paths: &[String], message: &str) -> Committe
                 reason(&u)
             ));
         }
-        return say(short(root, &note));
+        return say(format!("not committed: {}", short(root, &note)));
     }
     Committed {
         sha: crate::git::trimmed(root, &["rev-parse", "--short", "HEAD"]).ok(),
@@ -317,13 +333,23 @@ fn locked_retry(mut attempt: impl FnMut() -> Result<String, String>) -> Result<S
 }
 
 /// A merge, rebase, cherry-pick or revert under way, by the file git keeps for it.
-fn in_progress(root: &Utf8Path) -> Option<&'static str> {
+pub(crate) fn in_progress(root: &Utf8Path) -> Option<&'static str> {
+    let git_path = |file: &str| {
+        crate::git::trimmed(root, &["rev-parse", "--git-path", file])
+            .is_ok_and(|p| root.join(p).exists())
+    };
+    // `git am` keeps its state in `rebase-apply` too, with an `applying` file of its own.
+    if git_path("rebase-apply/applying") {
+        return Some("git am");
+    }
     [
         ("MERGE_HEAD", "merge"),
         ("rebase-merge", "rebase"),
         ("rebase-apply", "rebase"),
         ("CHERRY_PICK_HEAD", "cherry-pick"),
         ("REVERT_HEAD", "revert"),
+        // A commit on bisect's detached HEAD is dropped by `git bisect reset`.
+        ("BISECT_LOG", "bisect"),
     ]
     .into_iter()
     .find(|(file, _)| {
@@ -331,6 +357,13 @@ fn in_progress(root: &Utf8Path) -> Option<&'static str> {
             .is_ok_and(|p| root.join(p).exists())
     })
     .map(|(_, what)| what)
+    // Then unmerged entries with no marker: `stash pop` and `merge --squash` leave conflicts and
+    // none of the files above, and a checkpoint then committed the conflict markers.
+    .or_else(|| {
+        crate::git::run(root, &["ls-files", "-u"])
+            .is_ok_and(|out| !out.trim().is_empty())
+            .then_some("conflict")
+    })
 }
 
 /// Files under `paths` that exist and that `.gitignore` keeps out of the commit.

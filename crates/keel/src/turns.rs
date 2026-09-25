@@ -803,11 +803,26 @@ fn head(checkout: &Utf8Path) -> Option<String> {
 /// appeared nowhere — no files, no gate, no commit. The blob is the content, not the mtime: a
 /// save that changes nothing (a formatter, an editor, `next-env.d.ts` rewritten identically)
 /// must not make a turn that wrote nothing into one that commits the person's earlier work.
+/// The fingerprint as it stands, for a turn whose start changed the tree before the agent ran.
+pub fn fingerprint_now(checkout: &Utf8Path) -> HashSet<String> {
+    fingerprint(checkout)
+}
+
 fn fingerprint(checkout: &Utf8Path) -> HashSet<String> {
+    read_fingerprint(checkout).unwrap_or_default()
+}
+
+/// `None` when git could not say — a status that failed is not a clean tree, and reading it as
+/// one made every file that was dirty before the turn look as if the turn had moved it.
+fn read_fingerprint(checkout: &Utf8Path) -> Option<HashSet<String>> {
     // One `hash-object` for all of them, bounded: past this many dirty files the status letters
     // are what is compared, as before.
     const HASHED: usize = 500;
-    let changes = crate::repo::git_status(checkout).changes;
+    let status = crate::repo::git_status(checkout);
+    if !status.is_repo {
+        return None;
+    }
+    let changes = status.changes;
     let files: Vec<&str> = changes
         .iter()
         .map(|c| c.path.as_str())
@@ -822,13 +837,15 @@ fn fingerprint(checkout: &Utf8Path) -> HashSet<String> {
             blobs.extend(files.iter().copied().zip(out.lines().map(str::to_string)));
         }
     }
-    changes
-        .iter()
-        .map(|c| {
-            let blob = blobs.get(c.path.as_str()).map(String::as_str).unwrap_or("");
-            format!("{}\0{}{blob}", c.path, c.status)
-        })
-        .collect()
+    Some(
+        changes
+            .iter()
+            .map(|c| {
+                let blob = blobs.get(c.path.as_str()).map(String::as_str).unwrap_or("");
+                format!("{}\0{}{blob}", c.path, c.status)
+            })
+            .collect(),
+    )
 }
 
 /// Everything `finish` needs to know about the turn that just ended.
@@ -883,8 +900,9 @@ const DESIGN_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// runs: for a lane it is always true, because the claim is held for the whole of this; for a
 /// followed terminal session it is "the pid file still says idle". A gate that loses the tree is
 /// aborted — its process group, never `claude`'s — and nothing is committed. `window_open` is
-/// whether anyone is still looking: a closed window is not worth a test run, but the commit is
-/// made regardless, because a checkpoint nobody watched beats work left uncommitted.
+/// whether anyone is still looking: a closed window is not worth a test run, and then nothing is
+/// committed either — a checkpoint nobody checked, made by `add -A`, also swept in files earlier
+/// turns' gates had refused. The files stay in the tree, and the turn says so.
 pub async fn finish(
     state: &Arc<AppState>,
     f: Finish,
@@ -913,36 +931,60 @@ pub async fn finish(
     let checkout = f.checkout.clone();
     let before = f.begun.fingerprint.clone();
     let from = f.begun.head.clone();
-    let (uncommitted, committed, own_commit): (Vec<String>, Vec<String>, Option<String>) =
-        crate::serve::blocking(
-            move || {
-                let mut moved: Vec<String> = fingerprint(&checkout)
-                    .difference(&before)
-                    .map(|entry| entry.split('\0').next().unwrap_or(entry).to_string())
-                    .collect();
-                moved.sort();
-                moved.dedup();
-                let now = head(&checkout);
-                let (committed, own) = match (&from, &now) {
-                    (Some(from), Some(now)) if from != now => (
-                        crate::git::run(
-                            &checkout,
-                            &["diff", "--name-only", &format!("{from}..{now}")],
-                        )
-                        .map(|out| out.lines().map(str::to_string).collect())
-                        .unwrap_or_default(),
-                        Some(now.clone()),
-                    ),
-                    _ => (Vec::new(), None),
-                };
-                (moved, committed, own)
-            },
-            (Vec::new(), Vec::new(), None),
-        )
-        .await;
+    type Moved = (Vec<String>, Vec<String>, Vec<String>, Option<String>);
+    let (uncommitted, vanished, committed, own_commit): Moved = crate::serve::blocking(
+        move || {
+            let path = |entry: &String| entry.split('\0').next().unwrap_or(entry).to_string();
+            let now = read_fingerprint(&checkout);
+            // What is new or changed in the dirty set: the turn's work, and the only thing
+            // that runs the gate or makes a checkpoint.
+            let mut moved: Vec<String> = now
+                .as_ref()
+                .map(|n| n.difference(&before).map(path).collect())
+                .unwrap_or_default();
+            moved.sort();
+            moved.dedup();
+            // What left it — the agent deleted an untracked file, or put a modified one back
+            // to HEAD. Shown, never a reason to commit: the person committing, stashing or
+            // discarding their own file mid-turn leaves the set the same way, and counting
+            // that committed the rest of their work under the turn's prompt. Nothing at all
+            // when git could not say.
+            let mut left: Vec<String> = now
+                .as_ref()
+                .map(|n| {
+                    let still: HashSet<String> = n.iter().map(path).collect();
+                    before
+                        .iter()
+                        .map(path)
+                        .filter(|p| !still.contains(p))
+                        .collect()
+                })
+                .unwrap_or_default();
+            left.sort();
+            left.dedup();
+            let now = head(&checkout);
+            let (committed, own) = match (&from, &now) {
+                (Some(from), Some(now)) if from != now => (
+                    crate::git::run(
+                        &checkout,
+                        &["diff", "--name-only", &format!("{from}..{now}")],
+                    )
+                    .map(|out| out.lines().map(str::to_string).collect())
+                    .unwrap_or_default(),
+                    Some(now.clone()),
+                ),
+                _ => (Vec::new(), None),
+            };
+            (moved, left, committed, own)
+        },
+        (Vec::new(), Vec::new(), Vec::new(), None),
+    )
+    .await;
+    let wrote = !uncommitted.is_empty() || !committed.is_empty();
     let mut files: Vec<String> = uncommitted
         .iter()
         .chain(committed.iter())
+        .chain(vanished.iter())
         .cloned()
         .collect();
     files.sort();
@@ -963,7 +1005,7 @@ pub async fn finish(
         shared = Some(why);
     } else if !f.writes {
         shared = Some("a plan turn writes nothing, so nothing was checked or committed".into());
-    } else if !files.is_empty() && window_open() {
+    } else if wrote && window_open() {
         let checkout = f.checkout.clone();
         let started = std::time::Instant::now();
         // Said before it runs, so a follower sees the same spinner the lane does. The command
@@ -1029,7 +1071,9 @@ pub async fn finish(
     // 3. The design verdict, when the app owes one. "It edited the wrong file" is a reason not
     // to commit, and it used to arrive after the commit it should have questioned.
     let mut design_says_no = false;
-    if f.expect_design {
+    // Only the lane's own window can post a pixel verdict; with it gone, waiting a minute for
+    // one held the tree's claim for nothing.
+    if f.expect_design && window_open() {
         let mut rx = subscribe(&session);
         let already = crate::serve::blocking(
             {
@@ -1087,6 +1131,12 @@ pub async fn finish(
             );
         } else if !gate_allows {
             // Said by the gate itself; nothing to add.
+        } else if gate.is_none() && !window_open() {
+            shared = Some(
+                "the window closed before the checks ran, so this turn was not committed — its \
+                 files are still in the working tree"
+                    .into(),
+            );
         } else if !still_ours() {
             shared = Some("the working tree was taken over before the commit".into());
         } else if state.writer_in_other(&f.checkout, &session) {
@@ -1099,20 +1149,31 @@ pub async fn finish(
         } else {
             let checkout = f.checkout.clone();
             let message = commit_message(&f.prompt, gate.as_ref());
-            let sha: Option<String> = crate::serve::blocking(
-                move || match crate::worktree::commit_all(&checkout, &message) {
-                    Ok(true) => crate::repo::git_log(&checkout, 1)
-                        .first()
-                        .map(|c| c.sha.clone()),
-                    Ok(false) => None,
-                    Err(e) => {
-                        tracing::warn!("the automatic commit failed: {e}");
-                        None
-                    }
+            let made: Result<Option<String>, String> = crate::serve::blocking(
+                move || {
+                    crate::worktree::checkpoint(&checkout, &message).map(|done| {
+                        done.then(|| {
+                            crate::repo::git_log(&checkout, 1)
+                                .first()
+                                .map(|c| c.sha.clone())
+                        })
+                        .flatten()
+                    })
                 },
-                None,
+                Err("the commit was cancelled".into()),
             )
             .await;
+            // A checkpoint that did not happen says why on the turn, not only in a log line.
+            let sha = made.unwrap_or_else(|e| {
+                tracing::warn!("the automatic commit failed: {e}");
+                // A workspace can commit one repository and refuse another; said as that.
+                shared = Some(if e.starts_with("Committed:") {
+                    format!("part of this turn was not committed — {e}")
+                } else {
+                    format!("this turn was not committed: {e}")
+                });
+                None
+            });
             if let Some(sha) = sha {
                 emit_now(Fact::Commit { sha }).await;
                 crate::events::emit("git.changed", f.checkout_name(), serde_json::Value::Null);
@@ -1205,6 +1266,11 @@ fn commit_message(prompt: &str, gate: Option<&Gate>) -> String {
 /// The lane name a terminal session's claim is held under.
 pub fn terminal_lane(session: &str) -> String {
     format!("term:{session}")
+}
+
+/// The session a `terminal_lane` key names, or `None` for any other claim.
+pub fn terminal_session(lane: &str) -> Option<&str> {
+    lane.strip_prefix("term:")
 }
 
 /// A turn ends when nothing has been written for this long after the boundary was seen.
@@ -1457,6 +1523,22 @@ mod tests {
 
     /// A file already modified before the turn is still ` M` after the agent edits it again;
     /// that edit appeared nowhere — no files, no gate, no commit.
+    /// A file that leaves the dirty set moved too: the agent deleted the person's untracked file.
+    #[test]
+    fn a_deleted_untracked_file_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        crate::git::run(root, &["init", "-q"]).unwrap();
+        std::fs::write(root.join("mine.txt"), "x").unwrap();
+        let before = fingerprint(root);
+        std::fs::remove_file(root.join("mine.txt")).unwrap();
+        let moved: Vec<String> = fingerprint(root)
+            .symmetric_difference(&before)
+            .map(|e| e.split('\0').next().unwrap().to_string())
+            .collect();
+        assert_eq!(moved, ["mine.txt"]);
+    }
+
     /// A save that changes nothing — a formatter, an editor — is not the turn's work: counted,
     /// it made a turn that wrote nothing commit the person's earlier uncommitted changes.
     #[test]

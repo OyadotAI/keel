@@ -53,18 +53,18 @@ extension SessionModel {
         attachText(text)
     }
 
-    func attachText(_ text: String) {
+    func attachText(_ text: String, onSuccess: (() -> Void)? = nil) {
         let chars = text.count
         attach(data: Data(text.utf8),
                name: "paste-\(chars)-chars.txt",
                label: "long text · \(chars.formatted()) chars · \(Self.summary(of: text))",
-               text: text)
+               text: text, onSuccess: onSuccess)
     }
 
     struct Attached: Decodable { var path: String; var bytes: Int }
 
     func attach(data: Data, name: String, thumbnail: NSImage? = nil, label: String? = nil,
-                text: String? = nil) {
+                text: String? = nil, onSuccess: (() -> Void)? = nil) {
         guard data.count <= Self.maxAttachment else {
             lastError = "\(name) is \(Self.humanSize(data.count)); attachments are capped at 10 MB."
             return
@@ -89,6 +89,7 @@ extension SessionModel {
                     label: label ?? "\(name) · \(Self.humanSize(a.bytes))",
                     thumbnail: thumbnail,
                     text: text))
+                onSuccess?()
             } catch {
                 self.lastError = error.localizedDescription
             }
@@ -189,6 +190,7 @@ extension SessionModel {
 /// The chips above the composer.
 struct AttachmentStrip: View {
     @Bindable var model: SessionModel
+    @State private var preview: Attachment?
 
     var body: some View {
         if !model.attachments.isEmpty {
@@ -197,22 +199,23 @@ struct AttachmentStrip: View {
                     HStack(spacing: K.S.snug) {
                         if let t = a.thumbnail {
                             Image(nsImage: t).resizable().scaledToFill()
-                                .frame(width: 16, height: 16).clipped()
+                                .frame(width: 28, height: 28).clipped()
                                 .clipShape(RoundedRectangle(cornerRadius: 2))
                         } else {
                             Image(systemName: "paperclip")
                                 .font(K.F.tiny).foregroundStyle(K.C.faint)
                         }
-                        Text(a.label)
-                            .font(K.F.codeTiny).foregroundStyle(K.C.dim)
-                            .lineLimit(1).truncationMode(.head)
+                        Button { preview = a } label: {
+                            Text(a.label).font(K.F.small).foregroundStyle(K.C.text)
+                                .lineLimit(1).truncationMode(.middle).frame(maxWidth: 220)
+                        }.buttonStyle(.plain).hint("Preview \(a.label)")
                         CloseButton(size: 10, label: "Remove \(a.label)") {
                             model.attachments.removeAll { $0.id == a.id }
                         }
                     }
                     .padding(.leading, K.S.half).padding(.trailing, K.S.xxs)
-                    .padding(.vertical, K.S.hair)
-                    .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.sm))
+                    .padding(.vertical, K.S.half)
+                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                     .overlay(
                         RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1)
                     )
@@ -231,6 +234,27 @@ struct AttachmentStrip: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .popover(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
+                if let attachment = preview {
+                    VStack(alignment: .leading, spacing: K.S.md) {
+                        Text(attachment.label).font(K.F.row).foregroundStyle(K.C.text)
+                        if let thumbnail = attachment.thumbnail {
+                            Image(nsImage: thumbnail).resizable().scaledToFit().frame(maxHeight: 220)
+                        }
+                        if let text = attachment.text {
+                            ScrollView { Text(text).font(K.F.code).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                                .frame(maxHeight: 240)
+                        } else {
+                            Text(attachment.path).font(K.F.codeSmall).foregroundStyle(K.C.dim).textSelection(.enabled)
+                        }
+                        Button("Remove attachment") {
+                            model.attachments.removeAll { $0.id == attachment.id }
+                            preview = nil
+                        }.buttonStyle(QuietButton())
+                    }
+                    .padding(K.S.lg).frame(width: 360)
+                }
+            }
         }
     }
 }

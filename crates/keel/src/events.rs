@@ -174,6 +174,7 @@ pub async fn after_mutation(
             emit("tree.changed", wt, serde_json::Value::Null);
         }
         p if p.starts_with("/api/open")
+            || p.starts_with("/api/project")
             || p.starts_with("/api/readiness")
             || p.starts_with("/api/plugins")
             || p.starts_with("/api/mcp")
@@ -306,20 +307,22 @@ pub fn hold_terminal_claims<'a>(
     state: &AppState,
     sessions: impl Iterator<Item = (&'a str, Option<&'a str>, bool, bool)>,
 ) {
+    let mut held = std::collections::HashSet::new();
     for (id, cwd, live, busy) in sessions {
-        if !live || state.owns_session(id) {
+        if state.owns_session(id) {
             continue;
         }
-        if busy {
+        if live && busy {
+            held.insert(id);
             if let Some(checkout) = state.session_dir_checked(cwd) {
                 // Refused when a lane is writing that tree: the lane was first, and the terminal
                 // turn is the one that will be told so if a follower attaches.
                 let _ = state.claim_terminal(id, &checkout);
             }
-        } else {
-            state.release_terminal_unfollowed(id);
         }
     }
+    // Dead, idle, or gone from the listing altogether: all of them give the tree back.
+    state.release_terminal_except(&held);
 }
 
 /// The working tree, read every two seconds and said only when it changed.
@@ -434,6 +437,39 @@ mod tests {
         state.detach_follower("s-2");
         hold_terminal_claims(&state, [("s-2", Some(cwd), true, false)].into_iter());
         assert!(state.claim("lane-b", &repo, true).is_ok());
+    }
+
+    /// A `claude` killed mid-turn never says idle — its pid file goes and the session leaves the
+    /// listing. The tree was held until the daemon restarted.
+    #[test]
+    fn a_terminal_session_that_died_gives_its_tree_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let state = AppState::new(repo.clone());
+        hold_terminal_claims(
+            &state,
+            [("s-9", Some(repo.as_str()), true, true)].into_iter(),
+        );
+        assert!(state.claim("lane-a", &repo, true).is_err());
+        // Dead but still listed.
+        hold_terminal_claims(
+            &state,
+            [("s-9", Some(repo.as_str()), false, true)].into_iter(),
+        );
+        let w = state
+            .claim("lane-a", &repo, true)
+            .expect("a dead session gives it back");
+        state.release("lane-a", w);
+        // Busy again, then gone from the listing entirely.
+        hold_terminal_claims(
+            &state,
+            [("s-9", Some(repo.as_str()), true, true)].into_iter(),
+        );
+        hold_terminal_claims(&state, std::iter::empty());
+        assert!(
+            state.claim("lane-a", &repo, true).is_ok(),
+            "a vanished session gives it back"
+        );
     }
 
     #[test]

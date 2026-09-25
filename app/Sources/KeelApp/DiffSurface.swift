@@ -167,7 +167,7 @@ struct DiffSurface: View {
 
     private func centred(_ text: String) -> some View {
         Text(text)
-            .font(K.F.small).foregroundStyle(K.C.faint)
+            .font(K.F.small).foregroundStyle(K.C.dim)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

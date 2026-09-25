@@ -476,24 +476,32 @@ struct NewSubagent: View {
     }
 }
 
-/// A skill the person writes: `.claude/skills/<name>/SKILL.md`, frontmatter and instructions.
-/// The same shape as `NewSubagent`, because the two are the same act — writing down something
-/// Claude should know — and differ only in when Claude reads it.
+/// A skill written from one sentence by the person's own `claude`: `SKILL.md`, `schema.json`,
+/// the script and any assets. Generated first and shown file by file, and only then written into
+/// `.claude/skills/<name>/` — nothing lands in the project that nobody has had the chance to read.
 struct NewSkill: View {
     let client: Client
     var autoCommit = true
     let done: () -> Void
 
+    @State private var ask = ""
     @State private var name = ""
-    @State private var about = ""
-    @State private var instructions = ""
     @State private var error: String?
+    @State private var generating: Task<Void, Never>?
+    @State private var started = Date()
+    @State private var draft: Generated?
+    @State private var shown = "SKILL.md"
     @State private var creating = false
     /// What was written, when it could not also be committed — shown before the sheet closes.
     @State private var created: String?
-    @FocusState private var nameFocused: Bool
+    @FocusState private var askFocused: Bool
 
-    struct CreateBody: Encodable { var name: String; var description: String; var instructions: String; var commit: Bool }
+    struct File: Codable, Hashable { var path: String; var content: String }
+    struct Generated: Decodable { var name: String; var description: String; var files: [File]; var check: String }
+    struct GenerateBody: Encodable { var ask: String; var name: String }
+    struct CreateBody: Encodable {
+        var name: String; var description: String; var files: [File]; var commit: Bool
+    }
 
     /// The daemon's rule (`agents::valid_name`), checked as the person types.
     static func validName(_ n: String) -> Bool {
@@ -505,29 +513,13 @@ struct NewSkill: View {
         name.isEmpty || Self.validName(name) ? nil : "Use lowercase letters, digits and hyphens, at most 64 characters — the name becomes a folder."
     }
     private var ready: Bool {
-        Self.validName(name) && !about.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !creating
+        nameError == nil && !ask.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && generating == nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.md) {
             Text("Create a skill").font(K.F.title).foregroundStyle(K.C.text)
-
-            VStack(alignment: .leading, spacing: K.S.tight) {
-                Text("Name").font(K.F.micro).foregroundStyle(K.C.faint)
-                TextField("release-notes", text: $name)
-                    .textFieldStyle(.plain).font(K.F.code)
-                    .focused($nameFocused)
-                    .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
-                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-                Text("Writes .claude/skills/\(name.isEmpty ? "<name>" : name)/SKILL.md")
-                    .font(K.F.micro).foregroundStyle(K.C.dim)
-            }
-
-            editor("When to use it",
-                   "Claude reads only this when deciding whether to load the skill.",
-                   $about, height: 60)
-            editor("Instructions", nil, $instructions, height: 140)
+            if let draft { review(draft) } else { describe }
 
             if let created {
                 Text(created).font(K.F.small).foregroundStyle(K.C.warn)
@@ -535,54 +527,148 @@ struct NewSkill: View {
             } else if let message = nameError ?? error {
                 Text(message).font(K.F.small).foregroundStyle(K.C.del)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
 
             HStack {
-                Spacer()
-                if created != nil {
-                    Button("Done") { done() }.buttonStyle(FilledButton())
-                        .keyboardShortcut(.defaultAction)
-                } else {
-                    Button("Cancel") { done() }.buttonStyle(QuietButton())
-                        .keyboardShortcut(.cancelAction)
-                    Button(creating ? "…" : "Create") { create() }
-                        .buttonStyle(FilledButton())
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(!ready)
+                if generating != nil {
+                    // Two attempts of up to four minutes each: the clock says it is still going.
+                    TimelineView(.periodic(from: started, by: 1)) { ctx in
+                        Text("Claude is writing it… \(Int(ctx.date.timeIntervalSince(started)))s")
+                            .font(K.F.small).foregroundStyle(K.C.dim)
+                    }
                 }
+                Spacer()
+                buttons
             }
         }
-        .padding(K.S.xl).frame(width: 480).background(K.C.bg)
-        .onAppear { nameFocused = true }
+        .padding(K.S.xl).frame(width: draft == nil ? 480 : 720).background(K.C.bg)
+        .onAppear { askFocused = true }
+        .onDisappear { generating?.cancel() }
     }
 
-    private func editor(
-        _ label: String, _ note: String?, _ value: Binding<String>, height: CGFloat
-    ) -> some View {
-        VStack(alignment: .leading, spacing: K.S.tight) {
-            Text(label).font(K.F.micro).foregroundStyle(K.C.faint)
-            TextEditor(text: value)
-                .font(K.F.body).scrollContentBackground(.hidden)
-                .frame(height: height)
-                .padding(.horizontal, K.S.xs).padding(.vertical, K.S.tight)
+    private var describe: some View {
+        VStack(alignment: .leading, spacing: K.S.md) {
+            VStack(alignment: .leading, spacing: K.S.tight) {
+                Text("What should it do?").font(K.F.micro).foregroundStyle(K.C.faint)
+                TextEditor(text: $ask)
+                    .font(K.F.body).scrollContentBackground(.hidden)
+                    .focused($askFocused)
+                    .frame(height: 110)
+                    .padding(.horizontal, K.S.xs).padding(.vertical, K.S.tight)
+                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                    .disabled(generating != nil)
+                Text("e.g. “Check the current price of any cryptocurrency using the CoinGecko API”. Claude writes SKILL.md, a tool schema, the script and any assets; you read them before anything is added.")
+                    .font(K.F.micro).foregroundStyle(K.C.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: K.S.tight) {
+                Text("Name (optional)").font(K.F.micro).foregroundStyle(K.C.faint)
+                TextField("Claude picks one", text: $name)
+                    .textFieldStyle(.plain).font(K.F.code)
+                    .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
+                    .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+                    .disabled(generating != nil)
+            }
+        }
+    }
+
+    private func review(_ d: Generated) -> some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            Text(".claude/skills/\(d.name)/").font(K.F.code).foregroundStyle(K.C.text)
+            Text(d.description).font(K.F.small).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: K.S.sm) {
+                VStack(alignment: .leading, spacing: K.S.xxs) {
+                    ForEach(d.files, id: \.path) { f in
+                        Button { shown = f.path } label: {
+                            Text(f.path).font(K.F.codeSmall)
+                                .foregroundStyle(shown == f.path ? K.C.text : K.C.dim)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, K.S.xs).padding(.vertical, K.S.tight)
+                                .background(shown == f.path ? K.C.well : .clear,
+                                            in: RoundedRectangle(cornerRadius: K.R.sm))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+                .frame(width: 170)
+                ScrollView([.vertical, .horizontal]) {
+                    Text(d.files.first { $0.path == shown }?.content ?? "")
+                        .font(K.F.codeSmall).foregroundStyle(K.C.text)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(K.S.sm)
+                }
                 .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
-            if let note {
-                Text(note).font(K.F.micro).foregroundStyle(K.C.dim)
+            }
+            .frame(height: 360)
+            Text(d.check).font(K.F.micro).foregroundStyle(K.C.faint)
+        }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        if created != nil {
+            Button("Done") { done() }.buttonStyle(FilledButton())
+                .keyboardShortcut(.defaultAction)
+        } else if draft != nil {
+            Button("Back") { draft = nil; error = nil }.buttonStyle(QuietButton())
+                .keyboardShortcut(.cancelAction)
+            Button("Regenerate") { generate() }.buttonStyle(QuietButton())
+                .disabled(generating != nil || creating)
+            Button(creating ? "…" : "Add skill") { create() }
+                .buttonStyle(FilledButton())
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(creating || generating != nil)
+        } else if generating != nil {
+            Button("Stop") { generating?.cancel(); generating = nil }.buttonStyle(QuietButton())
+                .keyboardShortcut(.cancelAction)
+        } else {
+            Button("Cancel") { done() }.buttonStyle(QuietButton())
+                .keyboardShortcut(.cancelAction)
+            Button("Generate") { generate() }
+                .buttonStyle(FilledButton())
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!ready)
+        }
+    }
+
+    private func generate() {
+        guard generating == nil else { return }
+        error = nil
+        started = Date()
+        generating = Task {
+            defer { generating = nil }
+            do {
+                // The daemon stops `claude` at four minutes a try, two tries at most.
+                let d = try await client.post("/api/skills/generate",
+                                              body: GenerateBody(ask: ask, name: name),
+                                              as: Generated.self, timeout: 540)
+                guard !Task.isCancelled else { return }
+                draft = d
+                shown = "SKILL.md"
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.error = error.localizedDescription
             }
         }
     }
 
     private func create() {
-        guard ready else { return }
+        guard let d = draft, !creating else { return }
         creating = true
         error = nil
         Task {
             defer { creating = false }
             do {
                 let r = try await client.post("/api/skills/create",
-                                              body: CreateBody(name: name, description: about,
-                                                               instructions: instructions, commit: autoCommit),
+                                              body: CreateBody(name: d.name, description: d.description,
+                                                               files: d.files, commit: autoCommit),
                                               as: SkillCatalog.Installed.self)
                 if autoCommit, r.committed == nil || r.note != nil {
                     created = SkillCatalog.added(r, asked: true)
@@ -591,7 +677,6 @@ struct NewSkill: View {
                 }
             } catch {
                 self.error = error.localizedDescription
-                nameFocused = true
             }
         }
     }

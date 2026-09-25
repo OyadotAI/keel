@@ -549,19 +549,18 @@ final class SessionModel: Identifiable {
     /// What this lane is doing, for the rail.
     enum Activity: Equatable {
         case idle
-        case working(String)
+        case working
         case waiting
         case failed
     }
 
+    /// No payload on `working`, on purpose. It used to carry the running call's subject, which
+    /// meant reading `current.calls` — and a call's input changes on every streamed argument
+    /// delta, so every lane's tab was rebuilt on every keystroke of every lane's agent, for a
+    /// string only the tooltip showed.
     var activity: Activity {
         if !pending.isEmpty { return .waiting }
-        if running {
-            // The deepest running call: while a subagent works, "Task survey the auth flow"
-            // for a minute says less than the file it is reading right now.
-            let last = current?.calls.last?.deepestRunning ?? current?.calls.last
-            return .working(last.map { "\($0.tool) \($0.subject)" } ?? "thinking")
-        }
+        if running { return .working }
         if case .failed = current?.gate { return .failed }
         return .idle
     }
@@ -828,6 +827,18 @@ final class SessionModel: Identifiable {
                 last?.calls.count ?? 0, last?.files.count ?? 0,
                 printed, nested, running ? 1 : 0]
             .map(String.init).joined(separator: "-")
+    }
+
+    /// The primary action and keyboard command share the same eligibility rule.
+    var canSendDraft: Bool {
+        !isClosed && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || pins.contains { !$0.note.isEmpty || !$0.nudges.isEmpty })
+    }
+
+    /// Editing a queued message preserves any draft already in the editor.
+    func restoreQueued(at index: Int) {
+        guard queued.indices.contains(index) else { return }
+        prompt = [prompt, queued.remove(at: index)].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     func send() {

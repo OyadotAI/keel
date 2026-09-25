@@ -23,39 +23,52 @@ enum K {
     /// no build step, and puts the two values on the same line where a change to one is visibly a
     /// change to the other.
     enum C {
-        /// The window's own ground.
-        static let bg = pair(0xFBFBFA, 0x131417)
+        /// The front pane: the turn, the transcript. The ramp below is twice as wide as it was —
+        /// steps 3% apart read as one flat sheet, and a window where nothing is in front of
+        /// anything else gives the eye nowhere to land.
+        static let bg = pair(0xF4F3EF, 0x0C0C0A)
         /// A pane on the ground: rails, sidebars, the status bar.
-        static let surface = pair(0xF3F4F6, 0x191B20)
+        static let surface = pair(0xECEBE6, 0x1C1C18)
         /// Navigation selection and persistent controls.
-        static let chrome = pair(0xE9EBEF, 0x22252B)
-        /// A card on a pane: a diff, an approval, a picked element.
-        static let raised = pair(0xFFFFFF, 0x1E2126)
+        static let chrome = pair(0xE5E4DE, 0x30302A)
+        /// A card on a pane: a diff, an approval, a picked element. Lifted by `elevated()`.
+        static let raised = pair(0xFFFFFF, 0x242420)
         /// Inputs and wells — recessed rather than raised.
-        static let well = pair(0xEFEFED, 0x101215)
+        static let well = pair(0xFAFAF8, 0x141410)
 
-        static let line = pair(0xE3E3E0, 0x25282E)
-        static let lineStrong = pair(0xCFCFCB, 0x343841)
+        static let line = pair(0xDEDCD4, 0x2C2C26)
+        static let lineStrong = pair(0xC5C4BB, 0x48483F)
 
         /// Primary reading text.
-        static let text = pair(0x1B1C1E, 0xE6E8EC)
-        /// Secondary: labels and metadata still meant to be read.
-        static let dim = pair(0x5C5F66, 0x9BA1AC)
-        /// Tertiary: present, not competing. Line numbers, timestamps, counts.
-        static let faint = pair(0x8B8F98, 0x6B7280)
+        static let text = pair(0x1C1C1A, 0xF4F3EF)
+        /// Secondary: labels you navigate by.
+        static let dim = pair(0x45453E, 0xBABAB0)
+        /// Metadata only: figures, times, captions, glyphs — and only at `tiny`, `micro`,
+        /// `codeTiny` or a `codeSmall` figure. It used to fail 4.5:1 on every ground in both
+        /// appearances; a test holds it above that on bg, surface, raised and well now. Never on
+        /// `chrome` or `tint`: a selected row's faint text goes to `dim`.
+        static let faint = pair(0x62625A, 0xA3A39B)
 
-        static let accent = pair(0x2563EB, 0x5B9DFF)
-        /// White on the light appearance's blue; dark ink on the brighter dark-mode accent.
-        /// A fixed white label on that brighter blue fell below normal-text contrast.
-        static let onAccent = pair(0xFFFFFF, 0x101215)
-        static let add = pair(0x177245, 0x4ADE80)
-        static let del = pair(0xB3261E, 0xF87171)
-        static let warn = pair(0xB45309, 0xFBBF24)
+        /// Oya green: bright against warm charcoal, deeper on paper for readable controls.
+        static let accent = pair(0x157A13, 0x39ED35)
+        /// White on deep green; dark ink on the luminous dark-appearance accent.
+        static let onAccent = pair(0xFFFFFF, 0x0C0C0A)
+        static let add = pair(0x16774A, 0x5CD39A)
+        static let del = pair(0xC0322A, 0xFF7B72)
+        static let warn = pair(0x9A5200, 0xF2B544)
 
         /// Diff row grounds. Far weaker than the glyph colours on purpose: a diff is read for its
         /// content, and a saturated background makes forty changed lines unreadable.
-        static let addBG = pair(0xE7F6EC, 0x12291B)
-        static let delBG = pair(0xFCEBEA, 0x2B1517)
+        static let addBG = pair(0xE5F4EB, 0x12281C)
+        static let delBG = pair(0xFBE9E7, 0x2D1618)
+
+        /// The one elevation, for things that float over a pane — never for a row in a lazy
+        /// stack, where a blurred shadow per row is offscreen work on every scroll frame. Black in
+        /// both appearances, so it stays out of `all`: that test asks every token to differ.
+        static let shadow = Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor.black.withAlphaComponent(isDark ? 0.5 : 0.12)
+        })
 
         /// The three neutral fills every hand-drawn control reaches for: a surface that is barely
         /// there, the same one under the pointer, and a selected one. Written as 24 distinct
@@ -97,6 +110,7 @@ enum K {
     // including numbers in prose, so a cost that ticks up does not reflow the line around it.
 
     enum F {
+        @MainActor static let editor = NSFont.systemFont(ofSize: 15)
         static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
             .system(size: size, weight: weight)
         }
@@ -111,11 +125,14 @@ enum K {
         /// 11 · a label, a count, a timestamp. The platform's small-system size and the floor:
         /// nothing meant to be read is set below `floor`, and a test says so.
         static let micro = ui(11)
+        /// 13 medium · the name you click by: a row's title, a lane's, the prompt on a turn.
+        /// Everything in a row used to be 11pt, so no line in it was louder than the next.
+        static let row = ui(13, .medium)
         static let floor: CGFloat = 10
         /// Every named size, for the test.
         static let sizes: [(String, CGFloat)] = [
-            ("tiny", 10), ("micro", 11), ("small", 12), ("body", 13), ("reading", 14),
-            ("title", 16), ("display", 24), ("hero", 34),
+            ("tiny", 10), ("micro", 11), ("small", 12), ("row", 13), ("body", 13), ("reading", 15),
+            ("title", 16), ("display", 28), ("hero", 38),
             ("codeTiny", 10), ("codeSmall", 11), ("code", 12),
         ]
         /// 12 · secondary rows
@@ -124,16 +141,16 @@ enum K {
         static let body = ui(13)
         /// 16 · a section that has to be found
         static let title = ui(16, .semibold)
-        /// 24 · the one heading on a screen
-        static let display = ui(24, .semibold)
-        /// 34 · the first screen, and only the first screen. `display` is the heading of a pane
+        /// 28 · the one heading on a screen
+        static let display = ui(28, .semibold)
+        /// 38 · the first screen, and only the first screen. `display` is the heading of a pane
         /// you are working in; this is the one line on a page that has nothing else to do.
-        static let hero = ui(34, .semibold)
+        static let hero = ui(38, .semibold)
 
-        /// 14 · text you type into or read at length: the composer, the palette's query, and the
+        /// 15 · text you type into or read at length: the composer, the palette's query, and the
         /// assistant's prose. A step above `body` because a paragraph and a table row are not read
         /// the same way.
-        static let reading = ui(14)
+        static let reading = ui(15)
 
         static let code = mono(12)
         static let codeSmall = mono(11)
@@ -171,23 +188,24 @@ enum K {
     /// A label that wraps makes its own button taller and leaves the others centred against it —
     /// which is what a row of answers looked like the moment one of them named four rules. One
     /// height, one line, and the long ones truncate.
-    static let buttonHeight: CGFloat = 24
+    static let buttonHeight: CGFloat = 28
 
     /// The letter-spacing an uppercase label gets. One value: the app had 0.7, 0.6, 0.4 and 0.3
     /// for the same treatment, which is a difference nobody can name and everybody can see.
     static let tracking: CGFloat = 0.6
 
     enum R {
-        static let sm: CGFloat = 4
-        static let md: CGFloat = 6
-        static let lg: CGFloat = 10
+        static let sm: CGFloat = 6
+        static let md: CGFloat = 10
+        static let lg: CGFloat = 16
+        static let floating: CGFloat = 20
     }
 
     /// Motion that carries meaning and nothing else. A diff row arriving is information; a panel
     /// easing open is decoration, and decoration in a tool you use all day becomes latency.
     enum M {
-        static let quick = Animation.easeOut(duration: 0.12)
-        static let settle = Animation.easeOut(duration: 0.18)
+        static let quick = Animation.easeOut(duration: 0.16)
+        static let settle = Animation.spring(response: 0.24, dampingFraction: 1)
         /// A restrained spring for live evidence entering and sections changing size.
         // Panels should feel responsive and calm; spring overshoot makes dense rows jump.
         static let flow = Animation.easeInOut(duration: 0.22)
@@ -198,6 +216,38 @@ enum K {
         /// 0.12s reads as a glitch, and one that overshoots reads as a toy. `response` is the
         /// travel time; the damping is just under critical, so it settles without a bounce.
         static let enter = Animation.spring(response: 0.34, dampingFraction: 0.86)
+    }
+}
+
+extension View {
+    /// The one elevation (`K.C.shadow`). For what floats: a card, a palette, a button over a list.
+    func elevated() -> some View { shadow(color: K.C.shadow, radius: 12, y: 4) }
+}
+
+/// A real macOS material, for static chrome only — the rail and the title bar.
+///
+/// Never behind anything that scrolls or streams: a material recomposites its whole region every
+/// frame something under or over it moves, and a transcript receiving tokens moves every frame.
+/// `followsWindowActiveState` dims it in a background window the way every Mac app does, and
+/// AppKit falls back to an opaque fill under Reduce Transparency on its own.
+struct VisualEffect: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blending: NSVisualEffectView.BlendingMode = .behindWindow
+
+    init(_ material: NSVisualEffectView.Material, _ blending: NSVisualEffectView.BlendingMode = .behindWindow) {
+        self.material = material
+        self.blending = blending
+    }
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.state = .followsWindowActiveState
+        return v
+    }
+
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.material = material
+        v.blendingMode = blending
     }
 }
 
@@ -220,7 +270,7 @@ struct RailHeader: View {
     var body: some View {
         HStack(spacing: K.S.xs) {
             Text(title)
-                .font(K.F.small.weight(.medium))
+                .font(K.F.row)
                 .foregroundStyle(K.C.dim)
             Spacer()
             if let trailing {
@@ -328,6 +378,7 @@ extension View {
 /// carried a comment claiming to be the only primary style. What they had that this did not was a
 /// disabled appearance, which is why they existed at all; it is here now.
 struct FilledButton: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tone: Color = K.C.accent
     @Environment(\.isEnabled) private var enabled
     @State private var hovering = false
@@ -346,6 +397,8 @@ struct FilledButton: ButtonStyle {
                         : K.C.line
                 )
             )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : K.M.quick, value: configuration.isPressed)
             .onHover { hovering = $0 }
     }
 }
@@ -357,6 +410,7 @@ struct FilledButton: ButtonStyle {
 /// nobody looking for the design system would find it. That is most of why the system has been
 /// re-implemented as often as it has been used.
 struct QuietButton: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tone: Color = K.C.dim
     @State private var hovering = false
 
@@ -373,6 +427,8 @@ struct QuietButton: ButtonStyle {
                     .fill(hovering ? K.C.hover : K.C.ghost)
             )
             .overlay(RoundedRectangle(cornerRadius: K.R.sm).stroke(K.C.line, lineWidth: 1))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : K.M.quick, value: configuration.isPressed)
             .onHover { hovering = $0 }
     }
 }
@@ -528,7 +584,7 @@ struct Loading: View {
     var body: some View {
         HStack(spacing: K.S.sm) {
             ProgressView().controlSize(.mini)
-            Text(what).font(K.F.small).foregroundStyle(K.C.faint)
+            Text(what).font(K.F.small).foregroundStyle(K.C.dim)
         }
         .padding(.horizontal, K.S.md)
         .padding(.vertical, K.S.lg)
@@ -622,7 +678,7 @@ struct JumpToLatest: View {
             .padding(.horizontal, K.S.sm).padding(.vertical, K.S.snug)
             .background(K.C.raised, in: Capsule())
             .overlay(Capsule().stroke(K.C.lineStrong, lineWidth: 1))
-            .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+            .elevated()
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -698,23 +754,23 @@ struct PanelRow: View {
     var body: some View {
         HoverRow(selected: selected) {
             HStack(spacing: K.S.sm) {
-                VStack(alignment: .leading, spacing: K.S.hair) {
+                VStack(alignment: .leading, spacing: K.S.xs) {
                     HStack(spacing: K.S.half) {
                         if let accent {
                             Circle().fill(accent).frame(width: 6, height: 6)
                                 .accessibilityHidden(true)
                         }
                         Text(name)
-                            .font(K.F.small.weight(.medium))
+                            .font(K.F.row)
                             .foregroundStyle(dimmed ? K.C.faint : K.C.text)
                             .lineLimit(1)
                         if fromRepo { Pill(text: "REPO", tone: .warn) }
                     }
                     if !detail.isEmpty {
                         Text(detail)
-                            .font(code ? K.F.codeTiny : K.F.tiny)
+                            .font(code ? K.F.codeSmall : K.F.small)
                             .foregroundStyle(K.C.dim)
-                            .lineLimit(1).truncationMode(code ? .head : .tail)
+                            .lineLimit(code ? 1 : 2).truncationMode(code ? .head : .tail)
                     }
                 }
                 Spacer(minLength: 0)
@@ -724,7 +780,7 @@ struct PanelRow: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.vertical, K.S.tight)
+            .padding(.vertical, K.S.sm)
         } action: {
             action()
         }
@@ -900,16 +956,8 @@ struct CloseButton: View {
 }
 
 
-/// A control in a row of readouts.
-///
-/// The status bar is otherwise passive — a change count, the gate's name, tokens, a cost — so a
-/// lone faint glyph in that company reads as one more thing being reported at you. Reported as
-/// exactly that: "not obvious it's a terminal and clickable". Four things fix it: it says what it
-/// is in words, it is the amber the trust chip uses rather than the faint grey the readouts share,
-/// it is set a size up from them, and it lights under the pointer.
-///
-/// Amber, deliberately, for the same reason the trust chip is: this row's colour code is "grey is
-/// a fact, amber is yours to act on". A control is the second kind.
+/// Quiet controls alongside status readouts. Accent marks an open surface; amber is reserved
+/// for information that needs attention, such as project trust and failed checks.
 struct StatusToggle: View {
     let icon: String
     let title: String
@@ -926,16 +974,16 @@ struct StatusToggle: View {
                 Image(systemName: icon).font(K.F.micro)
                 Text(title).font(K.F.small.weight(.medium)).lineLimit(1)
             }
-            .foregroundStyle(K.C.warn)
+            .foregroundStyle(on ? K.C.accent : K.C.dim)
             .padding(.horizontal, K.S.xs)
             .padding(.vertical, K.S.xxs)
             .background(
                 RoundedRectangle(cornerRadius: K.R.sm)
-                    .fill(on ? K.C.warn.wash : (hovering ? K.C.hover : .clear))
+                    .fill(on ? K.C.tint : (hovering ? K.C.hover : .clear))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: K.R.sm)
-                    .stroke(K.C.warn)
+                    .stroke(on ? K.C.accent : K.C.lineStrong)
                     // A border painted only on hover makes the row jump by a pixel as the pointer
                     // crosses it. It is always there; only its strength changes.
                     .opacity(on ? 0.55 : (hovering ? 0.45 : 0.25))
@@ -1125,5 +1173,93 @@ struct TailFollower: View {
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
             .onChange(of: model.tailToken) { onGrow() }
+    }
+}
+
+/// Native material is restricted to navigation. Reading surfaces remain opaque.
+struct SpatialChrome: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content.background {
+            if reduceTransparency { K.C.surface }
+            else { VisualEffect(.sidebar).overlay(K.C.surface.opacity(0.78)) }
+        }
+    }
+}
+
+extension View {
+    func spatialChrome() -> some View { modifier(SpatialChrome()) }
+
+    /// One optical edge and one shadow for floating workspace surfaces.
+    func floatingSurface() -> some View {
+        self.spatialChrome()
+            .clipShape(RoundedRectangle(cornerRadius: K.R.floating))
+            .overlay {
+                RoundedRectangle(cornerRadius: K.R.floating)
+                    .strokeBorder(LinearGradient(colors: [K.C.lineStrong, K.C.line.opacity(0.4)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: K.C.shadow, radius: 18, y: 8)
+    }
+}
+
+/// The composer's primary action remains distinct from its secondary model and attachment controls.
+struct ComposerButton: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(K.F.row)
+            .foregroundStyle(enabled ? K.C.onAccent : K.C.dim)
+            .padding(.horizontal, K.S.lg)
+            .frame(height: 36)
+            .background(enabled ? K.C.accent : K.C.chrome, in: Capsule())
+            .overlay(Capsule().fill(K.C.onAccent.opacity(hovering && enabled ? 0.08 : 0)))
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(reduceMotion ? nil : K.M.quick, value: configuration.isPressed)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// A quiet, generous target shared by workspace navigation and inspector controls.
+struct WorkspaceButton: ButtonStyle {
+    var selected = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(K.F.small.weight(.medium))
+            .foregroundStyle(selected ? K.C.accent : K.C.dim)
+            .padding(.horizontal, K.S.md)
+            .frame(minHeight: 32)
+            .background(selected ? K.C.tint : (hovering ? K.C.hover : .clear),
+                        in: RoundedRectangle(cornerRadius: K.R.md))
+            .contentShape(RoundedRectangle(cornerRadius: K.R.md))
+            .opacity(enabled ? 1 : 0.45)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .animation(reduceMotion ? nil : K.M.quick, value: configuration.isPressed)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// New live turns settle into place without animating streamed text or hiding historical content.
+struct ChatArrival: ViewModifier {
+    var active: Bool
+    @State private var arrived = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func body(content: Content) -> some View {
+        content
+            .offset(y: active && !arrived && !reduceMotion ? 8 : 0)
+            .opacity(active && !arrived && !reduceMotion ? 0.94 : 1)
+            .onAppear {
+                withAnimation(reduceMotion ? nil : K.M.settle) { arrived = true }
+            }
     }
 }

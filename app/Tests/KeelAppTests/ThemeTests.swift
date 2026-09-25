@@ -76,7 +76,9 @@ final class ThemeTests: XCTestCase {
     func testTextContrastsWithItsGround() {
         let grounds: [(String, Color)] = [("bg", K.C.bg), ("surface", K.C.surface),
                                           ("raised", K.C.raised), ("well", K.C.well)]
-        let inks: [(String, Color)] = [("text", K.C.text), ("dim", K.C.dim)]
+        // `faint` included: it is the metadata the rail and the status bar are made of, and it
+        // sat at 2.9–3.8:1 on every ground in both appearances until this said otherwise.
+        let inks: [(String, Color)] = [("text", K.C.text), ("dim", K.C.dim), ("faint", K.C.faint)]
 
         for appearance in [light, dark] {
             for (gName, ground) in grounds {
@@ -202,6 +204,26 @@ final class TypeFloorTests: XCTestCase {
             XCTAssertFalse(line.contains(".font(.caption") || line.contains(".font(.body)")
                            || line.contains(".font(.title") || line.contains(".font(.headline"),
                            "\(file):\(n): uses a stock text style — use a `K.F` token")
+        }
+    }
+
+    /// Faint has one value. `faint.opacity(0.4)` and its seven siblings were a fainter faint the
+    /// contrast test could not see; a shape wants `line`, and text wants `faint` as it is.
+    func testNoTintedFaint() throws {
+        try eachSourceLine { file, n, line in
+            guard file != "Theme.swift" else { return }
+            XCTAssertFalse(line.contains("faint.opacity("),
+                           "\(file):\(n): a tinted faint — use `K.C.line` for a shape, `K.C.faint` for text")
+        }
+    }
+
+    /// One elevation, `K.C.shadow`: five hand-set black shadows disagreed in both depth and
+    /// darkness, and none of them knew which appearance it was in.
+    func testNoRawShadow() throws {
+        try eachSourceLine { file, n, line in
+            guard file != "Theme.swift" else { return }
+            XCTAssertFalse(line.contains(".shadow(color: .black"),
+                           "\(file):\(n): a hand-set shadow — use `.elevated()` or `K.C.shadow`")
         }
     }
 

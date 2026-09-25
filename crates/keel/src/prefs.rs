@@ -58,7 +58,9 @@ impl Prefs {
             return;
         }
         if let Ok(body) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&p, body);
+            // Replaced whole: two daemons share this file, and a reader of a half-written one
+            // fell back to defaults — not onboarded, loopback only.
+            let _ = crate::writes::replace(std::path::Path::new(p.as_str()), body.as_bytes());
         }
     }
 

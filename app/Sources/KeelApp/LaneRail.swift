@@ -7,18 +7,19 @@ import SwiftUI
 /// three agents and running one agent three times.
 struct LaneTabs: View {
     @Bindable var lanes: Lanes
+    var embedded = false
+    var showsProject = true
 
     /// The width the strip actually has, so the tabs can shrink into it rather than run off the
     /// end of it. Reported, not taken: a `GeometryReader` here would take part in the layout it
     /// is trying to measure.
     @State private var strip: Double = 0
+    @State private var windowWidth: Double = 0
 
-    /// A browser shrinks its tabs until they stop fitting and only then scrolls. Below `96` a tab
-    /// is two characters and a close button, so that is the floor; past it the strip scrolls.
-    /// `44` is the `+` and its padding, kept out of the division so the button stays reachable
-    /// instead of being the first thing pushed off the end.
+    /// Tabs retain a readable label and scroll once the strip runs out of room.
+    /// The new-session action remains outside the scroll view, reachable at every width.
     private var tabWidth: CGFloat {
-        min(220, max(96, (strip - 44) / Double(max(lanes.shown.count, 1))))
+        min(240, max(160, strip / Double(max(lanes.shown.count, 1))))
     }
 
     var body: some View {
@@ -26,33 +27,28 @@ struct LaneTabs: View {
             // The project first, then its sessions — the way a browser puts the site before the
             // tabs. This used to be a small menu in the status bar and a column on the left;
             // both were places people did not look for either.
-            ProjectMenu(model: lanes.active, prominent: true)
-                .padding(.horizontal, K.S.sm)
-            Rectangle().fill(K.C.line).frame(width: 1, height: 20)
+            if showsProject {
+                ProjectMenu(model: lanes.active, prominent: true)
+                    .padding(.horizontal, K.S.sm)
+                Rectangle().fill(K.C.line).frame(width: 1, height: 20)
+            }
 
-            // The tabs and the `+` scroll together, so the button sits against the last tab the
-            // way a browser's does. They used to be siblings in the outer row, and the scroll
-            // view then took whatever width was left over — which squeezed the third tab down to
-            // two characters while a full-width "New feature" pill sat beside it.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .bottom, spacing: K.S.hair) {
                     ForEach(lanes.shown) { lane in
                         LaneRow(lane: lane, lanes: lanes, width: tabWidth)
                     }
-                    newTab
                 }
                 .padding(.leading, K.S.xs)
                 .padding(.trailing, K.S.sm)
             }
             .onGeometryChange(for: Double.self) { $0.size.width } action: { strip = $0 }
 
-            if lanes.runningCount > 0 {
-                Text("\(lanes.runningCount) running")
-                    .font(K.F.codeTiny).foregroundStyle(K.C.accent)
-                    .padding(.trailing, K.S.md)
-            }
+            newTab.padding(.horizontal, K.S.xs)
+            if windowWidth >= 1000 { LaneCounter(lanes: lanes) }
         }
-        .frame(height: 38)
+        .frame(height: 52)
+        .onGeometryChange(for: Double.self) { $0.size.width } action: { windowWidth = $0 }
         // The empty run of the strip asks the same question when clicked: an empty tab strip in a
         // browser makes a tab, and people click it expecting that. Behind the row rather than a
         // sibling in it: as a sibling with `maxWidth: .infinity` it split the row evenly with the
@@ -67,8 +63,11 @@ struct LaneTabs: View {
             .buttonStyle(.plain)
             .hint("Click for a new feature")
         }
-        .background(K.C.surface)
-        .overlay(alignment: .bottom) { Hairline() }
+        // The title bar's own material, run up under the toolbar (whose background the window
+        // hides), so the tabs and the title read as one surface — the way Safari's tab bar does.
+        // Static chrome: nothing here scrolls vertically or streams.
+        .background { if !embedded { VisualEffect(.titlebar).ignoresSafeArea(edges: .top) } }
+        .overlay(alignment: .bottom) { if !embedded { Hairline() } }
     }
 
     /// A bare `+`, against the last tab.
@@ -186,15 +185,13 @@ private struct LaneRow: View {
             // Which agent is behind this tab. Two lanes running different providers looked
             // identical, and the model picker below them offers a different list for each.
             ProviderMark(provider: lane.provider)
+            // The one you are in is named at row size; the rest are quieter unless they need you.
             Text(lane.title)
-                .font(K.F.small.weight(selected ? .semibold : .regular))
-                .foregroundStyle(lane.turns.isEmpty ? K.C.faint : K.C.text)
+                .font(selected ? K.F.row : K.F.small)
+                .foregroundStyle(title)
                 .italic(lane.turns.isEmpty)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if lane.pending.count > 0 {
-                Pill(text: "ASKS", tone: .warn)
-            }
             if let wt = checkout {
                 Image(systemName: "arrow.triangle.branch").font(K.F.tiny)
                     .foregroundStyle(wt.dirty ? K.C.accent : K.C.faint)
@@ -208,7 +205,7 @@ private struct LaneRow: View {
                 .hint(closeLabel)
         }
         .padding(.horizontal, K.S.sm)
-        .frame(width: width, height: 30)
+        .frame(width: width, height: 36)
         .onTapGesture(count: 2) { newTitle = lane.title; renaming = true }
         .alert("Rename feature", isPresented: $renaming) {
             TextField("Name", text: $newTitle)
@@ -232,16 +229,19 @@ private struct LaneRow: View {
                 }
         )
         .finishAndDiscard(flow, lane: lane, lanes: lanes, checkout: checkout)
-        // A tab shape, not a pill: rounded at the top and square at the bottom, so the selected
-        // one reads as continuous with the pane under it. That continuity is the whole reason a
-        // browser's tabs are legible at a glance, and a row of floating pills is not.
+        // A compact floating tab keeps the unified command band visually continuous.
         .background {
-            let shape = UnevenRoundedRectangle(topLeadingRadius: K.R.md,
-                                               bottomLeadingRadius: 0,
-                                               bottomTrailingRadius: 0,
-                                               topTrailingRadius: K.R.md)
-            shape.fill(selected || drag != nil ? K.C.bg
-                                               : (hovering ? K.C.chrome : .clear))
+            let shape = RoundedRectangle(cornerRadius: K.R.md)
+            shape.fill(selected || drag != nil ? K.C.raised
+                       : lane.activity == .waiting ? K.C.warn.wash
+                       : (hovering ? K.C.chrome : .clear))
+            // A lane that needs you, or whose gate failed, says so from across the room: an edge
+            // in the state's colour along the top of the tab, selected or not.
+            if let edge {
+                Rectangle().fill(edge).frame(height: 2)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .clipShape(shape)
+            }
             if let drag {
                 // Accent once releasing would tear it out, so the outcome is visible before the
                 // mouse comes up rather than as a window appearing from nowhere.
@@ -254,7 +254,7 @@ private struct LaneRow: View {
         // Picked up: it lifts off the strip and follows the pointer. The one shadow in a window
         // that is otherwise flat by decision, because this is the one thing that genuinely *is*
         // above the surface — and it exists only while the tab is in the air.
-        .shadow(color: .black.opacity(drag == nil ? 0 : 0.35),
+        .shadow(color: drag == nil ? .clear : K.C.shadow,
                 radius: drag == nil ? 0 : 10, y: drag == nil ? 0 : 4)
         .scaleEffect(drag == nil ? 1 : 1.03)
         .offset(x: drag?.translation.width ?? 0, y: drag?.translation.height ?? 0)
@@ -334,6 +334,21 @@ private struct LaneRow: View {
         }
     }
 
+    private var edge: Color? {
+        switch lane.activity {
+        case .waiting: K.C.warn
+        case .failed: K.C.del
+        default: nil
+        }
+    }
+
+    private var title: Color {
+        if lane.activity == .waiting || lane.activity == .failed || selected {
+            return lane.turns.isEmpty ? K.C.dim : K.C.text
+        }
+        return K.C.dim
+    }
+
     /// Closing a lane with a checkout is not discarding it, and the difference is worth the words.
     private var closeLabel: String {
         lane.worktree == nil
@@ -368,7 +383,9 @@ private struct LaneRow: View {
             case .working:
                 StatusDot(failed: false, running: true)
             case .idle:
-                Circle().fill(K.C.faint.opacity(0.4)).frame(width: 5, height: 5)
+                // Nothing: a dot on every idle tab was the noise the three real states had to
+                // be read through.
+                Color.clear
             }
         }
         .frame(width: 10)
@@ -377,10 +394,42 @@ private struct LaneRow: View {
     /// The activity as words, for VoiceOver.
     private var activityText: String {
         switch lane.activity {
-        case .working(let what): "working: \(what)"
+        case .working: "working"
         case .waiting: "needs you"
         case .failed: "gate failed"
         case .idle: lane.turns.isEmpty ? "empty" : "\(lane.turns.count) turns"
+        }
+    }
+}
+
+/// "1 needs you · 2 running" at the end of the strip. The waiting half is loud and is a button:
+/// with the strip scrolled a waiting tab can be out of sight, and this is all that says so.
+private struct LaneCounter: View {
+    let lanes: Lanes
+
+    var body: some View {
+        let waiting = lanes.shown.count { !$0.pending.isEmpty }
+        let running = lanes.runningCount
+        if waiting > 0 || running > 0 {
+            HStack(spacing: K.S.xs) {
+                if waiting > 0 {
+                    Button {
+                        if let lane = lanes.firstWaiting { lanes.activeID = lane.id }
+                    } label: {
+                        Text("\(waiting) needs you").font(K.F.micro.weight(.semibold))
+                            .foregroundStyle(K.C.warn)
+                    }
+                    .buttonStyle(.plain)
+                    .hint("Go to the feature that is waiting on you")
+                }
+                if waiting > 0 && running > 0 {
+                    Text("·").font(K.F.micro).foregroundStyle(K.C.faint)
+                }
+                if running > 0 {
+                    Text("\(running) running").font(K.F.codeTiny).foregroundStyle(K.C.accent)
+                }
+            }
+            .padding(.trailing, K.S.md)
         }
     }
 }

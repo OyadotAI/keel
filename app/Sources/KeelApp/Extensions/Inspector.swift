@@ -49,21 +49,22 @@ struct Inspector: View {
 
     // MARK: Per-kind detail
 
+    static func skillScope(_ s: Wire.Named) -> String {
+        switch s.scope {
+        case "project" where s.generated == true:
+            "This repository. Keel generated it from a description."
+        case "project": "This repository. It came with the checkout."
+        case "plugin": "The \(s.plugin ?? "") plugin. Loads in every project while it is enabled."
+        default: "You. Available in every project and in the terminal."
+        }
+    }
+
     @ViewBuilder
     private var detail: some View {
         switch target {
-        case .skill(let s):
-            field("What it does", s.description.isEmpty
-                  ? "No description. The agent decides whether to use a skill by reading this, so "
-                    + "one without a description will rarely be used."
-                  : s.description)
-            field("Scope", s.scope == "project"
-                  ? "This repository. It came with the checkout."
-                  : "You. Available in every project and in the terminal.")
-            if let path = s.path { pathField(path) }
-            actions {
-                if let path = s.path { revealButton(path) }
-            }
+        case .skill:
+            // Drawn by `SkillPane`, which the window mounts instead of this for a skill.
+            EmptyView()
 
         case .agent(let a):
             field("When the main agent delegates to it", a.description.isEmpty

@@ -129,13 +129,12 @@ struct Welcome: View {
             // a claim about an outcome nobody has asked for yet, and "an easier, faster way to
             // work" is true of everything. "Actually" is the load-bearing word: it concedes that
             // today you cannot, which is the complaint this audience arrives with.
-            Text("See what your agent actually did.")
-                .font(K.F.hero).foregroundStyle(K.C.text)
+            Text("Your ideas.\nAlready in motion.")
+                .font(K.F.hero).tracking(-1.2).foregroundStyle(K.C.text)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 640)
-            Text("Your Claude account. A native workspace for everything it builds. "
-                 + "Install, sign in, and open a project—Keel guides you through it.")
+            Text("A workspace for you and your agents.\nFrom the first prompt to the final diff.")
                 .font(K.F.reading).foregroundStyle(K.C.dim)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -167,7 +166,7 @@ struct Welcome: View {
 
     private func statusItem(ok: Bool, _ label: String, _ detail: String) -> some View {
         HStack(spacing: K.S.sm) {
-            Circle().fill(ok ? K.C.add : K.C.faint.opacity(0.4))
+            Circle().fill(ok ? K.C.add : K.C.lineStrong)
                 .frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: K.S.hair) {
                 Text(label).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)

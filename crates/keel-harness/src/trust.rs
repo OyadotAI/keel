@@ -25,7 +25,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 ///
 /// `.mcp.json` is included even though `--strict-mcp-config` neutralises it: defence in depth costs
 /// nothing here, and it keeps the user's trust prompt honest about everything present.
-const UNTRUSTED: &[&str] = &[
+pub const UNTRUSTED: &[&str] = &[
     ".claude/settings.json",
     ".claude/settings.local.json",
     ".claude/hooks",
@@ -55,6 +55,15 @@ impl QuarantineReport {
 pub fn quarantine(repo: impl AsRef<Utf8Path>) -> Result<QuarantineReport> {
     let repo = repo.as_ref();
     let destination = repo.join(".keel").join("quarantine");
+    // Keel's own folder, not the project's: a quarantined copy committed into the repository
+    // is the file it was moved aside from, back again under another name.
+    if repo.join(".keel").is_dir() || UNTRUSTED.iter().any(|rel| repo.join(rel).exists()) {
+        let _ = std::fs::create_dir_all(&destination);
+        let ignore = destination.join(".gitignore");
+        if !ignore.exists() {
+            let _ = std::fs::write(&ignore, "*\n");
+        }
+    }
     let mut report = QuarantineReport::default();
 
     for rel in UNTRUSTED {

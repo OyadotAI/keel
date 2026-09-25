@@ -65,8 +65,8 @@ struct SettingsPage: View {
     private var nav: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("SETTINGS")
-                    .sectionLabel()
+                Text("Settings")
+                    .font(K.F.row)
                     .foregroundStyle(K.C.faint)
                 Spacer()
                 CloseButton(size: 10, label: "Close settings") { onClose() }
@@ -123,7 +123,7 @@ struct SettingsPage: View {
             Spacer()
         }
         .frame(width: 210)
-        .background(K.C.surface)
+        .spatialChrome()
     }
 
     var needsAttention: Int {

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import Vision
 @testable import KeelApp
 
 /// What the window actually draws.
@@ -329,85 +330,91 @@ extension UITests {
         )
     }
 
-    /// 6. Whatever is drawn fits the window, at every width and every stored pair of widths.
-    ///
-    /// Two stored column widths — a 299pt panel and a 720pt stage — needed 1517pt of row on a
-    /// 1512pt screen. The overflow came off the left and took the activity rail with it, and with
-    /// the rail every panel but the one already open.
-    ///
-    /// Arithmetic rather than pixels. "Is the rail drawn" is a question about colours in a strip
-    /// and a differently-coloured emptiness answers it wrongly; "does the row fit" is a sum, and
-    /// the sum is what was wrong.
-    func testWhateverIsDrawnFitsTheWindow() {
-        let rail = SessionWindow.railWidth
-        let handle = SessionWindow.handleWidth
-        let chat = SessionWindow.chatMinWidth
-
-        // Every width from the floor to a large display, against stored widths at both extremes
-        // and the pair that actually broke it.
-        for width in stride(from: SessionWindow.stageFloor, through: 2400, by: 17) {
-            for (panel, stage) in [(299.0, 720.0), (200.0, 300.0), (520.0, 720.0), (256.0, 460.0)] {
-                for wantsPanel in [true, false] {
-                    let got = SessionWindow.columns(in: width, panel: panel, stage: stage,
-                                                    wantsPanel: wantsPanel)
-                    var used = rail + chat + got.panel + got.stage
-                    if got.panel > 0 { used += handle }
-                    if got.stage > 0 { used += handle }
-
-                    XCTAssertLessThanOrEqual(
-                        used, width,
-                        "at \(Int(width))pt with a \(Int(panel))/\(Int(stage)) layout the row "
-                        + "needs \(Int(used))pt — the overflow comes off the left edge and the "
-                        + "activity rail goes with it"
-                    )
-                    if got.panel > 0 {
-                        XCTAssertGreaterThanOrEqual(got.panel, SessionWindow.panelMinWidth)
-                    }
-                    if got.stage > 0 {
-                        XCTAssertGreaterThanOrEqual(got.stage, SessionWindow.stageMinWidth)
+    func testWorkspaceColumnsFitWithoutShrinkingTheConversation() {
+        for width in stride(from: 480.0, through: 2400, by: 17) {
+            for side in [200.0, 256, 520] {
+                for inspector in [300.0, 460, 900] {
+                    for wantsInspector in [true, false] {
+                        let layout = WorkspaceLayout.resolve(width: width, sidebar: side,
+                            inspector: inspector, wantsSidebar: true, wantsInspector: wantsInspector)
+                        if layout.inspectorOnly {
+                            XCTAssertEqual(layout.sidebar, 0)
+                            XCTAssertEqual(layout.inspector, width)
+                        } else {
+                            let handles = (layout.sidebar > 0 ? 9.0 : 0) + (layout.inspector > 0 ? 9.0 : 0)
+                            XCTAssertGreaterThanOrEqual(width - layout.sidebar - layout.inspector - handles, 390)
+                        }
                     }
                 }
             }
         }
     }
 
-    /// And the rail is drawn: two Keel windows side by side on a 14" is 756pt each, which is the
-    /// width the floors were chosen for.
-    func testTheActivityRailIsDrawnAtEveryWidth() {
-        let lanes = windowLanes()
-        for width in [1512.0, 1040.0, 756.0] {
-            let shot = shoot(
-                SessionWindow(lanes: lanes, pairing: PairingModel(client: Client(port: 0))),
-                CGSize(width: width, height: 700)
-            )
-            XCTAssertGreaterThan(
-                shot.detail(in: CGRect(x: 0, y: 0, width: 60, height: 700)), 400,
-                "at \(Int(width))pt the leftmost 60pt has no icons in it"
-            )
+    func testCompactWorkspaceOpensInspectorAsMainContent() {
+        let compact = WorkspaceLayout.resolve(width: 600, wantsSidebar: true, wantsInspector: true)
+        XCTAssertTrue(compact.inspectorOnly)
+        XCTAssertEqual(compact.inspector, 600)
+        XCTAssertEqual(compact.sidebar, 0)
+        let focused = WorkspaceLayout.resolve(width: 600, wantsSidebar: true, wantsInspector: false)
+        XCTAssertFalse(focused.inspectorOnly)
+        XCTAssertEqual(focused.inspector, 0)
+        let expanded = WorkspaceLayout.resolve(width: 1440, wantsSidebar: true, wantsInspector: true, expanded: true)
+        XCTAssertTrue(expanded.inspectorOnly)
+        XCTAssertEqual(expanded.inspector, 1440)
+    }
+
+    func testResizingRestoresPreferredInspectorWidth() {
+        let narrow = WorkspaceLayout.resolve(width: 1000, inspector: 650, wantsSidebar: true, wantsInspector: true)
+        let wide = WorkspaceLayout.resolve(width: 1600, inspector: 650, wantsSidebar: true, wantsInspector: true)
+        XCTAssertLessThan(narrow.inspector, 650)
+        XCTAssertEqual(wide.inspector, 650)
+        XCTAssertGreaterThan(wide.sidebar, 0)
+    }
+
+    func testWorkspaceBreakpointsKeepNavigationAndInspectionReachable() {
+        for width in [600.0, 899, 900, 1279, 1280, 1512] {
+            let layout = WorkspaceLayout.resolve(width: width, wantsSidebar: true, wantsInspector: true)
+            XCTAssertEqual(layout.inspectorOnly, width < 900)
+            XCTAssertEqual(layout.sidebar > 0, width >= 1280)
+            XCTAssertGreaterThan(layout.inspector, 0)
+            let conversation = WorkspaceLayout.resolve(width: width, wantsSidebar: true, wantsInspector: false)
+            XCTAssertFalse(conversation.inspectorOnly)
+            XCTAssertEqual(conversation.sidebar > 0, width >= 1280)
         }
     }
 
-    /// 7. A panel offers each action once.
-    ///
-    /// Two identical "Add a server…" footers shipped, and a terminal toggle existed in the toolbar
-    /// and the status bar at the same time. A repeated row is a band of ink repeated at the same
-    /// width a fixed distance down.
-    func testAPanelDoesNotDrawTheSameActionTwice() {
-        let m = populated()
-        m.workspace = decodeWorkspace()
-        for panel in [SessionWindow.Panel.mcp, .agents, .skills, .plugins] {
-            let size = CGSize(width: 320, height: 620)
-            let shot = shoot(SidePanel(panel: panel, model: m), size)
-            let rows = shot.inkedRows()
-            // The footer is the last band. If the same action is drawn twice there are two bands
-            // of near-identical width at the bottom with a gap between them.
-            let bands = bandWidths(shot, rows: rows).suffix(2)
-            if bands.count == 2, let a = bands.first, let b = bands.last {
-                XCTAssertFalse(
-                    abs(a - b) < 4 && a > 40,
-                    "`\(panel.rawValue)` ends with two rows of the same width — the duplicated "
-                    + "footer looked exactly like this"
-                )
+    func testSelectingTheSameFileRequestsTheInspectorAgain() {
+        let m = windowLanes().active
+        m.show(file: "Sources/Main.swift")
+        let first = m.workbench.inspectorRequest
+        m.show(file: "Sources/Main.swift")
+        XCTAssertGreaterThan(m.workbench.inspectorRequest, first)
+    }
+
+    /// Read the actual CTA labels instead of inferring duplicates from equal row widths.
+    /// Both empty and populated panels must show the action once, above their scroll content.
+    func testAPanelDoesNotDrawTheSameActionTwice() throws {
+        let cases: [(SessionWindow.Panel, String)] = [
+            (.mcp, "Connect a server"), (.agents, "Create subagent"),
+            (.skills, "New skill"), (.plugins, "Browse plugins"),
+        ]
+        for populatedWorkspace in [false, true] {
+            for (panel, title) in cases {
+                let model = populated()
+                if populatedWorkspace { model.workspace = decodeWorkspace() }
+                let shot = shoot(SidePanel(panel: panel, model: model), CGSize(width: 320, height: 620))
+                let image = try XCTUnwrap(shot.bitmap.cgImage)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: image).perform([request])
+                let matching = (request.results ?? []).filter {
+                    $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(title) == true
+                }
+                XCTAssertEqual(matching.count, 1, "\(panel.title) must show \(title) exactly once")
+                if let action = matching.first {
+                    XCTAssertGreaterThan(action.boundingBox.midY, 0.75, "The action belongs in the fixed header")
+                }
             }
         }
     }
@@ -457,7 +464,7 @@ extension UITests {
         let lanes = windowLanes()
         for width in [1512.0, 900.0, 756.0] {
             let shot = shoot(
-                SessionWindow(lanes: lanes, pairing: PairingModel(client: Client(port: 0))),
+                SessionWindow(lanes: lanes, pairing: PairingModel(client: Client(port: 0)), inspectorOpen: true),
                 CGSize(width: width, height: 700)
             )
             let stage = CGRect(x: width - 280, y: 0, width: 280, height: 700)
@@ -491,34 +498,6 @@ extension UITests {
     private func describe(_ c: NSColor) -> String {
         let s = c.usingColorSpace(.sRGB) ?? c
         return String(format: "%.2f-%.2f-%.2f", s.redComponent, s.greenComponent, s.blueComponent)
-    }
-
-    /// The width of each contiguous band of rows that has ink.
-    private func bandWidths(_ shot: Shot, rows: [Int]) -> [CGFloat] {
-        var bands: [CGFloat] = []
-        var run: [Int] = []
-        for y in rows {
-            if run.last.map({ y - $0 <= 2 }) ?? true {
-                run.append(y)
-            } else {
-                if let w = widthOf(shot, rows: run) { bands.append(w) }
-                run = [y]
-            }
-        }
-        if let w = widthOf(shot, rows: run) { bands.append(w) }
-        return bands
-    }
-
-    private func widthOf(_ shot: Shot, rows: [Int]) -> CGFloat? {
-        guard let first = rows.first, let last = rows.last else { return nil }
-        let band = CGRect(x: 0, y: CGFloat(first), width: shot.size.width,
-                          height: CGFloat(last - first + 1))
-        var right: CGFloat = 0
-        for x in stride(from: Int(shot.size.width) - 1, through: 0, by: -1) {
-            let column = CGRect(x: CGFloat(x), y: band.minY, width: 1, height: band.height)
-            if shot.ink(in: column) > 0 { right = CGFloat(x); break }
-        }
-        return right
     }
 
     private func decodeWorkspace() -> Wire.Workspace {

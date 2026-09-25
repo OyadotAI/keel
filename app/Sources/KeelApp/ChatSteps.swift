@@ -7,16 +7,17 @@ import SwiftUI
 /// happened, and three separate thoughts either side of two commands are not one thought.
 struct ThinkingBlock: View {
     let block: Turn.Block
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var open = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
-            Button { withAnimation(K.M.quick) { open.toggle() } } label: {
+            Button { withAnimation(reduceMotion ? nil : K.M.settle) { open.toggle() } } label: {
                 HStack(spacing: K.S.tight) {
                     Image(systemName: "chevron.right")
                         .font(K.F.ui(7, .bold))
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text("thought")
+                    Text("Reasoning")
                     Text("\(block.words) word\(block.words == 1 ? "" : "s")").monospacedDigit()
                 }
                 .font(K.F.micro)
@@ -48,6 +49,7 @@ struct ThinkingBlock: View {
 /// word `cat` and an `Edit` showed a path and never its hunks.
 struct CallRow: View {
     let call: Turn.Call
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var userSet: Bool?
     @State private var hovering = false
 
@@ -58,7 +60,7 @@ struct CallRow: View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Button {
                 guard hasDetail else { return }
-                withAnimation(K.M.quick) { userSet = !open }
+                withAnimation(reduceMotion ? nil : K.M.settle) { userSet = !open }
             } label: {
                 HStack(spacing: K.S.sm) {
                     Image(systemName: "chevron.right")
@@ -78,7 +80,7 @@ struct CallRow: View {
                     Elapsed(started: call.started, duration: call.duration, running: call.running)
                 }
                 .padding(.horizontal, K.S.xs)
-                .padding(.vertical, K.S.hair)
+                .padding(.vertical, K.S.half)
                 .background(hovering && hasDetail ? K.C.hover : .clear, in: RoundedRectangle(cornerRadius: K.R.sm))
                 .contentShape(Rectangle())
             }
@@ -104,7 +106,9 @@ struct CallRow: View {
                 }
                 .padding(.leading, K.S.lg)
                 .padding(.trailing, K.S.lg)
-                .transition(.opacity)
+                .padding(.vertical, K.S.sm)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+                .transition(.opacity.combined(with: .offset(y: -4)))
             }
         }
         .padding(.leading, K.S.xs)
@@ -160,6 +164,7 @@ struct CallRow: View {
 /// around it, and CoreText encoding that much on the main thread is a measurable hang — the same
 /// one `String.capped` was written for. Lines in a lazy stack are measured as they are reached.
 struct Lines: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     /// Enough to see what happened; the rest is one click away and almost never wanted.
     static let shown = 300
@@ -199,7 +204,7 @@ struct Lines: View {
             }
             if lines.count > Self.shown {
                 Button(all ? "Show less" : "Show all \(lines.count) lines") {
-                    withAnimation(K.M.quick) { all.toggle() }
+                    withAnimation(reduceMotion ? nil : K.M.settle) { all.toggle() }
                 }
                 .buttonStyle(.plain)
                 .font(K.F.micro)

@@ -380,6 +380,24 @@ impl AppState {
         self.followers.locked().get(session).is_some_and(|n| *n > 0)
     }
 
+    /// Give back every unfollowed terminal claim whose session is not in `busy`. A `claude` killed
+    /// mid-turn (closing the terminal, ⌃C twice) never says idle: its pid file goes, the session
+    /// leaves the listing, and a claim released only on "idle" held the tree until the daemon
+    /// restarted.
+    pub fn release_terminal_except(&self, busy: &std::collections::HashSet<&str>) {
+        // Keys first and the lock let go, because `is_followed` takes a lock of its own.
+        let lanes: Vec<String> = self.running.locked().keys().cloned().collect();
+        let stale: Vec<String> = lanes
+            .iter()
+            .filter_map(|lane| crate::turns::terminal_session(lane))
+            .filter(|s| !busy.contains(s) && !self.is_followed(s))
+            .map(str::to_string)
+            .collect();
+        for session in stale {
+            self.release_terminal_unfollowed(&session);
+        }
+    }
+
     /// Give back a terminal session's claim, unless a follower holds it: the follower finishes
     /// the turn and releases it itself.
     pub fn release_terminal_unfollowed(&self, session: &str) {
@@ -423,6 +441,14 @@ impl AppState {
                 crate::signals::group(pid, libc::SIGINT);
             }
         }
+    }
+
+    /// Whether the person pressed Stop on this turn — so its ending is a stop, not a failure.
+    pub fn was_interrupted(&self, lane: &str, token: u64) -> bool {
+        self.running
+            .locked()
+            .get(lane)
+            .is_some_and(|turn| turn.token == token && turn.interrupted)
     }
 
     /// A stopped or superseded preparation must never start another agent.
@@ -797,6 +823,24 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route(
             "/api/skills/create",
             axum::routing::post(crate::skills::create),
+        )
+        .route(
+            "/api/skills/remove",
+            axum::routing::post(crate::skills::remove),
+        )
+        .route("/api/skills/files", get(crate::skills::files))
+        .route(
+            "/api/skills/revise",
+            axum::routing::post(crate::skills::revise),
+        )
+        .route("/api/skills/save", axum::routing::post(crate::skills::save))
+        .route(
+            "/api/skills/move",
+            axum::routing::post(crate::skills::relocate),
+        )
+        .route(
+            "/api/skills/generate",
+            axum::routing::post(crate::skills::generate),
         )
         .route("/api/mcp/add", get(crate::mcp::add))
         .route("/api/mcp/remove", get(crate::mcp::remove))

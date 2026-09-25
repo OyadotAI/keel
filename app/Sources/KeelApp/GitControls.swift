@@ -98,37 +98,31 @@ struct CommitBox: View {
         let n = all ? model.changes.count : staged
         return VStack(alignment: .leading, spacing: K.S.xs) {
             if titled { RailHeader("Commit changes", trailing: nil) }
-            HStack(spacing: K.S.xs) {
-                TextField("What changed, in one line", text: $message)
-                    .field().font(K.F.small)
-                    .onSubmit { commit(all: all) }
-                Button(n == 0 ? "Commit" : "Commit \(n)") { commit(all: all) }
-                    .buttonStyle(QuietButton(tone: K.C.accent))
+            TextField("Describe this commit…", text: $message, axis: .vertical)
+                .textFieldStyle(.plain).font(K.F.body).lineLimit(2...4)
+                .padding(K.S.md)
+                .background(K.C.well, in: RoundedRectangle(cornerRadius: K.R.md))
+                .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line, lineWidth: 1))
+            Text(n == 0 ? "Working tree is clean"
+                 : all ? "All \(n) changed files will be committed."
+                 : "Only the \(staged) staged files will be committed.")
+                .font(K.F.small).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: K.S.sm) {
+                Button(busy ? "Working…" : n == 0 ? "Commit" : "Commit \(n) files") { commit(all: all) }
+                    .buttonStyle(FilledButton())
                     .disabled(busy || message.trimmingCharacters(in: .whitespaces).isEmpty || n == 0)
-                    .help(all ? "Commits every change" : "Commits the \(staged) staged file\(staged == 1 ? "" : "s")")
-            }
-            HStack(spacing: K.S.xs) {
-                // `branches` arrives a moment after the pane does, and until it has, staged and
-                // unstaged are both nought — which read as "0 unstaged" beside a button offering
-                // to commit two files. Say what is known instead of a number that is not.
-                Text(n == 0 ? "nothing to commit"
-                     : b == nil ? "\(n) to commit"
-                     : (all ? "\(unstaged) unstaged — all will be committed" : "\(staged) staged · \(unstaged) unstaged"))
-                    .font(K.F.micro).foregroundStyle(K.C.faint)
-                Spacer()
-                if unstaged > 0 {
-                    Button("stage all") { Task { await model.stageAll(true) } }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
-                }
-                if staged > 0 {
-                    Button("unstage all") { Task { await model.stageAll(false) } }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.accent).disabled(busy)
-                }
-                if n > 0 {
-                    // Destructive, so it asks — and the question says what goes where.
-                    Button("discard all") { model.confirmingDiscard = true }
-                        .buttonStyle(.plain).font(K.F.micro).foregroundStyle(K.C.del).disabled(busy)
-                }
+                Spacer(minLength: 0)
+                Menu {
+                    Button("Stage all changes") { Task { await model.stageAll(true) } }
+                        .disabled(unstaged == 0)
+                    Button("Unstage all changes") { Task { await model.stageAll(false) } }
+                        .disabled(staged == 0)
+                    Divider()
+                    Button("Discard all changes…", role: .destructive) { model.confirmingDiscard = true }
+                        .disabled(n == 0)
+                } label: { Label("More", systemImage: "ellipsis") }
+                    .menuStyle(.borderlessButton).fixedSize().disabled(busy)
             }
         }
         .padding(.horizontal, titled ? K.S.md : 0)

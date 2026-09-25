@@ -6,10 +6,11 @@ struct SidePanel: View {
     @Bindable var model: SessionModel
     /// Closing the panel. The rail icon toggles it and ⌘⇧E toggles it, and neither is visible.
     var onClose: (() -> Void)?
+    @State private var refreshing = false
 
     var body: some View {
         VStack(spacing: 0) {
-            RailHeader(panel.title, trailing: count, onClose: onClose)
+            panelHeader
             Hairline()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -32,11 +33,11 @@ struct SidePanel: View {
                     case .sessions: SessionsPanel(model: model)
                     case .readiness: ReadinessPanel(model: model)
                     case .monitors: MonitorsPanel(model: model)
-                    case .skills: SkillsPanel(model: model)
-                    case .agents: AgentsPanel(model: model)
-                    case .mcp: MCPPanel(model: model)
+                    case .skills: SkillsPanel(model: model, actionsInHeader: true)
+                    case .agents: AgentsPanel(model: model, actionsInHeader: true)
+                    case .mcp: MCPPanel(model: model, actionsInHeader: true)
                     case .hooks: HooksPanel(model: model)
-                    case .plugins: PluginsPanel(model: model)
+                    case .plugins: PluginsPanel(model: model, actionsInHeader: true)
                     }
                     }
                 }
@@ -44,6 +45,12 @@ struct SidePanel: View {
             }
         }
         .background(K.C.surface)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let error = model.lastError {
+                ErrorRow(message: error, fix: model.lastFix) { model.lastError = nil; model.lastFix = nil }
+                    .padding(K.S.md).background(K.C.surface)
+            }
+        }
         // The one destructive question in the panels, anchored here for the same reason as
         // the sheets below: a row can be recycled under its own dialog.
         // Renaming a past session, asked from the panel root for the same reason: the list is a
@@ -59,6 +66,85 @@ struct SidePanel: View {
                     Task { await model.rename(session: id, to: name) }
                 }
                 model.renamingSession = nil
+            }
+        }
+    }
+
+    private var panelHeader: some View {
+        VStack(alignment: .leading, spacing: K.S.sm) {
+            HStack(spacing: K.S.sm) {
+                Text(panel.title).font(K.F.title).foregroundStyle(K.C.text)
+                if let count { Text(count).font(K.F.codeSmall).foregroundStyle(K.C.dim) }
+                Spacer(minLength: 0)
+                Button { refresh() } label: {
+                    if refreshing { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: "arrow.clockwise") }
+                }
+                .buttonStyle(WorkspaceButton()).disabled(refreshing)
+                .hint("Refresh \(panel.title.lowercased())")
+                if let onClose { CloseButton(label: "Close panel", action: onClose) }
+            }
+            Text(purpose).font(K.F.small).foregroundStyle(K.C.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            actions
+        }
+        .padding(K.S.lg)
+    }
+
+    private var purpose: String {
+        switch panel {
+        case .sessions: "Pick up a conversation or start a new task."
+        case .changes: "Files changed in this conversation. Open a file to review its diff."
+        case .files: "Explore the project. Open files or attach them as context."
+        case .git: "Review, commit, and share your working tree."
+        case .skills: "Reusable instructions for the work you repeat."
+        case .agents: "Focused delegates with their own instructions and tools."
+        case .mcp: "Connections that give your agent access to external tools."
+        case .hooks: "Commands triggered by agent events. Inspect before enabling."
+        case .plugins: "Manage installed bundles of skills and tools."
+        case .monitors: "Follow background commands and inspect their output."
+        case .readiness: "Find release blockers and choose what to fix next."
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        HStack(spacing: K.S.sm) {
+            switch panel {
+            case .sessions:
+                Button("New task", systemImage: "plus") {
+                    NotificationCenter.default.post(name: .keelNewLane, object: nil)
+                }.buttonStyle(FilledButton())
+            case .changes:
+                Button("Review changes", systemImage: "square.on.square") {
+                    NotificationCenter.default.post(name: .keelShowStage, object: SessionWindow.Stage.review.rawValue)
+                }.buttonStyle(FilledButton())
+            case .skills:
+                Button("New skill", systemImage: "plus") { model.sheet = .newSkill }.buttonStyle(FilledButton())
+                Button("Browse library") { model.sheet = .skills }.buttonStyle(QuietButton())
+            case .agents:
+                Button("Create subagent", systemImage: "plus") { model.sheet = .subagent }.buttonStyle(FilledButton())
+            case .mcp:
+                Button("Connect a server", systemImage: "plus") { model.sheet = .mcp }.buttonStyle(FilledButton())
+            case .plugins:
+                Button("Browse plugins", systemImage: "plus") { model.sheet = .skills }.buttonStyle(FilledButton())
+            case .monitors:
+                Button("Open terminal", systemImage: "terminal") {
+                    NotificationCenter.default.post(name: .keelToggleTerminal, object: nil)
+                }.buttonStyle(QuietButton())
+            default: EmptyView()
+            }
+        }
+    }
+
+    private func refresh() {
+        refreshing = true
+        Task {
+            defer { refreshing = false }
+            switch panel {
+            case .files: await model.refreshTree()
+            case .git, .changes: await model.refreshGit(); await model.refreshBranches()
+            case .readiness: await model.rescan()
+            default: await model.refreshState()
             }
         }
     }
@@ -116,7 +202,7 @@ struct SessionsPanel: View {
                        + "tabs above.")
         } else if visible.isEmpty {
             EmptyState(icon: "magnifyingglass", title: "Nothing matches",
-                       "No past session mentions “\(query)”.")
+                       "No past session mentions “\(query)”.", actionLabel: "Clear search") { query = "" }
         }
         ForEach(groups) { group in
             // The newest group open, the rest folded. 158 sessions is a scroll bar with no
@@ -618,6 +704,9 @@ private struct MonitorRow: View {
                 .lineLimit(open ? nil : 2)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Button(open ? "Hide output" : "Show output", systemImage: open ? "chevron.up" : "chevron.down") {
+                withAnimation(K.M.quick) { open.toggle() }
+            }.buttonStyle(QuietButton())
             if open, !job.log.isEmpty {
                 Text(job.log.suffix(40).joined(separator: "\n"))
                     .font(K.F.codeSmall).foregroundStyle(K.C.dim)
@@ -629,7 +718,5 @@ private struct MonitorRow: View {
             }
         }
         .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-        .contentShape(Rectangle())
-        .asButton { withAnimation(K.M.quick) { open.toggle() } }
     }
 }

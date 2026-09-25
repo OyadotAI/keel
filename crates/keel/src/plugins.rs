@@ -287,12 +287,21 @@ pub async fn details(Query(q): Query<DetailsQuery>) -> axum::Json<Details> {
         // Bounded and killed on the way out: a `claude` that never answers must not hold the
         // request, or a thread, for ever.
         let out = crate::git::output_within(command, CLAUDE_CEILING);
-        let Ok(out) = out else {
-            return axum::Json(Details {
-                name: q.name,
-                error: Some("could not run `claude`".into()),
-                ..Default::default()
-            });
+        let out = match out {
+            Ok(out) => out,
+            Err(e) => {
+                // A timeout is not "could not run": say which it was.
+                let why = if e.kind() == std::io::ErrorKind::TimedOut {
+                    format!("`claude plugin details` {e}")
+                } else {
+                    "could not run `claude`".to_string()
+                };
+                return axum::Json(Details {
+                    name: q.name,
+                    error: Some(why),
+                    ..Default::default()
+                });
+            }
         };
         if !out.status.success() {
             return axum::Json(Details {

@@ -80,7 +80,7 @@ struct FileDiff: View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
                 .font(K.F.tiny.weight(.bold))
-                .foregroundStyle(hoveringHeader ? K.C.dim : K.C.faint.opacity(0.6))
+                .foregroundStyle(hoveringHeader ? K.C.dim : K.C.faint)
                 .frame(width: 10)
 
             // Directory dimmed, filename not: you scan a diff list by filename.

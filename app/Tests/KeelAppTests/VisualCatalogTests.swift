@@ -95,6 +95,16 @@ final class VisualCatalogTests: XCTestCase {
                     into: live.turns[0])
         try capture(ChatRail(model: live), named: "conversation-working", in: directory)
 
+        let drafting = self.model()
+        drafting.prompt = "Review the retry policy and explain the edge cases.\nKeep the public API unchanged."
+        drafting.attachments = [Attachment(path: "Sources/Checkout/RetryPolicy.swift", label: "RetryPolicy.swift", thumbnail: nil)]
+        drafting.queued = ["Add a regression test for retry exhaustion."]
+        try capture(ChatRail(model: drafting), named: "conversation-rich-draft", in: directory)
+        try capture(ComposerEditor(text: .constant(String(repeating: "A longer draft with room to think.\n", count: 12)),
+                                   focused: .constant(false), expanded: true, submit: {}, navigate: { _ in false },
+                                   pasteAttachment: { _ in false }),
+                    named: "composer-expanded", in: directory, size: CGSize(width: 680, height: 280))
+
         // `/` — the vocabulary the terminal has and Keel dropped on the floor.
         let slash = self.model()
         slash.slashCommands = ["compact", "context", "review", "cost", "code-review:code-review",
@@ -126,13 +136,10 @@ final class VisualCatalogTests: XCTestCase {
             """)]
         try capture(ChatRail(model: questioning), named: "conversation-question", in: directory)
 
-        // The status bar is looked at more often than any pane in here and was the one surface the
-        // catalogue never showed — which is how a control in it stayed indistinguishable from the
-        // readouts beside it for as long as it did.
         let trusted = self.model()
         trusted.trusted = true
-        try capture(StatusBar(model: trusted, terminalOpen: .constant(true)) {},
-                    named: "status-bar", in: directory, size: CGSize(width: 900, height: 44))
+        try capture(WorkspaceStatus(model: trusted), named: "workspace-status-trusted",
+                    in: directory, size: CGSize(width: 360, height: 440))
 
         // The first screen anybody sees, at a real window's width — it was laid out as though the
         // window were as narrow as a panel.
@@ -145,6 +152,32 @@ final class VisualCatalogTests: XCTestCase {
         for panel in SessionWindow.Panel.allCases {
             try capture(SidePanel(panel: panel, model: model) {}, named: "panel-\(panel.rawValue)",
                         in: directory, size: CGSize(width: 320, height: 760))
+        }
+
+        let app = NSApplication.shared
+        let oldAppearance = app.appearance
+        defer { app.appearance = oldAppearance }
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            app.appearance = NSAppearance(named: appearance)
+            try capture(WorkspaceStatus(model: model), named: "workspace-status-\(name)",
+                        in: directory, size: CGSize(width: 360, height: 440))
+            for width in [600.0, 900, 1100, 1512] {
+                let lanes = mediaLanes()
+                let pairing = PairingModel(client: lanes.client)
+                try capture(SessionWindow(lanes: lanes, pairing: pairing, inspectorOpen: false),
+                            named: "workspace-\(name)-\(Int(width))", in: directory,
+                            size: CGSize(width: width, height: 820))
+                try capture(SessionWindow(lanes: lanes, pairing: pairing, inspectorOpen: true),
+                            named: "inspector-\(name)-\(Int(width))", in: directory,
+                            size: CGSize(width: width, height: 820))
+            }
+            let lanes = mediaLanes()
+            try capture(SessionWindow(lanes: lanes, pairing: PairingModel(client: lanes.client),
+                                      inspectorOpen: true, inspectorExpanded: true),
+                        named: "expanded-\(name)", in: directory, size: CGSize(width: 1100, height: 820))
+            try capture(Welcome(model: model) {}, named: "welcome-\(name)", in: directory,
+                        size: CGSize(width: 1100, height: 820))
+
         }
 
         // Settings is five panes behind one nav, and it was the last place in the app where two

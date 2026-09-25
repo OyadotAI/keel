@@ -1,4 +1,4 @@
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -18,6 +18,10 @@ pub struct Plugin {
     pub scope: Option<String>,
     pub installed_at: Option<String>,
     pub last_updated: Option<String>,
+    /// Where the plugin's files are, for reading the skills inside it. Not sent: the app has no
+    /// use for a cache path.
+    #[serde(skip)]
+    pub install_path: Option<Utf8PathBuf>,
 }
 
 /// Read `~/.claude/plugins/installed_plugins.json`.
@@ -71,6 +75,7 @@ pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
                         scope: field("scope"),
                         installed_at: field("installedAt"),
                         last_updated: field("lastUpdated"),
+                        install_path: field("installPath").map(Utf8PathBuf::from),
                     }
                 })
                 .collect::<Vec<_>>()

@@ -63,41 +63,50 @@ pub fn clear(kind: Kind) -> Result<(), String> {
 /// personal access token when a working credential is already on the machine is friction for its own
 /// sake. Keel never stores this one — it reads it per call, so revoking `gh` revokes Keel.
 pub fn github_from_gh_cli() -> Option<String> {
-    use std::io::Read;
-    // Bounded, and killed past the bound: a `gh` waiting on a keychain prompt or a network it
-    // cannot reach held the connections panel with no end. Its output is one token, so polling
-    // cannot fill a pipe.
-    const CEILING: std::time::Duration = std::time::Duration::from_secs(10);
     use std::os::unix::process::CommandExt;
+    // Bounded, and killed past the bound: a `gh` waiting on a keychain prompt or a network it
+    // cannot reach held the connections panel with no end. Its answer goes to a file, not a
+    // pipe, so a child it leaves running cannot hold the read open after it exits.
+    const CEILING: std::time::Duration = std::time::Duration::from_secs(10);
+    let out = tempfile::tempfile().ok()?;
     let mut child = std::process::Command::new("gh")
         .args(["auth", "token"])
         // Its own group, so a timeout ends whatever `gh` started as well.
         .process_group(0)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
+        .stdout(out.try_clone().ok()?)
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
     let started = std::time::Instant::now();
+    // Safety (both uses): the group this process spawned `gh` as the leader of, negated to
+    // address it. This crate cannot reach the daemon's `signals::group`; this is the same call.
+    let end_group = |pid: u32| unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    };
     let status = loop {
         if let Some(status) = child.try_wait().ok()? {
+            // Whatever `gh` left running in its group is not wanted: a token was the whole job.
+            end_group(child.id());
             break status;
         }
         if started.elapsed() > CEILING {
-            // Safety: the group this process spawned `gh` as the leader of, negated to address it.
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
+            end_group(child.id());
             let _ = child.wait();
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    let mut out = String::new();
-    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let mut token = String::new();
+    {
+        use std::io::{Read, Seek};
+        let mut out = out;
+        out.seek(std::io::SeekFrom::Start(0)).ok()?;
+        out.read_to_string(&mut token).ok()?;
+    }
     status
         .success()
-        .then(|| out.trim().to_string())
+        .then(|| token.trim().to_string())
         .filter(|t| !t.is_empty())
 }
 

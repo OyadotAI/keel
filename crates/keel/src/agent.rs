@@ -696,7 +696,7 @@ pub async fn chat(
         if preparation_stopped(&stopper, &lane, token, &tx).await {
             return;
         }
-        let begun = {
+        let mut begun = {
             let checkout = cwd.clone();
             crate::serve::blocking(move || Some(crate::turns::begin(&checkout)), None)
                 .await
@@ -883,6 +883,17 @@ pub async fn chat(
         if !quarantine_before_launch(cwd.clone(), &tx).await {
             return;
         }
+        // Again, now the quarantine has moved what it moves: taken before it, the move counted as
+        // the turn's work and the checkpoint committed the repository's config away.
+        {
+            let checkout = cwd.clone();
+            if let Some(now) =
+                crate::serve::blocking(move || Some(crate::turns::fingerprint_now(&checkout)), None)
+                    .await
+            {
+                begun.fingerprint = now;
+            }
+        }
 
         if preparation_stopped(&stopper, &lane, token, &tx).await {
             return;
@@ -969,8 +980,10 @@ pub async fn chat(
             // called `wait()` on a child still writing into a pipe nobody was draining — no
             // `done`, no `fatal`, the stream open forever. One non-UTF-8 byte was enough.
             loop {
+                // The window went: the child is ended, and the turn is still finished below —
+                // returning here left its record open and its files to the next turn's commit.
                 let Some(next) = next_agent_line(&mut lines, &mut child, &tx).await else {
-                    return;
+                    break;
                 };
                 let line = match next {
                     crate::lines::Next::Line(line) => line,
@@ -1079,23 +1092,26 @@ pub async fn chat(
                     // the leader, so the `cargo test` it had running would have survived it,
                     // reparented to init, with nothing left that knows it exists. That is the
                     // failure `BudgetTests` was written for, reached by a different door.
+                    // Then on to `finish`, like every other way a turn ends.
                     let _ = child.terminate().await;
-                    return;
+                    break;
                 }
             }
         }
 
         let status = wait_for_agent(&mut child, &tx).await;
+        // Stopped — the person pressed Stop, or closed the window or the lane — is how a turn
+        // ends, not how it fails: no `fatal` blaming a sign-in, no failure fact, no error report.
+        // It is still finished below, because every way a turn ends must leave the lane as a
+        // finished turn does.
+        let stopped = tx.is_closed() || stopper.was_interrupted(&lane, token);
         stopper.finished(&lane, token);
-        if tx.is_closed() {
-            return;
-        }
         let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
 
         // A provider that failed and said why on stderr used to say it to nobody: the app was
         // handed `done` with a code it ignored, and drew an empty turn card. An exit of 0 is
         // silent as before — plenty of tools warn on stderr and succeed.
-        if code != 0 {
+        if code != 0 && !stopped {
             let why = errors.locked().trim().to_string();
             // Every non-zero exit is reported. It used to travel as the provider and the code and
             // nothing else, on the grounds that stderr quotes paths and branch names — which is
@@ -1153,7 +1169,7 @@ pub async fn chat(
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
 
-        let failed = (code != 0).then(|| {
+        let failed = (code != 0 && !stopped).then(|| {
             let why = errors.locked().trim().to_string();
             let tail: String = why
                 .lines()

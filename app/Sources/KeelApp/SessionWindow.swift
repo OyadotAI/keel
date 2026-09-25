@@ -3,7 +3,7 @@ import SwiftUI
 
 /// One window, one conversation.
 ///
-/// An activity rail, a panel, the stage, the conversation, and a status bar — laid out by hand
+/// A single command band, navigation, conversation and an inset inspector — laid out by hand
 /// rather than by `NavigationSplitView`, which insists on sidebar chrome, its own toolbar
 /// behaviour and a translucency that fights a dense surface.
 struct SessionWindow: View {
@@ -19,6 +19,14 @@ struct SessionWindow: View {
     /// A turn ran while the person was looking at something else. The Trace tab keeps moving until
     /// they look at it — see `stageBar`.
     @State private var traceUnread = false
+    @State private var inspectorVisible: Bool
+    private let remembersPresentation: Bool
+    @State private var expandedInspector = false
+    @State private var compactSidebar = false
+    @State private var lastSidebarPanel: Panel = .sessions
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var statusOpen = false
+    @State private var statusTrust = false
     @State private var showTerminal = false
     @State private var terminalTitle = "shell"
     @State private var terminalCommand: String?
@@ -27,9 +35,19 @@ struct SessionWindow: View {
     @State private var startingFeature = false
     @State private var showSettings = false
     /// How wide the record beside the conversation is. Yours to drag; remembered.
-    @AppStorage("keel.stageWidth") private var stageWidth: Double = 460
+    @AppStorage("keel.stageWidth") private var stageWidth: Double = 420
     /// And the side panel.
-    @AppStorage("keel.panelWidth") private var panelWidth: Double = 256
+    @AppStorage("keel.panelWidth") private var panelWidth: Double = 320
+
+    init(lanes: Lanes, pairing: PairingModel, app: AppModel? = nil,
+         inspectorOpen: Bool? = nil, inspectorExpanded: Bool = false) {
+        _lanes = State(initialValue: lanes)
+        self.pairing = pairing
+        self.app = app
+        remembersPresentation = inspectorOpen == nil
+        _inspectorVisible = State(initialValue: inspectorOpen ?? UserDefaults.standard.bool(forKey: "keel.inspectorVisible"))
+        _expandedInspector = State(initialValue: inspectorExpanded)
+    }
 
     /// The two things the right pane can be.
     ///
@@ -136,6 +154,9 @@ struct SessionWindow: View {
         // and the terminal — for the length of a `quick`, on a flag that swaps a "Reading…"
         // placeholder. `model.loaded` is dropped rather than moved: nothing transitions on it.
         .background(K.C.bg)
+        // The toolbar draws no background of its own: the tab strip's title-bar material runs up
+        // under it, so the title and the tabs are one surface (`LaneTabs`).
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         // Workbench commands are mounted only with a project. Machine setup must also work
         // before one exists, including installers that need the interactive terminal.
         .onWindowCommand(.keelSettings) { _ in
@@ -188,15 +209,14 @@ struct SessionWindow: View {
 
     private var workbench: some View {
         VStack(spacing: 0) {
+            // The lanes are always on screen, across the top. They are the reason this is a
+            // window and not a terminal: several agents working at once, and you can see all
+            // of them. Directly under the title bar, because the two share one material.
+            workspaceHeader
             if let app, !app.crashes.isEmpty {
                 CrashBar(reports: app.crashes) { Crashes.markSeen(); app.crashes = [] }
                 Hairline()
             }
-            // The lanes are always on screen, across the top. They are the reason this is a
-            // window and not a terminal: several agents working at once, and you can see all
-            // of them.
-            LaneTabs(lanes: lanes)
-            Hairline()
             // Its own stack, so the animation that moves it is the bar's and not the window's.
             VStack(spacing: 0) {
                 if let o = model.opening {
@@ -210,28 +230,31 @@ struct SessionWindow: View {
             .animation(K.M.quick, value: model.opening)
             .animation(K.M.quick, value: model.justOpened)
             HStack(spacing: 0) {
-                ActivityRail(panel: $panel, model: model, onSettings: {
-                    withAnimation(K.M.quick) { showSettings.toggle() }
-                }, onPanel: {
-                    // Picking a panel is leaving Settings, whatever the gear is showing.
-                    withAnimation(K.M.quick) { showSettings = false }
-                })
-
-                if showsPanel, let panel {
-                    SidePanel(panel: panel, model: model) {
-                        withAnimation(K.M.quick) { self.panel = nil }
-                    }
-                    .frame(width: panelFit)
-                    SplitHandle(width: $panelWidth, range: 200...520, reset: 256, leading: true)
+                if layout.sidebar > 0 {
+                    workspaceSidebar
+                        .frame(width: layout.sidebar)
+                    SplitHandle(width: $panelWidth, range: 300...420, reset: 320, leading: true)
                 }
-
                 if showSettings {
                     SettingsPage(model: model, pairing: pairing) {
-                        withAnimation(K.M.quick) { showSettings = false }
+                        showSettings = false
+                        model.focusComposerTick += 1
                     }
                     .frame(maxWidth: .infinity)
                 } else {
                     working
+                }
+            }
+            .overlay(alignment: .leading) {
+                if compactSidebar && layout.sidebar == 0 && panel != nil {
+                    ZStack(alignment: .leading) {
+                        Color.black.opacity(0.12)
+                            .onTapGesture { compactSidebar = false }
+                            .accessibilityHidden(true)
+                        workspaceSidebar.frame(width: min(360, available - 40))
+                            .background(K.C.surface)
+                            .shadow(color: K.C.shadow, radius: 20, x: 8, y: 0)
+                    }
                 }
             }
             .onGeometryChange(for: Double.self) { $0.size.width } action: { available = $0 }
@@ -244,16 +267,13 @@ struct SessionWindow: View {
                 Hairline()
                 terminalPane
             }
-            Hairline()
-            StatusBar(model: model, terminalOpen: $showTerminal) {
-                NotificationCenter.default.post(name: .keelTrust, object: nil)
-            }
         }
         .overlay(alignment: .top) { paletteOverlay }
+        .modifier(TrustAlert(model: model, shown: $statusTrust))
         .toolbar { toolbar }
         .navigationTitle((model.repoPath as NSString).lastPathComponent.isEmpty
                          ? "Keel" : (model.repoPath as NSString).lastPathComponent)
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(model.branch ?? "")
         .sheet(isPresented: $startingFeature) {
             NewFeature(model: model, lanes: lanes) { startingFeature = false }
         }
@@ -299,11 +319,36 @@ struct SessionWindow: View {
         // is on the stage — however you got there, clicking the tab included.
         .onChange(of: model.turns.count) { if stage != .turn { traceUnread = true } }
         .onChange(of: stage) { if stage == .turn { traceUnread = false } }
-        .onChange(of: model.id) { traceUnread = false }
+        .onChange(of: model.id) {
+            traceUnread = false
+            expandedInspector = false
+            if model.workbench.detour != nil { inspectorVisible = true }
+        }
+        .onChange(of: model.workbench.inspectorRequest) {
+            if model.workbench.detour != nil { inspectorVisible = true; compactSidebar = false }
+        }
+        .onChange(of: inspectorVisible) {
+            if remembersPresentation { UserDefaults.standard.set(inspectorVisible, forKey: "keel.inspectorVisible") }
+        }
+        .onChange(of: panel) {
+            if let panel { lastSidebarPanel = panel }
+            compactSidebar = panel != nil && layout.sidebar == 0
+            if panel == nil { model.focusComposerTick += 1 }
+        }
+        .transaction { if reduceMotion { $0.animation = nil } }
         .modifier(WindowEvents(
             lanes: lanes, model: model,
             stage: $stage, showSettings: $showSettings, showTerminal: $showTerminal, terminalCommand: $terminalCommand,
-            paletteOpen: $paletteOpen, starting: $starting, panel: $panel))
+            paletteOpen: $paletteOpen, starting: $starting, panel: $panel,
+            inspectorVisible: $inspectorVisible, expandedInspector: $expandedInspector,
+            onToggleSidebar: toggleSidebar))
+        .onWindowCommand(.keelShowPanel) { note in
+            guard let raw = note.object as? String, let target = Panel(rawValue: raw),
+                  Panel.shown.contains(target) else { return }
+            showSettings = false
+            compactSidebar = true
+        }
+        .onWindowCommand(.keelShowStage) { _ in compactSidebar = false }
         .sheet(isPresented: $starting) {
             StartProject(client: model.client) { path, brief, file in
                 starting = false
@@ -333,190 +378,194 @@ struct SessionWindow: View {
         }
     }
 
-    /// The working area: conversation in the middle, the record beside it.
+    @State private var available: Double = 0
+
+    private var layout: WorkspaceLayout {
+        WorkspaceLayout.resolve(width: available == 0 ? 1100 : available,
+                                sidebar: panelWidth, inspector: stageWidth,
+                                wantsSidebar: panel != nil && !showSettings,
+                                wantsInspector: inspectorVisible && !showSettings,
+                                expanded: expandedInspector)
+    }
+
+    private var workspaceSidebar: some View {
+        VStack(spacing: 0) {
+            ProjectMenu(model: model, prominent: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(K.S.lg)
+            ActivityRail(panel: $panel, model: model, onSettings: {
+                showSettings.toggle()
+                compactSidebar = false
+            }, onPanel: { showSettings = false })
+            if let panel {
+                SidePanel(panel: panel, model: model)
+            }
+        }
+        .spatialChrome()
+    }
+
+    private var workspaceHeader: some View {
+        HStack(spacing: K.S.sm) {
+            Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
+                .buttonStyle(WorkspaceButton(selected: layout.sidebar > 0 || compactSidebar))
+                .hint("Toggle sidebar (⌘⇧E)")
+            LaneTabs(lanes: lanes, embedded: true, showsProject: layout.sidebar == 0 && available >= 900)
+                .frame(maxWidth: .infinity)
+            Button { statusOpen.toggle() } label: {
+                Image(systemName: model.project.events.connected || model.project.port == 0
+                      ? "waveform.path" : "wifi.slash")
+                    .foregroundStyle(model.project.events.connected || model.project.port == 0 ? K.C.accent : K.C.warn)
+            }
+            .buttonStyle(WorkspaceButton(selected: statusOpen))
+            .hint("Connection, branch and session usage")
+            .popover(isPresented: $statusOpen, arrowEdge: .bottom) {
+                WorkspaceStatus(model: model, onTrust: {
+                    statusOpen = false
+                    statusTrust = true
+                }, onSettings: {
+                    statusOpen = false
+                    showSettings = true
+                })
+            }
+            Button { showTerminal.toggle() } label: { Image(systemName: "terminal") }
+                .buttonStyle(WorkspaceButton(selected: showTerminal))
+                .hint("Toggle terminal (⌘⌥T)")
+            if layout.inspectorOnly {
+                Button { closeInspector() } label: {
+                    Label("Conversation", systemImage: "arrow.left")
+                }.buttonStyle(WorkspaceButton())
+            } else {
+                Button { openInspector(.review) } label: {
+                    Image(systemName: "square.on.square")
+                }.buttonStyle(WorkspaceButton(selected: inspectorVisible && stage == .review))
+                    .hint("Review changes")
+            }
+            Button {
+                if inspectorVisible { closeInspector() } else { openInspector(.turn) }
+            } label: { Image(systemName: "sidebar.right") }
+                .buttonStyle(WorkspaceButton(selected: inspectorVisible))
+                .hint(inspectorVisible ? "Close inspector (⌘⌥I)" : "Open activity inspector (⌘⌥I)")
+        }
+        .padding(.horizontal, K.S.md)
+        .frame(height: 52)
+        .spatialChrome()
+        .overlay(alignment: .bottom) { Hairline() }
+    }
+
+    private func toggleSidebar() {
+        if layout.sidebar > 0 || compactSidebar {
+            panel = nil
+            compactSidebar = false
+        } else {
+            panel = lastSidebarPanel
+            compactSidebar = true
+        }
+    }
+
+    private func openInspector(_ target: Stage) {
+        stage = target
+        closeDetour()
+        inspectorVisible = true
+        showSettings = false
+        compactSidebar = false
+    }
+
+    private func closeInspector() {
+        inspectorVisible = false
+        expandedInspector = false
+        model.focusComposerTick += 1
+    }
+
+    /// Keep the conversation alive behind full-width review so draft, selection and scroll
+    /// ownership survive. Only its visibility and hit testing change.
     private var working: some View {
-        HStack(spacing: 0) {
-            // The conversation is the middle, because it is what you are doing. The record of what
-            // the agent changed is a reference you consult, so it sits beside it.
-            // Keyed to the lane. Without this the view's own `@State` — the scroll anchor
-            // above all — survives a lane swap, and `scrollPosition(id:)` is then held against
-            // a turn id belonging to the conversation you just left. An id that resolves to
-            // nothing scrolls into empty space, which is the blank pane people report.
+        ZStack(alignment: .trailing) {
             ChatRail(model: model)
                 .id(model.id)
-                .frame(minWidth: 360)
+                .padding(.trailing, inspectorVisible && !layout.inspectorOnly ? layout.inspector + 9 : 0)
+                .opacity(layout.inspectorOnly ? 0 : 1)
+                .allowsHitTesting(!layout.inspectorOnly)
+                .accessibilityHidden(layout.inspectorOnly)
+            if inspectorVisible {
+                HStack(spacing: 0) {
+                    if !layout.inspectorOnly {
+                        SplitHandle(width: $stageWidth, range: 320...900, reset: 420)
+                    }
+                    inspectorSurface
+                        .padding(.vertical, K.S.md)
+                        .padding(.trailing, K.S.md)
+                        .padding(.leading, layout.inspectorOnly ? K.S.md : 0)
+                        .frame(width: layout.inspectorOnly ? nil : layout.inspector)
+                }
+                .frame(maxWidth: layout.inspectorOnly ? .infinity : nil)
+                .frame(width: layout.inspectorOnly ? nil : layout.inspector + 9)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .animation(reduceMotion ? nil : K.M.settle, value: inspectorVisible)
+        .animation(reduceMotion ? nil : K.M.settle, value: expandedInspector)
+    }
 
-            if showsStage {
-            SplitHandle(width: $stageWidth, range: 300...720, reset: 460)
+    private var inspectorSurface: some View {
+        VStack(spacing: 0) {
+            stageBar
+            detourBar
+            Group {
+                if case .skill(let skill) = model.inspecting {
+                    SkillPane(model: model, skill: skill)
+                } else if let target = model.inspecting {
+                    Inspector(model: model, target: target)
+                } else if let commit = model.viewingCommit {
+                    CommitSurface(model: model, commit: commit)
+                } else if let file = model.viewingFile {
+                    FileSurface(model: model, path: file)
+                } else if let path = model.viewingDiff {
+                    DiffSurface(model: model, path: path)
+                } else {
+                    switch stage {
+                    case .review: ReviewPacketView(model: model, lanes: lanes)
+                    case .turn: TurnStage(model: model).id(model.id)
+                    case .preview: PreviewSurface(model: model)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .floatingSurface()
+    }
 
-            VStack(spacing: 0) {
-                stageBar
-                Hairline()
-                detourBar
-                Group {
-                    if let target = model.inspecting {
-                        Inspector(model: model, target: target)
-                    } else if let commit = model.viewingCommit {
-                        CommitSurface(model: model, commit: commit)
-                    } else if let file = model.viewingFile {
-                        FileSurface(model: model, path: file)
-                    } else if let path = model.viewingDiff {
-                        DiffSurface(model: model, path: path)
-                    } else {
-                        switch stage {
-                        case .review: ReviewPacketView(model: model, lanes: lanes)
-                        case .turn: TurnStage(model: model).id(model.id)
-                        case .preview: PreviewSurface(model: model)
+    private var stageBar: some View {
+        HStack(spacing: K.S.xxs) {
+            ForEach(Stage.shown, id: \.self) { target in
+                Button {
+                    stage = target
+                    closeDetour()
+                } label: {
+                    HStack(spacing: K.S.snug) {
+                        Image(systemName: stageIcon(target))
+                        Text(target.rawValue)
+                        if target == .turn && traceUnread && stage != .turn {
+                            Circle().fill(K.C.accent).frame(width: 5, height: 5)
                         }
                     }
                 }
+                .buttonStyle(WorkspaceButton(selected: stage == target))
+                .accessibilityAddTraits(stage == target ? .isSelected : [])
             }
-            .frame(width: stageFit)
-            }
-        }
-    }
-
-    // MARK: - Making the columns fit the window
-
-    /// The width of the row the columns live in, or 0 before it has been laid out.
-    ///
-    /// `onGeometryChange` rather than a `GeometryReader`: it reports the size without taking part
-    /// in layout, so there is no proposal to divide by and nothing to draw at zero.
-    @State private var available: Double = 0
-
-    /// Everything in the row that is not one of the two resizable columns.
-    static let railWidth: Double = 60
-    static let handleWidth: Double = 9
-    static let chatMinWidth: Double = 360
-    static let stageMinWidth: Double = 300
-    static let panelMinWidth: Double = 200
-
-    /// Below this there is no room for the side panel beside a conversation and a stage.
-    static let panelFloor = railWidth + panelMinWidth + handleWidth
-        + chatMinWidth + handleWidth + stageMinWidth
-    /// Below this there is no room for the stage either, and the window is a conversation.
-    static let stageFloor = railWidth + chatMinWidth + handleWidth + stageMinWidth
-
-    /// Whether each column has the room to be drawn at all.
-    ///
-    /// Two Keel windows side by side on a 14" MacBook Pro is 756pt each, which is less than the
-    /// three columns need however hard they are squeezed — so the panel steps aside rather than
-    /// the window refusing to be that narrow. `panel` itself is untouched, so it comes back the
-    /// moment there is room, and ⌘⇧E still works.
-    private var showsPanel: Bool {
-        panel != nil && (available == 0 || available >= Self.panelFloor)
-    }
-    private var showsStage: Bool { available == 0 || available >= Self.stageFloor }
-
-    /// What is left for the panel and the stage once the rail, the handles and the conversation
-    /// have taken theirs.
-    private var roomForColumns: Double {
-        var fixed = Self.railWidth + Self.chatMinWidth
-        if showsPanel { fixed += Self.handleWidth }
-        if showsStage { fixed += Self.handleWidth }
-        return available - fixed
-    }
-
-    /// The stored widths, clamped to what the window can actually show.
-    ///
-    /// Both columns were rigid `.frame(width:)` reading straight from `@AppStorage`, and nothing
-    /// checked them against the window. Dragged out to a 299pt panel and a 720pt stage, the row
-    /// needed 1517pt — wider than the whole 1512pt screen of a 14" MacBook Pro — so the activity
-    /// rail was pushed off the left edge and there was no way to get it back.
-    ///
-    /// The stored width is a preference, not a measurement: it is left alone, and only what gets
-    /// drawn is clamped. Widen the window and the pane you asked for comes back.
-    private var panelFit: Double {
-        guard available > 0 else { return panelWidth }
-        return Self.columns(in: available, panel: panelWidth, stage: stageWidth,
-                            wantsPanel: panel != nil).panel
-    }
-
-    private var stageFit: Double {
-        guard available > 0 else { return stageWidth }
-        return Self.columns(in: available, panel: panelWidth, stage: stageWidth,
-                            wantsPanel: panel != nil).stage
-    }
-
-    /// What the two columns actually get, given the room and what was asked for.
-    ///
-    /// Pure and static so the invariant can be checked without a window: for every width and every
-    /// pair of stored widths, what is drawn has to *fit*. It did not, and the overflow came off the
-    /// left and took the activity rail with it — a 299pt panel and a 720pt stage need 1517pt of
-    /// row on a screen 1512pt wide.
-    ///
-    /// A column of zero means it steps aside: below `panelFloor` there is no room for the panel
-    /// beside a conversation and a stage, and below `stageFloor` there is no room for the stage.
-    static func columns(in available: Double, panel: Double, stage: Double, wantsPanel: Bool)
-        -> (panel: Double, stage: Double)
-    {
-        let showsPanel = wantsPanel && available >= panelFloor
-        let showsStage = available >= stageFloor
-        var fixed = railWidth + chatMinWidth
-        if showsPanel { fixed += handleWidth }
-        if showsStage { fixed += handleWidth }
-        let room = available - fixed
-
-        let p = showsPanel
-            ? max(panelMinWidth, min(panel, room - (showsStage ? stageMinWidth : 0)))
-            : 0
-        let s = showsStage ? max(stageMinWidth, min(stage, room - p)) : 0
-        return (p, s)
-    }
-
-    private var subtitle: String {
-        let branch = model.branch ?? ""
-        return model.trusted ? (branch.isEmpty ? "trusted" : branch + " · trusted") : branch
-    }
-
-    /// A segmented control drawn by hand: the stock one is a rounded capsule that reads as iOS.
-    private var stageBar: some View {
-        HStack(spacing: K.S.xxs) {
-            ForEach(Stage.shown, id: \.self) { s in
-                // Selected even while a diff or a file is covering the stage. It used to go dark
-                // for all four of those, so opening a diff put you somewhere the navigation could
-                // not describe — no tab lit, no name for where you were, no way back but an ✕.
-                // The tab is where you came from; `detourBar` below says where you have gone.
-                let on = stage == s
-                // A turn ran somewhere you were not looking — nearly always because the Designer
-                // took the stage — and the record of it sits behind a tab nobody clicked. The dot
-                // keeps pulsing until you do, rather than blinking once and going still.
-                let unread = s == .turn && traceUnread && !on
-                let active = (tabActivity(for: s) || unread) && !on
-                HStack(spacing: K.S.half) {
-                    Image(systemName: stageIcon(s)).font(K.F.micro.weight(.medium))
-                    Text(s.rawValue).font(K.F.small.weight(on ? .semibold : .regular))
-                    if active {
-                        Circle()
-                            .fill(K.C.accent)
-                            .frame(width: 5, height: 5)
-                            .transition(.scale.combined(with: .opacity))
-                            .phaseAnimator([false, true]) { dot, pulse in
-                                dot.opacity(pulse ? 0.35 : 1)
-                                    .scaleEffect(pulse ? 0.78 : 1)
-                            } animation: { _ in .easeInOut(duration: 0.8) }
-                    }
+            Spacer(minLength: 0)
+            if available >= 900 {
+                Button { expandedInspector.toggle() } label: {
+                    Image(systemName: expandedInspector ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 }
-                    .foregroundStyle(on ? K.C.text : K.C.dim)
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .background(on ? K.C.raised : .clear, in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay {
-                        if on { RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.line) }
-                    }
-                    .modifier(Nudge(active: unread))
-                    .contentShape(Rectangle())
-                    .asButton {
-                        stage = s
-                        closeDetour()
-                        Telemetry.breadcrumb("stage: \(s.rawValue)")
-                    }
-                    .accessibilityAddTraits(on ? .isSelected : [])
+                .buttonStyle(WorkspaceButton())
+                .hint(expandedInspector ? "Restore split view" : "Expand inspector")
             }
-            Spacer()
+            CloseButton(label: "Back to conversation", action: closeInspector)
         }
-        .padding(.horizontal, K.S.md)
-        .padding(.vertical, K.S.half)
-        .background(K.C.surface)
+        .padding(K.S.sm)
+        .spatialChrome()
+        .overlay(alignment: .bottom) { Hairline() }
     }
 
     /// What is covering the stage, if anything: the four surfaces the segmented control has no
@@ -572,30 +621,6 @@ struct SessionWindow: View {
         }
     }
 
-    /// The tab is unread and the person is somewhere else: a short jiggle, a long pause, repeat.
-    /// It runs only while `active`, because a control that moves forever is one you stop seeing.
-    private struct Nudge: ViewModifier {
-        let active: Bool
-
-        func body(content: Content) -> some View {
-            if active {
-                content.phaseAnimator([0.0, -2.5, 2.5, 0.0]) { tab, x in
-                    tab.offset(x: x)
-                } animation: { x in .easeInOut(duration: x == 0 ? 1.4 : 0.12) }
-            } else {
-                content
-            }
-        }
-    }
-
-    private func tabActivity(for stage: Stage) -> Bool {
-        switch stage {
-        case .turn: return model.running
-        case .preview: return model.editing != nil
-        case .review: return model.running && model.lastReview != nil
-        }
-    }
-
     private var terminalPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: K.S.sm) {
@@ -604,6 +629,7 @@ struct SessionWindow: View {
                 Spacer()
                 CloseButton(size: 10, label: "Close the terminal") {
                     withAnimation(K.M.quick) { showTerminal = false }
+                    model.focusComposerTick += 1
                 }
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.xs)
@@ -630,79 +656,60 @@ struct SessionWindow: View {
             }
             .hint("Command palette (⌘K)")
         }
-        // No terminal button here. There was one in the toolbar *and* one in the status bar, same
-        // glyph, same shortcut, both on screen at once — and the status bar's sits beside the pane
-        // it opens, which is where a toggle belongs.
+        // Terminal and session details live beside the tabs in the workspace command band.
     }
 }
 
 // MARK: - Activity rail
 
-/// Icon-only, 44pt, with a selection bar. The panel it opens is the one you were last in, and
-/// clicking the active icon collapses the panel — the two gestures every editor has.
+/// Labeled destinations keep the everyday workspace discoverable; configuration lives in one menu.
 struct ActivityRail: View {
     @Binding var panel: SessionWindow.Panel?
     let model: SessionModel
     var onSettings: () -> Void = {}
     var onPanel: () -> Void = {}
 
+    private let primary: [SessionWindow.Panel] = [.sessions, .changes, .files, .git]
+
     var body: some View {
-        VStack(alignment: .center, spacing: K.S.xxs) {
-            ForEach(SessionWindow.Panel.shown) { p in
-                RailButton(
-                    icon: p.icon,
-                    label: p.title,
-                    help: help(p),
-                    badge: badge(p),
-                    badgeTone: p == .hooks || p == .readiness || p == .plugins ? K.C.warn : K.C.accent,
-                    selected: panel == p
-                ) {
-                    withAnimation(K.M.quick) { panel = (panel == p) ? nil : p }
-                    onPanel()
-                }
-                if p.endsGroup {
-                    Rectangle().fill(K.C.line)
-                        .frame(width: 18, height: 1)
+        VStack(spacing: K.S.sm) {
+            HStack(spacing: K.S.xxs) {
+                ForEach(primary) { item in
+                    Button { panel = item; onPanel() } label: {
+                        VStack(spacing: K.S.xs) {
+                            Image(systemName: item.icon).font(K.F.small)
+                            Text(item.title).font(K.F.micro)
+                        }
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, K.S.xs)
+                    }
+                    .buttonStyle(WorkspaceButton(selected: panel == item))
+                    .hint(help(item))
+                    .accessibilityAddTraits(panel == item ? .isSelected : [])
                 }
             }
-            Spacer()
-            // `SettingsLink`, not a selector by name. `NSApp.sendAction(Selector("showSettingsWindow:"))`
-            // fails silently when the selector does not match the OS version, which is exactly
-            // what it was doing — the button was wired to nothing.
-            Button { onSettings() } label: {
-                VStack(spacing: K.S.tight) {
-                    Image(systemName: "gearshape").font(K.F.ui(17))
-                    Text("Settings").font(K.F.tiny)
-                }
-                    .foregroundStyle(toolsNeedAttention > 0 ? K.C.warn : K.C.faint)
-                    .frame(width: 60, height: 46)
-                    .overlay(alignment: .topTrailing) {
-                        if toolsNeedAttention > 0 {
-                            Text("\(toolsNeedAttention)")
-                                .font(K.F.tiny.weight(.bold))
-                                .foregroundStyle(K.C.bg)
-                                .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
-                                .background(K.C.warn, in: Capsule())
-                                .offset(x: -4, y: 2)
+            HStack(spacing: K.S.sm) {
+                Menu {
+                    ForEach(SessionWindow.Panel.shown.filter { !primary.contains($0) }) { item in
+                        Button { panel = item; onPanel() } label: {
+                            Label(item.title, systemImage: item.icon)
                         }
                     }
-                    .contentShape(Rectangle())
+                } label: {
+                    Label(panel.map { primary.contains($0) ? "Tools & agents" : $0.title } ?? "Tools & agents",
+                          systemImage: "slider.horizontal.3")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
+                }
+                .menuStyle(.borderlessButton)
+                Spacer(minLength: 0)
+                Button(action: onSettings) { Image(systemName: "gearshape") }
+                    .buttonStyle(WorkspaceButton())
+                    .hint(toolsNeedAttention > 0 ? "Settings — tools need attention (⌘,)" : "Settings (⌘,)")
             }
-            .buttonStyle(.plain)
-            .hint(toolsNeedAttention > 0
-                  ? "Settings (⌘,) — \(toolsNeedAttention) tool\(toolsNeedAttention == 1 ? "" : "s") "
-                    + "not installed or not signed in"
-                  : "Settings (⌘,)")
         }
-        .padding(.vertical, K.S.sm)
-        // Fixed and first in line for space: the rail never gives up width to a pane being
-        // dragged beside it.
-        .frame(width: 60)
-        .fixedSize(horizontal: true, vertical: false)
-        .layoutPriority(2)
-        .background(K.C.surface)
-        .overlay(alignment: .trailing) { Rectangle().fill(K.C.line).frame(width: 1) }
+        .padding(K.S.sm)
+        .spatialChrome()
+        .overlay(alignment: .bottom) { Hairline() }
     }
 
     /// The tooltip carries the reason for the badge, so a number on an icon is not a riddle.
@@ -711,6 +718,8 @@ struct ActivityRail: View {
         switch p {
         case .plugins where n > 0:
             return "Plugins — \(n) recommended for this repository, not installed"
+        case .skills where n > 0:
+            return "Skills — \(n) recommended plugin\(n == 1 ? "" : "s") would add skills here"
         case .skills:
             return "Skills — \(model.workspace.skills.count) installed"
         case .monitors:
@@ -753,10 +762,10 @@ struct ActivityRail: View {
         // Hooks that came with the repository are the one count worth shouting: each is a shell
         // command someone else wrote that runs on this machine.
         case .hooks: model.workspace.hooks.filter(\.fromRepo).count.nonZero
-        // What this repository is missing, on the panel that installs it. Skills get no number
-        // of their own: a plugin is what carries them, and the same count on two icons read as
-        // one bug.
-        case .plugins: model.missingSuggestions.count.nonZero
+        // What this repository is missing. On Skills as well as Plugins: the skills are what is
+        // missing, and people look for them under Skills — with no number there, a repository
+        // short of its recommended skills looked complete. Both panels list them with Install.
+        case .plugins, .skills: model.missingSuggestions.count.nonZero
         default: nil
         }
     }
@@ -766,202 +775,69 @@ private extension Int {
     var nonZero: Int? { self == 0 ? nil : self }
 }
 
-struct RailButton: View {
-    let icon: String
-    /// Under the icon. Nine unlabelled glyphs in a column is a riddle; testers said so.
-    var label: String? = nil
-    let help: String
-    let badge: Int?
-    /// Warn for something wrong, accent for something available. A suggestion is an opportunity,
-    /// and colouring it like a failure trains people to ignore the colour that means failure.
-    var badgeTone: Color = K.C.accent
-    let selected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            // The fill comes first so the whole row is painted and therefore hit-testable:
-            // a `.plain` button's target is otherwise the glyph itself. Full rail width, so the
-            // selection bar can sit on the rail's own edge rather than 4pt inside it.
-            Rectangle()
-                .fill(hovering ? K.C.hover : .clear)
-                .frame(width: 60, height: 46)
-                // Centred, which is the whole point of the fixed frame. This was a
-                // `ZStack(alignment: .topTrailing)` so the badge would sit in the corner — and
-                // that alignment applied to the icon too, pushing every one of them right.
-                .overlay(
-                    VStack(spacing: K.S.tight) {
-                        Image(systemName: icon).font(K.F.ui(17, .regular))
-                        if let label {
-                            Text(label).font(K.F.tiny).lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-                    }
-                    .foregroundStyle(selected ? K.C.text : (hovering ? K.C.dim : K.C.faint))
-                )
-                // The badge is positioned on its own, so it cannot move the icon.
-                .overlay(alignment: .topTrailing) {
-                    if let badge {
-                        Text("\(badge)")
-                            .font(K.F.tiny.weight(.bold))
-                            .foregroundStyle(K.C.bg)
-                            .padding(.horizontal, K.S.tight).padding(.vertical, K.S.hair)
-                            .background(badgeTone, in: Capsule())
-                            .offset(x: -8, y: 3)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .leading) {
-            if selected { Rectangle().fill(K.C.accent).frame(width: 2) }
-        }
-        .onHover { hovering = $0 }
-        .hint(help)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
 // MARK: - Status bar
 
 /// The instrument readout. Everything here answers a question you would otherwise have to go and
 /// ask: which branch, is this project trusted, what will the gate run, what has this cost.
-struct StatusBar: View {
+/// Session details stay available without taking a permanent row from the conversation.
+struct WorkspaceStatus: View {
     let model: SessionModel
-    @Binding var terminalOpen: Bool
-    var onTrust: (() -> Void)? = nil
+    var onTrust: () -> Void = {}
+    var onSettings: () -> Void = {}
     @State private var branchMenu = false
 
     var body: some View {
-        HStack(spacing: K.S.md) {
-            // A daemon that stopped answering used to read as every panel quietly emptying.
-            // Said here, once, for as long as it is true; the connection comes back on its own.
-            if !model.project.events.connected, model.project.port != 0 {
-                Pill(text: "RECONNECTING", tone: .warn)
-                    .help("Keel's daemon is not answering. The window reconnects on its own; "
-                          + "nothing here is lost.")
-            }
+        VStack(alignment: .leading, spacing: K.S.lg) {
+            Label(model.project.events.connected || model.project.port == 0 ? "Workspace status" : "Reconnecting to Keel",
+                  systemImage: "waveform.path")
+                .font(K.F.title).foregroundStyle(K.C.text)
             if model.isWorkspace {
-                // Several repositories in one folder. Each keeps its own branch, and there is no
-                // single one to name — so they are all named, which is also how you tell at a
-                // glance that this folder is a workspace rather than a project.
                 ForEach(model.repos) { repo in
-                    HStack(spacing: K.S.tight) {
-                        Image(systemName: "arrow.triangle.branch").font(K.F.tiny)
-                        Text(repo.name).font(K.F.micro).foregroundStyle(K.C.dim)
-                        Text(repo.branch ?? "—").font(K.F.codeTiny)
-                    }
-                    .foregroundStyle(K.C.faint)
-                    .help("\(repo.name) is its own git repository, on \(repo.branch ?? "no branch")")
+                    detail(repo.name, repo.branch ?? "No branch")
                 }
             } else if model.isRepo {
-                // The branch is a menu, the way every IDE's status bar treats it: click to see
-                // the others and switch, or start a new one from here.
-                // The branch is a menu, the same as every IDE's status bar — and it was drawn as
-                // one more grey readout, so nothing said so.
-                StatusToggle(icon: "arrow.triangle.branch", title: model.branch ?? "—",
-                             on: branchMenu, shortcut: "switch or create a branch") {
+                Button {
                     Task { await model.refreshBranches() }
                     branchMenu = true
+                } label: {
+                    Label(model.branch ?? "No branch", systemImage: "arrow.triangle.branch")
+                        .lineLimit(1).truncationMode(.middle)
                 }
-                .popover(isPresented: $branchMenu, arrowEdge: .top) {
+                .buttonStyle(WorkspaceButton())
+                .popover(isPresented: $branchMenu) {
                     BranchMenu(model: model) { branchMenu = false }
                 }
             } else {
-                HStack(spacing: K.S.tight) {
-                    Image(systemName: "exclamationmark.triangle").font(K.F.tiny)
-                    Text("no git").font(K.F.micro)
+                detail("Git", "Not initialized")
+            }
+            detail("Permissions", model.trusted ? "Trusted project" : "Approval required")
+            detail("Checks", model.gateCommand ?? "Not configured")
+            detail("Changed files", "\(model.changes.count)")
+            if let context = model.contextTokens { detail("Context", compact(context) + " tokens") }
+            if let tokens = model.sessionTokens { detail("Session", compact(tokens.total) + " tokens") }
+            if let cost = model.sessionCost { detail("Cost", money(cost)) }
+            if model.running, let rate = model.burnRate { detail("Spend rate", money(rate) + "/min") }
+            HStack(spacing: K.S.sm) {
+                if !model.trusted {
+                    Button("Project permissions…", action: onTrust).buttonStyle(QuietButton())
                 }
-                .foregroundStyle(K.C.warn)
-                .help("This project is not a git repository. Initialise one from Changes.")
-            }
-
-            if model.trusted {
-                HStack(spacing: K.S.tight) {
-                    Image(systemName: "checkmark.shield.fill").font(K.F.tiny)
-                    Text("trusted").font(K.F.micro)
-                }
-                .foregroundStyle(K.C.warn)
-                .help("This project runs commands without asking. Withdraw in Settings › Permissions.")
-            } else if model.projectOpen {
-                // Untrusted is the safe state, but it is also the one where every command
-                // becomes a question — said here so the first refusal is not a surprise, and
-                // one click away from the decision that removes the toll.
-                HStack(spacing: K.S.tight) {
-                    Image(systemName: "exclamationmark.shield").font(K.F.tiny)
-                    Text("not trusted · commands will ask").font(K.F.micro)
-                }
-                .foregroundStyle(K.C.warn)
-                .contentShape(Rectangle())
-                .asButton { onTrust?() }
-                .help("Commands the agent runs here need your approval each time. Click to trust this project (⌘⇧T).")
-            }
-
-            if !model.changes.isEmpty {
-                item("plusminus", "\(model.changes.count)")
-            }
-
-            Spacer()
-
-            if let gate = model.gateCommand {
-                item("checkmark.seal", gate)
-            } else {
-                HStack(spacing: K.S.tight) {
-                    Image(systemName: "exclamationmark.triangle").font(K.F.tiny)
-                    Text("no gate").font(K.F.micro)
-                }
-                .foregroundStyle(K.C.warn)
-                .help("This project declares no checks, so Keel cannot verify a turn's claim.")
-            }
-
-            // The context window, in tokens. Warm past 150k because that is where compaction
-            // starts to loom on a 200k model, and compaction you did not see coming is how a
-            // four-hour session loses its file paths.
-            if let ctx = model.contextTokens {
-                HStack(spacing: K.S.tight) {
-                    Image(systemName: "rectangle.stack").font(K.F.tiny)
-                    Text("ctx \(compact(ctx))").font(K.F.codeTiny).monospacedDigit()
-                }
-                .foregroundStyle(ctx > 150_000 ? K.C.warn : K.C.faint)
-                .help("Tokens in the context window after the last request. Compaction is near "
-                      + "when this is high.")
-            }
-            if let t = model.sessionTokens {
-                Text(compact(t.total) + " tok")
-                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
-                    .help("Tokens this session, cache included")
-            }
-            if model.running, let rate = model.burnRate {
-                Text(money(rate, places: 2) + "/min")
-                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
-                    .help("Spend rate, from this session's finished turns")
-            }
-            if let cost = model.sessionCost {
-                Text(money(cost))
-                    .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
-                    .help("This session, as reported by the CLI")
-            }
-
-            StatusToggle(icon: "terminal", title: "Terminal",
-                         on: terminalOpen, shortcut: "⌘⌥T") {
-                withAnimation(K.M.quick) { terminalOpen.toggle() }
+                Button("Settings…", action: onSettings).buttonStyle(QuietButton())
             }
         }
-        .padding(.horizontal, K.S.md)
-        .padding(.vertical, K.S.snug)
+        .padding(K.S.xl)
+        .frame(width: 360)
         .background(K.C.surface)
-        .foregroundStyle(K.C.faint)
     }
 
-    private func item(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: K.S.tight) {
-            Image(systemName: icon).font(K.F.tiny)
-            Text(text).font(K.F.codeTiny).lineLimit(1)
+    private func detail(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: K.S.lg) {
+            Text(title).font(K.F.small).foregroundStyle(K.C.dim)
+            Spacer(minLength: 0)
+            Text(value).font(K.F.small.weight(.medium)).foregroundStyle(K.C.text)
+                .multilineTextAlignment(.trailing).textSelection(.enabled)
         }
     }
 }
-
 
 /// The open project, and every way of changing it.
 ///
@@ -1019,11 +895,10 @@ struct ProjectMenu: View {
                 Image(systemName: "folder.fill").font(K.F.ui(prominent ? 12 : 10))
                 Text((model.repoPath as NSString).lastPathComponent)
                     .font(prominent ? K.F.body.weight(.semibold) : K.F.codeTiny.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: prominent ? 160 : 220)
                 Image(systemName: "chevron.down")
                     .font(K.F.ui(prominent ? 9 : 6, .bold))
-                if prominent {
-                    Text("switch").font(K.F.micro).foregroundStyle(K.C.faint)
-                }
             }
             .foregroundStyle(prominent ? K.C.text : K.C.dim)
             .padding(.horizontal, prominent ? K.S.sm : 0)
@@ -1090,12 +965,15 @@ struct WindowEvents: ViewModifier {
     @Binding var paletteOpen: Bool
     @Binding var starting: Bool
     @Binding var panel: SessionWindow.Panel?
+    @Binding var inspectorVisible: Bool
+    @Binding var expandedInspector: Bool
+    var onToggleSidebar: (() -> Void)? = nil
     @State private var confirmingTrust = false
 
     func body(content: Content) -> some View {
         content
             .modifier(ChatEvents(lanes: lanes, model: model, showSettings: $showSettings))
-            .modifier(LaneEvents(lanes: lanes, panel: $panel))
+            .modifier(LaneEvents(lanes: lanes, panel: $panel, onToggleSidebar: onToggleSidebar))
             .onWindowCommand(.keelTrust) { _ in
                 confirmingTrust = true
             }
@@ -1113,10 +991,27 @@ struct WindowEvents: ViewModifier {
                 await lanes.refreshShared()
             }
             .modifier(StageEvents(lanes: lanes, model: model, stage: $stage,
-                                  showSettings: $showSettings))
+                                  showSettings: $showSettings, inspectorVisible: $inspectorVisible))
             .onWindowCommand(.keelReviewTask) { _ in
                 model.workbench.detour = nil
-                withAnimation(K.M.quick) { stage = .review; showSettings = false }
+                withAnimation(K.M.quick) { stage = .review; showSettings = false; inspectorVisible = true }
+            }
+            .onWindowCommand(.keelToggleInspector) { _ in
+                inspectorVisible.toggle()
+                showSettings = false
+                if !inspectorVisible {
+                    expandedInspector = false
+                    model.focusComposerTick += 1
+                }
+            }
+            .onWindowCommand(.keelExpandInspector) { _ in
+                inspectorVisible = true
+                expandedInspector.toggle()
+                showSettings = false
+            }
+            .onWindowCommand(.keelFocusComposer) { _ in
+                expandedInspector = false
+                inspectorVisible = false
             }
             .onWindowCommand(.keelPalette) { _ in
                 withAnimation(K.M.quick) { paletteOpen.toggle() }
@@ -1201,6 +1096,7 @@ struct TrustAlert: ViewModifier {
 private struct LaneEvents: ViewModifier {
     let lanes: Lanes
     @Binding var panel: SessionWindow.Panel?
+    var onToggleSidebar: (() -> Void)? = nil
     /// The last panel that was open, so ⌘⇧E brings back what you closed rather than a fixed one.
     @State private var lastPanel = SessionWindow.Panel.sessions
 
@@ -1213,6 +1109,7 @@ private struct LaneEvents: ViewModifier {
                 step((note.object as? Int) ?? 1)
             }
             .onWindowCommand(.keelTogglePanel) { _ in
+                if let onToggleSidebar { onToggleSidebar(); return }
                 withAnimation(K.M.quick) {
                     if let open = panel {
                         lastPanel = open
@@ -1350,6 +1247,7 @@ private struct StageEvents: ViewModifier {
     let model: SessionModel
     @Binding var stage: SessionWindow.Stage
     @Binding var showSettings: Bool
+    @Binding var inspectorVisible: Bool
 
     func body(content: Content) -> some View {
         content
@@ -1360,13 +1258,14 @@ private struct StageEvents: ViewModifier {
                 followTheEdit()
             }
             .onChange(of: model.running) { followTheWork() }
-            .onChange(of: model.focusedTurn) { showTrace() }
+            .onChange(of: model.workbench.traceRequest) { showTrace() }
             .onWindowCommand(.keelShowStage) { note in
                 guard let raw = note.object as? String,
                       let s = SessionWindow.Stage(rawValue: raw),
                       SessionWindow.Stage.shown.contains(s) else { return }
                 withAnimation(K.M.quick) {
                     stage = s
+                    inspectorVisible = true
                     showSettings = false
                     model.workbench.detour = nil
                 }
@@ -1388,6 +1287,7 @@ private struct StageEvents: ViewModifier {
               model.id == lanes.activeID else { return }
         withAnimation(K.M.quick) {
             stage = .preview
+            inspectorVisible = true
             showSettings = false
             model.viewingDiff = nil
             model.inspecting = nil
@@ -1412,6 +1312,7 @@ private struct StageEvents: ViewModifier {
 
     private func showTrace() {
         guard model.focusedTurn != nil else { return }
+        inspectorVisible = true
         stage = .turn
         showSettings = false
         model.viewingDiff = nil

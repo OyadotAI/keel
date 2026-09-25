@@ -17,11 +17,8 @@ struct KeelApp: App {
                     delegate.app = app
                     await app.start()
                 }
-                // Rail 60 + conversation 360 + handle 9 + stage 300. The side panel steps
-                // aside below 938 and the stage below 729, so this is the floor for a window
-                // that still shows the conversation *and* what the agent did — which is two
-                // Keel windows side by side on a 14" MacBook Pro, 756pt each.
-                .frame(minWidth: SessionWindow.stageFloor, minHeight: 560)
+                // Compact windows present the inspector as a full-width destination.
+                .frame(minWidth: 600, minHeight: 560)
                 // The window draws its own chrome: a translucent background would put the desktop
                 // behind a diff, and a dense reading surface needs an opaque ground.
                 .containerBackground(K.C.bg, for: .window)
@@ -42,7 +39,7 @@ struct KeelApp: App {
                 DetachedWindow(app: app, request: request)
                     // A detached window draws the same panes, so it has the same floor — and it
                     // is the window most likely to be put beside another one.
-                    .frame(minWidth: SessionWindow.stageFloor, minHeight: 560)
+                    .frame(minWidth: 600, minHeight: 560)
                     .containerBackground(K.C.bg, for: .window)
             }
         }
@@ -144,10 +141,18 @@ struct KeelApp: App {
                 }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
                 Divider()
-                Button("Toggle side panel") {
+                Button("Toggle sidebar") {
                     NotificationCenter.default.post(name: .keelTogglePanel, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Toggle inspector") {
+                    NotificationCenter.default.post(name: .keelToggleInspector, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                Button("Expand or restore inspector") {
+                    NotificationCenter.default.post(name: .keelExpandInspector, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option, .shift])
             }
         }
     }
@@ -377,6 +382,8 @@ extension Notification.Name {
     /// all — not a shortcut, not a menu item, not a palette entry.
     static let keelShowPanel = Notification.Name("keel.showPanel")
     /// Object: a `SessionWindow.Stage` raw value. Same story: three stages, clickable only.
+    static let keelToggleInspector = Notification.Name("keel.toggleInspector")
+    static let keelExpandInspector = Notification.Name("keel.expandInspector")
     static let keelShowStage = Notification.Name("keel.showStage")
     static let keelReviewTask = Notification.Name("keel.reviewTask")
     /// Object: the command to type into the terminal, opening it first.

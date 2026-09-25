@@ -93,7 +93,7 @@ struct ApprovalCard: View {
         // in `onAppear`. That version started at `opacity(0)` and depended on `onAppear` firing to
         // become visible at all — which it does not in an offscreen render, and which made the one
         // card in the app that must never be missed the one card that could fail to draw.
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+        .elevated()
     }
 }
 
@@ -205,7 +205,7 @@ struct QuestionCard: View {
         // in `onAppear`. That version started at `opacity(0)` and depended on `onAppear` firing to
         // become visible at all — which it does not in an offscreen render, and which made the one
         // card in the app that must never be missed the one card that could fail to draw.
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
+        .elevated()
     }
 
     /// The answers as the text the agent reads: one line per question.
@@ -299,6 +299,6 @@ struct PlanCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.warn.opacity(0.45), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 3)
+        .elevated()
     }
 }

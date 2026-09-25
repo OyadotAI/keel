@@ -1,4 +1,4 @@
-use crate::{Scope, frontmatter};
+use crate::{Plugin, Scope, frontmatter};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
@@ -9,6 +9,11 @@ pub struct Skill {
     pub description: Option<String>,
     pub scope: Scope,
     pub path: Utf8PathBuf,
+    /// The plugin that ships it, for `Scope::Plugin`.
+    pub plugin: Option<String>,
+    /// Written by Keel's generator, which marks its frontmatter `generated-by: keel`. Said apart
+    /// from the rest of the project's skills because nobody wrote it by hand.
+    pub generated: bool,
 }
 
 /// Every skill visible from `repo`, project scope first.
@@ -18,6 +23,26 @@ pub struct Skill {
 pub fn discover_skills(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Skill> {
     let mut skills = read_skill_dir(&repo.join(".claude").join("skills"), Scope::Project);
     skills.extend(read_skill_dir(&claude_home.join("skills"), Scope::User));
+    skills
+}
+
+/// The skills inside every enabled plugin: `<installPath>/skills/<name>/SKILL.md`. A disabled
+/// plugin's skills do not load, so they are not listed as something the agent can use.
+pub fn plugin_skills(plugins: &[Plugin]) -> Vec<Skill> {
+    let mut skills: Vec<Skill> = plugins
+        .iter()
+        .filter(|p| p.enabled)
+        .filter_map(|p| Some((p, p.install_path.as_ref()?)))
+        .flat_map(|(p, root)| {
+            read_skill_dir(&root.join("skills"), Scope::Plugin)
+                .into_iter()
+                .map(|s| Skill {
+                    plugin: Some(p.name.clone()),
+                    ..s
+                })
+        })
+        .collect();
+    skills.sort_by(|a, b| (&a.plugin, &a.name).cmp(&(&b.plugin, &b.name)));
     skills
 }
 
@@ -35,6 +60,11 @@ fn read_skill_dir(dir: &Utf8Path, scope: Scope) -> Vec<Skill> {
             let manifest = dir.join("SKILL.md");
             let contents = std::fs::read_to_string(&manifest).ok()?;
             let (name, description) = frontmatter(&contents);
+            let generated = contents
+                .lines()
+                .skip(1)
+                .take_while(|l| l.trim() != "---")
+                .any(|l| l.trim() == "generated-by: keel");
             Some(Skill {
                 // Fall back to the directory name: a skill with malformed frontmatter still exists
                 // and still loads, so hiding it would misrepresent what the agent can do.
@@ -42,6 +72,8 @@ fn read_skill_dir(dir: &Utf8Path, scope: Scope) -> Vec<Skill> {
                 description,
                 scope,
                 path: manifest,
+                plugin: None,
+                generated,
             })
         })
         .collect();
@@ -102,5 +134,38 @@ mod tests {
         );
         assert_eq!(skills[0].name, "mystery");
         assert!(skills[0].description.is_none());
+    }
+
+    #[test]
+    fn generated_and_plugin_skills_are_told_apart() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf8");
+        std::fs::create_dir_all(root.join(".claude/skills/made")).unwrap();
+        std::fs::write(
+            root.join(".claude/skills/made/SKILL.md"),
+            "---\nname: made\nmetadata:\n  generated-by: keel\n---\n",
+        )
+        .unwrap();
+        let skills = discover_skills(&root, Utf8Path::new("/nonexistent"));
+        assert!(skills[0].generated);
+
+        let plugin = |enabled| Plugin {
+            name: "kit".into(),
+            enabled,
+            marketplace: None,
+            version: None,
+            scope: None,
+            installed_at: None,
+            last_updated: None,
+            install_path: Some(root.join(".claude")),
+        };
+        let found = plugin_skills(&[plugin(true)]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].scope, Scope::Plugin);
+        assert_eq!(found[0].plugin.as_deref(), Some("kit"));
+        assert!(
+            plugin_skills(&[plugin(false)]).is_empty(),
+            "a disabled plugin loads nothing"
+        );
     }
 }

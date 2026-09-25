@@ -315,12 +315,13 @@ struct TurnCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: K.S.sm) {
             header
-            // Capped as a string, not only by `lineLimit` — two lines of a 12,000-character paste
-            // still costs measuring all 12,000. `String.capped` says why.
-            Text(turn.prompt.capped(300))
-                .font(K.F.small).foregroundStyle(K.C.dim)
-                .lineLimit(2).truncationMode(.tail)
+            prompt
 
+            // A failed gate is the reason to be looking at this card, so what it found comes
+            // before what changed.
+            if case .failed(_, let problems) = turn.gate, !problems.isEmpty {
+                ProblemList(problems: problems, model: model)
+            }
             if !turn.files.isEmpty { ChangedFiles(turn: turn, model: model) }
 
             if let why = turn.notIsolated {
@@ -350,10 +351,6 @@ struct TurnCard: View {
 
             if let design = turn.design { DesignStrip(design: design) }
 
-            if case .failed(_, let problems) = turn.gate, !problems.isEmpty {
-                ProblemList(problems: problems, model: model)
-            }
-
             // Questions and approvals live in the conversation pane, above the composer —
             // the one place on screen whatever the stage is showing. Rendering them here too
             // would register every shortcut twice.
@@ -367,21 +364,53 @@ struct TurnCard: View {
         .background(
             model.focusedTurn == turn.id ? K.C.accent.wash : .clear
         )
+        // A static bar on the leading edge for a turn that wants attention — running, waiting,
+        // checking, failed. Nothing animates: in a lazy stack an animation is work per frame.
+        // The live one is its own view, so reading `pending` rebuilds that bar and not every card.
+        .overlay(alignment: .leading) {
+            if !turn.finished {
+                LiveBar(model: model)
+            } else if let tone = TurnVerdict.bar(turn) {
+                Rectangle().fill(tone).frame(width: 2)
+            }
+        }
     }
 
-    /// Which turn and when. The compact prompt beneath this header anchors execution evidence to
-    /// intent without repeating the full conversation.
+    /// The ask, at the size of the thing you click by — it is what the card is *about*. Capped
+    /// as a string, not only by `lineLimit`: two lines of a 12,000-character paste still costs
+    /// measuring all 12,000. `String.capped` says why.
+    private var prompt: some View {
+        HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
+            Text(turn.prompt.capped(300))
+                .font(K.F.row).foregroundStyle(K.C.text)
+                .lineLimit(2).truncationMode(.tail)
+            Spacer(minLength: K.S.sm)
+            Text("#\(number) ").font(K.F.codeTiny).foregroundStyle(K.C.faint)
+                + Text(turn.started, style: .time).font(K.F.codeTiny).foregroundStyle(K.C.faint)
+        }
+    }
+
+    /// The verdict first, then the figures a merge is decided on. It was a caption strip at the
+    /// bottom of the card, under the files, the problems and the raw output — the one line a
+    /// person scans for, placed where they read last.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: K.S.sm) {
-            Text("TURN \(number)")
-                .sectionLabel()
-                .foregroundStyle(K.C.faint)
-            if !turn.finished {
-                Pill(text: model.following ? "RUNNING · outside Keel" : "RUNNING", tone: .accent)
+            if turn.finished {
+                TurnVerdict(turn: turn)
+            } else {
+                LiveVerdict(model: model)
             }
             Spacer(minLength: K.S.sm)
-            Text(turn.started, style: .time)
-                .font(K.F.codeTiny).foregroundStyle(K.C.faint)
+            // The clock ticks once a second, so it sits outside `ViewThatFits`: inside, every
+            // candidate would be measured again on every tick.
+            ViewThatFits(in: .horizontal) {
+                figures(sha: true, files: true)
+                figures(sha: false, files: true)
+                figures(sha: false, files: false)
+            }
+            if !turn.finished {
+                Elapsed(started: turn.started, running: true)
+            }
             if turn.snapshot != nil, turn.finished {
                 Menu {
                     Button("Restore files to before this turn") {
@@ -396,6 +425,133 @@ struct TurnCard: View {
             }
         }
     }
+
+    private func figures(sha: Bool, files: Bool) -> some View {
+        let n = turn.files.count
+        var parts: [String] = []
+        if files, n > 0 { parts.append("\(n) file\(n == 1 ? "" : "s")") }
+        if sha, let c = turn.commit { parts.append(c) }
+        if turn.finished, let ms = turn.durationMS { parts.append(duration(ms)) }
+        if let c = turn.cost { parts.append(money(c)) }
+        return Text(parts.joined(separator: " · "))
+            .font(K.F.codeSmall).monospacedDigit().foregroundStyle(K.C.dim)
+            .lineLimit(1).fixedSize()
+            .help(turn.commit.map { "Keel committed this turn as \($0). Undo from the Changes panel." } ?? "")
+    }
+}
+
+/// `1.2s`, `2m14s`.
+func duration(_ ms: Int) -> String {
+    let s = Double(ms) / 1000
+    return s < 60
+        ? s.formatted(.number.precision(.fractionLength(1))) + "s"
+        : "\(Int(s) / 60)m\((Int(s) % 60).formatted(.number.precision(.integerLength(2))))s"
+}
+
+/// What a finished turn came to, in one glyph and a word or two in the state's colour.
+///
+/// "Stopped by you" is deliberately absent: the daemon does not report a stop as a fact yet, and
+/// a state the app made up would draw differently live and on replay. A stopped turn reads as
+/// what the gate said about it.
+struct TurnVerdict: View {
+    let turn: Turn
+
+    var body: some View {
+        let (icon, word, tone, cmd) = Self.parts(turn)
+        HStack(alignment: .firstTextBaseline, spacing: K.S.half) {
+            Image(systemName: icon).font(K.F.small).foregroundStyle(tone)
+            Text(word).font(K.F.row).foregroundStyle(tone).lineLimit(1)
+            if let cmd {
+                Text(cmd).font(K.F.codeSmall).foregroundStyle(K.C.dim).lineLimit(1)
+                    .truncationMode(.middle)
+            } else if let why = Self.why(turn) {
+                // `.none` carries its reason — nothing configured, the checks stopped part way,
+                // the command would not start — and those are three different things to be told.
+                Text(why).font(K.F.small).foregroundStyle(K.C.dim).lineLimit(1)
+                    .truncationMode(.tail).help(why)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    static func why(_ turn: Turn) -> String? {
+        if case .none(let why) = turn.gate, !why.isEmpty { return why }
+        return nil
+    }
+
+    /// The colour of the leading bar, when the turn has one.
+    static func bar(_ turn: Turn) -> Color? {
+        switch turn.gate {
+        case .running: return K.C.accent
+        case .failed: return K.C.del
+        default: return turn.failure != nil ? K.C.del : nil
+        }
+    }
+
+    /// The gate first, whatever else happened. An agent that exited badly still leaves a tree the
+    /// daemon checks and may commit — the gate's verdict on it is what a merge is decided on, and
+    /// the failure keeps its own red line in the card below. Only a turn the gate never looked at
+    /// is headed by the failure.
+    static func parts(_ turn: Turn) -> (String, String, Color, String?) {
+        if turn.failure != nil, case .notRun = turn.gate {
+            return ("exclamationmark.octagon.fill", "Did not finish", K.C.del, nil)
+        }
+        switch turn.gate {
+        case .running(let cmd):
+            return ("circle.dotted", "Checking", K.C.accent, short(cmd))
+        case .passed(let cmd, let t):
+            return ("checkmark.seal.fill", "Passed", K.C.add,
+                    "\(short(cmd)) · \(t.formatted(.number.precision(.fractionLength(1))))s")
+        case .failed(let cmd, let problems):
+            let n = problems.count
+            return ("xmark.seal.fill", n == 0 ? "Failed" : "Failed · \(n) problem\(n == 1 ? "" : "s")",
+                    K.C.del, short(cmd))
+        case .none:
+            return ("minus.circle", "Not checked", K.C.dim, nil)
+        case .notRun:
+            // Nothing to check is not a finding: a turn that only read, or one replayed from a
+            // transcript, has no gate to have skipped.
+            if !turn.replayed, turn.didWork { return ("minus.circle", "Not checked", K.C.dim, nil) }
+            return ("checkmark", "Done", K.C.dim, nil)
+        }
+    }
+
+    /// `go test ./... && go vet ./...` → `go test ./…`: the first command, elided.
+    static func short(_ cmd: String) -> String {
+        let first = cmd.split(separator: "&&").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? cmd
+        return first.count > 22 ? String(first.prefix(21)) + "…" : first
+    }
+}
+
+/// The running turn's verdict. Its own view because it reads `pending`, which changes on every
+/// approval — read from `TurnCard.body`, that would rebuild every card in the stack.
+struct LiveVerdict: View {
+    let model: SessionModel
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: K.S.half) {
+            if let ask = model.pending.first {
+                Image(systemName: "hand.raised.fill").font(K.F.small).foregroundStyle(K.C.warn)
+                Text("Needs you").font(K.F.row).foregroundStyle(K.C.warn)
+                Text("\(ask.tool) \(ask.command)").font(K.F.codeSmall).foregroundStyle(K.C.dim)
+                    .lineLimit(1).truncationMode(.tail)
+            } else {
+                StatusDot(failed: false, running: true)
+                Text(model.following ? "Running · outside Keel" : "Running")
+                    .font(K.F.row).foregroundStyle(K.C.accent)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The running card's leading bar: amber while it waits on you, blue otherwise.
+struct LiveBar: View {
+    let model: SessionModel
+    var body: some View {
+        Rectangle().fill(model.pending.isEmpty ? K.C.accent : K.C.warn).frame(width: 2)
+    }
+
 }
 
 /// After a rewind: the way back, for as long as it is one click away.
@@ -494,7 +650,7 @@ struct SectionBar: View {
         HStack(spacing: K.S.sm) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
                 .font(K.F.tiny.weight(.bold))
-                .foregroundStyle(hovering ? K.C.dim : K.C.faint.opacity(0.6))
+                .foregroundStyle(hovering ? K.C.dim : K.C.faint)
                 .frame(width: 10)
             Text(title)
                 .sectionLabel()
@@ -535,7 +691,7 @@ struct CallGlyph: View {
     private var color: Color {
         if failed { return K.C.del }
         switch risk {
-        case .safe: return running ? K.C.accent : K.C.faint.opacity(0.7)
+        case .safe: return running ? K.C.accent : K.C.faint
         case .warn: return K.C.warn
         case .danger: return K.C.del
         }
@@ -597,7 +753,7 @@ struct Elapsed: View {
         let label = s < 60 ? "\(s)s" : "\(s / 60)m\(String(format: "%02d", s % 60))s"
         return Text(label)
             .font(K.F.codeTiny).monospacedDigit()
-            .foregroundStyle(live ? K.C.accent : K.C.faint.opacity(0.7))
+            .foregroundStyle(live ? K.C.accent : K.C.faint)
     }
 }
 
@@ -608,7 +764,7 @@ struct StatusDot: View {
     @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
-        let color = failed ? K.C.del : (running ? K.C.accent : K.C.faint.opacity(0.55))
+        let color = failed ? K.C.del : (running ? K.C.accent : K.C.lineStrong)
         // `PhaseAnimator` rather than an `onAppear` flag. The flag version restarted its cycle
         // every time the row was rebuilt — which, in a list that rebuilds on every streamed tool
         // call, was most frames — so a column of dots flickered out of step with each other.
@@ -632,145 +788,21 @@ struct StatusDot: View {
 
 // MARK: - Footer
 
-/// The verdict, the clock and the cost. `.passed` is the exit code of the project's own check,
-/// run whether or not the agent bothered — not the agent's opinion of its own work.
+/// What the turn consumed. The verdict, the clock, the cost and the commit moved to the header,
+/// where a person deciding whether to merge looks first; what is left is one quiet line.
 struct TurnFooter: View {
     let turn: Turn
 
-    /// Whether the footer has anything to say at all.
-    private var speaks: Bool {
-        // Nothing to report while it runs: the working bar above says what is happening, and an
-        // empty footer row under every live turn is just a gap.
-        if !turn.finished { return false }
-        if turn.durationMS != nil || turn.cost != nil { return true }
-        if case .notRun = turn.gate { return !turn.replayed && turn.didWork }
-        return true
-    }
-
     var body: some View {
-        if speaks {
-            ViewThatFits(in: .horizontal) {
-                fullRow
-                compactRow
-            }
-            .padding(.top, K.S.sm)
+        if turn.finished, let t = turn.tokens {
+            let all = t.input + t.cacheRead + t.cacheWrite
+            let cached = t.cacheRead > 0
+                ? " · " + t.cached.formatted(.percent.precision(.fractionLength(0))) + " cached" : ""
+            Text("\(compact(all)) in · \(compact(t.output)) out\(cached)")
+                .font(K.F.codeTiny).monospacedDigit().foregroundStyle(K.C.faint)
+                .lineLimit(1)
+                .help("Tokens this turn, as the CLI reported them: \(all) in, \(t.output) out")
         }
-    }
-
-    /// A strip of labelled cells rather than a line of fragments: the caption says what the
-    /// number is, the value stands alone, and the gate is the one cell with a colour.
-    private var fullRow: some View {
-        HStack(spacing: 0) {
-            gateCell
-            if let sha = turn.commit {
-                divider
-                cell("COMMIT", sha, icon: "checkmark.circle", tone: K.C.add,
-                     help: "Keel committed this turn's changes as \(sha). Undo from the Changes panel.")
-            }
-            Spacer(minLength: K.S.sm)
-            if let ms = turn.durationMS {
-                cell("TIME", duration(ms), icon: "clock", help: "Wall-clock time for this turn")
-                divider
-            }
-            if let t = turn.tokens {
-                let value = "\(compact(t.input + t.cacheRead + t.cacheWrite)) in · \(compact(t.output)) out"
-                cell("TOKENS", value, icon: "arrow.up.arrow.down",
-                     help: "Tokens this turn, as the CLI reported them: \(t.input + t.cacheRead + t.cacheWrite) in, \(t.output) out"
-                           + (t.cacheRead > 0 ? ", " + t.cached.formatted(.percent.precision(.fractionLength(0))) + " served from cache" : ""))
-                if t.cacheRead > 0 {
-                    Text(t.cached.formatted(.percent.precision(.fractionLength(0))) + " cached")
-                        .font(K.F.micro).foregroundStyle(K.C.faint).padding(.leading, K.S.xs)
-                        .padding(.trailing, K.S.sm)
-                }
-                if turn.cost != nil { divider }
-            }
-            if let c = turn.cost {
-                cell("COST", money(c), icon: "dollarsign.circle", help: "What this turn cost, from the CLI's own figure")
-            }
-        }
-    }
-
-    private var compactRow: some View {
-        VStack(alignment: .leading, spacing: K.S.xs) {
-            HStack(spacing: 0) {
-                gateCell
-                if let sha = turn.commit {
-                    divider
-                    cell("COMMIT", sha, icon: "checkmark.circle", tone: K.C.add,
-                         help: "Keel committed this turn's changes as \(sha). Undo from the Changes panel.")
-                }
-                Spacer(minLength: K.S.xs)
-                if let c = turn.cost {
-                    cell("COST", money(c), icon: "dollarsign.circle", help: "What this turn cost, from the CLI's own figure")
-                }
-            }
-            HStack(spacing: 0) {
-                if let ms = turn.durationMS {
-                    cell("TIME", duration(ms), icon: "clock", help: "Wall-clock time for this turn")
-                    divider
-                }
-                if let t = turn.tokens {
-                    let inTok = compact(t.input + t.cacheRead + t.cacheWrite)
-                    let outTok = compact(t.output)
-                    let cached = t.cacheRead > 0 ? " (\(t.cached.formatted(.percent.precision(.fractionLength(0)))) cached)" : ""
-                    cell("TOKENS", "\(inTok) in · \(outTok) out\(cached)", icon: "arrow.up.arrow.down",
-                         help: "Tokens this turn: \(t.input + t.cacheRead + t.cacheWrite) in, \(t.output) out")
-                }
-                Spacer(minLength: 0)
-            }
-        }
-    }
-
-    private var divider: some View {
-        Rectangle().fill(K.C.line).frame(width: 1, height: 22).padding(.horizontal, K.S.sm)
-    }
-
-    /// Caption over value. The caption is what made the old line unreadable by its absence.
-    private func cell(_ label: String, _ value: String, icon: String, tone: Color = K.C.text, help: String) -> some View {
-        VStack(alignment: .leading, spacing: K.S.hair) {
-            Text(label).sectionLabel().foregroundStyle(K.C.faint)
-            HStack(spacing: K.S.xs) {
-                Image(systemName: icon).font(K.F.tiny).foregroundStyle(tone == K.C.text ? K.C.faint : tone)
-                Text(value).font(K.F.codeSmall).monospacedDigit().foregroundStyle(tone).lineLimit(1)
-            }
-        }
-        .help(help)
-    }
-
-    @ViewBuilder
-    private var gateCell: some View {
-        switch turn.gate {
-        case .notRun:
-            if turn.finished, !turn.replayed, turn.didWork {
-                cell("GATE", "no checks ran", icon: "minus.circle", help: "This turn changed files but nothing was checked afterwards.")
-            }
-        case .running(let cmd):
-            cell("GATE", "checking · \(short(cmd))", icon: "circle.dotted", tone: K.C.accent, help: "Running \(cmd)")
-        case .passed(let cmd, let t):
-            let took = t.formatted(.number.precision(.fractionLength(1)))
-            cell("GATE", "passed · \(short(cmd)) · \(took)s", icon: "checkmark.seal.fill", tone: K.C.add,
-                 help: "\(cmd) passed in \(took)s")
-        case .failed(let cmd, let problems):
-            cell("GATE", "failed · \(short(cmd))" + (problems.isEmpty ? "" : " · \(problems.count) problem\(problems.count == 1 ? "" : "s")"),
-                 icon: "xmark.seal.fill", tone: K.C.del, help: "\(cmd) failed" + (problems.isEmpty ? "" : " with \(problems.count) problems, listed above"))
-        case .none:
-            // Why there is no gate is a fact about the project, not about this turn, and the
-            // status bar says it once. Repeating it under every turn was most of the noise.
-            cell("GATE", "none set", icon: "minus.circle", help: "No check command is configured for this project. Set one in the status bar.")
-        }
-    }
-
-    /// `go test ./... && go vet ./...` → `go test ./…`: the first command, elided.
-    private func short(_ cmd: String) -> String {
-        let first = cmd.split(separator: "&&").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? cmd
-        return first.count > 22 ? String(first.prefix(21)) + "…" : first
-    }
-
-    private func duration(_ ms: Int) -> String {
-        let s = Double(ms) / 1000
-        return s < 60
-            ? s.formatted(.number.precision(.fractionLength(1))) + "s"
-            : "\(Int(s) / 60)m\((Int(s) % 60).formatted(.number.precision(.integerLength(2))))s"
     }
 }
 

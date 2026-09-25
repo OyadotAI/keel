@@ -791,31 +791,23 @@ fn expired_google_credentials_have_provider_recovery_not_context_setup() {
 }
 
 async fn run_checked(program: &str, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .kill_on_drop(true);
-    let child = command
-        .spawn()
-        .map_err(|e| format!("Could not run {program}: {e}"))?;
-    let pid = child.id();
-    let output =
-        match tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
-            .await
-        {
-            Ok(done) => done.map_err(|e| format!("Could not run {program}: {e}"))?,
-            Err(_) => {
-                // The group, not the leader: a tool that forked and hung left its children behind.
-                if let Some(pid) = pid {
-                    crate::signals::end_tree(pid);
-                }
-                return Err("Connection check timed out after 8 seconds.".to_string());
-            }
-        };
+    // Through `git::output_within`, like every other bounded process here: its own group, ended
+    // on timeout, and a short grace after exit rather than the whole ceiling — a tool that forks
+    // an updater and exits was read as "not installed" after eight seconds.
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    let name = program.to_string();
+    let output = crate::serve::in_blocking(move || {
+        crate::git::output_within(command, std::time::Duration::from_secs(8))
+    })
+    .await
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            "Connection check timed out after 8 seconds.".to_string()
+        } else {
+            format!("Could not run {name}: {e}")
+        }
+    })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {

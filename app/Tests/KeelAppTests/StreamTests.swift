@@ -791,11 +791,13 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(t.calls[0].children.map(\.tool), ["Read", "Write"])
         XCTAssertEqual(t.files, ["src/new.ts"], "a file the subagent wrote is the turn's file")
 
-        // The rail names what is happening now, not the Task it is happening inside.
+        // What is happening now is the deepest running call, not the Task it is inside. The tab
+        // no longer shows it — reading it rebuilt every tab on every streamed delta — but the
+        // call tree still knows.
         m.turns = [t]; m.running = true
-        if case .working(let what) = m.activity {
-            XCTAssertEqual(what, "Write src/new.ts")
-        } else { XCTFail("running") }
+        XCTAssertEqual(m.activity, .working)
+        let now = t.calls.last?.deepestRunning
+        XCTAssertEqual(now.map { "\($0.tool) \($0.subject)" }, "Write src/new.ts")
 
         feed(#"{"type":"user","parent_tool_use_id":"task1","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"ok"}]}}"#, m, t)
         XCTAssertFalse(t.calls[0].children[1].running, "a child's result finds the child")

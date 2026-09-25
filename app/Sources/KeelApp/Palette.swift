@@ -35,8 +35,14 @@ struct Palette: View {
             Item(title: "Next lane", detail: "the one below", shortcut: "⌘⇧]") {
                 NotificationCenter.default.post(name: .keelNextLane, object: 1)
             },
-            Item(title: "Toggle side panel", detail: "more room for the trace", shortcut: "⌘⇧E") {
+            Item(title: "Toggle sidebar", detail: "Show or hide workspace navigation", shortcut: "⌘⇧E") {
                 NotificationCenter.default.post(name: .keelTogglePanel, object: nil)
+            },
+            Item(title: "Toggle inspector", detail: "Activity, review, and selected files", shortcut: "⌘⌥I") {
+                NotificationCenter.default.post(name: .keelToggleInspector, object: nil)
+            },
+            Item(title: "Expand or restore inspector", detail: "More room to read code", shortcut: "⌘⌥⇧I") {
+                NotificationCenter.default.post(name: .keelExpandInspector, object: nil)
             },
             Item(title: "Trust this project…", detail: "stop asking about commands here",
                  shortcut: "⌘⇧T") {
@@ -76,7 +82,7 @@ struct Palette: View {
             })
         }
         for stage in SessionWindow.Stage.shown {
-            out.append(Item(title: stage.rawValue, detail: "stage") {
+            out.append(Item(title: stage.rawValue, detail: "Open in inspector") {
                 NotificationCenter.default.post(name: .keelShowStage, object: stage.rawValue)
             })
         }
@@ -296,7 +302,7 @@ struct Palette: View {
         .frame(width: 560)
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
         .overlay(RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.lineStrong, lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 30, y: 12)
+        .shadow(color: K.C.shadow, radius: 30, y: 12)
         .onAppear { focused = true }
         .onKeyPress(.downArrow) { selection = min(selection + 1, max(hits.count - 1, 0)); return .handled }
         .onKeyPress(.upArrow) { selection = max(selection - 1, 0); return .handled }

@@ -33,18 +33,30 @@ struct FileTree: View {
             } else {
                 // Filtering flattens: a match three folders down is not easier to find because
                 // its ancestors are still drawn above it.
-                ForEach(model.files.filter { $0.localizedCaseInsensitiveContains(filter) }.prefix(80), id: \.self) { path in
+                let matches = model.files.filter { $0.localizedCaseInsensitiveContains(filter) }
+                if matches.isEmpty {
+                    EmptyState(icon: "magnifyingglass", title: "No matching files",
+                               "Try a filename or part of its path.", actionLabel: "Clear search") { filter = "" }
+                }
+                if matches.count > 80 {
+                    Text("Showing 80 of \(matches.count) matches. Narrow your search to see more.")
+                        .font(K.F.micro).foregroundStyle(K.C.dim).padding(.horizontal, K.S.md)
+                }
+                ForEach(matches.prefix(80), id: \.self) { path in
                     HoverRow {
-                        HStack(spacing: 0) {
-                            Text((path as NSString).deletingLastPathComponent + "/")
-                                .foregroundStyle(K.C.faint)
-                            Text((path as NSString).lastPathComponent)
-                                .foregroundStyle(K.C.dim)
+                        VStack(alignment: .leading, spacing: K.S.xs) {
+                            Text((path as NSString).lastPathComponent).font(K.F.row).foregroundStyle(K.C.text)
+                            Text((path as NSString).deletingLastPathComponent)
+                                .font(K.F.codeSmall).foregroundStyle(K.C.dim)
                         }
-                        .font(K.F.codeSmall)
-                        .lineLimit(1).truncationMode(.head)
+                        .lineLimit(1).truncationMode(.middle)
+                        .padding(.vertical, K.S.xs)
                     } action: {
                         model.show(file: path)
+                    }
+                    .contextMenu {
+                        Button("Attach as context") { model.mention(path); model.focusComposerTick += 1 }
+                        Button("Reveal in Finder") { Task { await model.reveal(path) } }
                     }
                 }
             }
@@ -70,7 +82,7 @@ private struct TreeRow: View {
                 }
                 Image(systemName: node.dir ? "folder.fill" : icon(node.name))
                     .font(K.F.tiny)
-                    .foregroundStyle(node.dir ? K.C.faint : K.C.faint.opacity(0.7))
+                    .foregroundStyle(K.C.faint)
                     .frame(width: 11)
                 Text(node.name)
                     .font(K.F.small)

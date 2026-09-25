@@ -116,7 +116,11 @@ enum Wire {
         var scope: String
         /// Where it lives on disk. Absent for MCP servers, which are config entries not files.
         var path: String?
-        var id: String { scope + name }
+        /// Skills only: the plugin that ships it, and whether Keel's generator wrote it.
+        var plugin: String?
+        var generated: Bool?
+        /// With the plugin, because two plugins can ship a skill of the same name.
+        var id: String { scope + (plugin ?? "") + name }
         /// Anything that arrived *with the repository* was written by whoever wrote the repo.
         var fromRepo: Bool { scope == "project" }
 

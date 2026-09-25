@@ -336,6 +336,9 @@ final class Lanes {
     /// badge care about. "2 running" beside one visible spinner is a number nobody can check.
     var runningCount: Int { shown.count { $0.running } }
     var waitingCount: Int { shown.reduce(0) { $0 + $1.pending.count } }
+    /// The first lane, in tab order, that is waiting on the person. The counter's click goes here:
+    /// with the strip scrolled, a waiting tab can be off-screen and the counter is all that says so.
+    var firstWaiting: SessionModel? { shown.first { !$0.pending.isEmpty } }
 
     /// Whether *another* lane is mid-turn — the condition under which a second agent editing the
     /// same working tree can clobber the first.

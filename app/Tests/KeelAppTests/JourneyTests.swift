@@ -194,6 +194,14 @@ final class JourneyTests: XCTestCase {
     }
 
     /// The form refuses what the daemon would, before the round trip.
+    /// A proposal is shown as a diff: removed lines, then added, the rest as context, in order.
+    func testSkillDiffShowsOnlyWhatChanged() {
+        let rows = DiffLines.rows("a\nb\nc", "a\nB\nc\nd").map { "\($0.0)\($0.1)" }
+        XCTAssertEqual(rows, [" a", "-b", "+B", " c", "+d"])
+        XCTAssertEqual(DiffLines.rows("", "x").map { "\($0.0)\($0.1)" }, ["+x"], "a new file is all added")
+        XCTAssertEqual(SkillPane.body(of: "---\nname: x\n---\n\n# X\n"), "# X")
+    }
+
     func testNewSkillNameFollowsTheDaemonsRule() {
         for good in ["release-notes", "a", "x2"] { XCTAssertTrue(NewSkill.validName(good), good) }
         for bad in ["", "Release", "../x", "a/b", "-x", "a b", "é", String(repeating: "a", count: 65)] {

@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 /// changed — and each one opens onto exactly what was passed to it.
 struct ChatRail: View {
     @Bindable var model: SessionModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
     /// A drag is over the conversation. The whole column takes the drop — a target you have to aim
     /// at is a target you miss, and the composer is the smallest thing on screen.
@@ -58,7 +59,7 @@ struct ChatRail: View {
                         }
                     }
                     .padding(.horizontal, K.S.xxl)
-                    .frame(maxWidth: 800, alignment: .leading)
+                    .frame(maxWidth: 820, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, K.S.md)
                     .transition(.asymmetric(
@@ -90,7 +91,7 @@ struct ChatRail: View {
                     .padding(.horizontal, K.S.sm).padding(.vertical, K.S.xs)
                     .background(K.C.surface, in: RoundedRectangle(cornerRadius: K.R.sm))
                     .padding(.horizontal, K.S.xxl)
-                    .frame(maxWidth: 800, alignment: .leading)
+                    .frame(maxWidth: 820, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, K.S.sm)
                     .transition(.opacity)
@@ -98,9 +99,9 @@ struct ChatRail: View {
                 if model.running {
                     WorkingBar(model: model)
                         .padding(.horizontal, K.S.xxl)
-                        .frame(maxWidth: 800, alignment: .leading)
+                        .frame(maxWidth: 820, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.top, K.S.sm)
+                        .padding(.top, K.S.lg)
                         .transition(.opacity)
                 }
             }
@@ -114,9 +115,9 @@ struct ChatRail: View {
             // through AppKit each time, and the main thread pegged for as long as it ran. It
             // arrives as a hang inside `StackLayout.placeChildren` with no Keel frame in it, and
             // it repeats on every turn.
-            .animation(K.M.enter, value: model.pending.count)
-            .animation(K.M.settle, value: model.running)
-            .animation(K.M.settle, value: model.following)
+            .animation(reduceMotion ? nil : K.M.enter, value: model.pending.count)
+            .animation(reduceMotion ? nil : K.M.settle, value: model.running)
+            .animation(reduceMotion ? nil : K.M.settle, value: model.following)
             Composer(model: model, focused: $composerFocused, dropping: $dropping)
         }
         .background(K.C.bg)
@@ -158,11 +159,12 @@ struct ChatRail: View {
                 ForEach(Array(model.turns.enumerated()).dropFirst(hidden), id: \.element.id) { i, turn in
                     ChatTurn(turn: turn, number: i + 1, model: model)
                         .id("chat-\(turn.id)")
+                        .modifier(ChatArrival(active: model.running && model.turns.last?.id == turn.id))
                 }
             }
             .padding(.horizontal, K.S.xxl)
             .padding(.vertical, K.S.xl)
-            .frame(maxWidth: 800, alignment: .leading)
+            .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -339,21 +341,23 @@ struct ChatRail: View {
             }
 
             VStack(alignment: .leading, spacing: K.S.xs) {
-                Text("Ask for a change")
-                    .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.dim)
+                Text("What will you build?")
+                    .font(K.F.display).foregroundStyle(K.C.text)
+                    .padding(.bottom, K.S.md)
                 ForEach(suggestions, id: \.self) { s in
                     Button { model.prompt = s } label: {
                         HStack(spacing: K.S.xs) {
-                            Image(systemName: "arrow.turn.down.right")
-                                .font(K.F.tiny).foregroundStyle(K.C.faint)
-                            Text(s).font(K.F.small).foregroundStyle(K.C.faint)
+                            Image(systemName: "arrow.up.right")
+                                .font(K.F.small).foregroundStyle(K.C.accent)
+                            Text(s).font(K.F.small).foregroundStyle(K.C.dim)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WorkspaceButton())
                 }
             }
         }
+        .padding(.top, K.S.xxl)
         .frame(maxWidth: 520, alignment: .leading)
     }
 
@@ -379,6 +383,7 @@ struct ChatRail: View {
 /// belongs here is what you asked, what it thought, and what it said back — plus a marker that
 /// jumps the stage to the matching turn, which is cheaper than repeating its contents.
 struct ChatTurn: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let turn: Turn
     let number: Int
     let model: SessionModel
@@ -400,8 +405,8 @@ struct ChatTurn: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: K.S.half) {
-            // Yours, on the right, in blue. Nothing above it: a message does not need a title.
+        VStack(alignment: .leading, spacing: K.S.md) {
+            // The person’s message stays distinct from the agent’s response. Nothing above it: a message does not need a title.
             //
             // Except when nobody typed it. A finished background job is delivered as a turn, and
             // drawn as a blue bubble on the right it reads as something the person said — the
@@ -420,7 +425,7 @@ struct ChatTurn: View {
                         // long session was a visible stall, and every keystroke in the composer
                         // paid it again.
                         Text(shown)
-                            .font(K.F.body)
+                            .font(K.F.reading)
                             .foregroundStyle(K.C.text)
                             .textSelection(.enabled)
                             .lineLimit(expanded ? nil : Self.promptLines)
@@ -433,9 +438,9 @@ struct ChatTurn: View {
                                 .foregroundStyle(K.C.accent)
                         }
                     }
-                    .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-                    .background(K.C.accent.wash, in: RoundedRectangle(cornerRadius: K.R.md))
-                    .overlay(RoundedRectangle(cornerRadius: K.R.md).stroke(K.C.accent.opacity(0.25), lineWidth: 1))
+                    .padding(K.S.lg)
+                    .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
+                    .overlay(RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.lineStrong.opacity(0.6), lineWidth: 1))
                     .frame(maxWidth: 560, alignment: .trailing)
                 }
             }
@@ -450,8 +455,18 @@ struct ChatTurn: View {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     HStack(spacing: K.S.xs) {
                         Image(systemName: "sailboat.fill")
-                            .font(K.F.tiny.weight(.semibold))
-                        Text("Keel").font(K.F.micro.weight(.semibold))
+                            .font(K.F.small.weight(.semibold))
+                            .foregroundStyle(K.C.accent)
+                            .frame(width: 28, height: 28)
+                            .background(K.C.tint, in: RoundedRectangle(cornerRadius: K.R.md))
+                        Text("Keel").font(K.F.row)
+                        Spacer(minLength: 0)
+                        if model.running && model.turns.last?.id == turn.id {
+                            Image(systemName: "waveform")
+                                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                                .font(K.F.small).foregroundStyle(K.C.accent)
+                            Text("Working").font(K.F.micro).foregroundStyle(K.C.dim)
+                        }
                     }
                     .foregroundStyle(K.C.dim)
 
@@ -493,7 +508,7 @@ struct ChatTurn: View {
             .padding(.leading, K.S.xs)
             .frame(minHeight: 18)
             .contentShape(Rectangle())
-            .animation(K.M.quick, value: hovering)
+            .animation(reduceMotion ? nil : K.M.quick, value: hovering)
         }
         // The whole column is the hover target, gaps included: without a shape, the pointer
         // leaving a bubble for the transparent space beside the caption ended the hover, and
@@ -539,7 +554,7 @@ private struct ChatTurnCopyButtons: View {
             }
             CopyChip(label: "both", copied: copied == "both") { put("> \(turn.prompt)\n\n\(turn.text)", "both") }
         }
-        .opacity(hovering || copied != nil ? 1 : 0.4)
+        .opacity(hovering || copied != nil ? 1 : 0.7)
     }
 }
 
@@ -584,6 +599,7 @@ struct CopyChip: View {
 
 struct Composer: View {
     @Bindable var model: SessionModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState.Binding var focused: Bool
     /// Owned by the rail, which is the thing you drop on.
     @Binding var dropping: Bool
@@ -597,7 +613,15 @@ struct Composer: View {
     /// for any prompt that did not arrive one keystroke at a time — a restored draft, a palette
     /// insertion, a test — which is the same way the approval card managed to render invisible.
     /// State that mirrors other state is state that can be wrong.
-    private var completing: Completion? { completion(in: model.prompt) }
+    private var completing: Completion? {
+        browsing.map { Completion(kind: $0, query: browseQuery, start: model.prompt.endIndex) }
+            ?? completion(in: model.prompt)
+    }
+    @State private var browsing: Completion.Kind?
+    @State private var browseQuery = ""
+    @FocusState private var browseFocused: Bool
+    @State private var expandedEditor = false
+    @State private var queueOpen = false
     /// Which row is highlighted. This one is genuinely the view's own.
     @State private var pick = 0
     /// Dismissed with Escape, until the text changes again.
@@ -640,7 +664,7 @@ struct Composer: View {
 
     /// At most eight, because a list that fills the window is a palette and there is one of those.
     private var hits: [Hit] {
-        guard let c = completing, model.prompt != dismissed else { return [] }
+        guard let c = completing, browsing != nil || model.prompt != dismissed else { return [] }
         let all: [Hit]
         switch c.kind {
         case .file:
@@ -667,11 +691,14 @@ struct Composer: View {
         guard let c = completing else { return }
         switch c.kind {
         case .file:
-            model.prompt.removeSubrange(c.start...)
+            if browsing == nil { model.prompt.removeSubrange(c.start...) }
             model.mention(hit.value)
         case .command:
-            model.prompt = "/" + hit.value
+            model.prompt = "/" + hit.value + (browsing != nil && !model.prompt.isEmpty ? " " + model.prompt : "")
         }
+        browsing = nil
+        browseFocused = false
+        dismissed = model.prompt
         pick = 0
         focused = true
     }
@@ -679,18 +706,16 @@ struct Composer: View {
     var body: some View {
         VStack(spacing: K.S.sm) {
             PinList(model: model)
-            AttachmentStrip(model: model)
-            completionList
 
             if !model.notes.isEmpty {
                 Button {
-                    model.prompt = model.commentsPrompt()
+                    model.prompt = [model.prompt, model.commentsPrompt()].filter { !$0.isEmpty }.joined(separator: "\n\n")
                     model.notes.removeAll()
                     focused = true
                 } label: {
                     HStack(spacing: K.S.snug) {
                         Image(systemName: "text.bubble.fill").font(K.F.tiny)
-                        Text("Send \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")")
+                        Text("Add \(model.notes.count) review comment\(model.notes.count == 1 ? "" : "s")")
                     }
                 }
                 .buttonStyle(QuietButton(tone: K.C.accent))
@@ -698,13 +723,24 @@ struct Composer: View {
             }
 
             if !model.queued.isEmpty {
-                HStack(spacing: K.S.snug) {
-                    Image(systemName: "arrow.down.circle").font(K.F.tiny)
-                    Text("\(model.queued.count) queued — they run in order when this turn ends")
-                        .font(K.F.micro)
+                DisclosureGroup(isExpanded: $queueOpen) {
+                    ForEach(Array(model.queued.enumerated()), id: \.offset) { index, message in
+                        HStack(spacing: K.S.sm) {
+                            Text(message).font(K.F.small).foregroundStyle(K.C.text).lineLimit(2)
+                            Spacer(minLength: 0)
+                            Button("Edit") {
+                                model.restoreQueued(at: index)
+                                focused = true
+                            }.buttonStyle(QuietButton())
+                            Button { if model.queued.indices.contains(index) { model.queued.remove(at: index) } } label: { Image(systemName: "xmark") }
+                                .buttonStyle(WorkspaceButton()).hint("Remove queued message")
+                        }
+                        .padding(.vertical, K.S.xs)
+                    }
+                } label: {
+                    Label("\(model.queued.count) queued · runs after this reply", systemImage: "text.line.first.and.arrowtriangle.forward")
+                        .font(K.F.small).foregroundStyle(K.C.dim)
                 }
-                .foregroundStyle(K.C.faint)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let err = model.lastError {
@@ -714,25 +750,51 @@ struct Composer: View {
             }
 
             VStack(spacing: 0) {
+                if !model.attachments.isEmpty {
+                    AttachmentStrip(model: model)
+                        .padding(.horizontal, K.S.lg).padding(.top, K.S.md)
+                }
                 field
-                controls.overlay(alignment: .top) { Hairline() }
+                controls
             }
-            .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
+            .background {
+                RoundedRectangle(cornerRadius: K.R.floating).fill(K.C.raised)
+                    .shadow(color: K.C.shadow, radius: 20, y: 8)
+            }
             .overlay(
-                RoundedRectangle(cornerRadius: K.R.lg)
-                    .stroke(dropping ? K.C.accent : (focused ? K.C.lineStrong : K.C.line),
+                RoundedRectangle(cornerRadius: K.R.floating)
+                    .stroke(dropping ? K.C.accent : (focused ? K.C.accent.opacity(0.65) : K.C.lineStrong.opacity(0.5)),
                             lineWidth: dropping ? 2 : 1)
             )
-            .animation(K.M.quick, value: focused)
-            .animation(K.M.quick, value: dropping)
+            .overlay(alignment: .top) {
+                completionList
+                    .alignmentGuide(.top) { $0[.bottom] + K.S.sm }
+            }
+            .animation(reduceMotion ? nil : K.M.quick, value: focused)
+            .animation(reduceMotion ? nil : K.M.quick, value: dropping)
+            HStack(spacing: K.S.sm) {
+                Text(completing != nil && (browsing != nil || model.prompt != dismissed)
+                     ? "↑↓ to select · Return to insert · Esc to dismiss"
+                     : "Return to send · ⇧Return for a new line")
+                Spacer(minLength: 0)
+                if !model.attachments.isEmpty { Text("\(model.attachments.count) attached") }
+            }
+            .font(K.F.micro).foregroundStyle(K.C.faint)
             memoryNote
         }
-        .padding(.horizontal, K.S.xxl)
-        .padding(.top, K.S.sm)
-        .padding(.bottom, K.S.lg)
-        .frame(maxWidth: 800, alignment: .leading)
+        .padding(.horizontal, K.S.xl)
+        .padding(.top, K.S.xl)
+        .padding(.bottom, K.S.xl)
+        .frame(maxWidth: 820, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .center)
-        .background(K.C.bg)
+        .background {
+            ZStack {
+                K.C.bg
+                RadialGradient(colors: [K.C.accent.opacity(0.035), .clear],
+                               center: .bottom, startRadius: 0, endRadius: 220)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     /// The `@` file picker the paperclip's tooltip and `docs/features.md` both promised, and the
@@ -743,9 +805,31 @@ struct Composer: View {
     /// assembled and would then have to keep in step.
     @ViewBuilder
     private var completionList: some View {
-        if !hits.isEmpty {
+        let options = hits
+        if completing != nil && (browsing != nil || model.prompt != dismissed) {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(hits.enumerated()), id: \.element.value) { i, hit in
+                HStack(spacing: K.S.sm) {
+                    Text(completing?.kind == .command ? "Commands" : "Project files")
+                        .font(K.F.small.weight(.semibold)).foregroundStyle(K.C.dim)
+                    Spacer(minLength: 0)
+                    CloseButton(label: "Dismiss suggestions") { _ = navigate(.dismiss); focused = true }
+                }
+                .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
+                if browsing != nil {
+                    TextField("Search by name…", text: $browseQuery)
+                        .field().font(K.F.body).focused($browseFocused)
+                        .padding(.horizontal, K.S.md).padding(.bottom, K.S.sm)
+                        .onAppear { browseFocused = true }
+                        .onChange(of: browseQuery) { pick = 0 }
+                        .onSubmit { if !options.isEmpty { take(options[min(pick, options.count - 1)]) } }
+                        .onKeyPress(.upArrow) { navigate(.previous) ? .handled : .ignored }
+                        .onKeyPress(.downArrow) { navigate(.next) ? .handled : .ignored }
+                        .onKeyPress(.escape) { _ = navigate(.dismiss); focused = true; return .handled }
+                }
+                if options.isEmpty {
+                    Text("No matches. Try another name.").font(K.F.small).foregroundStyle(K.C.dim).padding(K.S.md)
+                }
+                ForEach(Array(options.enumerated()), id: \.element.value) { i, hit in
                     HoverRow(selected: i == pick) {
                         HStack(spacing: K.S.sm) {
                             Image(systemName: completing?.kind == .command
@@ -776,70 +860,38 @@ struct Composer: View {
     }
 
     private var field: some View {
-        TextField("Ask Keel to change, explain, or review…", text: $model.prompt, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(K.F.reading)
-            .lineSpacing(3)
-            .lineLimit(1...8)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, K.S.md).padding(.vertical, K.S.sm)
-            .focused($focused)
-            // The button has always drawn a `return` glyph; until now Return only inserted a
-            // newline and ⌘Return was the real key, so the control lied about itself. ⇧Return
-            // still makes a new line, which is the convention every chat composer uses.
-            .onSubmit { if hits.isEmpty { model.send() } }
-            .onPasteCommand(of: [.png, .tiff, .fileURL, .plainText]) { _ in
-                if !model.takePaste(.general) {
-                    model.prompt += NSPasteboard.general.string(forType: .string) ?? ""
-                }
-            }
-            // Native vertical-axis layout measures wrapped lines, not only explicit newlines, so
-            // the composer grows naturally until eight lines and then becomes scrollable.
-            .onChange(of: model.prompt) {
-                if model.prompt.count > SessionModel.longPaste { model.fileLongText() }
-                pick = 0
-            }
-            // Arrow keys and Return belong to the list while it is up, and to the composer
-            // otherwise — the same rule the palette follows.
-            .onKeyPress(.upArrow) {
-                guard !hits.isEmpty else { return .ignored }
-                pick = max(0, pick - 1)
-                return .handled
-            }
-            .onKeyPress(.downArrow) {
-                guard !hits.isEmpty else { return .ignored }
-                pick = min(hits.count - 1, pick + 1)
-                return .handled
-            }
-            .onKeyPress(.tab) {
-                guard !hits.isEmpty else { return .ignored }
-                take(hits[pick])
-                return .handled
-            }
-            .onKeyPress(.return) {
-                guard !hits.isEmpty else { return .ignored }
-                // A file is inserted and you carry on typing; a command *is* the whole prompt, so
-                // completing it and sending it are one gesture, the way the terminal does it.
-                let kind = completing?.kind
-                take(hits[pick])
-                if kind == .command { model.send() }
-                return .handled
-            }
-            .onKeyPress(.escape) {
-                guard !hits.isEmpty else { return .ignored }
-                dismissed = model.prompt
-                return .handled
-            }
-            // ⌃W deletes the word behind the cursor, the way every shell does. AppKit binds that
-            // to ⌥⌫ and leaves ⌃W unbound, and this is a box people reach for straight out of a
-            // terminal. Sent to the field editor rather than done to `model.prompt` here: the
-            // caret is the text view's to know, and deleting the last word of the whole prompt is
-            // the wrong edit whenever the caret is not at the end.
-            .onKeyPress(.init("w"), phases: .down) { press in
-                guard press.modifiers.contains(.control) else { return .ignored }
-                let deleteWord = #selector(NSStandardKeyBindingResponding.deleteWordBackward(_:))
-                return NSApp.sendAction(deleteWord, to: nil, from: nil) ? .handled : .ignored
-            }
+        ComposerEditor(text: $model.prompt,
+                       focused: Binding(get: { focused }, set: { focused = $0 }),
+                       expanded: expandedEditor, submit: { model.send() },
+                       navigate: navigate, pasteAttachment: { model.takePaste($0) })
+            .padding(.horizontal, K.S.lg).padding(.top, K.S.md).padding(.bottom, K.S.sm)
+            .onChange(of: model.prompt) { pick = 0 }
+    }
+
+    private func navigate(_ direction: ComposerNavigation) -> Bool {
+        let options = hits
+        if direction == .dismiss {
+            guard !options.isEmpty || browsing != nil || (completing != nil && model.prompt != dismissed) else { return false }
+            dismissed = model.prompt
+            browsing = nil
+            return true
+        }
+        guard !options.isEmpty else { return false }
+        switch direction {
+        case .previous: pick = max(0, pick - 1)
+        case .next: pick = min(options.count - 1, pick + 1)
+        case .accept: take(options[min(pick, options.count - 1)])
+        case .dismiss: break
+        }
+        return true
+    }
+
+    private func browse(_ kind: Completion.Kind) {
+        browsing = kind
+        browseQuery = ""
+        dismissed = ""
+        pick = 0
+        focused = false
     }
 
     @ViewBuilder
@@ -858,13 +910,27 @@ struct Composer: View {
         HStack(spacing: K.S.sm) {
             ModeToggle(mode: $model.mode)
             ModelPicker(model: model)
-            Button { model.chooseAttachments() } label: {
-                Image(systemName: "paperclip").font(K.F.micro)
-                    .frame(width: 24, height: 22)
-                    .contentShape(Rectangle())
+            Menu {
+                Button("Attach files…", systemImage: "paperclip") { model.chooseAttachments() }
+                Button("Find project file…", systemImage: "at") { browse(.file) }
+                Button("Insert command…", systemImage: "slash.circle") { browse(.command) }
+                if !model.prompt.isEmpty {
+                    Divider()
+                    Button("Attach draft as text", systemImage: "doc.text") {
+                        let draft = model.prompt
+                        model.attachText(draft) {
+                            if model.prompt == draft { model.prompt = "" }
+                        }
+                    }
+                }
+            } label: { Label("Add", systemImage: "plus.circle") }
+                .font(K.F.small).foregroundStyle(K.C.dim)
+                .menuStyle(.borderlessButton).fixedSize()
+            Button { withAnimation(reduceMotion ? nil : K.M.settle) { expandedEditor.toggle() }; focused = true } label: {
+                Image(systemName: expandedEditor ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
             }
-            .buttonStyle(.plain).foregroundStyle(K.C.faint)
-            .hint("Attach files (or paste, drop, or type @)")
+            .buttonStyle(WorkspaceButton())
+            .hint(expandedEditor ? "Compact editor" : "Expand editor")
             Spacer()
             // Stop belongs to the working bar directly above, and having it here too put two of
             // them forty pixels apart. What it cost was worse than the duplication: it *replaced*
@@ -876,11 +942,11 @@ struct Composer: View {
             } label: {
                 HStack(spacing: K.S.snug) {
                     Text(model.running ? "Queue" : "Send")
-                    Image(systemName: "return").font(K.F.tiny.weight(.bold))
+                    Image(systemName: model.running ? "plus" : "arrow.up").font(K.F.small.weight(.semibold))
                 }
             }
-            .buttonStyle(FilledButton())
-            .disabled(model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .buttonStyle(ComposerButton())
+            .disabled(!model.canSendDraft)
             .hint(model.running
                   ? "Queue this — it runs when the turn above finishes (Return, or ⌘Return)."
                   : "Send (Return, or ⌘Return). ⇧Return for a new line.")

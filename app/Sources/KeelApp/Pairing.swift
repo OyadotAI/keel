@@ -87,7 +87,7 @@ struct PairingSettings: View {
             SettingsSection("Paired devices") {
                 if model.devices.isEmpty {
                     Text("None. Keel listens only on this machine until a device is paired.")
-                        .font(K.F.small).foregroundStyle(K.C.faint)
+                        .font(K.F.small).foregroundStyle(K.C.dim)
                 }
                 ForEach(model.devices) { d in
                     SettingsRow(title: d.name) {

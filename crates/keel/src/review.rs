@@ -1127,6 +1127,12 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
     let mut written = Vec::new();
     let mut skipped = Vec::new();
     for (rel, body) in files {
+        // Tracked but not on disk is a file the person deleted — `rm`, or a staged `git rm` —
+        // and writing the stock one back committed it over their decision.
+        if crate::writes::deleted_by_person(repo, rel) {
+            skipped.push(format!("{rel} (you deleted it — left alone)"));
+            continue;
+        }
         let wrote = crate::writes::no_link_under(repo, rel)
             .and_then(|_| crate::writes::create_new(&repo.join(rel), body.as_bytes()));
         match wrote {
@@ -1174,6 +1180,21 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
                 .or(names.first())
                 .cloned()
         })
+        .filter(|n| !n.is_empty())
+        // Gone from disk: the name git has for it, so a deleted `claude.md` is recognised as the
+        // person's decision rather than written back as `CLAUDE.md`.
+        .or_else(|| {
+            ["ls-files", "ls-tree --name-only HEAD"]
+                .iter()
+                .find_map(|cmd| {
+                    let args: Vec<&str> = cmd.split(' ').collect();
+                    crate::git::run(repo, &args)
+                        .ok()?
+                        .lines()
+                        .find(|l| l.eq_ignore_ascii_case("CLAUDE.md"))
+                        .map(str::to_string)
+                })
+        })
         .unwrap_or_else(|| "CLAUDE.md".into());
     let link = repo.join(&name);
     match std::fs::symlink_metadata(&link) {
@@ -1218,6 +1239,9 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
 /// when they already say it.
 fn claude_md(repo: &Utf8Path, name: &str) -> Result<Option<String>, String> {
     let (path, rel) = instructions_file(repo)?;
+    if crate::writes::deleted_by_person(repo, &rel) {
+        return Err("you deleted it — left alone".into());
+    }
     let existing = match std::fs::read(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("could not be read: {e}")),
@@ -1793,6 +1817,66 @@ mod tests {
         let r = adopt(&root).unwrap();
         assert_eq!(std::fs::read(meta.join("config")).unwrap(), before);
         assert!(r.skipped.iter().any(|s| s.contains("into .git")), "{r:?}");
+    }
+
+    #[test]
+    fn a_claude_md_the_person_deleted_stays_deleted() {
+        let (_d, root) = git_repo();
+        std::fs::write(root.join("CLAUDE.md"), "# mine\n").unwrap();
+        crate::git::run(&root, &["add", "CLAUDE.md"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "c"]).unwrap();
+        crate::git::run(&root, &["rm", "-q", "CLAUDE.md"]).unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(!root.join("CLAUDE.md").exists());
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s == "CLAUDE.md (you deleted it — left alone)"),
+            "{r:?}"
+        );
+        let status = crate::git::run(&root, &["status", "--porcelain", "--", "CLAUDE.md"]).unwrap();
+        assert_eq!(
+            status.trim(),
+            "D  CLAUDE.md",
+            "the staged deletion stays staged"
+        );
+    }
+
+    #[test]
+    fn a_lowercase_claude_md_the_person_deleted_stays_deleted() {
+        let (_d, root) = git_repo();
+        std::fs::write(root.join("claude.md"), "# lower\n").unwrap();
+        crate::git::run(&root, &["add", "claude.md"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "c"]).unwrap();
+        std::fs::remove_file(root.join("claude.md")).unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(
+            !root.join("claude.md").exists() && !root.join("CLAUDE.md").exists(),
+            "{r:?}"
+        );
+        assert!(
+            r.skipped.iter().any(|s| s.contains("you deleted it")),
+            "{r:?}"
+        );
+    }
+
+    /// An agent file the person deleted is their decision; the stock one is not written back.
+    #[test]
+    fn a_file_the_person_deleted_is_left_alone() {
+        let (_d, root) = git_repo();
+        std::fs::create_dir_all(root.join(".claude/agents")).unwrap();
+        std::fs::write(root.join(".claude/agents/pm.md"), "MY CUSTOM PM").unwrap();
+        crate::git::run(&root, &["add", "-A"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "pm"]).unwrap();
+        crate::git::run(&root, &["rm", "-q", ".claude/agents/pm.md"]).unwrap();
+        let r = adopt(&root).unwrap();
+        assert!(!root.join(".claude/agents/pm.md").exists());
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s == ".claude/agents/pm.md (you deleted it — left alone)"),
+            "{r:?}"
+        );
     }
 
     #[test]

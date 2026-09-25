@@ -27,7 +27,7 @@ pub use sessions::{
     Kind, MAX_READ, Session, Status, discover_sessions, kind_of, opener_of, opening_turn,
     project_key, session_dirs, status, tail, tail_last, transcript_len, transcript_path,
 };
-pub use skills::{Skill, discover_skills};
+pub use skills::{Skill, discover_skills, plugin_skills};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
@@ -81,11 +81,14 @@ impl Workspace {
     /// plugins installed is not an error, and neither is one where the layout has moved on.
     pub fn discover(repo: impl AsRef<Utf8Path>, claude_home: &Utf8Path) -> Self {
         let repo = repo.as_ref();
+        let plugins = discover_plugins(claude_home);
+        let mut skills = discover_skills(repo, claude_home);
+        skills.extend(plugin_skills(&plugins));
         Self {
             repo: repo.to_owned(),
             sessions: discover_sessions(repo, claude_home),
-            skills: discover_skills(repo, claude_home),
-            plugins: discover_plugins(claude_home),
+            skills,
+            plugins,
             agents: discover_agents(repo, claude_home),
             commands: discover_commands(repo, claude_home),
             hooks: discover_hooks(repo, claude_home),

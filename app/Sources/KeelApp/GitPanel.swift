@@ -60,24 +60,18 @@ struct GitPanel: View {
                     Text(what + "…").font(K.F.micro).foregroundStyle(K.C.faint)
                 }
                 Spacer()
-                Menu {
-                    Button("Fetch", systemImage: "arrow.triangle.2.circlepath") {
-                        Task { await model.remote("fetch") }
-                    }
-                    .disabled(b?.remotes.isEmpty ?? true)
-                    Button("Pull", systemImage: "arrow.down") { Task { await model.remote("pull") } }
-                        .disabled((current?.behind ?? 0) == 0)
-                    Button("Push", systemImage: "arrow.up") { Task { await model.remote("push") } }
-                        .disabled(!((current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true)))
-                    Divider()
-                    Button("Open pull request…", systemImage: "arrow.triangle.pull") { model.sheet = .pr }
-                        .disabled(b?.remotes.isEmpty ?? true)
-                } label: {
-                    Label("Remote", systemImage: "arrow.up.arrow.down")
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .disabled(busy)
             }
+            HStack(spacing: K.S.sm) {
+                Button("Fetch", systemImage: "arrow.triangle.2.circlepath") { Task { await model.remote("fetch") } }
+                    .buttonStyle(QuietButton()).disabled(busy || (b?.remotes.isEmpty ?? true))
+                Button("Pull", systemImage: "arrow.down") { Task { await model.remote("pull") } }
+                    .buttonStyle(QuietButton()).disabled(busy || (current?.behind ?? 0) == 0)
+                Button("Push", systemImage: "arrow.up") { Task { await model.remote("push") } }
+                    .buttonStyle(QuietButton(tone: K.C.accent))
+                    .disabled(busy || !((current?.ahead ?? 0) > 0 || current?.upstream == nil && !(b?.remotes.isEmpty ?? true)))
+            }
+            Button("Open pull request…", systemImage: "arrow.triangle.pull") { model.sheet = .pr }
+                .buttonStyle(QuietButton()).disabled(busy || (b?.remotes.isEmpty ?? true))
             if let done = model.discarded {
                 Text(done).font(K.F.micro).foregroundStyle(K.C.add)
             }
@@ -149,7 +143,7 @@ struct GitPanel: View {
             }
 
             if creating {
-                HStack(spacing: K.S.xs) {
+                VStack(alignment: .leading, spacing: K.S.sm) {
                     TextField("new-branch-name", text: $newBranch)
                         .field().font(K.F.code)
                         .onSubmit { create() }

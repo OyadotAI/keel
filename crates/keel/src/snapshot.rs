@@ -19,9 +19,16 @@ use crate::serve::Checkout;
 /// Snapshot speaks to git in two ways: against an index of its own while building or restoring
 /// a tree, and against the repository's own for discovery and validation.
 fn git(root: &Utf8Path, index: Option<&Utf8Path>, args: &[&str]) -> Result<String, String> {
+    // Keel's own git, taken at the start of every turn: no repository hook runs for it —
+    // `add` and `write-tree` on the snapshot index fired `post-index-change` twice a turn.
+    let args: Vec<&str> = crate::git::AUTOMATIC
+        .iter()
+        .copied()
+        .chain(args.iter().copied())
+        .collect();
     match index {
-        Some(index) => crate::git::with_index(root, index, args),
-        None => crate::git::trimmed(root, args),
+        Some(index) => crate::git::with_index(root, index, &args),
+        None => crate::git::trimmed(root, &args),
     }
 }
 
@@ -156,6 +163,29 @@ pub async fn put_back(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Taken at the start of every turn, plan turns included: it fired the repository's
+    /// `post-index-change` hook twice each time.
+    #[test]
+    fn a_snapshot_runs_no_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        crate::git::run(root, &["init", "-q"]).unwrap();
+        std::fs::write(root.join("a"), "x").unwrap();
+        let hook = root.join(".git/hooks/post-index-change");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\ntouch \"$GIT_DIR/../fired\" 2>/dev/null; touch fired\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        snapshot(root).unwrap();
+        assert!(
+            !root.join("fired").exists(),
+            "the snapshot ran the repository's hook"
+        );
+    }
     use camino::Utf8PathBuf;
 
     fn repo() -> (tempfile::TempDir, Utf8PathBuf) {

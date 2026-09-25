@@ -353,7 +353,7 @@ struct ReviewPacketView: View {
 
     private func fact(_ name: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(name).font(K.F.small).foregroundStyle(K.C.faint).frame(width: 72, alignment: .leading)
+            Text(name).font(K.F.small).foregroundStyle(K.C.dim).frame(width: 72, alignment: .leading)
             Text(value).font(K.F.code).foregroundStyle(K.C.text).textSelection(.enabled)
         }
     }
