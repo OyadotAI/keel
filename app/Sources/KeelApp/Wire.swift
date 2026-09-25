@@ -177,7 +177,7 @@ enum Wire {
     }
 
     /// One entry in the repository tree. Recursive, and the whole tree arrives at once.
-    struct Node: Decodable, Identifiable {
+    struct Node: Decodable, Identifiable, Equatable {
         var name: String
         var path: String
         var dir: Bool
@@ -208,7 +208,7 @@ enum Wire {
         }
     }
 
-    struct Change: Decodable, Identifiable {
+    struct Change: Decodable, Identifiable, Equatable {
         var path: String
         var status: String
         var label: String
@@ -223,7 +223,7 @@ enum Wire {
     /// A folder people open is often a workspace rather than a project — `backend/` and
     /// `frontend/`, each its own repository — and Keel used to report that as "not a git
     /// repository" and offer to `git init` a third one around them.
-    struct Repo: Decodable, Identifiable, Sendable {
+    struct Repo: Decodable, Identifiable, Sendable, Equatable {
         /// Relative to the opened folder; empty when the folder is itself the repository.
         var dir: String
         var branch: String?
@@ -233,7 +233,7 @@ enum Wire {
         var name: String { dir.isEmpty ? "project" : dir }
     }
 
-    struct Branch: Decodable, Identifiable, Sendable {
+    struct Branch: Decodable, Identifiable, Sendable, Equatable {
         var name: String
         var current: Bool
         var upstream: String?
@@ -243,7 +243,7 @@ enum Wire {
         var id: String { name }
     }
 
-    struct Branches: Decodable, Sendable {
+    struct Branches: Decodable, Sendable, Equatable {
         var current: String?
         var local: [Branch]
         var remote: [String]
@@ -253,7 +253,7 @@ enum Wire {
     }
 
     /// One commit on the current branch.
-    struct Commit: Decodable, Identifiable, Sendable {
+    struct Commit: Decodable, Identifiable, Sendable, Equatable {
         var sha: String
         var subject: String
         var when: Int

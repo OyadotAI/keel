@@ -61,7 +61,14 @@ final class Turn: Identifiable {
         @ObservationIgnored private var parsed = 0
         @ObservationIgnored private var flushing = false
 
-        init(_ text: String = "") { append(text); settle() }
+        /// Whether `blocks` is drawn at all. Reasoning is shown raw with a word count, and parsing
+        /// it as Markdown twelve times a second was a growing cost for a result nobody read.
+        @ObservationIgnored let markdown: Bool
+
+        init(_ text: String = "", markdown: Bool = true) {
+            self.markdown = markdown
+            append(text); settle()
+        }
 
         /// Roughly twelve times a second — under a frame, far above what anyone reads at.
         ///
@@ -86,9 +93,10 @@ final class Turn: Identifiable {
         /// Parse now: the block closed, or the turn ended, and there is no next tick to correct a
         /// half-drawn reply.
         func settle() {
-            guard text.count != parsed else { return }
-            parsed = text.count
-            blocks = Markdown.blocks(text)
+            // `utf8.count` is O(1) on a native string; `count` walked every character to find out.
+            guard text.utf8.count != parsed else { return }
+            parsed = text.utf8.count
+            if markdown { blocks = Markdown.blocks(text) }
             words = text.split(whereSeparator: \.isWhitespace).count
         }
     }
@@ -130,7 +138,7 @@ final class Turn: Identifiable {
     /// Open a new prose block. Called on `content_block_start` for a `text` block.
     func say() { let b = Block(); steps.append(.say(b)); open = .say(b) }
     /// Open a new reasoning block.
-    func think() { let b = Block(); steps.append(.think(b)); open = .think(b) }
+    func think() { let b = Block(markdown: false); steps.append(.think(b)); open = .think(b) }
 
     /// Prose, into the open block — opening one first if the stream never announced a block start.
     func said(_ more: String) {
@@ -180,7 +188,7 @@ final class Turn: Identifiable {
     /// A whole reasoning block that arrived at once — a transcript holds them complete.
     func mused(_ whole: String) {
         guard !whole.isEmpty else { return }
-        steps.append(.think(Block(whole)))
+        steps.append(.think(Block(whole, markdown: false)))
         open = nil
         if !thinking.isEmpty { thinking += "\n\n" }
         thinking += whole
@@ -424,9 +432,6 @@ final class Turn: Identifiable {
         /// all of it, and the whole complaint about Keel hiding raw data starts here.
         var input: [String: JSONValue] = [:]
         var cwd: String?
-        /// `input_json_delta` as it arrives, before the block closes and it can be parsed. This is
-        /// what lets a command appear while it is being written rather than only once it is run.
-        var partialInput = ""
         var reason: String?
         var output: String = ""
         var failed = false
@@ -629,22 +634,21 @@ final class Turn: Identifiable {
         }
     }
 
+    /// `input_json_delta` as it arrives, before the block closes and it can be parsed. Kept off
+    /// `calls` on purpose: nothing draws a fragment, and a `Write` streams its whole file this
+    /// way — held on the call, every chunk invalidated the live turn, the Trace and the bar.
+    @ObservationIgnored private var partialInputs: [String: String] = [:]
+
     /// Arguments arriving a fragment at a time, before the block closes.
     func argue(call id: String, json: String) {
-        switch index(of: id) {
-        case .top(let i)?: calls[i].partialInput += json
-        case .child(let pi, let ci)?: calls[pi].children[ci].partialInput += json
-        case nil: break
-        }
+        guard index(of: id) != nil else { return }
+        partialInputs[id, default: ""] += json
     }
 
     /// The block closed: the accumulated fragments are now a complete JSON object.
     func settle(call id: String) {
+        let partial = partialInputs.removeValue(forKey: id) ?? ""
         guard let at = index(of: id) else { return }
-        let partial = switch at {
-        case .top(let i): calls[i].partialInput
-        case .child(let pi, let ci): calls[pi].children[ci].partialInput
-        }
         guard !partial.isEmpty,
               let input = try? JSONDecoder().decode([String: JSONValue].self,
                                                     from: Data(partial.utf8))

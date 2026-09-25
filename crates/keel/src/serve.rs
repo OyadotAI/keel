@@ -1709,6 +1709,8 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
     //
     // Off the executor, because it is a full scan and a walk of every Claude Code session in the
     // project — seconds on a large repository, during which nothing else Keel serves could answer.
+    // The two side by side: the scan alone is half a second, and it ran before the workspace
+    // read began, on every turn end.
     let scanning = repo.clone();
     let scan = blocking(
         move || {
@@ -1719,18 +1721,17 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
             crate::ignored::apply(&scanning, report)
         },
         keel_scanner::Report::new(Vec::new()),
-    )
-    .await;
+    );
 
     let discovering = repo.clone();
-    let mut workspace = blocking(
+    let workspace = blocking(
         move || match keel_workspace::claude_home() {
             Some(home) => keel_workspace::Workspace::discover(&discovering, &home),
             None => keel_workspace::Workspace::discover(&discovering, "/nonexistent".into()),
         },
         keel_workspace::Workspace::default(),
-    )
-    .await;
+    );
+    let (scan, mut workspace) = tokio::join!(scan, workspace);
     // A session someone renamed in Keel keeps that name, without Claude Code's transcript being
     // touched to achieve it.
     crate::names::apply(&mut workspace.sessions);

@@ -111,12 +111,13 @@ final class Lanes {
                 for lane in lanes { lane.sessionsChanged(list) }
             }
         case "tree.changed", "git.changed":
-            let repo = project.repo(for: event.wt)
-            if let fault = await repo.refreshGit(project.client) {
-                active.lastError = "Could not read \(fault.what): \(fault.why)"
+            // Not awaited: a burst folds into one pass, and nothing queues behind it. The tree
+            // is read for both — finishing a lane is only `git.changed`, and its `--no-ff` merge
+            // puts new files on the project's disk that the watcher cannot see move.
+            let tree = event.kind == "tree.changed"
+            project.repo(for: event.wt).refreshSoon(project.client, tree: true, branches: !tree) { [weak self] fault in
+                self?.active.lastError = "Could not read \(fault.what): \(fault.why)"
             }
-            _ = await repo.refreshTree(project.client)
-            if event.kind == "git.changed" { await repo.refreshBranches(project.client) }
         case "worktrees.changed":
             await refreshWorktrees()
         case "monitors.changed":

@@ -619,6 +619,8 @@ extension UITests {
                        + "with the repository")
 
         try? FileManager.default.removeItem(at: scratch)
+        // A deletion reaches the app as the watcher's `tree.changed`, which is a read of git.
+        m.repo.treeVersion += 1
         XCTAssertEqual(m.editedThisSession.map(\.path), ["src/kept.ts"],
                        "a file that is not on disk any more is not a change to review")
     }

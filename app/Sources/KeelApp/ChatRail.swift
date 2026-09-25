@@ -34,6 +34,7 @@ struct ChatRail: View {
     @State private var showingAll = false
     /// The geometry's last word on whether the pane is showing its conversation.
     @State private var isBlank = false
+    @State private var tailMotion = ChatTailMotion()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,23 +163,29 @@ struct ChatRail: View {
                         .modifier(ChatArrival(active: model.running && model.turns.last?.id == turn.id))
                 }
             }
+            .background(ChatScrollProbe(motion: tailMotion))
             .padding(.horizontal, K.S.xxl)
             .padding(.vertical, K.S.xl)
             .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollBounceBehavior(.basedOnSize)
-        // The end of the conversation is where this pane opens, and where it stays while the
-        // person is at it: the scroll view keeps the bottom edge in view itself as rows grow,
-        // and stops the moment they scroll up to read — `pinned` is the geometry's own word for
-        // that. One thing moves the offset while a reply streams, and it is the scroll view.
-        //
-        // There used to be three more: a scroll-to-row on every streamed token, another on every
-        // change of the content height, and one at the end of the turn. Each was the fix for a
-        // pane that had stopped following, from before the anchor existed, and with the anchor
-        // they were four hands on one wheel — the jolt after every message and every reply.
+        // Initial positioning is immediate. Subsequent growth has exactly one owner: the
+        // continuous native follower, which releases before a manual scroll can compete.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(pinned ? .bottom : nil, for: .sizeChanges)
+        .defaultScrollAnchor(nil, for: .sizeChanges)
+        .onScrollGeometryChange(for: CGSize.self) { $0.contentSize } action: { _, _ in
+            if pinned { tailMotion.follow(reduceMotion: reduceMotion) }
+        }
+        .onScrollPhaseChange { _, phase in
+            if phase == .tracking || phase == .interacting || phase == .decelerating {
+                tailMotion.stop()
+            }
+        }
+        .onChange(of: pinned) { _, following in
+            if !following { tailMotion.stop() }
+        }
+        .onDisappear { tailMotion.stop() }
         // A task, not an onChange: opening a session bumps `pinTick` before this pane exists,
         // so the change had no listener and the transcript opened at the top. A task with that
         // id runs on appear as well, after the rows have laid out. This is the one deliberate
@@ -454,11 +461,7 @@ struct ChatTurn: View {
             if !turn.steps.isEmpty {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     HStack(spacing: K.S.xs) {
-                        Image(systemName: "sailboat.fill")
-                            .font(K.F.small.weight(.semibold))
-                            .foregroundStyle(K.C.accent)
-                            .frame(width: 28, height: 28)
-                            .background(K.C.tint, in: RoundedRectangle(cornerRadius: K.R.md))
+                        AgentAvatar(working: model.running && model.turns.last?.id == turn.id)
                         Text("Keel").font(K.F.row)
                         Spacer(minLength: 0)
                         if model.running && model.turns.last?.id == turn.id {

@@ -106,6 +106,14 @@ final class ChatScrollingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         let scroll = try XCTUnwrap(scrollView(in: host))
         XCTAssertGreaterThan(state.offset, 1_000, "Fixture must open at its tail")
+        let originalTail = state.offset
+        state.height += 400
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertGreaterThan(state.offset, originalTail, "The native probe must follow growing content")
+        XCTAssertLessThan(state.offset, originalTail + 399, "Following must visibly ease between lines")
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(state.offset, originalTail + 400, accuracy: 2)
+
 
         try wheel(scroll, delta: 10, phase: .began)
         try await Task.sleep(for: .milliseconds(30))
@@ -116,12 +124,46 @@ final class ChatScrollingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertFalse(state.pinned, "Finishing above the tail must stay unpinned")
         let readingOffset = state.offset
-        XCTAssertLessThan(readingOffset, 2_050, "The wheel event must actually move the viewport")
+        XCTAssertLessThan(readingOffset, originalTail + 370, "The wheel event must actually move the viewport")
 
         state.height += 1_000
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(state.offset, readingOffset, accuracy: 2,
                        "New output must not move a viewport that is reading earlier content")
+    }
+
+    func testStreamingFollowerMovesContinuouslyAndCanBeInterrupted() async throws {
+        let motion = ChatTailMotion()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+        let document = FlippedDocument(frame: NSRect(x: 0, y: 0, width: 480, height: 1200))
+        scroll.documentView = document
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = scroll
+        window.orderBack(nil)
+        defer { motion.stop(); window.orderOut(nil) }
+        motion.scroll = scroll
+        motion.follow(reduceMotion: false)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, "Starting a follow must not jump")
+        try await Task.sleep(for: .milliseconds(50))
+        let middle = scroll.contentView.bounds.minY
+        XCTAssertGreaterThan(middle, 0)
+        XCTAssertLessThan(middle, 880, "A response should move through intermediate positions")
+        document.frame.size.height = 1600
+        motion.follow(reduceMotion: false)
+        XCTAssertEqual(scroll.contentView.bounds.minY, middle, "Retargeting must not snap")
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(scroll.contentView.bounds.minY, 1280, accuracy: 1)
+        motion.stop()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        document.frame.size.height = 1800
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(scroll.contentView.bounds.minY, 500, accuracy: 1, "Stopping releases the reading position")
+        motion.follow(reduceMotion: true)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 1480, accuracy: 1, "Reduce Motion reaches the tail immediately")
+    }
+
+    private final class FlippedDocument: NSView {
+        override var isFlipped: Bool { true }
     }
 
     private func scrollView(in view: NSView) -> NSScrollView? {
@@ -145,13 +187,23 @@ final class ChatScrollingTests: XCTestCase {
 
     private struct ScrollFixture: View {
         @Bindable var state: ScrollState
+        @State private var motion = ChatTailMotion()
 
         var body: some View {
             ScrollView {
                 Color.gray.frame(height: state.height)
+                    .background(ChatScrollProbe(motion: motion))
             }
             .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .defaultScrollAnchor(state.pinned ? .bottom : nil, for: .sizeChanges)
+            .defaultScrollAnchor(nil, for: .sizeChanges)
+            .onScrollGeometryChange(for: CGSize.self) { $0.contentSize } action: { _, _ in
+                if state.pinned { motion.follow(reduceMotion: false) }
+            }
+            .onScrollPhaseChange { _, phase in
+                if phase == .tracking || phase == .interacting || phase == .decelerating { motion.stop() }
+            }
+            .onChange(of: state.pinned) { _, value in if !value { motion.stop() } }
+            .onDisappear { motion.stop() }
             .followsTail($state.pinned)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 state.offset = y

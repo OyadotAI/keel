@@ -10,6 +10,9 @@ struct Palette: View {
     @Binding var open: Bool
     @State private var query = ""
     @State private var selection = 0
+    /// Computed once per query, not per read: `body`, the arrow keys and the scroll each read it,
+    /// and every read scored every file in the project.
+    @State private var hits: [Item] = []
     @FocusState private var focused: Bool
 
     struct Item: Identifiable {
@@ -198,7 +201,7 @@ struct Palette: View {
     /// What is shown: recently run things first on an empty query, otherwise the best fuzzy
     /// matches. Substring matching is the thing every palette is criticised for — `nlb` should
     /// find "New lane on its own branch".
-    private var hits: [Item] {
+    private func matches() -> [Item] {
         let all = items
         guard !query.isEmpty else {
             let recent = Recent.titles
@@ -206,8 +209,17 @@ struct Palette: View {
             let rest = all.filter { !recent.contains($0.title) }
             return Array((first + rest).prefix(12))
         }
+        // Thousands of files share one detail; score each distinct detail once.
+        var details: [String: Int?] = [:]
         return all
-            .compactMap { item in Self.score(query, item: item).map { (item, $0) } }
+            .compactMap { item -> (Item, Int)? in
+                let detail: Int?
+                if let seen = details[item.detail] { detail = seen } else {
+                    detail = Fuzzy.score(query, in: item.detail).map { $0 - 24 }
+                    details[item.detail] = detail
+                }
+                return [Fuzzy.score(query, in: item.title), detail].compactMap { $0 }.max().map { (item, $0) }
+            }
             .sorted { $0.1 > $1.1 }
             .prefix(12)
             .map(\.0)
@@ -231,7 +243,7 @@ struct Palette: View {
                     .font(K.F.reading)
                     .focused($focused)
                     .onSubmit { runSelected() }
-                    .onChange(of: query) { selection = 0 }
+                    .onChange(of: query) { selection = 0; hits = matches() }
                 Text("esc").font(K.F.codeSmall).foregroundStyle(K.C.dim)
             }
             .padding(.horizontal, K.S.md).padding(.vertical, K.S.md)
@@ -303,7 +315,7 @@ struct Palette: View {
         .background(K.C.raised, in: RoundedRectangle(cornerRadius: K.R.lg))
         .overlay(RoundedRectangle(cornerRadius: K.R.lg).stroke(K.C.lineStrong, lineWidth: 1))
         .shadow(color: K.C.shadow, radius: 30, y: 12)
-        .onAppear { focused = true }
+        .onAppear { focused = true; hits = matches() }
         .onKeyPress(.downArrow) { selection = min(selection + 1, max(hits.count - 1, 0)); return .handled }
         .onKeyPress(.upArrow) { selection = max(selection - 1, 0); return .handled }
         .onKeyPress(.escape) { open = false; return .handled }

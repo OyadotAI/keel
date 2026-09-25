@@ -174,20 +174,18 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
         &[
             "log",
             &format!("-{n}"),
-            "--format=%h%x1f%s%x1f%ct",
+            "--format=%h%x1f%s%x1f%ct%x1f%H",
             "--shortstat",
         ],
     ) else {
         return Vec::new();
     };
-    // What the upstream does not have yet. No upstream means nothing is pushed.
-    let unpushed: std::collections::HashSet<String> = git(root, &["rev-list", "@{u}..HEAD"])
-        .map(|s| s.lines().map(|l| l.trim().to_string()).collect())
-        .unwrap_or_default();
-    let has_upstream = git(root, &["rev-parse", "--abbrev-ref", "@{u}"]).is_some();
-    let full: Vec<String> = git(root, &["log", &format!("-{n}"), "--format=%H"])
-        .map(|s| s.lines().map(str::to_string).collect())
-        .unwrap_or_default();
+    // What the upstream does not have yet. No upstream fails the range, and means nothing is
+    // pushed. Two processes, where this was four: the full hash rides in the log's own format
+    // and the range failing is the upstream check.
+    let unpushed: Option<std::collections::HashSet<String>> =
+        git(root, &["rev-list", "@{u}..HEAD"])
+            .map(|s| s.lines().map(|l| l.trim().to_string()).collect());
 
     // Headers carry the separator; the stat line for a commit follows its header, blank lines
     // between, and the next header comes straight after the stat.
@@ -198,13 +196,13 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
             let (Some(sha), Some(subject), Some(when)) = (f.next(), f.next(), f.next()) else {
                 continue;
             };
-            let long = full.get(out.len()).cloned().unwrap_or_default();
+            let long = f.next().unwrap_or_default();
             out.push(Commit {
                 sha: sha.to_string(),
                 subject: subject.to_string(),
                 when: when.parse().unwrap_or(0),
                 files: 0,
-                pushed: has_upstream && !unpushed.contains(&long),
+                pushed: unpushed.as_ref().is_some_and(|u| !u.contains(long)),
             });
         } else if line.contains("changed")
             && let Some(last) = out.last_mut()

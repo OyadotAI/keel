@@ -25,7 +25,10 @@ struct DiffSurface: View {
         }
         .background(K.C.bg)
         .task(id: "\(path)-\(model.diffTick)") {
-            loading = true
+            // Only a different file starts from "Loading". A refresh of this one keeps the old
+            // diff on screen: swapping it for a spinner on every write threw away the scroll
+            // position and flickered the pane for as long as the agent was editing.
+            if diff?.path != path { loading = true }
             switch await model.diff(path) {
             case .success(let got): diff = got; failure = nil
             case .failure(let error): diff = nil; failure = error.localizedDescription

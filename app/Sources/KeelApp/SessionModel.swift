@@ -128,7 +128,23 @@ final class SessionModel: Identifiable {
 
     /// The files the agent wrote in this conversation, newest turn last, as the Changes panel
     /// shows them — what happened here, not git's view of the working tree (that is the Git tab).
+    ///
+    /// Memoised: the Review pane, the rail badge, the panel header and the palette each read it
+    /// per render, and every read walked every turn and asked the filesystem about each path.
+    /// The key reads what the answer depends on, so Observation still tracks it: the turns, the
+    /// files each recorded, and `treeVersion`, which climbs with every git read and every write.
     var editedThisSession: [Wire.Change] {
+        let key = [turns.count, turns.reduce(0) { $0 + $1.files.count }, repo.treeVersion, isRepo ? 1 : 0,
+                   ObjectIdentifier(repo).hashValue]
+        let changes = changes
+        if let cached = editedCache, cached.key == key, cached.changes == changes { return cached.value }
+        let value = computeEditedThisSession()
+        editedCache = (key, changes, value)
+        return value
+    }
+    @ObservationIgnored private var editedCache: (key: [Int], changes: [Wire.Change], value: [Wire.Change])?
+
+    private func computeEditedThisSession() -> [Wire.Change] {
         var seen: [String: Wire.Change] = [:]
         var order: [String] = []
         var ordered = Set<String>()
@@ -1084,16 +1100,16 @@ final class SessionModel: Identifiable {
         defer { if current === turn { settling = false } }
         // The files, the gate and the commit are the daemon's now, and arrived as facts before
         // the stream closed. What is left is reading the tree they left behind.
-        await refreshGit()
-        guard !Task.isCancelled, current === turn else { return }
-        await refreshTree()
-        guard !Task.isCancelled, current === turn else { return }
+        // Side by side: four independent reads, and the readiness scan alone is half a second,
+        // which in series held `settling` — and so every other lane — for the sum of them.
         // The turn just changed the repository, and readiness is a reading of the repository.
-        // Without this the panel kept the findings from before the fix — including the one the
-        // person clicked "Fix this" on — until they went and pressed rescan themselves.
-        await refreshState()
-        guard !Task.isCancelled, current === turn else { return }
-        await lanes?.refreshWorktrees()
+        // Without the state read the panel kept the findings from before the fix — including the
+        // one the person clicked "Fix this" on — until they went and pressed rescan themselves.
+        async let git: Void = refreshGit()
+        async let tree: Void = refreshTree()
+        async let state: Void = refreshState()
+        async let worktrees: Void? = lanes?.refreshWorktrees()
+        _ = await (git, tree, state, worktrees)
         guard !Task.isCancelled, current === turn else { return }
         // The diffs in the turn are read once, when their card appears — which for a file the
         // agent is in the middle of writing is before there is anything to read, and the daemon
@@ -1940,11 +1956,15 @@ final class SessionModel: Identifiable {
 
     /// The daemon says the jobs moved. A build prints hundreds of lines and says so for each;
     /// one read a few hundred milliseconds after the last is the whole of what the panel needs.
+    /// A throttle, not a debounce: the daemon says "changed" once per output line, and a
+    /// debounce that restarts on each one never fired for as long as a chatty job kept printing —
+    /// the panel froze exactly while there was something to watch.
     func refreshMonitorsSoon() {
-        monitorsRefresh?.cancel()
+        guard monitorsRefresh == nil else { return }
         monitorsRefresh = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard let self, !Task.isCancelled else { return }
+            self.monitorsRefresh = nil
             await self.refreshMonitors()
         }
     }
@@ -1960,7 +1980,7 @@ final class SessionModel: Identifiable {
         for job in jobs where !known.contains(job.id) && job.running {
             Notifications.jobStarted(lane: self, command: job.command)
         }
-        monitors = jobs
+        if monitors != jobs { monitors = jobs }
         // Acked before it is delivered, and by the one lane that owns it: the result reaching
         // the conversation twice is worse than not reaching it at all.
         for job in jobs where !job.running && !job.reported {
@@ -3155,6 +3175,11 @@ final class SessionModel: Identifiable {
         if let fault = await repo.refreshGit(client) { note(fault) }
     }
 
+    /// Git and the tree, read again without waiting and folded into any read already running.
+    func refreshCheckoutSoon() {
+        repo.refreshSoon(client, tree: true) { [weak self] in self?.note($0) }
+    }
+
     /// A read that failed says so, without clearing a turn's own error on the next one that
     /// succeeds.
     private func note(_ fault: Fault) {
@@ -3296,10 +3321,7 @@ final class SessionModel: Identifiable {
     /// `?wt=` all arrived as that sentence: not a blank pane, which would at least look like a
     /// failure, but a confident and wrong claim about the person's code.
     func diff(_ path: String) async -> Result<Wire.Diff, Error> {
-        do {
-            return .success(try await client.get("/api/git/diff", q(["path": path])))
-        } catch {
-            return .failure(error)
-        }
+        let client = client, query = q(["path": path])
+        return await repo.diff(path) { try await client.get("/api/git/diff", query) }
     }
 }

@@ -272,6 +272,13 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
 /// exactly that, and is a no-op when there is nothing stale.
 fn registered(root: &Utf8Path) -> Vec<String> {
     let _ = git(root, &["worktree", "prune"]);
+    names(root)
+}
+
+/// The lane checkouts git has registered, and nothing else: one read-only git call. The watcher
+/// wants this every six seconds and was calling `list`, which prunes (a write), then asks for
+/// each lane's base, ahead count and a full status — five processes a lane for three names.
+pub fn names(root: &Utf8Path) -> Vec<String> {
     let Ok(listing) = git(root, &["worktree", "list", "--porcelain"]) else {
         return Vec::new();
     };

@@ -14,7 +14,7 @@ struct WorkingBar: View {
         // seeing the seconds move is the whole reason this is here.
         TimelineView(.periodic(from: .now, by: 0.5)) { context in
             HStack(spacing: K.S.sm) {
-                Sweep()
+                AgentAvatar(working: !waiting)
 
                 Text(activity)
                     .font(K.F.codeSmall)

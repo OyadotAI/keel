@@ -345,12 +345,12 @@ async fn watch_tree(state: Arc<AppState>) {
         // Lane checkouts every third pass: listing them is a git call of its own.
         if pass % 3 == 1 {
             let r = root.clone();
-            let lanes = crate::serve::blocking(move || crate::worktree::list(&r), Vec::new()).await;
-            checkouts.extend(
-                lanes
-                    .into_iter()
-                    .map(|w| (Some(w.name.clone()), Utf8PathBuf::from(w.path))),
-            );
+            let lanes =
+                crate::serve::blocking(move || crate::worktree::names(&r), Vec::new()).await;
+            checkouts.extend(lanes.into_iter().map(|name| {
+                let path = root.join(crate::worktree::DIR).join(&name);
+                (Some(name), path)
+            }));
         }
         for (wt, dir) in checkouts {
             let d = dir.clone();

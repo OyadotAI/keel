@@ -1192,16 +1192,23 @@ extension View {
     func spatialChrome() -> some View { modifier(SpatialChrome()) }
 
     /// One optical edge and one shadow for floating workspace surfaces.
+    ///
+    /// Opaque, with the shadow on the background shape and not on the content: this holds the
+    /// Trace, which streams, and a material or a content shadow behind it recomposited the whole
+    /// pane every frame a token arrived — the rule `VisualEffect` states, broken by its caller.
     func floatingSurface() -> some View {
-        self.spatialChrome()
+        self.background(K.C.surface)
             .clipShape(RoundedRectangle(cornerRadius: K.R.floating))
+            .background {
+                RoundedRectangle(cornerRadius: K.R.floating).fill(K.C.surface)
+                    .shadow(color: K.C.shadow, radius: 18, y: 8)
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: K.R.floating)
                     .strokeBorder(LinearGradient(colors: [K.C.lineStrong, K.C.line.opacity(0.4)],
                                                  startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
                     .allowsHitTesting(false)
             }
-            .shadow(color: K.C.shadow, radius: 18, y: 8)
     }
 }
 

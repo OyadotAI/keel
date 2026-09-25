@@ -92,7 +92,14 @@ struct CallRow: View {
                     ForEach(Self.parts(of: call), id: \.label) { part in
                         VStack(alignment: .leading, spacing: K.S.xxs) {
                             Text(part.label).sectionLabel().foregroundStyle(K.C.faint)
-                            CodeBlock(language: part.language, text: part.text)
+                            // A `Write` of a lockfile is 30,000 lines, and `CodeBlock` is one
+                            // `Text` laid out whole on the main thread. Past a screenful, the
+                            // lazy reader instead.
+                            if part.text.utf8.count > 8_000 {
+                                Lines(text: part.text)
+                            } else {
+                                CodeBlock(language: part.language, text: part.text)
+                            }
                         }
                     }
                     if !call.output.isEmpty {
@@ -171,16 +178,19 @@ struct Lines: View {
     @State private var all = false
     @State private var copied = false
 
-    private var lines: [String] { text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) }
+    /// Counted over bytes, and only the lines drawn are split out: a 100,000-line output was
+    /// 100,000 strings allocated to show three hundred of them.
+    private var count: Int { text.utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 } }
 
     var body: some View {
-        let lines = lines
-        let cut = all ? lines : Array(lines.prefix(Self.shown))
+        let count = count
+        let cut = text.split(separator: "\n", maxSplits: all ? .max : Self.shown,
+                             omittingEmptySubsequences: false).prefix(all ? .max : Self.shown)
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(cut.enumerated()), id: \.offset) { _, line in
-                        Text(line.capped(2_000))
+                        Text(String(line).capped(2_000))
                             .font(K.F.codeSmall)
                             .foregroundStyle(K.C.dim)
                             .textSelection(.enabled)
@@ -200,10 +210,10 @@ struct Lines: View {
                     Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
                 }
                 .padding(K.S.xxs)
-                .help("Copy all \(lines.count) lines")
+                .help("Copy all \(count) lines")
             }
-            if lines.count > Self.shown {
-                Button(all ? "Show less" : "Show all \(lines.count) lines") {
+            if count > Self.shown {
+                Button(all ? "Show less" : "Show all \(count) lines") {
                     withAnimation(reduceMotion ? nil : K.M.settle) { all.toggle() }
                 }
                 .buttonStyle(.plain)

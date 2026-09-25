@@ -203,7 +203,7 @@ struct SessionWindow: View {
         // clicking one opened a diff of nothing. Coming back to the window is the moment to look.
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await model.refreshGit(); await model.refreshTree() }
+            model.refreshCheckoutSoon()
         }
     }
 
@@ -983,9 +983,10 @@ struct WindowEvents: ViewModifier {
                 // A lane switch is not a project open: the project was read when it was opened.
                 // What a lane has of its own is its checkout, so that is what is re-read here.
                 // The full nine-call pass on every ⌘-tab is what made switching lanes feel slow.
+                // Only a checkout nobody has read yet: one store per checkout, and events keep a
+                // read one current, so re-reading on every switch was requests for nothing.
                 guard model.repoPath.isEmpty else {
-                    await model.refreshGit()
-                    await model.refreshTree()
+                    if model.repo.treeVersion == 0 { model.refreshCheckoutSoon() }
                     return
                 }
                 await lanes.refreshShared()
