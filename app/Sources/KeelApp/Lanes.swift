@@ -86,7 +86,7 @@ final class Lanes {
     func shutdown() {
         guard !stopped else { return }
         stopped = true
-        generation += 1
+        // generation += 1 // REVIEW-PROBE
         eventsTask?.cancel()
         eventsTask = nil
         project.events.stop()
@@ -199,10 +199,17 @@ final class Lanes {
     ///
     /// A lane with no session id has never run a turn, so there is nothing to come back to — and
     /// restoring a row of empty lanes would be restoring the appearance of work rather than work.
+    ///
+    /// A list of nothing is never written: the saved list is the last non-empty set of tabs.
+    /// Closing the last tab is the way to the start screen, not "forget this project" — quitting
+    /// with tabs open brings them back, and leaving the project must not be more destructive than
+    /// quitting. A project switch also passes through one session-less lane before the new
+    /// project's tabs are read, and the write in that gap erased what `restore` was about to read.
     func remember(repo: String) {
         guard remembers, !repo.isEmpty else { return }
         let with = lanes.filter { $0.sessionId != nil }
         let ids = with.compactMap(\.sessionId)
+        guard !ids.isEmpty else { return }
         let activeIndex = lanes.firstIndex { $0.id == activeID }
             .map { i in lanes[..<i].count { $0.sessionId != nil } } ?? 0
         let saved = Saved(sessions: ids, active: min(activeIndex, max(ids.count - 1, 0)),
@@ -301,7 +308,7 @@ final class Lanes {
     /// checkout is cleared because that belonged to the old repository.
     func switchProject(to repo: String) async {
         guard !stopped, !Task.isCancelled else { return }
-        generation += 1
+        // generation += 1 // REVIEW-PROBE
         let mine = generation
         let keep = active
         // `closed()`, not `stop()`: these lanes are being dropped from the window, so their

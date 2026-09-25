@@ -120,6 +120,75 @@ final class LanesTests: XCTestCase {
     }
 
     /// Closing the last lane leaves a usable window rather than an empty frame.
+    private struct SavedLanes: Decodable { var sessions: [String]; var active: Int }
+    private func saved() -> SavedLanes? {
+        UserDefaults.standard.data(forKey: "keel.lanes." + repo)
+            .flatMap { try? JSONDecoder().decode(SavedLanes.self, from: $0) }
+    }
+
+    /// The saved list is the last non-empty set of tabs. Closing every tab is the way to the
+    /// start screen, not "forget this project": the write that followed it stored `[]`, so the
+    /// RECENT row could never bring the conversations back. Closing them one at a time is a
+    /// different gesture — each close shrinks the list — so only the last one comes back.
+    func testClosingEveryTabKeepsTheRememberedList() {
+        let l = lanes()
+        let a = l.lanes[0]
+        a.sessionId = "session-a"
+        let b = l.newLane()
+        b.sessionId = "session-b"
+        l.remember(repo: repo)
+
+        l.close(l.shown)
+        l.remember(repo: repo)  // what `onChange(of: sessionIds)` does after the close
+        XCTAssertTrue(l.atStart)
+        XCTAssertEqual(saved()?.sessions, ["session-a", "session-b"])
+
+        let m = lanes()
+        let c = m.lanes[0]
+        c.sessionId = "session-a"
+        let d = m.newLane()
+        d.sessionId = "session-b"
+        m.remember(repo: repo)
+        m.close(d); m.remember(repo: repo)
+        m.close(c); m.remember(repo: repo)
+        XCTAssertEqual(saved()?.sessions, ["session-a"], "one at a time: each close shrinks the list")
+    }
+
+    /// The bug as reported: close every tab, click the project in RECENT, land on one blank lane.
+    /// `repoPath` does not move for the same project, so nothing restored; the start screen's
+    /// reopen calls `switchProject` itself.
+    func testReopeningTheProjectFromTheStartScreenBringsTheTabsBack() async {
+        let l = lanes()
+        l.lanes[0].sessionId = "session-a"
+        let b = l.newLane()
+        b.sessionId = "session-b"
+        l.activeID = b.id
+        l.remember(repo: repo)
+        l.close(l.shown)
+        l.remember(repo: repo)
+        XCTAssertTrue(l.atStart)
+        XCTAssertEqual(l.lanes.compactMap(\.sessionId), [])
+
+        await l.switchProject(to: repo)
+        XCTAssertEqual(l.lanes.compactMap(\.sessionId), ["session-a", "session-b"])
+        XCTAssertEqual(l.active.sessionId, "session-b", "the focused tab is the one that was focused")
+    }
+
+    /// Two reopens of one project at once — the start screen's closure and `onChange(of:
+    /// repoPath)` both fire for a different project — adopt once. `switchProject` bumps the
+    /// generation first, so the earlier restore fails its check and exactly one set of lanes lands.
+    func testTwoSwitchesToOneProjectAdoptOnce() async {
+        let l = lanes()
+        l.lanes[0].sessionId = "session-a"
+        l.remember(repo: repo)
+        let first = Task { @MainActor in await l.switchProject(to: repo) }
+        let second = Task { @MainActor in await l.switchProject(to: repo) }
+        await first.value
+        await second.value
+        XCTAssertEqual(l.lanes.count, 1)
+        XCTAssertEqual(l.lanes.filter { $0.sessionId == "session-a" }.count, 1, "one lane per session")
+    }
+
     func testClosingTheLastLaneStartsAFreshOne() {
         let l = lanes()
         let only = l.lanes[0]
