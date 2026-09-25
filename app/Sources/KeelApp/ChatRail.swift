@@ -458,10 +458,13 @@ struct ChatTurn: View {
             // agent did: it thought, said something, ran a command, read what came back, and said
             // something else. That sequence is the thing being reviewed, and reconstructing it
             // from two panes was left to the reader.
-            if !turn.steps.isEmpty {
+            // Also while it has said nothing yet, so the companion is there from the first moment.
+            if !turn.steps.isEmpty || (model.running && model.turns.last?.id == turn.id) {
                 VStack(alignment: .leading, spacing: K.S.sm) {
                     HStack(spacing: K.S.xs) {
-                        AgentAvatar(working: model.running && model.turns.last?.id == turn.id)
+                        // At rest: the companion under the reply carries the live one, with its
+                        // mood. Two lenses spinning a few rows apart is one too many.
+                        AgentAvatar(working: false)
                         Text("Keel").font(K.F.row)
                         Spacer(minLength: 0)
                         if model.running && model.turns.last?.id == turn.id {
@@ -476,7 +479,7 @@ struct ChatTurn: View {
                     ForEach(turn.steps) { step in
                         switch step {
                         case .say(let block):
-                            ChatReply(block: block)
+                            ChatReply(block: block, live: model.running && model.turns.last?.id == turn.id)
                                 .padding(.trailing, K.S.lg)
                         case .think(let block):
                             ThinkingBlock(block: block)
@@ -485,6 +488,12 @@ struct ChatTurn: View {
                                 CallRow(call: call)
                             }
                         }
+                    }
+                    // The companion, under the last thing it wrote.
+                    if model.running && model.turns.last?.id == turn.id {
+                        LiveTail(model: model)
+                            .padding(.top, K.S.xs)
+                            .transition(.opacity)
                     }
                 }
                 .padding(.top, K.S.sm)
@@ -538,8 +547,9 @@ struct ChatTurn: View {
 /// to the sequence of steps, not the text arriving inside an existing step.
 struct ChatReply: View {
     let block: Turn.Block
+    var live = false
 
-    var body: some View { Markdown(blocks: block.blocks) }
+    var body: some View { Markdown(blocks: block.blocks, live: live) }
 }
 
 /// Keep raw reply availability in a tiny leaf. Reading `turn.text.isEmpty` in ChatTurn's body

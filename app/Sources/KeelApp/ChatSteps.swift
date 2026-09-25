@@ -11,6 +11,12 @@ struct ThinkingBlock: View {
     @State private var open = false
 
     var body: some View {
+        // Claude Code keeps a reasoning block's shape and drops its words, so a replayed or
+        // redacted one arrives empty. "Reasoning 0 words" is a row that says nothing.
+        if block.words > 0 { content }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: K.S.xs) {
             Button { withAnimation(reduceMotion ? nil : K.M.settle) { open.toggle() } } label: {
                 HStack(spacing: K.S.tight) {
@@ -68,20 +74,27 @@ struct CallRow: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                         .foregroundStyle(hasDetail ? (hovering ? K.C.dim : K.C.faint) : .clear)
                     CallGlyph(risk: call.risk, failed: call.failed, running: call.running)
-                    Text(call.tool)
-                        .font(K.F.micro.weight(.semibold))
-                        .foregroundStyle(call.failed ? K.C.del : (hovering ? K.C.text : K.C.dim))
-                    Text(call.subject)
-                        .font(K.F.codeSmall)
-                        .foregroundStyle(hovering ? K.C.dim : K.C.faint)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    // Light runs through what it is doing while it does it.
+                    Shimmer(active: call.running) {
+                        HStack(spacing: K.S.sm) {
+                            Text(call.tool)
+                                .font(K.F.micro.weight(.semibold))
+                                .foregroundStyle(call.failed ? K.C.del
+                                                 : (hovering || call.running ? K.C.text : K.C.dim))
+                            Text(call.subject)
+                                .font(K.F.codeSmall)
+                                .foregroundStyle(hovering || call.running ? K.C.dim : K.C.faint)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                     Spacer(minLength: K.S.xs)
                     Elapsed(started: call.started, duration: call.duration, running: call.running)
                 }
                 .padding(.horizontal, K.S.xs)
                 .padding(.vertical, K.S.half)
                 .background(hovering && hasDetail ? K.C.hover : .clear, in: RoundedRectangle(cornerRadius: K.R.sm))
+                .modifier(Beam(active: call.running))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -119,6 +132,7 @@ struct CallRow: View {
             }
         }
         .padding(.leading, K.S.xs)
+        .modifier(Arrive(live: call.running))
     }
 
     /// What was passed to the tool, as the parts worth reading separately.

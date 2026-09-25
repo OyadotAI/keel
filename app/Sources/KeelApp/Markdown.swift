@@ -14,17 +14,20 @@ struct Markdown: View {
     /// Already parsed. `body` does no parsing at all: a streaming reply re-parses once per delta
     /// on the model side (`Turn.Block`), not once per block per frame here.
     let parsed: [Block]
+    /// The turn being written: each new block arrives (`Arrive`) instead of appearing.
+    var live = false
 
     /// A literal that never changes — a hint, a job report, a plan card.
     init(_ source: String) { parsed = Self.blocks(source) }
     /// A block the model already parsed.
-    init(blocks: [Block]) { parsed = blocks }
+    init(blocks: [Block], live: Bool = false) { parsed = blocks; self.live = live }
 
     var body: some View {
         let blocks = parsed
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 view(for: block)
+                    .modifier(Arrive(live: live))
                     .padding(.top, spacing(before: block, at: index))
             }
         }
@@ -37,13 +40,13 @@ struct Markdown: View {
     private func view(for block: Block) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(text)
+            StreamText(text: text, live: live)
                 .font(K.F.ui(level == 1 ? 20 : (level == 2 ? 17 : 14), .semibold))
                 .foregroundStyle(K.C.text)
                 .lineSpacing(2)
 
         case .paragraph(let text):
-            Text(text)
+            StreamText(text: text, live: live)
                 .font(K.F.reading)
                 .foregroundStyle(K.C.text)
                 .lineSpacing(3)
@@ -57,7 +60,7 @@ struct Markdown: View {
                             .font(K.F.code)
                             .foregroundStyle(K.C.faint)
                             .frame(minWidth: 18, alignment: .trailing)
-                        Text(item.text)
+                        StreamText(text: item.text, live: live)
                             .font(K.F.reading)
                             .foregroundStyle(K.C.text)
                             .lineSpacing(3)

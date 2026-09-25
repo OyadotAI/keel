@@ -75,6 +75,15 @@ enum K {
         /// `.opacity()` literals before they had names — `0.03`, `0.04`, `0.05`, `0.055`, `0.06`,
         /// `0.07`, `0.08` were all one intent, and two controls side by side disagreed by a
         /// hundredth, which is a difference you can see and cannot name.
+        /// AgentChrome's one light (`--light` in its control shield): the agent's avatar ring and
+        /// the edge that flows around the composer while a turn runs. The same in both
+        /// appearances, because it is emitted light rather than a surface, so it stays out of `all`.
+        static let light: [Color] = [0x39ED35, 0x9DFFA0, 0xF4F3EF, 0x1FD6A0, 0x6CB4FF, 0x39ED35]
+            .map { Color(nsColor: hex($0)) }
+        /// The same light, held: amber while the turn is stopped on the person.
+        static let held: [Color] = [0xF2B544, 0xFFE2A0, 0xF4F3EF, 0xF2B544]
+            .map { Color(nsColor: hex($0)) }
+
         static let ghost = text.opacity(0.04)
         static let hover = text.opacity(0.08)
         static let tint = accent.opacity(0.16)

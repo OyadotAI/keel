@@ -268,6 +268,12 @@ struct SessionWindow: View {
                 terminalPane
             }
         }
+        // The agent is in control: light around the whole window, gone when it stops. Not for a
+        // turn followed from a terminal — Keel is not the one driving it.
+        .overlay {
+            AgentBeat(model: model, radius: K.R.lg)
+                .ignoresSafeArea()
+        }
         .overlay(alignment: .top) { paletteOverlay }
         .modifier(TrustAlert(model: model, shown: $statusTrust))
         .toolbar { toolbar }

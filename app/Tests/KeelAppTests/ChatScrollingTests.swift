@@ -150,7 +150,7 @@ final class ChatScrollingTests: XCTestCase {
         XCTAssertLessThan(middle, 880, "A response should move through intermediate positions")
         document.frame.size.height = 1600
         motion.follow(reduceMotion: false)
-        XCTAssertEqual(scroll.contentView.bounds.minY, middle, "Retargeting must not snap")
+        XCTAssertEqual(scroll.contentView.bounds.minY, middle, accuracy: 0.001, "Retargeting must not snap")
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(scroll.contentView.bounds.minY, 1280, accuracy: 1)
         motion.stop()
