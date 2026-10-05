@@ -1796,6 +1796,7 @@ mod stream_tests {
         assert!(preparation_stopped(&state, "preparing", token, &tx).await);
     }
 
+    #[cfg(unix)]
     fn silent_agent(close_stdout: bool) -> AgentChild {
         let mut command = Command::new("/bin/sh");
         command
@@ -1816,6 +1817,8 @@ mod stream_tests {
         }
     }
 
+    // `/bin/sh` and its utilities; Windows has neither.
+    #[cfg(unix)]
     #[tokio::test]
     async fn disconnect_stops_a_silent_agent_before_releasing_its_checkout() {
         let state = Arc::new(AppState::empty());
@@ -1853,6 +1856,8 @@ mod stream_tests {
         assert!(state.claim("replacement", checkout, true).is_ok());
     }
 
+    // `/bin/sh` and its utilities; Windows has neither.
+    #[cfg(unix)]
     #[tokio::test]
     async fn disconnect_after_stdout_eof_still_reaps_the_agent() {
         let mut child = silent_agent(true);

@@ -494,7 +494,8 @@ mod tests {
     /// afterwards rather than in a file nobody reads.
     #[tokio::test]
     async fn a_job_runs_past_the_call_that_started_it_and_keeps_its_output() {
-        let dir = camino::Utf8PathBuf::from("/tmp");
+        let dir =
+            camino::Utf8PathBuf::from_path_buf(std::env::temp_dir()).expect("a UTF-8 temp dir");
         let id = start("lane-1", "echo hello; sleep 0.2; echo bye", &dir).expect("started");
         // Still running when `start` returned, which is what "background" has to mean.
         assert!(list(Some("lane-1"))[0].running());
@@ -514,7 +515,12 @@ mod tests {
     /// polling the same lane, must not put the same result into the chat again.
     #[tokio::test]
     async fn a_completion_is_only_reported_once() {
-        let id = start("lane-2", "true", &camino::Utf8PathBuf::from("/tmp")).expect("started");
+        let id = start(
+            "lane-2",
+            "true",
+            &camino::Utf8PathBuf::from_path_buf(std::env::temp_dir()).expect("a UTF-8 temp dir"),
+        )
+        .expect("started");
         assert!(!list(Some("lane-2"))[0].reported);
         assert!(
             api_ack(Json(IdBody { id: id.clone() })).await.0,
@@ -548,7 +554,8 @@ mod tests {
     /// A lane sees its own jobs and nobody else's — the same rule as questions.
     #[tokio::test]
     async fn jobs_belong_to_one_conversation() {
-        let dir = camino::Utf8PathBuf::from("/tmp");
+        let dir =
+            camino::Utf8PathBuf::from_path_buf(std::env::temp_dir()).expect("a UTF-8 temp dir");
         start("lane-a", "true", &dir).expect("started");
         start("lane-b", "true", &dir).expect("started");
         assert_eq!(list(Some("lane-a")).len(), 1);
@@ -563,7 +570,8 @@ mod tests {
     #[tokio::test]
     async fn a_chatty_job_is_a_handful_of_events_not_one_per_line() {
         let mut events = crate::events::subscribe();
-        let dir = camino::Utf8PathBuf::from("/tmp");
+        let dir =
+            camino::Utf8PathBuf::from_path_buf(std::env::temp_dir()).expect("a UTF-8 temp dir");
         start("lane-chatty", "seq 1 200; sleep 1.5", &dir).expect("started");
         let mut ours = 0;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);

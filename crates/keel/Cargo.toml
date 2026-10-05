@@ -9,6 +9,8 @@ name = "keel"
 path = "src/main.rs"
 
 [dependencies]
+# Pairing codes, on every platform (pair.rs). Already in the build through other crates.
+getrandom = "0.3"
 sentry.workspace = true
 keel-harness.workspace = true
 keel-mcp.workspace = true

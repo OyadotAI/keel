@@ -96,16 +96,13 @@ fn sha256_hex(s: &str) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Random bytes, from the kernel.
+/// Random bytes, from the operating system.
 ///
-/// `/dev/urandom` rather than a crate: this is four lines of std on every platform Keel runs on,
-/// and a dependency whose whole job is to open that file is a dependency to keep patched forever.
+/// `getrandom` (already in the build through other crates) rather than `/dev/urandom`: Windows
+/// has no such file, and pairing a device there failed outright before it got as far as a code.
 fn random_bytes(n: usize) -> Result<Vec<u8>, String> {
-    use std::io::Read;
     let mut buf = vec![0u8; n];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut buf))
-        .map_err(|e| format!("reading /dev/urandom: {e}"))?;
+    getrandom::fill(&mut buf).map_err(|e| format!("no randomness from the system: {e}"))?;
     Ok(buf)
 }
 
@@ -128,7 +125,7 @@ pub struct CodeView {
 
 /// Start pairing. Loopback only — see [`guard`].
 pub async fn begin() -> Result<Json<CodeView>, (StatusCode, String)> {
-    // no-blocking: four bytes from /dev/urandom and a mutex.
+    // no-blocking: four bytes from the system's random source and a mutex.
     let bytes = random_bytes(4).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % 1_000_000;
     let code = format!("{n:06}");

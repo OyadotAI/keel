@@ -669,7 +669,9 @@ mod tests {
     #[test]
     fn a_git_directory_outside_the_tree_still_names_its_checkout() {
         let dir = tempfile::tempdir().unwrap();
-        let base = camino::Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let base =
+            camino::Utf8PathBuf::from_path_buf(keel_workspace::real_std(dir.path()).unwrap())
+                .unwrap();
         let main = base.join("main");
         std::fs::create_dir_all(&main).unwrap();
         let git = |d: &camino::Utf8Path, args: &[&str]| {
@@ -771,7 +773,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Canonical, because `session_dir_checked` compares a canonicalised cwd against the
         // repository, and a temp dir on macOS is `/var/…` for `/private/var/…`.
-        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let repo =
+            camino::Utf8PathBuf::from_path_buf(keel_workspace::real_std(dir.path()).unwrap())
+                .unwrap();
         let state = AppState::new(repo.clone());
         let cwd = repo.as_str();
 
@@ -809,7 +813,9 @@ mod tests {
     #[test]
     fn a_terminal_session_that_died_gives_its_tree_back() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let repo =
+            camino::Utf8PathBuf::from_path_buf(keel_workspace::real_std(dir.path()).unwrap())
+                .unwrap();
         let state = AppState::new(repo.clone());
         hold_terminal_claims(
             &state,

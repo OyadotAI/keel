@@ -2519,8 +2519,10 @@ mod tests {
     async fn appending_to_a_transcript_wakes_its_follower_at_once() {
         let repo = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let repo = Utf8PathBuf::from_path_buf(repo.path().canonicalize().unwrap()).unwrap();
-        let home = Utf8PathBuf::from_path_buf(home.path().canonicalize().unwrap()).unwrap();
+        let repo =
+            Utf8PathBuf::from_path_buf(keel_workspace::real_std(repo.path()).unwrap()).unwrap();
+        let home =
+            Utf8PathBuf::from_path_buf(keel_workspace::real_std(home.path()).unwrap()).unwrap();
         let project = home
             .join("projects")
             .join(keel_workspace::project_key(&repo));

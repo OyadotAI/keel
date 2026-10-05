@@ -88,8 +88,11 @@ fn project_identity(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
     // the old one's trust. Its `.git` is new in that case, so it is part of the identity too.
     let folder = private::identity(&canonical, &metadata)?;
     let git = canonical.join(".git");
+    // Its inode and its birth time. The inode alone was not enough on Linux, which hands a
+    // just-freed inode number straight to the next directory made — the new `.git` read as the
+    // old one and kept its trust. A birth time is not reused, and does not move on a commit.
     let repository = match std::fs::metadata(&git) {
-        Ok(m) => private::identity(&git, &m)?,
+        Ok(m) => format!("{}\0{}", private::identity(&git, &m)?, born(&m)),
         Err(_) => String::new(),
     };
     let identity = format!("{canonical}\0{folder}\0{repository}");
@@ -99,16 +102,37 @@ fn project_identity(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
     ))
 }
 
-/// The key before `.git` was part of the identity, for a one-time move of an existing store.
-fn legacy_key(repo: &Utf8Path) -> Option<String> {
-    let canonical = keel_workspace::Real::real(repo).ok()?;
-    let metadata = std::fs::metadata(&canonical).ok()?;
-    let identity = format!(
-        "{}\0{}",
-        canonical,
-        private::identity(&canonical, &metadata).ok()?
-    );
-    Some(format!("{:x}", Sha256::digest(identity.as_bytes())))
+/// When a file or directory was made, in nanoseconds; empty where the filesystem does not say.
+fn born(m: &std::fs::Metadata) -> String {
+    m.created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos().to_string())
+        .unwrap_or_default()
+}
+
+/// The keys a project's store was written under before, newest first, for a one-time move: the
+/// folder and `.git` without its birth time (0.3.1), then the folder alone (before it).
+fn legacy_keys(repo: &Utf8Path) -> Vec<String> {
+    let Ok(canonical) = keel_workspace::Real::real(repo) else {
+        return Vec::new();
+    };
+    let Ok(metadata) = std::fs::metadata(&canonical) else {
+        return Vec::new();
+    };
+    let Ok(folder) = private::identity(&canonical, &metadata) else {
+        return Vec::new();
+    };
+    let git = canonical.join(".git");
+    let repository = std::fs::metadata(&git)
+        .ok()
+        .and_then(|m| private::identity(&git, &m).ok())
+        .unwrap_or_default();
+    let hash = |s: String| format!("{:x}", Sha256::digest(s.as_bytes()));
+    vec![
+        hash(format!("{canonical}\0{folder}\0{repository}")),
+        hash(format!("{canonical}\0{folder}")),
+    ]
 }
 
 /// What "a private file of this user's, reached without following a link" means on each platform.
@@ -280,8 +304,10 @@ fn store_path(repo: &Utf8Path) -> Result<Utf8PathBuf, String> {
     // bound to the repository that is there now. Without it every trusted project would quietly
     // read as untrusted after an update, with every approved rule gone.
     if std::fs::symlink_metadata(&file).is_err()
-        && let Some(old) = legacy_key(repo).map(|k| canonical.join(format!("{k}.json")))
-        && std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_file())
+        && let Some(old) = legacy_keys(repo)
+            .into_iter()
+            .map(|k| canonical.join(format!("{k}.json")))
+            .find(|old| std::fs::symlink_metadata(old).is_ok_and(|m| m.is_file()))
     {
         let _ = std::fs::rename(&old, &file);
     }
@@ -912,6 +938,19 @@ mod tests {
         std::fs::rename(moved, root).unwrap();
     }
 
+    /// A store written by 0.3.1 — `.git` without its birth time — moves over too.
+    #[test]
+    fn a_store_under_the_0_3_1_key_moves_to_the_new_one() {
+        let (_dir, root) = repo(&[]);
+        std::fs::create_dir(root.join(".git")).unwrap();
+        set_trusted(&root, true).unwrap();
+        let new = store_path(&root).unwrap();
+        let old = new.with_file_name(format!("{}.json", legacy_keys(&root)[0]));
+        std::fs::rename(&new, &old).unwrap();
+        assert!(trusted(&root), "0.3.1's store was not carried over");
+        assert!(!old.exists() && new.exists());
+    }
+
     /// Emptying a folder keeps its inode; cloning into it makes a new `.git`. The new repository
     /// is a new project, and it is not trusted.
     #[test]
@@ -936,7 +975,7 @@ mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
         set_trusted(&root, true).unwrap();
         let new = store_path(&root).unwrap();
-        let old = new.with_file_name(format!("{}.json", legacy_key(&root).unwrap()));
+        let old = new.with_file_name(format!("{}.json", legacy_keys(&root)[1]));
         std::fs::rename(&new, &old).unwrap();
         assert!(trusted(&root), "the old store was not carried over");
         assert!(!old.exists() && new.exists());

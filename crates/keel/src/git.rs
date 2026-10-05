@@ -372,6 +372,8 @@ mod tests {
     }
 
     /// A command that will not end is ended, rather than held forever.
+    // `/bin/sh` and its utilities; Windows has neither.
+    #[cfg(unix)]
     #[test]
     fn a_hung_git_is_stopped() {
         let mut c = Command::new("/bin/sh");
@@ -387,6 +389,8 @@ mod tests {
     }
 
     /// And a command that ends on its own is not cut short by the machinery.
+    // `/bin/sh` and its utilities; Windows has neither.
+    #[cfg(unix)]
     #[test]
     fn an_ordinary_command_is_untouched() {
         let mut c = Command::new("/bin/sh");
@@ -398,6 +402,8 @@ mod tests {
     }
 
     /// The reason the pipes are drained on threads: more output than a pipe buffer holds.
+    // `/bin/sh` and its utilities; Windows has neither.
+    #[cfg(unix)]
     #[test]
     fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
         let mut c = Command::new("/bin/sh");
