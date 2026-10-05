@@ -561,8 +561,17 @@ fn commit_one(
     let from_file = listed
         .as_ref()
         .map(|f| format!("--pathspec-from-file={}", f.path().display()));
+    // Literal: a path from the turn is a filename, never a pattern. Read as a pathspec, a file the
+    // agent named `*` or `:(top)` matched the person's own work and the quarantine, and the turn's
+    // commit took them all.
     match &from_file {
-        Some(spec) => add.extend_from_slice(&["add", "-A", spec.as_str(), "--pathspec-file-nul"]),
+        Some(spec) => add.extend_from_slice(&[
+            "--literal-pathspecs",
+            "add",
+            "-A",
+            spec.as_str(),
+            "--pathspec-file-nul",
+        ]),
         None => add.extend_from_slice(&["add", "-A", "--", "."]),
     }
     // What Keel quarantined is Keel's doing, not the turn's or the person's: committing it
@@ -595,6 +604,9 @@ fn commit_one(
     } else {
         Vec::new()
     };
+    if from_file.is_some() {
+        args.push("--literal-pathspecs");
+    }
     args.extend_from_slice(&["commit", "-q"]);
     if automatic {
         args.push("--no-verify");
@@ -1456,6 +1468,26 @@ link
         assert!(
             status.contains("A  staged-mine.txt"),
             "the person's staging was disturbed: {status}"
+        );
+    }
+
+    /// A path is a filename, not a pattern: a file the turn named `*` once matched everything.
+    #[test]
+    fn a_turns_paths_are_literal_not_patterns() {
+        let (_d, root) = repo();
+        std::fs::write(root.join("mine.txt"), "the person's\n").unwrap();
+        std::fs::write(root.join("*"), "the agent's oddly named file\n").unwrap();
+        assert!(checkpoint_only(&root, "the turn", &["*".into()]).unwrap());
+        let shown = git(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
+        assert_eq!(
+            shown.trim(),
+            "*",
+            "a pattern took more than the turn's file: {shown}"
+        );
+        assert!(
+            git(&root, &["status", "--porcelain"])
+                .unwrap()
+                .contains("mine.txt")
         );
     }
 
