@@ -60,6 +60,9 @@ pub fn apply(repo: &Utf8Path, report: keel_scanner::Report) -> keel_scanner::Rep
         phase.findings.retain(|id| !ignored.iter().any(|i| i == id));
     }
     out.plan.retain(|p| !p.findings.is_empty());
+    // Set aside is not passed: the row leaves the list with its finding, and "Ignored" names it.
+    out.checks
+        .retain(|c| c.passed || !ignored.iter().any(|i| i == c.id));
     out.ignored = ignored;
     out
 }

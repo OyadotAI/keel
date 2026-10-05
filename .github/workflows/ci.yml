@@ -16,27 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  native:
-    # Hosted macOS/Xcode runner: fork PRs get no signing, analytics, or release secrets.
-    runs-on: macos-26
-    timeout-minutes: 60
-    env:
-      KEEL_SIGN_IDENTITY: "-"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Install icon renderer in an isolated environment
-        run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install Pillow
-      - name: Build the native bundle and run Swift tests
-        run: |
-          source .venv/bin/activate
-          make app-test
-
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -68,6 +47,41 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  # The daemon and the desktop app on Windows. `cargo test` here is the real check behind the
+  # `cfg(windows)` paths — process trees ended with `taskkill`, Git Bash for command lines,
+  # PATHEXT, the profile directory for HOME — which nothing on macOS or Linux runs. Suites that
+  # drive stub agents written as `/bin/sh` scripts are `cfg(unix)` and skipped here.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+      - run: cargo test -p keel -p keel-workspace -p keel-harness -p keel-scanner
+      # Node is on the runner image; pnpm comes from npm rather than another third-party action.
+      - name: Desktop app
+        working-directory: desktop
+        run: |
+          npm install -g pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm budget
+      - name: Desktop shell
+        shell: bash
+        run: |
+          packaging/sidecar.sh
+          cd desktop/src-tauri && cargo build
 
   # Keel is subject to its own scanner. If the readiness bar is worth holding other repositories
   # to, it is worth holding this one to — and a regression here means the scanner shipped a false

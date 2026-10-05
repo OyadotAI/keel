@@ -12,6 +12,10 @@ impl Check for ContinuousIntegration {
         Dimension::Deployability
     }
 
+    fn always(&self) -> bool {
+        true
+    }
+
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         let has_workflow = ctx
             .matching(".github/workflows/")

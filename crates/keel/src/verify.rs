@@ -6,6 +6,7 @@
 //!
 //! So Keel runs them itself after every turn. The agent does not get to grade its own work.
 
+use crate::signals::Leads;
 use axum::response::sse::{Event, Sse};
 use camino::Utf8Path;
 use serde::Serialize;
@@ -345,7 +346,7 @@ pub async fn run_all(
 
         // Through a shell, because the detected command is a pipeline of the project's own
         // scripts. Its own process group, so aborting it takes the whole pipeline.
-        let mut cmd = Command::new("sh");
+        let mut cmd = Command::new(crate::path::posix_shell());
         cmd.arg("-c")
             .arg(&check.command)
             .current_dir(root.join(&check.dir))
@@ -355,7 +356,7 @@ pub async fn run_all(
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .process_group(0);
+            .lead_group();
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,

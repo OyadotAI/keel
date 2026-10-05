@@ -51,6 +51,10 @@ impl Check for UntrustedAgentConfig {
         Dimension::Security
     }
 
+    fn always(&self) -> bool {
+        true
+    }
+
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         let mut findings = Vec::new();
 

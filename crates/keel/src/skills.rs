@@ -222,7 +222,7 @@ fn claude_home() -> Utf8PathBuf {
 fn locate(repo: &Utf8Path, home: &Utf8Path, dir: &str) -> Result<Located, Failure> {
     let mut all = keel_workspace::discover_skills(repo, home);
     all.extend(keel_workspace::plugin_skills(
-        &keel_workspace::discover_plugins(home),
+        &keel_workspace::discover_plugins(repo, home),
     ));
     let wanted = Utf8Path::new(dir);
     all.into_iter()
@@ -921,7 +921,7 @@ Output each file between marker lines, exactly like this, and nothing else — n
 fn ask_claude(prompt: &str) -> Result<String, Failure> {
     let gateway = |m: String| (StatusCode::BAD_GATEWAY, m);
     let dir = tempfile::tempdir().map_err(|e| gateway(format!("a temporary folder: {e}")))?;
-    let mut command = std::process::Command::new("claude");
+    let mut command = std::process::Command::new(crate::permissions::program("claude"));
     command.current_dir(dir.path()).args([
         "-p",
         prompt,
@@ -1202,7 +1202,11 @@ fn skill_md(name: &str, description: &str, instructions: &str) -> String {
 }
 
 fn read_catalog(root: &Utf8Path) -> Result<Catalog, String> {
-    let home = std::env::var("HOME").ok().map(Utf8PathBuf::from);
+    let home = keel_workspace::home()
+        .map(String::from)
+        .ok_or(std::env::VarError::NotPresent)
+        .ok()
+        .map(Utf8PathBuf::from);
     let python = python3_available();
     let mut entries = Vec::new();
     for v in keel_generator::skills::catalog() {
@@ -1683,6 +1687,7 @@ mod tests {
         assert!(!md.contains("metadata:"), "{md}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_copied_skill_arrives_whole_without_links() {
         let d = tempfile::tempdir().unwrap();

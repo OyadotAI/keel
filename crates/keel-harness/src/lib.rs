@@ -13,4 +13,4 @@ pub mod invocation;
 pub mod trust;
 
 pub use invocation::{Environment, Invocation};
-pub use trust::{QuarantineReport, quarantine};
+pub use trust::{QuarantineReport, quarantine, quarantine_keeping};

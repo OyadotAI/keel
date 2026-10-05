@@ -3,6 +3,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ignore::WalkBuilder;
 use std::collections::BTreeSet;
 
+/// Files read before a scan stops walking. Far past any real repository's tracked files.
+const MAX_FILES: usize = 200_000;
+
 /// A snapshot of the repository the checks run against.
 ///
 /// Built once and shared by every check, so a scan walks the tree a single time. Paths are stored
@@ -33,9 +36,21 @@ impl RepoContext {
             // directories before cloning as well as after, and an ignored file is ignored either
             // way; without this the walker silently skips gitignore rules outside a repo.
             .require_git(false)
+            // Pruned, not filtered: a folder of several repositories (a workspace, a monorepo of
+            // clones) has a `.git` in each, and walking into them read every object of every one
+            // — over 90 seconds for a 3.8 GB folder, which the window's own timeout then threw
+            // away. The root itself is never pruned; a lane's checkout is under `.keel`.
+            .filter_entry(|e| {
+                e.depth() == 0 || !matches!(e.file_name().to_str(), Some(".git" | ".keel"))
+            })
             .build();
 
         for entry in walker {
+            // A ceiling, so a folder that is not a project (a home directory, a drive) gives a
+            // partial report rather than a scan nobody waits for.
+            if files.len() >= MAX_FILES {
+                break;
+            }
             let entry = entry.with_context(|| format!("walking {root}"))?;
             if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
@@ -112,6 +127,23 @@ mod tests {
         let (_dir, ctx) = fixture(&[(".gitignore", "secret.txt\n"), ("secret.txt", "shh")]);
         assert!(!ctx.has("secret.txt"));
         assert!(ctx.has(".gitignore"));
+    }
+
+    /// A folder of clones has a `.git` in each; the scan must not count — or walk — their objects.
+    #[test]
+    fn a_nested_repositorys_git_directory_is_not_walked() {
+        let (_dir, ctx) = fixture(&[
+            ("api/src/main.rs", "fn main() {}"),
+            ("api/.git/objects/ab/cdef", "blob"),
+            ("api/.git/HEAD", "ref: refs/heads/main"),
+        ]);
+        assert!(ctx.has("api/src/main.rs"));
+        assert_eq!(
+            ctx.files().count(),
+            1,
+            "{:?}",
+            ctx.files().collect::<Vec<_>>()
+        );
     }
 
     /// `keel trust` moves hostile config into `.keel/quarantine`. If the scanner still reported it

@@ -42,6 +42,7 @@ mod term;
 mod tree;
 mod turns;
 mod verify;
+mod vouched;
 mod worktree;
 mod writes;
 
@@ -133,6 +134,19 @@ enum Command {
         /// is how a machine accumulates one invisible agent host per app launch.
         #[arg(long)]
         exit_with_parent: bool,
+
+        /// Exit when stdin reaches end of file; its first line is the app's token.
+        ///
+        /// The cross-platform form of `--exit-with-parent`: the app holds the write end of a pipe,
+        /// and the kernel closes it however the app dies — on Windows too, which has no parent to
+        /// poll. Opt-in, because an app launched from the Dock hands its children an empty stdin,
+        /// which would read as the parent being gone the moment the daemon started.
+        ///
+        /// The pipe is also the one channel nothing else on the machine can read, so the app
+        /// writes a random token down it first (`pair::set_app_token`): its webview's origin is
+        /// shared by every Tauri app, and the token is what makes a request the app's.
+        #[arg(long)]
+        exit_on_stdin_eof: bool,
 
         /// Report panics to Sentry. Passed by the app from its own configuration, so the
         /// daemon reports under the same key with `component=daemon`.
@@ -281,6 +295,7 @@ fn main() -> Result<()> {
             port,
             no_open: _,
             exit_with_parent,
+            exit_on_stdin_eof,
             sentry_dsn,
             resume_last,
         } => {
@@ -300,8 +315,8 @@ fn main() -> Result<()> {
                 });
                 guard
             });
-            if exit_with_parent {
-                watch_parent();
+            if exit_with_parent || exit_on_stdin_eof {
+                watch_parent(exit_on_stdin_eof);
             }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -399,23 +414,48 @@ fn main() -> Result<()> {
 /// so the parent going away is a one-integer comparison. A second of latency is irrelevant for a
 /// process whose job is now to stop existing, and this catches the cases a cleanup handler cannot
 /// — SIGKILL, a force quit, and a crashed parent.
-fn watch_parent() {
-    let original = std::os::unix::process::parent_id();
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let now = std::os::unix::process::parent_id();
-            if now != original || now == 1 {
-                // Everything Keel started is its child, and `exit` alone reparents all of it to
-                // init. A dev server nobody can see and nobody can stop is worse than one that
-                // never started — and for a long time that sentence was written here while the
-                // dev server was the one thing not in this list.
-                monitor::stop_all();
-                dev::stop_now();
-                std::process::exit(0);
+///
+/// With `stdin`, the parent's death is the end of a pipe it holds instead, which works on every
+/// platform: a blocking read that returns zero bytes.
+fn watch_parent(stdin: bool) {
+    // Everything Keel started is its child, and `exit` alone reparents all of it to init. A dev
+    // server nobody can see and nobody can stop is worse than one that never started — and for a
+    // long time that sentence was written here while the dev server was the one thing not in
+    // this list.
+    let gone = || {
+        monitor::stop_all();
+        dev::stop_now();
+        std::process::exit(0);
+    };
+    if stdin {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, Read};
+            let mut sink = [0u8; 256];
+            let mut input = std::io::stdin().lock();
+            let mut token = String::new();
+            if matches!(input.read_line(&mut token), Ok(0) | Err(_)) {
+                gone();
             }
-        }
-    });
+            pair::set_app_token(&token);
+            // Whatever the app writes is ignored; only the end of it means anything.
+            while matches!(input.read(&mut sink), Ok(n) if n > 0) {}
+            gone();
+        });
+        return;
+    }
+    #[cfg(unix)]
+    {
+        let original = std::os::unix::process::parent_id();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let now = std::os::unix::process::parent_id();
+                if now != original || now == 1 {
+                    gone();
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]

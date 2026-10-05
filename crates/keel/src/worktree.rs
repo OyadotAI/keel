@@ -1006,6 +1006,7 @@ mod tests {
     }
 
     /// `.worktreeinclude` is repository content, and the only escape it filtered was `..`.
+    #[cfg(unix)]
     #[test]
     fn worktreeinclude_cannot_reach_outside_the_repository() {
         let (_d, root) = repo();

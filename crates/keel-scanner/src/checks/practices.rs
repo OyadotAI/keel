@@ -108,9 +108,13 @@ impl Check for ProductionPractices {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
+        self.evaluate(ctx).0
+    }
+
+    fn evaluate(&self, ctx: &RepoContext) -> (Vec<Finding>, Vec<&'static str>) {
         let langs = languages(ctx);
         if langs.is_empty() {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let pkgs = package_jsons(ctx);
         let mut deps = dependencies(ctx);
@@ -195,6 +199,13 @@ impl Check for ProductionPractices {
             })
             .collect();
         let mut out = Vec::new();
+        // What was judged here, pass or fail, pushed beside the condition that decides it.
+        let mut checked = vec![
+            "verify/no-gate",
+            "agent/no-reviewers",
+            "docs/no-readme",
+            "docs/no-architecture",
+        ];
 
         // ── the gate ────────────────────────────────────────────────────────────────────
         let makefile_check = ctx.read("Makefile").is_some_and(|m| {
@@ -353,6 +364,7 @@ impl Check for ProductionPractices {
                     })
             });
         if has_routes || !dockerfiles.is_empty() {
+            checked.extend(["deploy/no-pipeline", "deploy/no-environments"]);
             if !deploys {
                 out.push(Finding::new(
                     "deploy/no-pipeline",
@@ -389,6 +401,9 @@ impl Check for ProductionPractices {
         }
 
         // ── the image ───────────────────────────────────────────────────────────────────
+        if !dockerfiles.is_empty() {
+            checked.extend(["security/image-runs-as-root", "deploy/no-dockerignore"]);
+        }
         for df in &dockerfiles {
             if let Some(text) = ctx.read(df.as_str()) {
                 let runs_as_user = text
@@ -434,6 +449,12 @@ impl Check for ProductionPractices {
 
         // ── the server's behaviour ──────────────────────────────────────────────────────
         if has_routes {
+            checked.extend([
+                "reliability/no-graceful-shutdown",
+                "security/no-input-validation",
+                "security/no-rate-limit",
+                "observability/no-structured-logs",
+            ]);
             let srv: Vec<&Utf8Path> = servers.clone();
             let drains = any_file_contains(
                 ctx,
@@ -611,6 +632,7 @@ impl Check for ProductionPractices {
 
         // ── the database ────────────────────────────────────────────────────────────────
         if has_db {
+            checked.push("reliability/no-migrations");
             let has_migrations = has_dir("migrations/")
                 || has_dir("alembic/")
                 || ctx.files().any(|p| {
@@ -654,6 +676,7 @@ impl Check for ProductionPractices {
             .or_else(|| ctx.read("AGENTS.md"))
             .or_else(|| ctx.read(".claude/CLAUDE.md"))
         {
+            checked.push("agent/thin-instructions");
             let l = md.to_lowercase();
             let names_gate = [
                 "make check",
@@ -745,7 +768,69 @@ impl Check for ProductionPractices {
             ));
         }
 
-        out
+        // ── the map and the rules, where an agent will find them ────────────────────────
+        // A CLAUDE.md with an architecture section is the same map in the file the agent
+        // already reads; a second copy is a second thing to keep true.
+        let mapped_in_instructions = ["CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md"]
+            .iter()
+            .filter_map(|f| ctx.read(f))
+            .any(|md| {
+                md.lines()
+                    .any(|l| l.to_lowercase().starts_with("## architecture"))
+            });
+        if !on_disk(ctx, "ARCHITECTURE.md")
+            && !on_disk(ctx, "docs/ARCHITECTURE.md")
+            && !mapped_in_instructions
+        {
+            out.push(Finding::new(
+                "docs/no-architecture",
+                Dimension::AgentLegibility,
+                Severity::Low,
+                "No ARCHITECTURE.md",
+                "The map an agent reads before it changes anything: the parts, what each one is \
+                 for, how they talk, and the standards they share. Without it every session \
+                 rebuilds the map from whichever files it opens first.",
+                Fix::Assisted {
+                    description: "Write ARCHITECTURE.md from the code: a table of the parts with \
+                                  their paths and runtimes, how they talk, and the engineering \
+                                  standards they share."
+                        .to_string(),
+                },
+            ));
+        }
+        // The rules in CLAUDE.md are read; the linter's are enforced. Asked only of a JS/TS
+        // project, because `tooling/eslint` is what Keel ships for it.
+        let lint_wired = ctx.files().any(|p| {
+            p.file_name()
+                .is_some_and(|n| n.starts_with("eslint.config."))
+                && !p.as_str().contains("node_modules")
+                && ctx.read(p.as_str()).is_some_and(|c| {
+                    c.contains("designRules") || c.contains("max-lines-per-function")
+                })
+        });
+        if ctx.has("package.json") {
+            checked.push("verify/lint-rules-unwired");
+        }
+        if ctx.has("package.json") && !lint_wired {
+            out.push(Finding::new(
+                "verify/lint-rules-unwired",
+                Dimension::Verifiability,
+                Severity::Low,
+                "The engineering rules are not enforced by the linter",
+                "CLAUDE.md asks for short functions, named constants and doc comments; nothing \
+                 checks it, so the agent keeps them when it remembers to. The gate should fail \
+                 when a rule is broken.",
+                Fix::Assisted {
+                    description:
+                        "Import the rule sets from `tooling/eslint/index.js` (file header, \
+                                  function and class length, no magic numbers, doc comments) into \
+                                  the ESLint config, add `eslint-plugin-jsdoc`, and run the gate."
+                            .to_string(),
+                },
+            ));
+        }
+
+        (out, checked)
     }
 }
 
@@ -789,14 +874,44 @@ mod tests {
             "observability/no-structured-logs",
             "reliability/no-migrations",
             "docs/no-readme",
+            "docs/no-architecture",
+            "verify/lint-rules-unwired",
         ] {
             assert!(got.contains(&want), "missing {want} in {got:?}");
         }
     }
 
-    /// `files` plus the whole agent team, as a generated project has it.
+    /// Wiring the shipped rule sets into the ESLint config, and writing the map, clear the two.
+    #[test]
+    fn the_map_and_wired_lint_rules_clear_their_findings() {
+        let (_d, ctx) = fixture(&[
+            ("package.json", r#"{"scripts":{"lint":"eslint ."}}"#),
+            ("ARCHITECTURE.md", "# Architecture"),
+            (
+                "eslint.config.mjs",
+                "import { designRules } from './tooling/eslint/index.js';",
+            ),
+        ]);
+        let got = ids(&ctx);
+        assert!(!got.contains(&"docs/no-architecture"), "{got:?}");
+        assert!(!got.contains(&"verify/lint-rules-unwired"), "{got:?}");
+
+        let (_d, go) = fixture(&[("go.mod", "module x")]);
+        assert!(
+            !ids(&go).contains(&"verify/lint-rules-unwired"),
+            "lint rules are asked of JS/TS only"
+        );
+    }
+
+    /// `files` plus what adopting writes and finishing setup wires: the whole agent team, the
+    /// architecture map, and an ESLint config that imports the shipped rule sets.
     fn with_team(files: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
         let mut all = files.to_vec();
+        all.push(("ARCHITECTURE.md", "# Architecture"));
+        all.push((
+            "eslint.config.mjs",
+            "import { designRules } from './tooling/eslint/index.js';",
+        ));
         for (path, _) in TEAM_FILES {
             all.push((path, ""));
         }

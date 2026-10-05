@@ -177,11 +177,20 @@ pub fn clean_before(root: &Utf8Path, rel: &str) -> bool {
     // and a `chmod +x` is a change too.
     let head = entry(out(&["ls-tree", "HEAD", "--", rel]), 2);
     let disk = on_disk.and_then(|m| {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = if m.permissions().mode() & 0o111 != 0 {
-            "100755"
-        } else {
-            "100644"
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            if m.permissions().mode() & 0o111 != 0 {
+                "100755"
+            } else {
+                "100644"
+            }
+        };
+        // No executable bit on disk to read: git on Windows keeps the index's, so does this.
+        #[cfg(windows)]
+        let mode = {
+            let _ = &m;
+            index.as_ref().map_or("100644", |(mode, _)| mode.as_str())
         };
         let blob = crate::git::trimmed(root, &["hash-object", "--", rel]).ok()?;
         Some((mode.to_string(), blob))
@@ -444,6 +453,7 @@ mod tests {
     }
 
     /// A dangling symlink is how a repository would point Keel's write somewhere else.
+    #[cfg(unix)]
     #[test]
     fn a_new_file_never_goes_through_a_link() {
         let (_d, root) = repo();
@@ -517,6 +527,7 @@ mod tests {
         assert_eq!(shown.trim(), "b.md");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_path_through_a_linked_folder_is_refused() {
         let (_d, root) = repo();
@@ -597,6 +608,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_mode_change_is_the_persons_edit() {
         use std::os::unix::fs::PermissionsExt;
@@ -685,6 +697,7 @@ mod tests {
     }
 
     /// `--no-verify` skips two hooks; Keel's checkpoint runs none, `post-commit` included.
+    #[cfg(unix)]
     #[test]
     fn no_hook_runs_on_keels_commit() {
         let (_d, root) = repo();

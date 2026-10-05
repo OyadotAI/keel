@@ -43,6 +43,10 @@ impl Check for CommittedSecrets {
         Dimension::Security
     }
 
+    fn always(&self) -> bool {
+        true
+    }
+
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         let mut findings = Vec::new();
 

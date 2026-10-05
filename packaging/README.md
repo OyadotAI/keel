@@ -1,93 +1,76 @@
 # Packaging
 
-`make app` builds `dist/Keel.app`; `make dmg` wraps it in `dist/Keel.dmg` with a drag-to-Applications
-alias. Both need only a Mac and a release build — no Xcode project, no signing certificate.
+Keel is a Tauri app (`desktop/`) with the Rust daemon (`keel`) bundled inside it, one daemon per
+open project. A release is a universal macOS app (DMG plus an updater archive) and a Windows NSIS
+installer, published to the public `OyadotAI/keel-releases` repository. Installed copies update
+themselves from there.
 
-## What the bundle is
+## Building locally
 
-The app shell is SwiftUI/AppKit, built with SwiftPM. `Contents/MacOS/KeelApp` launches the UI;
-`Contents/MacOS/keel` is the bundled Rust daemon. The app communicates with the daemon over
-loopback for agent runs, Git operations, terminals, and session updates. WebKit is used for
-in-app web previews, not to render the application shell.
+    packaging/sidecar.sh release aarch64-apple-darwin
+    cd desktop && pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg
 
-The bundle also contains SwiftPM resources, the generated icon, and Sparkle.framework. No Xcode
-project is needed, but building the current Swift code requires an Xcode 26+ toolchain. The app's
-deployment target remains macOS 15.
+`sidecar.sh` stages the daemon where `externalBin` expects it, at
+`desktop/src-tauri/binaries/keel-<triple>`. Tauri puts it beside the app's executable, and
+`keel_binary()` in `desktop/src-tauri/src/main.rs` finds it there. Without the staged file Tauri
+refuses to build at all, and that includes `tauri dev`, which is why `make dev` runs it first.
 
-## Local and CI builds
+A build is only signed if `APPLE_SIGNING_IDENTITY` names a Developer ID in the keychain. An
+unsigned build is for your own machine and nothing else.
 
-Install Pillow in a virtual environment before `make app` or `make app-test`; see
-[Contributing](../CONTRIBUTING.md). `KEEL_SIGN_IDENTITY=- make app-test` explicitly uses ad-hoc
-signing for a local/CI build, without a Developer ID, notarization credentials, or release secrets.
+## Updates
 
-Optional reporting keys are read only from the build environment or this repository's ignored
-`.env`. Leaving them unset disables reporting in that build. See [Privacy](../docs/privacy.md).
-Never commit `.env`, signing certificates, or update private keys. The Sparkle public verification
-key is public by design and is distinct from the signing key.
+The app checks `releases/latest/download/latest.json` at launch and every six hours, downloads in
+the background, and installs only when the person clicks **Restart to update**. A restart stops
+every agent the app is running, so Keel never makes that choice for them, and it says how many
+lanes are mid-turn before it restarts. Development builds never check.
 
-## Signing
+Updates are signed with an updater key that has nothing to do with Apple. The public half is in
+`tauri.conf.json`. The private half is created once:
 
-`make app` and `make dmg` sign with a Developer ID when one is in the keychain, found automatically
-or named by `KEEL_SIGN_IDENTITY`. Both use the hardened runtime and a secure timestamp, which
-notarisation requires and does not explain the absence of.
+    make updater-keys        # writes ~/.tauri/keel-updater.key, prints the secret command
 
-Signed is not enough — Gatekeeper says so exactly:
+## Swift testers
 
-    dist/Keel.app: rejected
-    source=Unnotarized Developer ID
-
-Notarisation closes it, and needs credentials in the keychain. `notarytool store-credentials` asks
-for them interactively — an Apple ID, a team id, an app-specific password — so it cannot be driven
-from a script. Once, and every `make dmg` notarises and staples on its own:
-
-    xcrun notarytool store-credentials keel \
-      --apple-id <apple-id> --team-id <team> --password <app-specific-password>
-
-Use `KEEL_NOTARY_PROFILE` for a different profile name.
-
-## Order matters
-
-The app is notarised and stapled **before** the image is built from it, and the image is notarised
-after. Doing only the image leaves the app inside without a ticket — Gatekeeper still accepts it,
-by asking Apple, so it passes on every machine you would test on and fails on one with no network.
-
-That is not hypothetical. An app copied out of an image notarised on its own reported this, in the
-same breath:
-
-    accepted
-    source=Notarized Developer ID
-    Keel.app does not have a ticket stapled to it.
+Builds of the Swift app update through Sparkle from `appcast.xml` on the same feed. The Tauri app
+carries the Swift app's bundle identifier (`ai.oya.keel`) and is signed with the same Team ID, so
+Sparkle accepts it as the next version and installs it in place. The release workflow therefore
+also writes a Sparkle appcast for the DMG, using the old Sparkle key. After that first update the
+Tauri updater takes over, and nobody has to download anything by hand. Keep publishing the
+appcast until no Swift build is left in use.
 
 ## Releasing
 
-`make release` bumps the version in `Cargo.toml`, commits it, and pushes a `v*` tag.
-`.github/workflows/release.yml` does everything after that — build, sign, notarise, staple, write
-the appcast, publish to `OyadotAI/keel-releases`. Nothing about a release depends on which Mac you
-are sitting at, which was the point.
+`make release` bumps the version in `Cargo.toml` and `desktop/src-tauri/Cargo.toml` together,
+commits it, and pushes a `v*` tag. `.github/workflows/release.yml` does the rest:
 
-The workflow needs these repository secrets, and does nothing useful without them:
+1. `draft` opens a draft release on the feed.
+2. `macos` builds the universal app, signs and notarises it, and staples the DMG.
+3. `windows` builds the installer.
+4. `publish` writes `latest.json` from the signatures, publishes it, and mirrors the installers
+   to this repository.
+
+The workflow needs these repository secrets:
 
 | Secret | What it is |
 | --- | --- |
 | `MACOS_CERT_P12` | The Developer ID Application certificate and key, `base64 -i cert.p12` |
 | `MACOS_CERT_PASSWORD` | The password set when exporting that `.p12` |
-| `MACOS_SIGN_IDENTITY` | Optional. Left empty, the job finds the identity it just imported |
-| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | The three `notarytool store-credentials` asks for |
-| `SPARKLE_PRIVATE_KEY` | `packaging/sparkle/bin/generate_keys -x -` on the machine that ran `make sparkle-keys` |
-| `SPARKLE_PUBLIC_KEY` | The public half, baked into `Info.plist` so the updater trusts the feed |
-| `RELEASES_TOKEN` | A token with `contents: write` on `OyadotAI/keel-releases` — the default one cannot reach another repository |
-| `KEEL_SENTRY_DSN`, `KEEL_POSTHOG_KEY`, `KEEL_POSTHOG_HOST` | Optional. Absent, that SDK is off in the build |
+| `MACOS_SIGN_IDENTITY` | The identity's name, e.g. `Developer ID Application: Oya (TEAMID)` |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | For notarisation |
+| `TAURI_SIGNING_PRIVATE_KEY` | `~/.tauri/keel-updater.key`, from `make updater-keys` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty unless the key was made with one |
+| `SPARKLE_PRIVATE_KEY` | The Swift app's Sparkle key, for the migration appcast above |
+| `RELEASES_TOKEN` | A token with `contents: write` on `OyadotAI/keel-releases`, since the default token cannot reach another repository |
 
-If the workflow is down, the manual path is what it always was — `make dmg`, then upload the two
-files it leaves in `dist/`:
+**Windows is not Authenticode-signed yet.** There is no certificate, so SmartScreen warns on
+first run. Updates are still verified by the updater's own signature before they install.
 
-    gh release create v0.2.52 dist/Keel.dmg dist/appcast.xml -R OyadotAI/keel-releases --latest
+## Order matters
 
-## If notarisation is not set up
-
-Use the build for local development only. Ad-hoc or unnotarized artifacts are not suitable for
-public distribution and can be rejected by Gatekeeper. Finish signing and notarization before
-publishing a download; do not ask users to bypass quarantine as the normal installation path.
+Tauri notarises the app. The image it is put in is a second file Gatekeeper checks, so the
+workflow notarises and staples the DMG as well. If only the app is stapled, the image passes on
+every machine with a network and fails on one without.
 
 ## A 403 about agreements
 
@@ -95,6 +78,6 @@ publishing a download; do not ask users to bypass quarantine as the normal insta
 
 Two separate places, and accepting one does not clear the other. `notarytool` authenticates against
 the App Store Connect API, so **appstoreconnect.apple.com → Business** is the one usually
-outstanding — not the developer portal, which is where everyone looks first. Only the Account
+outstanding. It is not the developer portal, which is where everyone looks first. Only the Account
 Holder can accept either. Nothing about the certificate or the build is involved; signing keeps
 working throughout.

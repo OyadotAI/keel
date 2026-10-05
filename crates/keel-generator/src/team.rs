@@ -44,6 +44,14 @@ pub fn agents() -> Vec<(&'static str, &'static str)> {
 /// description matches nothing the project does is noise in every turn's skill list.
 pub const FRONTEND_SKILL_PATH: &str = ".claude/skills/frontend/SKILL.md";
 
+/// Where [`ESLINT_RULES`] is written. Only into a project with a `package.json`.
+pub const ESLINT_RULES_PATH: &str = "tooling/eslint/index.js";
+
+/// [`RULES`] as lint rules, so the agent is held to them by the gate rather than by reading.
+/// agentchrome's `tooling/eslint`, verbatim but for the header: no dependencies of its own, so it
+/// can be written before anything is installed, and the project's ESLint config imports from it.
+pub const ESLINT_RULES: &str = include_str!("team/eslint.js");
+
 /// The heading [`RULES`] opens with.
 pub const RULES_HEADING: &str = "## Engineering rules";
 
@@ -80,6 +88,9 @@ changes to them; say which rule a deviation breaks and why it is worth it.
   from one shared table; a value the environment can tune is read in one place with a named
   default.
 - **No new dependency** for something a few lines of the standard library cover.
+- **In JavaScript and TypeScript the linter holds these.** `tooling/eslint/index.js` has the rule
+  sets (file header, function and class length, no magic numbers, doc comments); import them into
+  the project's ESLint config rather than restating them.
 
 **Design**
 
@@ -376,6 +387,9 @@ missed and which stage owns each objection. Then return, and keep it to what an 
 - **Every way out** — for any new state, wait, process or queue: the bound, the owner, each exit.
 - **The tests that pin it** — named, with the wrong implementation each one fails on.
 - **The order to build it in**, smallest shippable step first, and what is left out.
+- **What repeats** — a procedure the team will run again (a recipe, an integration, a checklist)
+  is a skill, not a paragraph. Name it and its one-line trigger, and recommend creating it with
+  Keel's New skill (Skills → New skill), which writes it from a sentence into `.claude/skills/`.
 
 No code beyond a signature or a type. A design longer than the change it describes is wrong. If
 you cannot name the case that fails, it is not a Blocker. If the design holds, say LGTM and stop.

@@ -214,8 +214,16 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
     out
 }
 
-/// One commit's diff, file by file, in the shape the working-tree diff already has.
-pub fn git_commit_diff(root: &Utf8Path, sha: &str) -> Result<Vec<DiffResponse>, String> {
+/// One commit's diff, file by file, in the shape the working-tree diff already has — or one
+/// file of it, which is what a turn's file card asks for.
+///
+/// Capped like the working-tree diff: a turn that wrote a 30,000-line lockfile is a normal turn,
+/// and before the cap every line of it went to the app whenever its card was drawn.
+pub fn git_commit_diff(
+    root: &Utf8Path,
+    sha: &str,
+    only: Option<&str>,
+) -> Result<Vec<DiffResponse>, String> {
     if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) || sha.len() > 40 {
         return Err("not a commit id".into());
     }
@@ -223,17 +231,19 @@ pub fn git_commit_diff(root: &Utf8Path, sha: &str) -> Result<Vec<DiffResponse>, 
     Ok(files
         .lines()
         .filter(|f| !f.is_empty())
+        .filter(|f| only.is_none_or(|o| o == *f))
         .map(|path| {
             let raw = git(
                 root,
                 &["show", "--format=", "--no-color", "-U3", sha, "--", path],
             )
             .unwrap_or_default();
+            let (hunks, note) = capped(parse_hunks(&raw));
             DiffResponse {
                 path: path.to_string(),
-                hunks: parse_hunks(&raw),
+                hunks,
                 untracked: false,
-                note: None,
+                note,
             }
         })
         .collect())
@@ -1506,5 +1516,43 @@ mod diff_tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].lines.len(), 3);
         assert!(note.is_none());
+    }
+
+    /// A turn's file card asks for one file of its commit, and gets it capped like any diff.
+    #[test]
+    fn a_commit_diff_can_be_one_file_and_is_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                crate::git::command(root)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join("small.txt"), "a\n").unwrap();
+        let big: String = (0..MAX_DIFF_LINES + 50).map(|i| format!("{i}\n")).collect();
+        std::fs::write(root.join("big.lock"), big).unwrap();
+        git(&["add", "-A"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "x",
+        ]);
+        let sha = crate::git::trimmed(root, &["rev-parse", "HEAD"]).unwrap();
+        let one = git_commit_diff(root, &sha, Some("small.txt")).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].path, "small.txt");
+        let big = git_commit_diff(root, &sha, Some("big.lock")).unwrap();
+        let shown: usize = big[0].hunks.iter().map(|h| h.lines.len()).sum();
+        assert_eq!(shown, MAX_DIFF_LINES);
+        assert!(big[0].note.is_some(), "says it was cut");
     }
 }

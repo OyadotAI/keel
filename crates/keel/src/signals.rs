@@ -12,10 +12,54 @@
 //! called `Child::start_kill()`, which is `kill(pid)` on the leader alone. `AppState::interrupt`
 //! carried a comment explaining precisely why that is wrong, four files away.
 
+/// Ask a tree to stop: what lets `claude` flush its transcript and a dev server give its port back.
+#[cfg(unix)]
+pub const INTERRUPT: i32 = libc::SIGINT;
+/// Insist.
+#[cfg(unix)]
+pub const KILL: i32 = libc::SIGKILL;
+// Windows has no signals to send another program's group: both mean "end the tree" there.
+#[cfg(windows)]
+pub const INTERRUPT: i32 = 2;
+#[cfg(windows)]
+pub const KILL: i32 = 9;
+
+/// Make a command the leader of a group of its own, so [`group`] can reach everything it starts.
+/// Every spawn site says this instead of `process_group(0)`, which does not exist on Windows.
+pub trait Leads {
+    fn lead_group(&mut self) -> &mut Self;
+}
+
+impl Leads for std::process::Command {
+    fn lead_group(&mut self) -> &mut Self {
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(self, 0);
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(self, WINDOWS_GROUP);
+        self
+    }
+}
+
+impl Leads for tokio::process::Command {
+    fn lead_group(&mut self) -> &mut Self {
+        #[cfg(unix)]
+        self.process_group(0);
+        #[cfg(windows)]
+        self.creation_flags(WINDOWS_GROUP);
+        self
+    }
+}
+
+/// `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`: a group of its own, and no console window
+/// flashing up behind the app for a process nobody asked to see.
+#[cfg(windows)]
+const WINDOWS_GROUP: u32 = 0x0000_0200 | 0x0800_0000;
+
 /// Signal the whole group `pid` leads.
 ///
 /// `pid` must be a group leader Keel spawned. Negating it is what makes the kernel deliver to
 /// every process in the group rather than to one.
+#[cfg(unix)]
 pub fn group(pid: u32, signal: i32) {
     if pid == 0 {
         return;
@@ -28,6 +72,28 @@ pub fn group(pid: u32, signal: i32) {
     }
 }
 
+/// End the tree `pid` leads, on Windows.
+///
+/// `taskkill /T /F` — the whole tree, at once. Windows cannot deliver an interrupt to another
+/// program's group from a process with no console, so there is no "ask" here, and `claude` may not
+/// flush the turn's last records. ponytail: ending `claude` gracefully on Windows means its own
+/// `--input-format stream-json` interrupt message, and Job Objects would make the tree exact.
+/// Started and not waited for: callers include request handlers, which must not block.
+#[cfg(windows)]
+pub fn group(pid: u32, _signal: i32) {
+    use std::os::windows::process::CommandExt;
+    if pid == 0 {
+        return;
+    }
+    let _ = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .creation_flags(0x0800_0000)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// End a process tree: ask, then insist.
 ///
 /// SIGINT first, and to the group, because that is what ends things cleanly — `claude` flushes its
@@ -36,11 +102,12 @@ pub fn group(pid: u32, signal: i32) {
 /// every caller of this is a path where nobody is listening any more, and something that decides
 /// to ignore SIGINT must not become the thing this file exists to prevent.
 pub fn end_tree(pid: u32) {
-    group(pid, libc::SIGINT);
-    group(pid, libc::SIGKILL);
+    group(pid, INTERRUPT);
+    #[cfg(unix)]
+    group(pid, KILL);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};

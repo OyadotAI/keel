@@ -20,7 +20,10 @@ use std::collections::BTreeSet;
 /// should leave Keel no worse off than a hardcoded list, and a shell that answers should be able
 /// to add to it rather than replace it.
 fn well_known() -> Vec<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = keel_workspace::home()
+        .map(String::from)
+        .ok_or(std::env::VarError::NotPresent)
+        .unwrap_or_default();
     [
         // Where `claude`'s own installer puts it.
         format!("{home}/.local/bin"),
@@ -96,6 +99,11 @@ fn shell_path() -> Option<String> {
 /// Order is preserved and duplicates dropped, so a tool the user shadowed deliberately stays
 /// shadowed — appending our guesses after their `PATH` rather than in front of it.
 pub fn adopt_shell_path() {
+    // A Windows app inherits the PATH the system keeps for the user; there is no login shell to
+    // ask and no Homebrew to add.
+    if cfg!(windows) {
+        return;
+    }
     let mut seen = BTreeSet::new();
     let mut parts: Vec<String> = Vec::new();
 
@@ -120,6 +128,33 @@ pub fn adopt_shell_path() {
     if !parts.is_empty() {
         // Safety: called once, at the top of main, before any thread is spawned.
         unsafe { std::env::set_var("PATH", parts.join(":")) };
+    }
+}
+
+/// The shell that runs a command line the agent or the project wrote: `sh` on Unix, Git Bash on
+/// Windows — those lines are bash syntax, and Claude Code itself requires Git Bash there, so it is
+/// installed wherever Keel is useful. Found the way Claude Code finds it: its own variable first,
+/// then the `bash.exe` that ships beside `git.exe`.
+pub fn posix_shell() -> std::ffi::OsString {
+    #[cfg(windows)]
+    {
+        if let Some(path) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH") {
+            return path;
+        }
+        if let Some(git) = crate::permissions::find_on_path("git") {
+            // `…\Git\cmd\git.exe` or `…\Git\bin\git.exe`; bash is in `…\Git\bin`.
+            for up in git.ancestors().skip(1).take(3) {
+                let bash = up.join("bin").join("bash.exe");
+                if bash.is_file() {
+                    return bash.into_os_string();
+                }
+            }
+        }
+        "bash".into()
+    }
+    #[cfg(not(windows))]
+    {
+        "sh".into()
     }
 }
 
@@ -184,7 +219,10 @@ mod tests {
     fn the_search_path_covers_where_things_install() {
         adopt_shell_path();
         let path = std::env::var("PATH").unwrap_or_default();
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = keel_workspace::home()
+            .map(String::from)
+            .ok_or(std::env::VarError::NotPresent)
+            .unwrap_or_default();
 
         for dir in [format!("{home}/.local/bin"), "/opt/homebrew/bin".into()] {
             if std::path::Path::new(&dir).is_dir() {

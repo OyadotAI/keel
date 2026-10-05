@@ -23,6 +23,10 @@ impl Check for ProductionShape {
     }
 
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
+        self.evaluate(ctx).0
+    }
+
+    fn evaluate(&self, ctx: &RepoContext) -> (Vec<Finding>, Vec<&'static str>) {
         let is_service = ctx.has_any([
             "package.json",
             "frontend/package.json",
@@ -32,8 +36,14 @@ impl Check for ProductionShape {
             .files()
             .any(|p| p.file_name().is_some_and(|f| f.starts_with("wrangler.")));
         if !is_service || on_workers {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
+        let mut checked = vec![
+            "deploy/no-env-example",
+            "deploy/no-dockerfile",
+            "deploy/no-compose",
+            "runtime/no-health-endpoint",
+        ];
 
         let mut out = Vec::new();
         let mut want = |id: &'static str, sev: Severity, title: &str, detail: &str, fix: &str| {
@@ -92,6 +102,9 @@ impl Check for ProductionShape {
             || ctx.matching("kustomization.yaml").next().is_some()
             || ctx.matching("helm/").next().is_some()
             || ctx.matching("deploy/").next().is_some();
+        if has_dockerfile {
+            checked.push("deploy/no-manifests");
+        }
         if has_dockerfile && !has_manifests {
             want(
                 "deploy/no-manifests",
@@ -128,7 +141,7 @@ impl Check for ProductionShape {
                  point the probes at them.",
             );
         }
-        out
+        (out, checked)
     }
 }
 

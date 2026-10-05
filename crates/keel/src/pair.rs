@@ -292,6 +292,96 @@ fn token_ok(token: &str) -> bool {
     })
 }
 
+/// Where the desktop app's webview is served from: `tauri://localhost` on macOS,
+/// `http://tauri.localhost` on Windows, and Vite in a debug build.
+///
+/// **Not proof of anything on its own.** Every Tauri app on the machine shares these origins, so
+/// script in any of them — an XSS in somebody's notes app — carries the same one, and on some
+/// networks `tauri.localhost` resolves to whoever answers DNS. An origin on this list is let
+/// through only with [`app_token`] beside it; the origin is the second factor, not the first.
+pub const APP_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    // `tauri dev` serves the page from Vite. A debug build only.
+    #[cfg(debug_assertions)]
+    "http://localhost:1420",
+];
+
+/// The token the app that spawned this daemon handed it on stdin, once. Random per launch, never
+/// on the command line, in the environment or in a URL, so nothing else on the machine can read it.
+static APP_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Called once, with the first line the app writes to the daemon's stdin.
+pub fn set_app_token(token: &str) {
+    let token = token.trim();
+    if token.len() >= 32 {
+        let _ = APP_TOKEN.set(token.to_string());
+    }
+}
+
+/// Whether a request carries the app's token as `Authorization: Bearer`, compared over the whole
+/// string. No token handed over — a daemon the Swift app or a terminal started — means no page is
+/// ever the app.
+fn app_token(headers: &axum::http::HeaderMap) -> bool {
+    let Some(expected) = APP_TOKEN.get() else {
+        return false;
+    };
+    let same = |given: &str| {
+        given.len() == expected.len()
+            && given
+                .bytes()
+                .zip(expected.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    };
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    // A page's WebSocket cannot set headers, only subprotocols — so the terminal offers
+    // `keel.<token>` among them. Kept out of the URL, where it would be in every log.
+    let offered = headers
+        .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())
+        .into_iter()
+        .flat_map(|v| v.split(','))
+        .filter_map(|p| p.trim().strip_prefix("keel."));
+    bearer.into_iter().chain(offered).any(same)
+}
+
+/// Why a loopback request came from a web page, if it did. Loopback is unauthenticated because
+/// the app and the `keel approve` hook depend on it — and so, without this, is every page in every
+/// browser on the machine: a `no-cors` GET from any site, or a rebound DNS name, could add an MCP
+/// server to the project. None of Keel's own callers is a browser, so none of them sends these.
+fn from_a_page(headers: &axum::http::HeaderMap) -> Option<&'static str> {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let name = host.rsplit_once(':').map_or(host, |(h, port)| {
+        if port.chars().all(|c| c.is_ascii_digit()) {
+            h
+        } else {
+            host
+        }
+    });
+    if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
+        return Some("a Host that is not this machine");
+    }
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        if origin.to_str().is_ok_and(|o| APP_ORIGINS.contains(&o)) && app_token(headers) {
+            return None;
+        }
+        return Some("a web page's Origin");
+    }
+    let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if matches!(site, Some("cross-site" | "same-site")) {
+        return Some("a web page's fetch");
+    }
+    None
+}
+
 /// The one place that decides whether a request from off this machine is allowed in.
 pub async fn guard(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -300,6 +390,12 @@ pub async fn guard(
 ) -> Result<Response, (StatusCode, String)> {
     // no-blocking: middleware; off loopback only, one small read of the device list.
     if peer.ip().is_loopback() {
+        if let Some(why) = from_a_page(req.headers()) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!("Refused a request carrying {why}."),
+            ));
+        }
         return Ok(next.run(req).await);
     }
 
@@ -353,6 +449,96 @@ pub fn tailscale_ip() -> Option<std::net::Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_web_page_cannot_reach_the_loopback_api() {
+        use axum::http::{HeaderMap, HeaderValue};
+        let with = |pairs: &[(&'static str, &'static str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(*k, HeaderValue::from_static(v));
+            }
+            from_a_page(&h)
+        };
+        // The app, the hook and `claude`'s MCP client.
+        assert_eq!(with(&[("host", "127.0.0.1:7777")]), None);
+        assert_eq!(
+            with(&[("host", "localhost:7777"), ("sec-fetch-mode", "cors")]),
+            None
+        );
+        // A page, a no-cors GET from one, and a rebound name.
+        assert!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "https://evil.example")
+            ])
+            .is_some()
+        );
+        assert!(with(&[("host", "127.0.0.1:7777"), ("sec-fetch-site", "cross-site")]).is_some());
+        // The desktop app's webview is a page, but Keel's own: its origin *and* the token it
+        // handed this daemon on stdin. The origin alone is every Tauri app on the machine.
+        const TOKEN: &str =
+            "Bearer kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk";
+        set_app_token(&TOKEN["Bearer ".len()..]);
+        assert_eq!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "tauri://localhost"),
+                ("sec-fetch-site", "cross-site"),
+                ("authorization", TOKEN)
+            ]),
+            None
+        );
+        assert!(
+            with(&[("host", "127.0.0.1:7777"), ("origin", "tauri://localhost")]).is_some(),
+            "another Tauri app has the same origin and no token"
+        );
+        assert!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "tauri://localhost"),
+                ("authorization", "Bearer kkkk")
+            ])
+            .is_some()
+        );
+        // The terminal's WebSocket carries it as a subprotocol, since a page cannot set headers.
+        const PROTOCOLS: &str =
+            "keel, keel.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk";
+        assert_eq!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "tauri://localhost"),
+                ("sec-websocket-protocol", PROTOCOLS)
+            ]),
+            None
+        );
+        assert!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "tauri://localhost"),
+                ("sec-websocket-protocol", "keel, keel.kkkk")
+            ])
+            .is_some()
+        );
+        assert!(
+            with(&[
+                ("host", "evil.example:7777"),
+                ("origin", "tauri://localhost"),
+                ("authorization", TOKEN)
+            ])
+            .is_some(),
+            "the app's token does not excuse a rebound name"
+        );
+        assert!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "tauri://localhost.evil.example")
+            ])
+            .is_some()
+        );
+        assert!(with(&[("host", "evil.example:7777")]).is_some());
+        assert!(with(&[]).is_some(), "no Host at all is not a Keel caller");
+    }
 
     #[test]
     fn a_code_is_six_digits_and_nothing_else() {

@@ -137,7 +137,10 @@ fn configure(req: SsoSetup) -> Result<Configured, (StatusCode, String)> {
 /// the file is left exactly as it was — this is somebody's existing AWS config, and Keel adding a
 /// session to it must not be a reason for anything else in it to change.
 fn write_session(req: &SsoSetup) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "no home directory")?;
+    let home = keel_workspace::home()
+        .map(String::from)
+        .ok_or(std::env::VarError::NotPresent)
+        .map_err(|_| "no home directory")?;
     let dir = std::path::Path::new(&home).join(".aws");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("config");

@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::lock::Locked;
@@ -47,9 +46,14 @@ fn session_rules() -> &'static Mutex<SessionRules> {
 
 /// Authorization belongs to this Mac, never to files supplied by a clone or edited by an agent.
 /// Test binaries use an isolated directory without changing process-global HOME.
-fn permissions_dir() -> Result<Utf8PathBuf, String> {
+pub(crate) fn permissions_dir() -> Result<Utf8PathBuf, String> {
     #[cfg(test)]
     {
+        // A test that spawns a second process hands it this directory, so the two share it the
+        // way two daemons share `~/.keel`.
+        if let Ok(shared) = std::env::var("KEEL_TEST_PERMISSIONS_DIR") {
+            return Ok(Utf8PathBuf::from(shared));
+        }
         static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
         Ok(Utf8PathBuf::from_path_buf(
             DIR.get_or_init(|| tempfile::tempdir().expect("permission test storage"))
@@ -66,7 +70,7 @@ fn permissions_dir() -> Result<Utf8PathBuf, String> {
         std::env::var("KEEL_PERMISSIONS_DIR")
             .ok()
             .map(Utf8PathBuf::from)
-            .or_else(|| crate::prefs::dir().map(|d| d.join("permissions")))
+            .or_else(private::default_dir)
             .filter(|p| p.is_absolute())
             .ok_or_else(|| "No absolute local permissions directory is available.".into())
     }
@@ -79,25 +83,143 @@ fn project_identity(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
         return Err("Permissions require an existing project directory.".into());
     }
     // A new clone at the same path must not inherit the deleted directory's authorization.
-    let identity = format!("{}\0{}\0{}", canonical, metadata.dev(), metadata.ino());
+    let identity = format!("{}\0{}", canonical, private::identity(&metadata));
     Ok((
         canonical,
         format!("{:x}", Sha256::digest(identity.as_bytes())),
     ))
 }
 
+/// What "a private file of this user's, reached without following a link" means on each platform.
+#[cfg(unix)]
+mod private {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+
+    pub fn identity(m: &std::fs::Metadata) -> String {
+        format!("{}\0{}", m.dev(), m.ino())
+    }
+
+    pub fn create_dir(dir: &camino::Utf8Path) -> std::io::Result<()> {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+
+    /// Owned by this user, readable by nobody else, and — for a file — with no other name.
+    pub fn owned_and_private(m: &std::fs::Metadata, file: bool) -> bool {
+        // SAFETY: `geteuid` cannot fail and touches no memory.
+        m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o077 == 0 && (!file || m.nlink() == 1)
+    }
+
+    pub fn no_follow(o: &mut std::fs::OpenOptions) {
+        o.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn default_dir() -> Option<camino::Utf8PathBuf> {
+        crate::prefs::dir().map(|d| d.join("permissions"))
+    }
+
+    /// The uid and mode checks above are the whole guarantee on Unix; where it lives adds nothing.
+    pub fn trusted_location(_dir: &camino::Utf8Path) -> bool {
+        true
+    }
+}
+
+#[cfg(windows)]
+mod private {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    /// The volume serial and file index are the inode's equivalent and still unstable in std;
+    /// the directory's creation time does the same job here — a fresh clone at the same path is a
+    /// new directory, made later.
+    pub fn identity(m: &std::fs::Metadata) -> String {
+        m.created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos().to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn create_dir(dir: &camino::Utf8Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)
+    }
+
+    // ponytail: no owner/ACL check — the store lives under the user's profile, whose default ACL
+    // is the user, SYSTEM and Administrators. Read the DACL if storage ever moves out of it.
+    pub fn owned_and_private(m: &std::fs::Metadata, _file: bool) -> bool {
+        !m.file_type().is_symlink()
+    }
+
+    /// Open the link itself, never what it points at (`FILE_FLAG_OPEN_REPARSE_POINT`) — so a
+    /// planted link fails the `is_file` check after it rather than redirecting the write.
+    pub fn no_follow(o: &mut std::fs::OpenOptions) {
+        o.custom_flags(0x0020_0000);
+    }
+
+    /// `%LOCALAPPDATA%\\Keel\\permissions`, which Windows sets for the user and keeps to them —
+    /// never `HOME`, which Git for Windows users often point at a folder under `C:\\` that every
+    /// authenticated user may write to.
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn default_dir() -> Option<camino::Utf8PathBuf> {
+        std::env::var("LOCALAPPDATA")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .map(|d| {
+                camino::Utf8PathBuf::from(d)
+                    .join("Keel")
+                    .join("permissions")
+            })
+    }
+
+    /// Fail closed: without an owner and ACL check here, the one thing standing between another
+    /// local user and a planted `"trusted": true` is the profile directory's own ACL. So nothing
+    /// outside the profile is used at all — not a `HOME` under `C:\\`, not a configured directory.
+    // ponytail: read the DACL (GetNamedSecurityInfoW) and accept any directory only this user can
+    // write, if a store outside the profile is ever needed.
+    pub fn trusted_location(dir: &camino::Utf8Path) -> bool {
+        let Some(profile) =
+            std::env::var_os("USERPROFILE").and_then(|p| std::fs::canonicalize(p).ok())
+        else {
+            return false;
+        };
+        dir.canonicalize().is_ok_and(|d| d.starts_with(&profile))
+    }
+}
+
+/// A lock file of this user's, in a private directory beside the permission store: a directory
+/// only this user can read, opened without following a link. Shared by every daemon this user
+/// runs, which is the point — and by nobody else's, which a shared `/tmp` could not promise.
+pub(crate) fn private_lock(name: &str) -> Result<std::fs::File, String> {
+    let dir = permissions_dir()?.with_file_name("writers");
+    private::create_dir(&dir).map_err(|e| e.to_string())?;
+    let metadata = std::fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
+    if !metadata.is_dir()
+        || !private::owned_and_private(&metadata, false)
+        || !private::trusted_location(&dir)
+    {
+        return Err("The lock directory must be a private, user-owned directory.".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    private::no_follow(&mut options);
+    let file = options.open(dir.join(name)).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || !private::owned_and_private(&metadata, true) {
+        return Err("A lock file must be a private, user-owned file without links.".into());
+    }
+    Ok(file)
+}
+
 fn store_path(repo: &Utf8Path) -> Result<Utf8PathBuf, String> {
     let (project, key) = project_identity(repo)?;
     let dir = permissions_dir()?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
-        .map_err(|e| e.to_string())?;
+    private::create_dir(&dir).map_err(|e| e.to_string())?;
     let metadata = std::fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
     if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
+        || !private::owned_and_private(&metadata, false)
+        || !private::trusted_location(&dir)
     {
         return Err(
             "Local permission storage must be a private, user-owned directory, not a symlink."
@@ -115,20 +237,12 @@ fn store_path(repo: &Utf8Path) -> Result<Utf8PathBuf, String> {
 }
 
 fn open_store(repo: &Utf8Path, write: bool) -> Result<std::fs::File, String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(write)
-        .create(write)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(store_path(repo)?)
-        .map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(write).create(write);
+    private::no_follow(&mut options);
+    let file = options.open(store_path(repo)?).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
-    if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-        || metadata.nlink() != 1
-    {
+    if !metadata.is_file() || !private::owned_and_private(&metadata, true) {
         return Err(
             "Local permission records must be private, user-owned files without links.".into(),
         );
@@ -247,12 +361,35 @@ fn developer_shim(path: &std::path::Path) -> bool {
 }
 
 /// The first `name` on `PATH`, found by reading the directories — never by running it.
+///
+/// On Windows a program is `name` plus one of `PATHEXT`'s extensions — `claude.exe`, or the
+/// `claude.cmd` an npm install leaves — and `PATH` is split on `;`, which `split_paths` knows.
 pub(crate) fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var("PATH").ok()?;
-    path.split(':')
-        .filter(|dir| !dir.is_empty())
-        .map(|dir| std::path::Path::new(dir).join(name))
+    let path = std::env::var_os("PATH")?;
+    #[cfg(windows)]
+    let names: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(|e| format!("{name}{}", e.to_ascii_lowercase()))
+        .chain(std::iter::once(name.to_string()))
+        .collect();
+    #[cfg(not(windows))]
+    let names = [name.to_string()];
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
         .find(|candidate| candidate.is_file())
+}
+
+/// What to hand `Command::new` for a program on `PATH`. On Unix, the name. On Windows, the file
+/// it resolves to: `Command` adds only `.exe`, so an npm-installed `claude.cmd` would not start.
+pub(crate) fn program(name: &str) -> std::ffi::OsString {
+    #[cfg(windows)]
+    if let Some(found) = find_on_path(name) {
+        return found.into_os_string();
+    }
+    name.into()
 }
 
 /// Whether this project has been trusted. Never true unless somebody said so.
@@ -715,6 +852,7 @@ mod tests {
         std::fs::rename(moved, root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn publication_symlink_aliases_share_only_their_canonical_project_grants() {
         let (dir, root) = repo(&[]);
@@ -739,6 +877,7 @@ mod tests {
         assert!(!effective(&second, Some("same-session-id")).contains(&"Bash".into()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn publication_corrupt_or_linked_local_records_fail_closed() {
         use std::os::unix::fs::PermissionsExt;
@@ -791,11 +930,7 @@ mod tests {
     #[test]
     fn publication_permissions_cannot_be_kept_inside_the_project_being_authorized() {
         let dir = permissions_dir().unwrap();
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)
-            .unwrap();
+        private::create_dir(&dir).unwrap();
         assert!(set_trusted(dir.parent().unwrap(), true).is_err());
         assert!(!trusted(dir.parent().unwrap()));
     }

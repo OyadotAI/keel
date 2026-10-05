@@ -63,35 +63,42 @@ pub fn clear(kind: Kind) -> Result<(), String> {
 /// personal access token when a working credential is already on the machine is friction for its own
 /// sake. Keel never stores this one — it reads it per call, so revoking `gh` revokes Keel.
 pub fn github_from_gh_cli() -> Option<String> {
-    use std::os::unix::process::CommandExt;
     // Bounded, and killed past the bound: a `gh` waiting on a keychain prompt or a network it
     // cannot reach held the connections panel with no end. Its answer goes to a file, not a
     // pipe, so a child it leaves running cannot hold the read open after it exits.
     const CEILING: std::time::Duration = std::time::Duration::from_secs(10);
     let out = tempfile::tempfile().ok()?;
-    let mut child = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        // Its own group, so a timeout ends whatever `gh` started as well.
-        .process_group(0)
+    let mut command = std::process::Command::new("gh");
+    command.args(["auth", "token"]);
+    // Its own group, so a timeout ends whatever `gh` started as well.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone().ok()?)
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
     let started = std::time::Instant::now();
-    // Safety (both uses): the group this process spawned `gh` as the leader of, negated to
-    // address it. This crate cannot reach the daemon's `signals::group`; this is the same call.
-    let end_group = |pid: u32| unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
+    // Safety: the group this process spawned `gh` as the leader of, negated to address it. This
+    // crate cannot reach the daemon's `signals::group`; this is the same call.
+    #[cfg(unix)]
+    let end_group = |child: &mut std::process::Child| unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    };
+    // No groups on Windows; `gh auth token` starts nothing of its own worth chasing.
+    #[cfg(windows)]
+    let end_group = |child: &mut std::process::Child| {
+        let _ = child.kill();
     };
     let status = loop {
         if let Some(status) = child.try_wait().ok()? {
             // Whatever `gh` left running in its group is not wanted: a token was the whole job.
-            end_group(child.id());
+            end_group(&mut child);
             break status;
         }
         if started.elapsed() > CEILING {
-            end_group(child.id());
+            end_group(&mut child);
             let _ = child.wait();
             return None;
         }

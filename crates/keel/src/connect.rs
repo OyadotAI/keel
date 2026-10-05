@@ -54,7 +54,7 @@ pub async fn status() -> Json<Connections> {
 
 /// Whether the `claude` binary Keel drives is actually installed.
 pub fn which_claude() -> bool {
-    let mut command = std::process::Command::new("claude");
+    let mut command = std::process::Command::new(crate::permissions::program("claude"));
     command.arg("--version");
     // Bounded: a `claude` that hangs on start must not hold the connections panel for ever.
     crate::git::output_within(command, std::time::Duration::from_secs(10))
@@ -137,7 +137,9 @@ pub async fn clone(
         // `~/Dev` is what a person types; expanding it here means every caller gets it right
         // rather than each one remembering to.
         Some(p) => Utf8PathBuf::from(match p.strip_prefix('~') {
-            Some(rest) => std::env::var("HOME")
+            Some(rest) => keel_workspace::home()
+                .map(String::from)
+                .ok_or(std::env::VarError::NotPresent)
                 .map(|h| format!("{h}{rest}"))
                 .unwrap_or_else(|_| p.clone()),
             None => p.clone(),
@@ -230,7 +232,10 @@ pub struct Listing {
 /// essentially every project location while keeping the rest of the disk out of reach.
 pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
     crate::serve::in_blocking(move || {
-        let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
+        let home = keel_workspace::home()
+            .map(String::from)
+            .ok_or(std::env::VarError::NotPresent)
+            .map_err(|_| bad("no home directory"))?;
         let home = Utf8PathBuf::from(home)
             .canonicalize_utf8()
             .map_err(|_| bad("home directory is unreadable"))?;
@@ -340,7 +345,10 @@ pub async fn browse_files(
 
 /// Expand a leading `~`, which is what people type.
 fn shellexpand(path: &str) -> String {
-    match std::env::var("HOME") {
+    match keel_workspace::home()
+        .map(String::from)
+        .ok_or(std::env::VarError::NotPresent)
+    {
         Ok(home) => expand_under(&home, path),
         Err(_) => path.to_string(),
     }

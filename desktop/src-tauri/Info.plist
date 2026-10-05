@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundle's Info.plist by Tauri.
+
+     SUPublicEDKey is the Swift app's Sparkle public key, and it is here for exactly one reason:
+     an installed Swift build updates through Sparkle, and Sparkle refuses an update that drops
+     the key the old bundle carried ("only supports rotation, but not removal"). Without it every
+     Swift tester is offered this version, downloads it, and is rejected after extraction, daily,
+     with nothing reported. This app does not use Sparkle; the key only lets the old one let go.
+     It is a public key. -->
+<plist version="1.0">
+<dict>
+  <key>SUPublicEDKey</key>
+  <string>ZIFattUB3gjHibsfBwO0YfzTj9hDRcCtPUIYn9j28pk=</string>
+</dict>
+</plist>

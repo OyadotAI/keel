@@ -29,7 +29,10 @@ pub struct Prefs {
 /// `~/.keel`. Keel's own directory, deliberately separate from `~/.claude`: Keel reads Claude
 /// Code's state and must never be a reason for it to change.
 pub fn dir() -> Option<Utf8PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = keel_workspace::home()
+        .map(String::from)
+        .ok_or(std::env::VarError::NotPresent)
+        .ok()?;
     Some(Utf8PathBuf::from(home).join(".keel"))
 }
 

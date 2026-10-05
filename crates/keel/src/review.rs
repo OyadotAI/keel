@@ -1123,6 +1123,12 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
             keel_generator::team::FRONTEND_SKILL.to_string(),
         ));
     }
+    if repo.join("package.json").is_file() {
+        files.push((
+            keel_generator::team::ESLINT_RULES_PATH,
+            keel_generator::team::ESLINT_RULES.to_string(),
+        ));
+    }
     files.push(("docs/PRODUCTION.md", production_md(&name, &report)));
     let mut written = Vec::new();
     let mut skipped = Vec::new();
@@ -1553,6 +1559,7 @@ mod tests {
         let (_d, go) = go_repo();
         adopt(&go).unwrap();
         assert!(!go.join(keel_generator::team::FRONTEND_SKILL_PATH).exists());
+        assert!(!go.join(keel_generator::team::ESLINT_RULES_PATH).exists());
         assert!(
             std::fs::read_to_string(go.join("CLAUDE.md"))
                 .unwrap()
@@ -1579,6 +1586,10 @@ mod tests {
             .collect();
         assert_eq!(skills, ["frontend"]);
         assert_eq!(team_finding(&web), None);
+        assert!(
+            web.join(keel_generator::team::ESLINT_RULES_PATH).is_file(),
+            "a JS project gets the lint rules"
+        );
     }
 
     /// A repository that gitignores `.claude/` hides the team from the scan's walk; the fix must
@@ -1597,6 +1608,7 @@ mod tests {
     }
 
     /// A repository cannot point Keel's write somewhere else with a link, even a dangling one.
+    #[cfg(unix)]
     #[test]
     fn adopting_never_writes_through_a_link() {
         let (_d, root) = go_repo();
@@ -1711,6 +1723,7 @@ mod tests {
     }
 
     /// `CLAUDE.md -> AGENTS.md` is a convention; the file behind it is the one appended to.
+    #[cfg(unix)]
     #[test]
     fn a_claude_md_linked_to_agents_md_is_followed() {
         let (_d, root) = go_repo();
@@ -1749,6 +1762,7 @@ mod tests {
     }
 
     /// A link to some other file than AGENTS.md is still the person's file when they have edited it.
+    #[cfg(unix)]
     #[test]
     fn a_linked_instructions_file_with_edits_is_not_committed() {
         let (_d, root) = git_repo();
@@ -1771,6 +1785,7 @@ mod tests {
     }
 
     /// Inside the repository is not enough: `.git/config` is inside it, and so is a submodule.
+    #[cfg(unix)]
     #[test]
     fn a_link_into_git_internals_or_another_repository_is_left_alone() {
         let (_d, root) = git_repo();
@@ -1803,6 +1818,7 @@ mod tests {
     }
 
     /// `--separate-git-dir` puts the git dir anywhere, under any name, inside the tree.
+    #[cfg(unix)]
     #[test]
     fn a_link_into_a_git_dir_by_another_name_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,17 +1,16 @@
-.PHONY: help build check fmt lint test scan clean dev app
+.PHONY: help build check fmt lint test scan clean dev
 
 help:
 	@echo "build   compile the workspace"
 	@echo "check   fmt + clippy + tests, the gate everything must pass"
 	@echo "test    run tests"
 	@echo "scan    scan this repository with the freshly built binary"
-	@echo "app     build dist/Keel.app (release, signed) — run this once"
-	@echo "dev     rebuild and relaunch the app, ~5s — the loop while working on it"
+	@echo "dev     run the desktop app (desktop/, Tauri) against a daemon built from this tree"
 
 build:
 	cargo build
 
-check: fmt lint test app-test
+check: fmt lint test desktop-test
 
 fmt:
 	cargo fmt --all -- --check
@@ -22,39 +21,22 @@ lint:
 test:
 	cargo test
 
-# The Swift half of the gate: the stream parser, and the budgets from the plan that can actually
-# fail — a daemon that outlives its app, a bundle that grew, resources the packaging script forgot.
-#
-# It depends on `app` because those three budgets measure the *bundle*. Without one they skipped
-# themselves and the gate went green anyway, which is the failure mode this repository has already
-# paid for once: a budget that cannot fail reads as proof.
-app-test: app
-	swift test --package-path app
+.PHONY: desktop-test dev
 
-.PHONY: app-test
+# The cross-platform app (desktop/, Tauri). Type-checked, its reducer tested, and bundled — the
+# bundle is what the 400 KB budget is measured on. Installs its own dependencies the first time.
+desktop-test:
+	cd desktop && pnpm install --frozen-lockfile --silent && pnpm exec tsc --noEmit && pnpm lint && pnpm test && pnpm build && pnpm budget
+
+# The desktop app with a live reload, against a daemon built from this tree.
+dev:
+	packaging/sidecar.sh && cd desktop && pnpm tauri dev
 
 scan: build
 	cargo run --quiet -- scan .
 
 clean:
 	cargo clean
-
-# ── macOS packaging ──────────────────────────────────────────────────────────
-app:
-	@packaging/build-app.sh
-
-# The loop for working on the app: rebuild what changed, relaunch, about five seconds.
-# `make app` is the release path and does a minute of work that has nothing to do with your edit.
-dev:
-	@packaging/dev-run.sh
-
-dmg: app sparkle-tools
-	@packaging/build-dmg.sh
-
-# The README's stills and GIFs, rendered from the app's own views rather than screen-recorded, so
-# they can be regenerated after a UI change instead of going quietly out of date. Needs ffmpeg.
-media:
-	@packaging/media.sh
 
 # Sparkle's command-line tools (generate_keys, generate_appcast), fetched once from the
 # release the framework came from. Not vendored: 10 MB of somebody else's binaries.
@@ -79,7 +61,8 @@ sparkle-keys: sparkle-tools
 #
 # The version is the workspace version in Cargo.toml, and the release moves it: bumping by
 # hand and forgetting was how two builds went out calling themselves the same thing, which
-# Sparkle then refuses to offer. `make release` bumps the patch; `make release VERSION=0.3.0`
+# no updater then offers. The app's version is the shell's (desktop/src-tauri/Cargo.toml), moved
+# in step, and the workflow refuses a tag either disagrees with. `make release` bumps the patch; `make release VERSION=0.3.0`
 # sets it. The bump is committed before the tag, and the workflow refuses a tag that disagrees.
 release:
 	@current="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
@@ -89,13 +72,21 @@ release:
 	fi; \
 	if [ "$$next" = "$$current" ]; then echo "    version unchanged ($$current)"; else \
 	  sed -i '' "s/^version = \"$$current\"/version = \"$$next\"/" Cargo.toml; \
+	  sed -i '' "s/^version = \"$$current\"/version = \"$$next\"/" desktop/src-tauri/Cargo.toml; \
 	  cargo build -p keel --quiet; \
-	  git commit -qm "chore: $$next" -- Cargo.toml Cargo.lock; \
+	  (cd desktop/src-tauri && cargo update -p keel-desktop --quiet); \
+	  git commit -qm "chore: $$next" -- Cargo.toml Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock; \
 	fi; \
 	git push -q origin HEAD; \
 	git tag -a "v$$next" -m "Keel $$next"; \
 	git push -q origin "v$$next"; \
 	echo "    tagged v$$next — the release workflow builds, signs, notarises and publishes it"
+
+# One-time: the updater's signing key pair. The private half stays in ~/.tauri and goes into the
+# repository's TAURI_SIGNING_PRIVATE_KEY secret; the public half is in tauri.conf.json already.
+updater-keys:
+	@test -f ~/.tauri/keel-updater.key || (cd desktop && pnpm tauri signer generate --ci -w ~/.tauri/keel-updater.key)
+	@echo "    gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/keel-updater.key"
 
 # Ten evals: the product's promises against a real agent — the daemon, the hook, `claude`, the gate.
 #
@@ -109,4 +100,4 @@ release:
 evals:
 	@KEEL_EVALS=1 cargo test -p keel --test evals -- --nocapture --test-threads=1
 
-.PHONY: app dmg media sparkle-tools sparkle-keys release evals
+.PHONY: sparkle-tools sparkle-keys updater-keys release evals

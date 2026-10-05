@@ -1,15 +1,21 @@
 name: release
 
-# How Keel reached production before this: `make release` on one laptop, with one keychain, by one
-# person — which is to say differently every time and not at all while that person is away. The tag
-# is the trigger now. `make release` bumps the version, commits it and pushes the tag; everything
-# after that happens here, the same way twice.
+# The tag is the trigger: `make release` bumps the version, commits it and pushes the tag, and
+# everything after that happens here, the same way twice.
+#
+# Four jobs, because the two installers need two operating systems:
+#   draft    — checks the tag is the version, opens a draft release on the public feed
+#   macos    — the universal app, signed and notarised, as a DMG, an updater archive and a
+#              Sparkle appcast (the last for installed Swift builds; see "Swift testers" below)
+#   windows  — the NSIS installer and its updater signature
+#   publish  — writes latest.json from the signatures, publishes, mirrors to this repository
+#
+# Assets move between jobs as release assets on the draft, with `gh`, rather than through
+# artifact actions: every action here is pinned by SHA, and the draft is where they end up anyway.
 on:
   push:
     tags: ["v*"]
 
-# Keep the legacy update repository for installed copies. The publishing job also writes a
-# release here, so visitors to the source repository see the current downloadable version.
 permissions:
   contents: read
 
@@ -19,47 +25,62 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  FEED: OyadotAI/keel-releases
+
 jobs:
-  publish:
-    permissions:
-      contents: write
-    # macos-15 is Xcode 16.4, and 16.4's Swift is 6.1 — which does not know isolated conformances
-    # (`@MainActor TerminalViewDelegate` in TerminalPane.swift), so it reads the attribute as
-    # unknown and then rejects every delegate method under it. macos-26 is Xcode 26. The app still
-    # runs on macOS 15: the deployment target comes from `platforms:` in Package.swift, not from
-    # the SDK it was built against.
-    runs-on: macos-26
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # An updater never offers a version that is not higher than the installed one, so a tag
+      # that disagrees with the bundle publishes something nobody is ever shown. Fail before the
+      # builds rather than after them. Both manifests: the shell's version is the app's.
+      - name: The tag is the version in both Cargo.toml files
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for f in Cargo.toml desktop/src-tauri/Cargo.toml; do
+            v="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
+            [ "$tag" = "$v" ] || { echo "tag v$tag is not $f $v" >&2; exit 1; }
+          done
+      - name: Open a draft release on the feed
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" -R "$FEED" >/dev/null 2>&1 \
+          || gh release create "$GITHUB_REF_NAME" -R "$FEED" --draft --title "Keel ${GITHUB_REF_NAME#v}" \
+               --notes "Signed and notarised. Installed copies are offered the update."
+
+  macos:
+    needs: draft
+    runs-on: macos-15
     timeout-minutes: 90
     env:
-      KEEL_NOTARY_PROFILE: keel
-      KEEL_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      # Tauri notarises the app with these when all three are set.
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Signs the updater archive; the public half is in tauri.conf.json.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       KEEL_SENTRY_DSN: ${{ secrets.KEEL_SENTRY_DSN }}
-      KEEL_POSTHOG_KEY: ${{ secrets.KEEL_POSTHOG_KEY }}
-      KEEL_POSTHOG_HOST: ${{ secrets.KEEL_POSTHOG_HOST }}
-      KEEL_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
-      # `make sparkle-tools` fetches Sparkle's CLI with `gh`; the publish step overrides this.
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          # Pinned by SHA, so the toolchain no longer comes from the `@stable` ref name.
           toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-
-      # Sparkle never offers an update whose version is not higher than the installed one, so a tag
-      # that disagrees with the bundle publishes something nobody is ever shown. Fail before the
-      # ninety-minute build rather than after it.
-      - name: The tag is the version in Cargo.toml
-        run: |
-          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
-          tag="${GITHUB_REF_NAME#v}"
-          [ "$tag" = "$version" ] || { echo "tag v$tag is not Cargo.toml $version" >&2; exit 1; }
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
 
       # A runner has none of your keychain. The certificate arrives as a base64 .p12 and is
-      # imported into a keychain that exists for this job only, made the default so `notarytool`
-      # and `security find-identity` both land on it, and told that codesign may use it without
-      # asking — there is nobody here to answer a prompt.
+      # imported into a keychain that exists for this job only, made the default so codesign and
+      # notarytool both land on it, and told codesign may use it without asking.
       - name: Import the Developer ID certificate
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -78,61 +99,151 @@ jobs:
           security list-keychain -d user -s "$keychain" login.keychain-db
           security default-keychain -s "$keychain"
 
-      # `notarytool store-credentials` prompts when it is missing an argument and does not when it
-      # has all three. The profile name is the one build-dmg.sh looks for.
-      - name: Store the notary credentials
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          xcrun notarytool store-credentials "$KEEL_NOTARY_PROFILE" \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+      # The daemon ships inside the app (`externalBin`), built for both architectures and joined.
+      - name: Build the daemon
+        run: packaging/sidecar.sh release universal
 
-      # generate_appcast signs the image with the EdDSA key, and reads it from the keychain unless
-      # pointed at a file. A file is the honest form here: it lives in RUNNER_TEMP for one job.
-      - name: Write the Sparkle signing key
+      - name: Build, sign and notarise the app
+        working-directory: desktop
+        run: |
+          npm install -g pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm tauri build --target universal-apple-darwin --bundles app,dmg
+
+      # Sparkle in an installed Swift build rejects an update that carries no EdDSA key, after
+      # downloading it; generate_appcast only warns. So the release fails here instead.
+      - name: The app carries the Sparkle key installed Swift builds require
+        run: |
+          app=desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Keel.app
+          key="$(plutil -extract SUPublicEDKey raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+          [ -n "$key" ] || { echo "Keel.app has no SUPublicEDKey: Swift installs would refuse it" >&2; exit 1; }
+
+      # Tauri notarises the app; the image it is then put in is a second file Gatekeeper checks,
+      # so it is notarised and stapled too. Only the app stapled passes on every machine with a
+      # network and fails on one without.
+      - name: Notarise and staple the image
+        run: |
+          bundle=desktop/src-tauri/target/universal-apple-darwin/release/bundle
+          mkdir -p out
+          cp "$bundle"/dmg/*.dmg out/Keel.dmg
+          cp "$bundle/macos/Keel.app.tar.gz" out/Keel.app.tar.gz
+          cp "$bundle/macos/Keel.app.tar.gz.sig" out/Keel.app.tar.gz.sig
+          xcrun notarytool submit out/Keel.dmg --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" --wait
+          xcrun stapler staple out/Keel.dmg
+
+      # Swift testers: an installed Swift build updates through Sparkle from appcast.xml on this
+      # same feed. This app has the Swift app's bundle identifier and Team ID, so Sparkle accepts
+      # it as the next version and installs it in place; from then on the Tauri updater has it.
+      - name: Write the Sparkle appcast for installed Swift builds
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          make sparkle-tools
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
           chmod 600 "$RUNNER_TEMP/sparkle_ed_key"
-          echo "KEEL_SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle_ed_key" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/appcast" && cp out/Keel.dmg "$RUNNER_TEMP/appcast/"
+          packaging/sparkle/bin/generate_appcast --ed-key-file "$RUNNER_TEMP/sparkle_ed_key" \
+            --download-url-prefix "https://github.com/$FEED/releases/download/$GITHUB_REF_NAME/" \
+            "$RUNNER_TEMP/appcast"
+          cp "$RUNNER_TEMP/appcast/appcast.xml" out/appcast.xml
+          rm -f "$RUNNER_TEMP/sparkle_ed_key"
 
-      # `packaging/icon.py` renders the icon at build time rather than checking a binary in, so
-      # the runner needs Pillow. Homebrew's python is externally managed and this runner is
-      # thrown away at the end of the job, so there is nothing to protect it from.
-      - name: Install Pillow, which the icon is rendered with
-        run: python3 -m pip install --break-system-packages --quiet Pillow
+      - name: Upload to the draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" out/* -R "$FEED" --clobber
 
-      # The same target a person would have run, so there is one build path and not two.
-      - name: Build, sign, notarise, package
-        run: make dmg
-
-      # Both artifacts, because the feed is the appcast and the appcast points at the image.
-      - name: Publish to the update feed
+  windows:
+    needs: draft
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+      - name: Build the daemon
+        run: packaging/sidecar.sh release x86_64-pc-windows-msvc
+      # Not Authenticode-signed yet: there is no certificate, so SmartScreen warns on first run.
+      # The updater's own signature is what the app checks before installing an update.
+      - name: Build the installer
+        working-directory: desktop
+        run: |
+          npm install -g pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Upload to the draft
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
-            -R OyadotAI/keel-releases --title "Keel ${GITHUB_REF_NAME#v}" \
-            --notes "Signed and notarised. Installed copies are offered the update." --latest \
-          || gh release upload "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
-            -R OyadotAI/keel-releases --clobber
+          nsis=desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          mkdir -p out
+          cp "$nsis"/*-setup.exe out/Keel-setup.exe
+          cp "$nsis"/*-setup.exe.sig out/Keel-setup.exe.sig
+          gh release upload "$GITHUB_REF_NAME" out/* -R "$FEED" --clobber
 
-      # Mirror the exact signed artifacts, not a second build. The appcast deliberately keeps
-      # pointing at keel-releases so existing installations continue to receive updates.
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest the Tauri updater reads (tauri.conf.json `plugins.updater.endpoints`): one
+      # entry per platform, each the archive's URL and its signature's text.
+      - name: Write latest.json
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          mkdir -p out && cd out
+          gh release download "$GITHUB_REF_NAME" -R "$FEED" --pattern '*.sig'
+          base="https://github.com/$FEED/releases/download/$GITHUB_REF_NAME"
+          mac="$(cat Keel.app.tar.gz.sig)"
+          win="$(cat Keel-setup.exe.sig)"
+          jq -n --arg v "${GITHUB_REF_NAME#v}" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac "$mac" --arg win "$win" --arg base "$base" '{
+              version: $v,
+              notes: "See the release on GitHub.",
+              pub_date: $date,
+              platforms: {
+                "darwin-aarch64": { signature: $mac, url: ($base + "/Keel.app.tar.gz") },
+                "darwin-x86_64": { signature: $mac, url: ($base + "/Keel.app.tar.gz") },
+                "windows-x86_64": { signature: $win, url: ($base + "/Keel-setup.exe") }
+              }
+            }' > latest.json
+          rm -f *.sig
+      - name: Publish the feed
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" out/latest.json -R "$FEED" --clobber
+          gh release edit "$GITHUB_REF_NAME" -R "$FEED" --draft=false --latest
+
+      # Mirror the exact signed artifacts, not a second build, so visitors to the source repository
+      # see the current downloadable version.
       - name: Publish to the source repository
         env:
+          FEED_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_REPO: ${{ github.repository }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" -R "$RELEASE_REPO" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
-              -R "$RELEASE_REPO" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/Keel.dmg dist/appcast.xml \
-              -R "$RELEASE_REPO" --verify-tag --title "Keel ${GITHUB_REF_NAME#v}" \
-              --notes "Signed and notarised. Download Keel.dmg to install. Existing installations continue to receive updates from the original update feed." \
-              --latest
-          fi
+          mkdir -p mirror
+          GH_TOKEN="$FEED_TOKEN" gh release download "$GITHUB_REF_NAME" -R "$FEED" -D mirror \
+            --pattern 'Keel.dmg' --pattern 'Keel-setup.exe'
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+          || gh release create "$GITHUB_REF_NAME" --verify-tag --title "Keel ${GITHUB_REF_NAME#v}" \
+               --notes "Download Keel.dmg (macOS) or Keel-setup.exe (Windows). Installed copies update themselves." --latest
+          gh release upload "$GITHUB_REF_NAME" mirror/* --clobber

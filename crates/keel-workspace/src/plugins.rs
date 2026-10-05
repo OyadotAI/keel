@@ -28,14 +28,30 @@ pub struct Plugin {
 ///
 /// The index is keyed `"<name>@<marketplace>"` and maps to an array of installations, one per
 /// scope. A malformed or absent file yields an empty list: not having plugins is normal.
-pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
+///
+/// The index is machine-wide, and a `project` or `local` installation belongs to the project at
+/// its `projectPath` — so only `repo`'s are listed, beside the person's own. Listing every
+/// project's would show a plugin here that Claude Code does not load here.
+pub fn discover_plugins(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Plugin> {
     // Enablement lives in settings.json, separately from the install index — a disabled plugin is
-    // still installed, and the UI needs to tell those apart to offer the right action.
-    let enabled_map: Value = std::fs::read_to_string(claude_home.join("settings.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.get("enabledPlugins").cloned())
-        .unwrap_or(Value::Null);
+    // still installed, and the UI needs to tell those apart to offer the right action. Each scope
+    // has its own settings file.
+    let enabled_in = |file: Utf8PathBuf| -> Value {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v.get("enabledPlugins").cloned())
+            .unwrap_or(Value::Null)
+    };
+    let user_enabled = enabled_in(claude_home.join("settings.json"));
+    let project_enabled = enabled_in(repo.join(".claude/settings.json"));
+    let local_enabled = enabled_in(repo.join(".claude/settings.local.json"));
+    let here = |install: &Value| {
+        install
+            .get("projectPath")
+            .and_then(Value::as_str)
+            .is_some_and(|p| same_path(Utf8Path::new(p), repo))
+    };
 
     let path = claude_home.join("plugins").join("installed_plugins.json");
     let Ok(contents) = std::fs::read_to_string(&path) else {
@@ -61,9 +77,15 @@ pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
                 .map(Vec::as_slice)
                 .unwrap_or_default()
                 .iter()
-                .map(|install| {
+                .filter_map(|install| {
                     let field = |k: &str| install.get(k).and_then(Value::as_str).map(str::to_owned);
-                    Plugin {
+                    let enabled_map = match field("scope").as_deref() {
+                        Some("project") if here(install) => &project_enabled,
+                        Some("local") if here(install) => &local_enabled,
+                        Some("project" | "local") => return None,
+                        _ => &user_enabled,
+                    };
+                    Some(Plugin {
                         // Absent from enabledPlugins means enabled: the file records overrides.
                         enabled: enabled_map
                             .get(key)
@@ -76,7 +98,7 @@ pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
                         installed_at: field("installedAt"),
                         last_updated: field("lastUpdated"),
                         install_path: field("installPath").map(Utf8PathBuf::from),
-                    }
+                    })
                 })
                 .collect::<Vec<_>>()
         })
@@ -84,6 +106,16 @@ pub fn discover_plugins(claude_home: &Utf8Path) -> Vec<Plugin> {
 
     plugins.sort_by(|a, b| a.name.cmp(&b.name));
     plugins
+}
+
+/// The same directory, through any links: Claude Code records a resolved path, and on macOS a
+/// repository's own path very often is not one (`/tmp` is `/private/tmp`).
+fn same_path(a: &Utf8Path, b: &Utf8Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
 }
 
 #[cfg(test)]
@@ -98,6 +130,39 @@ mod tests {
         std::fs::create_dir_all(home.join("plugins")).unwrap();
         std::fs::write(home.join("plugins/installed_plugins.json"), index).unwrap();
         (dir, home)
+    }
+
+    /// A project installation shows in its own project and nowhere else, with the project's
+    /// settings deciding whether it is enabled.
+    #[test]
+    fn a_project_plugin_belongs_to_its_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let (home, repo, other) = (base.join("home"), base.join("repo"), base.join("other"));
+        for d in [&home.join("plugins"), &repo.join(".claude"), &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(
+            home.join("plugins/installed_plugins.json"),
+            format!(
+                r#"{{"plugins":{{"a@m":[{{"scope":"project","projectPath":"{repo}"}}],"u@m":[{{"scope":"user"}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".claude/settings.json"),
+            r#"{"enabledPlugins":{"a@m":false}}"#,
+        )
+        .unwrap();
+        let here = discover_plugins(&repo, &home);
+        let names: Vec<_> = here.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["a", "u"]);
+        assert!(!here[0].enabled, "the project's settings decide");
+        let there: Vec<_> = discover_plugins(&other, &home)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(there, ["u"]);
     }
 
     #[test]
@@ -116,7 +181,7 @@ mod tests {
         )
         .unwrap();
 
-        let plugins = discover_plugins(&home);
+        let plugins = discover_plugins(Utf8Path::new("/nonexistent-repo"), &home);
         let a = plugins.iter().find(|p| p.name == "a").expect("a");
         let b = plugins.iter().find(|p| p.name == "b").expect("b");
         assert!(!a.enabled, "explicitly disabled");
@@ -129,7 +194,7 @@ mod tests {
             r#"{"version":2,"plugins":{"frontend-design@claude-plugins-official":[
                 {"scope":"user","version":"e33a9ec0973a","installedAt":"2026-05-12T21:49:01.729Z"}]}}"#,
         );
-        let plugins = discover_plugins(&home);
+        let plugins = discover_plugins(Utf8Path::new("/nonexistent-repo"), &home);
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].name, "frontend-design");
         assert_eq!(
@@ -142,11 +207,17 @@ mod tests {
     #[test]
     fn a_malformed_index_yields_nothing_rather_than_failing() {
         let (_d, home) = home_with("{ not json");
-        assert!(discover_plugins(&home).is_empty());
+        assert!(discover_plugins(Utf8Path::new("/nonexistent-repo"), &home).is_empty());
     }
 
     #[test]
     fn no_plugins_installed_is_normal() {
-        assert!(discover_plugins(Utf8Path::new("/nonexistent")).is_empty());
+        assert!(
+            discover_plugins(
+                Utf8Path::new("/nonexistent-repo"),
+                Utf8Path::new("/nonexistent")
+            )
+            .is_empty()
+        );
     }
 }

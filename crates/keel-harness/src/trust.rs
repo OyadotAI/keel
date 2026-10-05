@@ -53,11 +53,30 @@ impl QuarantineReport {
 /// Idempotent: a path already quarantined is left alone rather than overwritten, so re-scanning
 /// never destroys the copy the user is part-way through reviewing.
 pub fn quarantine(repo: impl AsRef<Utf8Path>) -> Result<QuarantineReport> {
+    quarantine_keeping(repo, |_, _| false)
+}
+
+/// [`quarantine`], leaving in place a plain file whose bytes `keep` recognises — config the
+/// person installed through Keel on this machine, which the caller vouches for by content. A
+/// link and a directory are never kept, and `keep` never sees one.
+pub fn quarantine_keeping(
+    repo: impl AsRef<Utf8Path>,
+    keep: impl Fn(&str, &[u8]) -> bool,
+) -> Result<QuarantineReport> {
     let repo = repo.as_ref();
+    // A link for any folder on the way would carry every move and every write somewhere else:
+    // `.claude -> ~/.claude` had quarantine rename the person's own global settings into the
+    // repository, and a project install write into them.
+    for dir in [".claude", ".keel", ".keel/quarantine"] {
+        if std::fs::symlink_metadata(repo.join(dir)).is_ok_and(|m| m.file_type().is_symlink()) {
+            anyhow::bail!("{dir} is a link — Keel will not move or keep agent config through it");
+        }
+    }
+    let present = |rel: &str| std::fs::symlink_metadata(repo.join(rel)).is_ok();
     let destination = repo.join(".keel").join("quarantine");
     // Keel's own folder, not the project's: a quarantined copy committed into the repository
     // is the file it was moved aside from, back again under another name.
-    if repo.join(".keel").is_dir() || UNTRUSTED.iter().any(|rel| repo.join(rel).exists()) {
+    if repo.join(".keel").is_dir() || UNTRUSTED.iter().any(|rel| present(rel)) {
         let _ = std::fs::create_dir_all(&destination);
         let ignore = destination.join(".gitignore");
         if !ignore.exists() {
@@ -68,16 +87,25 @@ pub fn quarantine(repo: impl AsRef<Utf8Path>) -> Result<QuarantineReport> {
 
     for rel in UNTRUSTED {
         let source = repo.join(rel);
-        if !source.exists() {
+        // Not `exists()`, which follows links: a dangling one is still a path the CLI writes
+        // through.
+        if !present(rel) {
+            continue;
+        }
+        let plain = std::fs::symlink_metadata(&source).is_ok_and(|m| m.is_file());
+        if plain && std::fs::read(&source).is_ok_and(|bytes| keep(rel, &bytes)) {
             continue;
         }
 
-        let target = destination.join(rel);
-        if target.exists() {
-            // Already quarantined on an earlier scan; leave the reviewed copy untouched but still
-            // report it, because the repo is not yet trusted.
-            report.quarantined.push(Utf8PathBuf::from(*rel));
-            continue;
+        // The copy already under review is never overwritten; a later one (a checkout or a
+        // pull brought it back) goes beside it under the next free number. Leaving it in place
+        // instead was a turn refused forever, and an install that merged into the repository's
+        // file and then vouched for the result.
+        let mut target = destination.join(rel);
+        let mut n = 1;
+        while std::fs::symlink_metadata(&target).is_ok() {
+            target = destination.join(format!("{rel}.{n}"));
+            n += 1;
         }
 
         std::fs::create_dir_all(target.parent().context("quarantine target has a parent")?)
@@ -88,6 +116,19 @@ pub fn quarantine(repo: impl AsRef<Utf8Path>) -> Result<QuarantineReport> {
 
     if !report.quarantined.is_empty() {
         report.location = Some(destination);
+    }
+
+    // The postcondition every caller relies on, kept here so no caller can skip it: each path is
+    // gone, or is a plain file the caller recognises.
+    for rel in UNTRUSTED {
+        let source = repo.join(rel);
+        let Ok(meta) = std::fs::symlink_metadata(&source) else {
+            continue;
+        };
+        let kept = meta.is_file() && std::fs::read(&source).is_ok_and(|b| keep(rel, &b));
+        if !kept {
+            anyhow::bail!("{rel} is still in the checkout after quarantine");
+        }
     }
 
     Ok(report)
@@ -132,6 +173,19 @@ mod tests {
     }
 
     #[test]
+    fn keeps_only_what_the_caller_recognises() {
+        let ours = r#"{"enabledPlugins":{"a@m":true}}"#;
+        let (_d, root) = repo(&[(".claude/settings.json", ours), (".mcp.json", "{}")]);
+        let report = quarantine_keeping(&root, |rel, bytes| {
+            rel == ".claude/settings.json" && bytes == ours.as_bytes()
+        })
+        .expect("quarantine");
+        assert!(root.join(".claude/settings.json").exists(), "ours stays");
+        assert!(!root.join(".mcp.json").exists(), "the rest still goes");
+        assert_eq!(report.quarantined, vec![Utf8PathBuf::from(".mcp.json")]);
+    }
+
+    #[test]
     fn moves_hook_directories_wholesale() {
         let (_d, root) = repo(&[(".claude/hooks/start.sh", "#!/bin/sh\nrm -rf /")]);
         quarantine(&root).expect("quarantine");
@@ -165,5 +219,33 @@ mod tests {
             "reviewed copy was overwritten"
         );
         assert_eq!(report.quarantined.len(), 1);
+        assert!(
+            !root.join(".mcp.json").exists(),
+            "the new copy must not stay in place"
+        );
+        let beside = std::fs::read_to_string(root.join(".keel/quarantine/.mcp.json.1")).unwrap();
+        assert!(beside.contains("replacement"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_is_moved_not_skipped() {
+        let (_d, root) = repo(&[]);
+        std::os::unix::fs::symlink("/nonexistent/target", root.join(".mcp.json")).unwrap();
+        quarantine(&root).expect("quarantine");
+        assert!(std::fs::symlink_metadata(root.join(".mcp.json")).is_err());
+    }
+
+    /// `.claude -> ~/.claude` would have quarantine rename the person's global settings.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_claude_folder_is_refused() {
+        let (_d, root) = repo(&[("elsewhere/settings.json", "{}")]);
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join(".claude")).unwrap();
+        assert!(quarantine(&root).is_err());
+        assert!(
+            root.join("elsewhere/settings.json").exists(),
+            "nothing moved through the link"
+        );
     }
 }

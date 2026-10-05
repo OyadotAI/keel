@@ -149,9 +149,18 @@ pub struct Restored {
 }
 
 pub async fn put_back(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::serve::AppState>>,
     Checkout(repo): Checkout,
     Json(body): Json<RestoreBody>,
 ) -> Result<Json<Restored>, (axum::http::StatusCode, String)> {
+    // A rewind rewrites the whole tree, so it is a writer like a turn: refused while any lane —
+    // or a terminal session — is writing this checkout, and holding the tree while it runs.
+    // Before this, the only guard was the asking lane's own "running" in one window.
+    let lane = format!("rewind:{repo}");
+    let token = state
+        .claim(&lane, &repo, true)
+        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+    let _held = crate::serve::Held::new(state.clone(), lane, token);
     tokio::task::spawn_blocking(move || restore(&repo, &body.tree))
         .await
         .map_err(|e| e.to_string())
@@ -166,6 +175,7 @@ mod tests {
 
     /// Taken at the start of every turn, plan turns included: it fired the repository's
     /// `post-index-change` hook twice each time.
+    #[cfg(unix)]
     #[test]
     fn a_snapshot_runs_no_hook() {
         let dir = tempfile::tempdir().unwrap();

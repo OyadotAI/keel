@@ -56,7 +56,9 @@ pub struct Created {
 
 fn expand(path: &str) -> String {
     match path.strip_prefix('~') {
-        Some(rest) => std::env::var("HOME")
+        Some(rest) => keel_workspace::home()
+            .map(String::from)
+            .ok_or(std::env::VarError::NotPresent)
             .map(|h| format!("{h}{rest}"))
             .unwrap_or_else(|_| path.to_string()),
         None => path.to_string(),

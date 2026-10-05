@@ -17,6 +17,10 @@ impl Check for AgentInstructions {
         Dimension::AgentLegibility
     }
 
+    fn always(&self) -> bool {
+        true
+    }
+
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         if ctx.has_any(INSTRUCTION_FILES.iter().copied()) {
             return Vec::new();

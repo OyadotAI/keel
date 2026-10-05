@@ -3,6 +3,7 @@
 //! The prompt, the arguments, the two pipes, the classification of a non-zero exit, and the
 //! redaction that lets a failure be reported without carrying anybody's paths in it.
 
+use crate::signals::Leads;
 use anyhow::Result;
 use axum::{
     Json,
@@ -24,6 +25,8 @@ use crate::serve::AppState;
 #[derive(Deserialize)]
 pub struct ChatQuery {
     pub prompt: String,
+    /// `1` for decoded `turn` ops in place of raw `msg` records. See [`translate`].
+    pub ops: Option<String>,
     /// Resume an existing conversation rather than starting a new one.
     pub session: Option<String>,
     /// Permission mode. `plan` explores without touching anything; `acceptEdits` lets the agent
@@ -585,50 +588,52 @@ pub async fn chat(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ChatQuery>,
 ) -> impl axum::response::IntoResponse {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Said, Infallible>>(256);
+    let rx = translate(rx, &query);
     // The agent runs in the lane's checkout; its permissions come from the project. The two are
     // different paths on purpose, and `settings_json` below is handed the project.
     let repo = state.repo();
-    let cwd = match state.checkout(query.wt.as_deref()) {
-        // A resumed session runs where it was started. Validated: the repository, a parent
-        // within two levels, or a subdirectory — nowhere else.
-        Ok(_) if query.cwd.is_some() && query.session.is_some() => {
-            match state.session_dir_checked(query.cwd.as_deref()) {
-                Some(dir) => dir,
-                // Resuming it here would run another project's conversation against this
-                // project's files. Every path the agent already knows would be unreadable, and
-                // what the person sees is the agent saying it has no access to a folder — which
-                // is exactly the report that led here. Refuse, and say which project it belongs
-                // to rather than pretending.
-                None => {
-                    let where_from = query.cwd.clone().unwrap_or_default();
-                    let name = where_from
-                        .rsplit('/')
-                        .find(|p| !p.is_empty() && *p != ".")
-                        .unwrap_or("another project")
-                        .to_string();
-                    tokio::spawn(async move {
-                        let _ = tx
-                            .send(Ok(Event::default().event("fatal").data(format!(
+    let cwd =
+        match state.checkout(query.wt.as_deref()) {
+            // A resumed session runs where it was started. Validated: the repository, a parent
+            // within two levels, or a subdirectory — nowhere else.
+            Ok(_) if query.cwd.is_some() && query.session.is_some() => {
+                match state.session_dir_checked(query.cwd.as_deref()) {
+                    Some(dir) => dir,
+                    // Resuming it here would run another project's conversation against this
+                    // project's files. Every path the agent already knows would be unreadable, and
+                    // what the person sees is the agent saying it has no access to a folder — which
+                    // is exactly the report that led here. Refuse, and say which project it belongs
+                    // to rather than pretending.
+                    None => {
+                        let where_from = query.cwd.clone().unwrap_or_default();
+                        let name = where_from
+                            .rsplit('/')
+                            .find(|p| !p.is_empty() && *p != ".")
+                            .unwrap_or("another project")
+                            .to_string();
+                        tokio::spawn(async move {
+                            let _ = tx
+                            .send(Ok(said("fatal", format!(
                                 "That conversation was started in “{name}”, which is not the \
                                  project open here. Open that project and resume it there — \
                                  resuming it in this one would point it at files it has never \
                                  seen."
                             ))))
                             .await;
-                    });
-                    return alive(rx);
+                        });
+                        return alive(rx);
+                    }
                 }
             }
-        }
-        Ok(p) => p,
-        Err(e) => {
-            tokio::spawn(async move {
-                let _ = tx.send(Ok(Event::default().event("fatal").data(e))).await;
-            });
-            return alive(rx);
-        }
-    };
+            Ok(p) => p,
+            Err(e) => {
+                tokio::spawn(async move {
+                    let _ = tx.send(Ok(said("fatal", e))).await;
+                });
+                return alive(rx);
+            }
+        };
     let port = state.port();
     let stopper = state.clone();
 
@@ -654,7 +659,7 @@ pub async fn chat(
         let token = match stopper.claim(&lane, &cwd, writes) {
             Ok(token) => token,
             Err(why) => {
-                let _ = tx.send(Ok(Event::default().event("fatal").data(why))).await;
+                let _ = tx.send(Ok(said("fatal", why))).await;
                 return;
             }
         };
@@ -667,9 +672,7 @@ pub async fn chat(
         // Reserve before announcing startup so Stop can find even a turn still reading the
         // project. A disconnected caller must not go on to start an agent.
         if tx
-            .send(Ok(Event::default()
-                .event("starting")
-                .data("reading the project")))
+            .send(Ok(said("starting", "reading the project")))
             .await
             .is_err()
         {
@@ -722,7 +725,7 @@ pub async fn chat(
             at: begun.started.clone(),
             fact: started_fact.clone(),
         }) {
-            let _ = tx.send(Ok(Event::default().event("fact").data(json))).await;
+            let _ = tx.send(Ok(said("fact", json))).await;
         }
         stopper.hold_early(&lane, started_fact);
 
@@ -740,7 +743,7 @@ pub async fn chat(
             return;
         }
         let mut command = if provider == "codex" {
-            let mut command = Command::new("codex");
+            let mut command = Command::new(crate::permissions::program("codex"));
             command.current_dir(&cwd).arg("exec");
             // The sandbox and the directory on *both* branches. They used to be on the first
             // turn only, so every Codex turn after it ran with codex's own defaults: no `--cd`,
@@ -781,7 +784,7 @@ pub async fn chat(
             }
             command
         } else if provider == "claude" {
-            let mut command = Command::new("claude");
+            let mut command = Command::new(crate::permissions::program("claude"));
             command
                 .current_dir(&cwd)
                 .arg("-p")
@@ -808,6 +811,10 @@ pub async fn chat(
                 // Keel's one MCP tool, `ask_user`; the person's own servers stay (no --strict).
                 .arg("--mcp-config")
                 .arg(crate::askmcp::config(port, query.lane.as_deref()))
+                // The project's servers, when Keel wrote them: named explicitly, because a `-p`
+                // turn has nobody to answer Claude Code's approval for a project `.mcp.json`.
+                // Quarantine ran before this, so a file still here is one `vouched` holds.
+                .args(project_mcp(&cwd))
                 .arg("--append-system-prompt")
                 .arg(
                     match query
@@ -842,9 +849,10 @@ pub async fn chat(
             command
         } else {
             let _ = tx
-                .send(Ok(Event::default()
-                    .event("fatal")
-                    .data(format!("unsupported agent provider `{provider}`"))))
+                .send(Ok(said(
+                    "fatal",
+                    format!("unsupported agent provider `{provider}`"),
+                )))
                 .await;
             return;
         };
@@ -855,6 +863,9 @@ pub async fn chat(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        for name in INHERITED {
+            command.env_remove(name);
+        }
 
         if let Some(model) = model_arg(query.model.as_deref()) {
             command.arg("--model").arg(model);
@@ -863,7 +874,7 @@ pub async fn chat(
         // Its own process group, so Stop can interrupt the agent *and* whatever it started. A
         // `cargo test` the agent spawned is the case that matters: signalling only the parent
         // leaves the build running and the turn is not actually stopped.
-        command.process_group(0);
+        command.lead_group();
 
         // Before the agent starts, and every time.
         //
@@ -906,9 +917,12 @@ pub async fn chat(
                     || sentry::capture_message("could not start the agent", sentry::Level::Error),
                 );
                 let _ = tx
-                    .send(Ok(Event::default().event("fatal").data(format!(
-                        "could not start `{provider}`: {e}. Is the CLI installed and on PATH?"
-                    ))))
+                    .send(Ok(said(
+                        "fatal",
+                        format!(
+                            "could not start `{provider}`: {e}. Is the CLI installed and on PATH?"
+                        ),
+                    )))
                     .await;
                 return;
             }
@@ -992,9 +1006,10 @@ pub async fn chat(
                     // forever, at the speed of the loop.
                     crate::lines::Next::Skipped => {
                         let _ = tx
-                            .send(Ok(Event::default()
-                                .event("err")
-                                .data("a line of the agent's output was not text; skipped")))
+                            .send(Ok(said(
+                                "err",
+                                "a line of the agent's output was not text; skipped",
+                            )))
                             .await;
                         continue;
                     }
@@ -1052,11 +1067,7 @@ pub async fn chat(
                                 let Ok(json) = serde_json::to_string(&*e) else {
                                     continue;
                                 };
-                                if ftx
-                                    .send(Ok(Event::default().event("fact").data(json)))
-                                    .await
-                                    .is_err()
-                                {
+                                if ftx.send(Ok(said("fact", json))).await.is_err() {
                                     return;
                                 }
                                 if e.turn.as_deref() == Some(&turn)
@@ -1082,11 +1093,7 @@ pub async fn chat(
                         cost_usd: v["total_cost_usd"].as_f64(),
                     });
                 }
-                if tx
-                    .send(Ok(Event::default().event("msg").data(line)))
-                    .await
-                    .is_err()
-                {
+                if tx.send(Ok(said("msg", line))).await.is_err() {
                     // The app disconnected — the window closed, the lane closed, the app quit.
                     // The whole tree goes, not just `claude`: `start_kill()` is `kill(pid)` on
                     // the leader, so the `cargo test` it had running would have survived it,
@@ -1140,11 +1147,14 @@ pub async fn chat(
                 // `done` with a code it ignores and drew an empty turn card, which is what the
                 // whole `fatal` path exists to prevent.
                 let _ = tx
-                    .send(Ok(Event::default().event("fatal").data(format!(
-                        "`{provider}` exited with code {code} and printed nothing. Run \
+                    .send(Ok(said(
+                        "fatal",
+                        format!(
+                            "`{provider}` exited with code {code} and printed nothing. Run \
                          `{provider} -p hi` in a terminal — a sign-in that has expired or a spent \
                          balance fails exactly like this and says so there."
-                    ))))
+                        ),
+                    )))
                     .await;
             } else {
                 let tail: String = why
@@ -1156,18 +1166,19 @@ pub async fn chat(
                     .rev()
                     .collect::<Vec<_>>()
                     .join("\n");
-                let _ = tx
-                    .send(Ok(Event::default().event("fatal").data(tail)))
-                    .await;
+                let _ = tx.send(Ok(said("fatal", tail))).await;
             }
         }
 
         // `done` first: the composer is free the moment the agent has stopped talking. What
         // follows — the files, the gate, the commit — is Keel's, arrives as facts, and holds the
         // lane's claim until it is over, so no other lane can start writing this tree meanwhile.
-        let _ = tx
-            .send(Ok(Event::default().event("done").data(code.to_string())))
-            .await;
+        if stopped {
+            // For the translator alone: a stopped `claude` exits 0 or 130 on its own, and the
+            // code cannot say it was stopped. Never reaches the client.
+            let _ = tx.send(Ok(said(STOPPED, ""))).await;
+        }
+        let _ = tx.send(Ok(said("done", code.to_string()))).await;
 
         let failed = (code != 0 && !stopped).then(|| {
             let why = errors.locked().trim().to_string();
@@ -1231,33 +1242,114 @@ pub async fn chat(
     alive(rx)
 }
 
+/// `.mcp.json` in the turn's tree, if it is there and Keel wrote it — as a second config for
+/// `--mcp-config`, which takes several.
+fn project_mcp(cwd: &camino::Utf8Path) -> Option<String> {
+    let path = cwd.join(".mcp.json");
+    let plain = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file());
+    let bytes = std::fs::read(&path).ok().filter(|_| plain)?;
+    crate::vouched::holds(cwd, ".mcp.json", &bytes).then(|| path.to_string())
+}
+
+/// What a parent Claude Code session leaves in the environment of everything it starts — its
+/// session id, its pid, its messaging socket, and the flag saying "you are my child".
+///
+/// Keel is often launched from inside one (a developer's own `claude` running `make dev`), and the
+/// daemon and every `claude` it spawns inherited all of it. Measured: a lane's `claude` came up
+/// saying "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker", so it wrote no
+/// transcript and Keel had nothing to follow. These are cleared for every agent Keel starts; the
+/// person's own configuration (`CLAUDE_CONFIG_DIR`, API keys) is not on the list and stays.
+pub(crate) const INHERITED: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_PID",
+];
+
+/// What a lane's terminal runs when it is the agent itself rather than a shell: Claude Code's own
+/// interactive interface, with everything a Keel turn gets — the approval hook, `ask_user`, the
+/// system prompt, the lane's checkout and access to the project root — and a session id Keel
+/// chose, so the transcript it follows is known before the first word is typed.
+///
+/// The person gets every feature the CLI has, on the day it ships; Keel reads what happened from
+/// the transcript (`/api/session/tail`) and the follower runs the checks and the commit when a
+/// turn ends, as it always has for a session started in a terminal.
+///
+/// Runs the quarantine first, like a turn: a repository's own `.claude/settings.json` hooks are
+/// arbitrary code, and this is a launch on Keel's initiative. Blocking — the PTY thread calls it.
+pub(crate) fn interactive(
+    agent: &str,
+    repo: &Utf8Path,
+    cwd: &Utf8Path,
+    port: u16,
+    session: &str,
+    resume: bool,
+    lane: Option<&str>,
+) -> Result<(std::ffi::OsString, Vec<String>), String> {
+    let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(cwd, rel, bytes);
+    keel_harness::quarantine_keeping(cwd, keep).map_err(|e| {
+        format!(
+            "Keel could not quarantine this repository's agent configuration ({e:#}), so the \
+             agent was not started. Inspect .claude/, .mcp.json and .keel/quarantine/."
+        )
+    })?;
+    match agent {
+        "claude" => {
+            let mut args = vec![
+                if resume { "--resume" } else { "--session-id" }.to_string(),
+                session.to_string(),
+                "--settings".into(),
+                crate::permissions::settings_json(repo, port, Some(session), lane, cwd),
+                "--mcp-config".into(),
+                crate::askmcp::config(port, lane),
+                "--append-system-prompt".into(),
+                system_prompt(cwd),
+            ];
+            // The project's servers ride on the same flag, as on a turn: it takes several.
+            if let Some(mcp) = project_mcp(cwd) {
+                let at = args
+                    .iter()
+                    .position(|a| a == "--mcp-config")
+                    .map_or(args.len(), |i| i + 2);
+                args.insert(at, mcp);
+            }
+            if cwd != repo {
+                args.extend(["--add-dir".into(), repo.to_string()]);
+            }
+            Ok((crate::permissions::program("claude"), args))
+        }
+        // No transcript reader for Codex yet: its lane is the CLI and Keel's git panels.
+        "codex" => {
+            let mut args = vec!["--cd".to_string(), cwd.to_string()];
+            if resume {
+                args = vec![
+                    "resume".into(),
+                    session.to_string(),
+                    "--cd".into(),
+                    cwd.to_string(),
+                ];
+            }
+            Ok((crate::permissions::program("codex"), args))
+        }
+        other => Err(format!("unknown agent `{other}`")),
+    }
+}
+
 async fn quarantine_before_launch(
     checkout: camino::Utf8PathBuf,
-    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
 ) -> bool {
     let quarantined = crate::serve::blocking(
         move || {
-            keel_harness::quarantine(&checkout).map_err(|e| format!("{e:#}"))?;
-            // The harness preserves an earlier quarantined copy on a destination collision.
-            // Its success alone therefore does not prove a newly restored source was moved.
-            // Check lexical presence, including dangling symlinks, before trusting the result.
-            for path in [
-                ".claude/settings.json",
-                ".claude/settings.local.json",
-                ".claude/hooks",
-                ".mcp.json",
-            ] {
-                match std::fs::symlink_metadata(checkout.join(path)) {
-                    Ok(_) => {
-                        return Err(format!(
-                            "{path} remains in the checkout; its quarantine destination may \
-                             already contain an earlier copy"
-                        ));
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(format!("could not verify {path}: {e}")),
-                }
-            }
+            // What the person installed through Keel on this machine, in this project, stays;
+            // see `vouched`. The harness also verifies that everything else is gone.
+            let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(&checkout, rel, bytes);
+            keel_harness::quarantine_keeping(&checkout, keep).map_err(|e| format!("{e:#}"))?;
             Ok(())
         },
         Err("the quarantine worker stopped before configuration could be verified".to_string()),
@@ -1270,12 +1362,15 @@ async fn quarantine_before_launch(
             sentry::Level::Error,
         );
         let _ = tx
-            .send(Ok(Event::default().event("fatal").data(format!(
-                "The agent was not started. Keel could not quarantine repository agent \
+            .send(Ok(said(
+                "fatal",
+                format!(
+                    "The agent was not started. Keel could not quarantine repository agent \
                  configuration ({e}). Existing files were preserved. Inspect .claude/, \
                  .mcp.json, and .keel/quarantine/; move conflicting configuration aside or fix \
                  its permissions before retrying."
-            ))))
+                ),
+            )))
             .await;
         return false;
     }
@@ -1288,13 +1383,13 @@ async fn preparation_stopped(
     state: &AppState,
     lane: &str,
     token: u64,
-    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
 ) -> bool {
     if tx.is_closed() {
         return true;
     }
     if state.cancelled(lane, token) {
-        let _ = tx.send(Ok(Event::default().event("done").data("-1"))).await;
+        let _ = tx.send(Ok(said("done", "-1"))).await;
         return true;
     }
     false
@@ -1326,7 +1421,7 @@ impl Drop for AgentChild {
 async fn next_agent_line<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
     child: &mut AgentChild,
-    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
 ) -> Option<crate::lines::Next> {
     tokio::select! {
         biased;
@@ -1340,7 +1435,7 @@ async fn next_agent_line<R: tokio::io::AsyncBufRead + Unpin>(
 
 async fn wait_for_agent(
     child: &mut AgentChild,
-    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
 ) -> std::io::Result<std::process::ExitStatus> {
     tokio::select! {
         biased;
@@ -1359,6 +1454,151 @@ async fn wait_for_agent(
 /// into something the app can notice and say.
 ///
 /// Every return from `chat` goes through here, including the ones that only carry a `fatal`.
+/// The chat task telling the translator a turn was stopped. Consumed there, never sent.
+const STOPPED: &str = "#stopped";
+
+/// A record past this is decoded on a blocking thread rather than the executor.
+const BIG_RECORD: usize = 256 * 1024;
+
+/// One event of the chat stream, named, before it is an SSE frame — so the one place that turns
+/// them into frames can read them.
+pub(crate) struct Said(&'static str, String);
+
+fn said(name: &'static str, data: impl Into<String>) -> Said {
+    Said(name, data.into())
+}
+
+/// The chat task's events, as the client asked for them.
+///
+/// Without `ops=1`, exactly what they always were. With it, the agent's records go through
+/// `keel_workspace::conversation` and come out as `turn` ops — and this is the **one place a chat
+/// turn closes**: before `done`, before `fatal`, and when the task drops its sender without either
+/// (a panic, a path nobody thought of). Every call still running is answered on the way. The task
+/// has a dozen ways out; putting the close here rather than at each of them is what makes "a row
+/// left spinning" impossible rather than fixed.
+fn translate(
+    mut rx: tokio::sync::mpsc::Receiver<Result<Said, Infallible>>,
+    query: &ChatQuery,
+) -> tokio::sync::mpsc::Receiver<Result<Event, Infallible>> {
+    use keel_workspace::conversation::{Decoder, Ending, Frame, Provider, Source};
+    let (tx, out) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    let mut decoder = matches!(query.ops.as_deref(), Some("1" | "true")).then(|| {
+        let provider = match query.provider.as_deref() {
+            Some("codex") => Provider::Codex,
+            _ => Provider::Claude,
+        };
+        Decoder::new(provider, Source::Chat)
+    });
+    let prompt = query.prompt.clone();
+    let mut stopped = false;
+    let frame = |frames: Vec<Frame>| {
+        (!frames.is_empty())
+            .then(|| serde_json::to_string(&frames).ok())
+            .flatten()
+            .map(|json| Event::default().event("turn").data(json))
+    };
+    tokio::spawn(async move {
+        loop {
+            // Text waits up to `BATCH` to be sent with what follows it; a model that pauses
+            // mid-sentence still gets its words on screen when the wait is up.
+            let deadline = decoder.as_ref().and_then(Decoder::deadline);
+            let next = tokio::select! {
+                biased;
+                _ = tx.closed() => return,
+                said = rx.recv() => said,
+                _ = tokio::time::sleep_until(deadline.unwrap_or_else(std::time::Instant::now).into()),
+                    if deadline.is_some() =>
+                {
+                    let d = decoder.as_mut().expect("a deadline means a decoder");
+                    if let Some(e) = frame(d.flush(std::time::Instant::now())) {
+                        let _ = tx.send(Ok(e)).await;
+                    }
+                    continue;
+                }
+            };
+            let Some(Ok(Said(name, data))) = next else {
+                // The task ended without a terminal event. Whatever it was doing, the turn is
+                // over, and the client is told so in the one shape it already handles.
+                if let Some(e) = decoder
+                    .as_mut()
+                    .and_then(|d| frame(d.close(Ending::Interrupted)))
+                {
+                    let _ = tx.send(Ok(e)).await;
+                }
+                return;
+            };
+            // A record is usually a token. The complete message of a `Write` is the whole file,
+            // and parsing megabytes of JSON on the executor holds up every other request.
+            if name == "msg" && data.len() > BIG_RECORD && decoder.is_some() {
+                let d = decoder.take().expect("checked");
+                let Some((d, frames)) = crate::serve::blocking(
+                    move || {
+                        let mut d = d;
+                        let frames = d.feed(&data, None, std::time::Instant::now());
+                        Some((d, frames))
+                    },
+                    None,
+                )
+                .await
+                else {
+                    return;
+                };
+                decoder = Some(d);
+                if let Some(e) = frame(frames)
+                    && tx.send(Ok(e)).await.is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            if name == STOPPED {
+                stopped = true;
+                continue;
+            }
+            if let Some(d) = decoder.as_mut() {
+                let now = std::time::Instant::now();
+                let ops = match name {
+                    "msg" => Some(d.feed(&data, None, now)),
+                    "err" => Some(d.stderr(&data)),
+                    _ => None,
+                };
+                if let Some(frames) = ops {
+                    if let Some(e) = frame(frames)
+                        && tx.send(Ok(e)).await.is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                let before = match name {
+                    "starting" if !d.is_open() => d.open(Some(prompt.clone()), None, None, None),
+                    "done" => d.close(match data.as_str() {
+                        _ if stopped => Ending::Stopped,
+                        "0" => Ending::Done,
+                        "-1" => Ending::Stopped,
+                        _ => Ending::Failed,
+                    }),
+                    "fatal" => d.close(Ending::Failed),
+                    _ => Vec::new(),
+                };
+                if let Some(e) = frame(before)
+                    && tx.send(Ok(e)).await.is_err()
+                {
+                    return;
+                }
+            }
+            if tx
+                .send(Ok(Event::default().event(name).data(data)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    out
+}
+
 fn alive(rx: tokio::sync::mpsc::Receiver<Result<Event, Infallible>>) -> axum::response::Response {
     use axum::response::IntoResponse;
     Sse::new(ReceiverStream::new(rx))
@@ -1446,7 +1686,7 @@ mod stream_tests {
         };
         assert!(state.claim("replacement", root, true).is_ok());
         drop(tx);
-        let bytes = axum::body::to_bytes(alive(rx).into_body(), 16_384)
+        let bytes = axum::body::to_bytes(alive(translate(rx, &query(false))).into_body(), 16_384)
             .await
             .unwrap();
         (allowed, String::from_utf8(bytes.to_vec()).unwrap())
@@ -1476,8 +1716,11 @@ mod stream_tests {
         );
     }
 
+    /// A checkout that brings quarantined config back must not leave it active, and must not
+    /// overwrite the copy under review. It used to refuse the turn and leave the file in place —
+    /// a state no turn could leave, and one a project install then merged into and vouched for.
     #[tokio::test]
-    async fn quarantine_collision_refuses_launch_and_preserves_both_copies() {
+    async fn a_restored_config_is_moved_beside_the_copy_under_review() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(dir.path()).unwrap();
         std::fs::create_dir(root.join(".claude")).unwrap();
@@ -1486,36 +1729,32 @@ mod stream_tests {
         std::fs::write(root.join(".claude/settings.json"), "replacement\n").unwrap();
 
         let (allowed, events) = quarantine_result(root).await;
+        assert!(allowed, "{events}");
         assert!(
-            !allowed,
-            "an earlier quarantine let restored hooks remain active"
-        );
-        assert!(events.contains("event: fatal"), "{events}");
-        assert!(events.contains(".keel/quarantine"), "{events}");
-        assert_eq!(
-            std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
-            "replacement\n"
+            !root.join(".claude/settings.json").exists(),
+            "restored hooks stayed active"
         );
         assert_eq!(
             std::fs::read_to_string(root.join(".keel/quarantine/.claude/settings.json")).unwrap(),
             "original\n"
         );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".keel/quarantine/.claude/settings.json.1")).unwrap(),
+            "replacement\n"
+        );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
-    async fn quarantine_does_not_accept_a_remaining_dangling_symlink() {
+    async fn a_dangling_symlink_does_not_stay_in_the_checkout() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(dir.path()).unwrap();
         std::fs::create_dir(root.join(".claude")).unwrap();
         std::os::unix::fs::symlink("missing.json", root.join(".claude/settings.json")).unwrap();
 
         let (allowed, events) = quarantine_result(root).await;
-        assert!(
-            !allowed,
-            "a dangling symlink escaped the postcondition check"
-        );
-        assert!(events.contains("event: fatal"), "{events}");
-        assert!(std::fs::symlink_metadata(root.join(".claude/settings.json")).is_ok());
+        assert!(allowed, "{events}");
+        assert!(std::fs::symlink_metadata(root.join(".claude/settings.json")).is_err());
     }
 
     #[tokio::test]
@@ -1568,7 +1807,7 @@ mod stream_tests {
                     "printf 'ready\\n'; exec sleep 30"
                 },
             ])
-            .process_group(0)
+            .lead_group()
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
@@ -1735,5 +1974,122 @@ mod stream_tests {
         assert_eq!(model_arg(Some("opus; rm -rf /")), None);
         assert_eq!(model_arg(Some("../../etc/passwd")), None);
         assert_eq!(model_arg(Some("$(whoami)")), None);
+    }
+
+    fn query(ops: bool) -> super::ChatQuery {
+        serde_json::from_value(serde_json::json!({
+            "prompt": "ask",
+            "ops": if ops { Some("1") } else { None },
+        }))
+        .unwrap()
+    }
+
+    async fn run(ops: bool, said: Vec<super::Said>, end: bool) -> Vec<(String, String)> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let mut out = super::translate(rx, &query(ops));
+        for s in said {
+            tx.send(Ok(s)).await.unwrap();
+        }
+        if end {
+            drop(tx);
+        }
+        let mut got = Vec::new();
+        // The SSE `Event` keeps its fields to itself; its wire form is what a client reads.
+        while let Ok(Some(Ok(e))) =
+            tokio::time::timeout(std::time::Duration::from_millis(300), out.recv()).await
+        {
+            let wire = format!("{e:?}");
+            let name = wire
+                .split("event: ")
+                .nth(1)
+                .and_then(|r| r.split('\\').next())
+                .unwrap_or("")
+                .to_string();
+            got.push((name, wire));
+        }
+        got
+    }
+
+    fn tool_start() -> super::Said {
+        super::said(
+            "msg",
+            serde_json::json!({"type": "stream_event", "event": {"type": "content_block_start",
+                "index": 0, "content_block": {"type": "tool_use", "id": "c1", "name": "Bash"}}})
+            .to_string(),
+        )
+    }
+
+    /// Stop mid-call: the client is told the call was interrupted and the turn closed, before the
+    /// terminal `done` — in the stream itself, not by its own guess.
+    #[tokio::test]
+    async fn a_stopped_turn_closes_and_answers_its_calls_before_done() {
+        let got = run(
+            true,
+            vec![
+                super::said("starting", "reading"),
+                tool_start(),
+                super::said("done", "-1"),
+            ],
+            true,
+        )
+        .await;
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        let done = names.iter().position(|n| *n == "done").expect("done");
+        let close = got
+            .iter()
+            .position(|(_, w)| w.contains("\\\"op\\\":\\\"close\\\""))
+            .expect("a close op");
+        assert!(close < done, "{names:?}");
+        assert!(got[close].1.contains("interrupted") && got[close].1.contains("stopped"));
+    }
+
+    /// The task vanishing without a terminal event still closes the turn.
+    #[tokio::test]
+    async fn a_task_that_ends_without_done_still_closes_the_turn() {
+        let got = run(
+            true,
+            vec![super::said("starting", "reading"), tool_start()],
+            true,
+        )
+        .await;
+        assert!(
+            got.iter().any(|(_, w)| w.contains("interrupted")),
+            "{got:?}"
+        );
+    }
+
+    /// Without the flag, the stream is what it always was: the record itself, as `msg`.
+    #[tokio::test]
+    async fn without_ops_the_stream_is_unchanged() {
+        let got = run(false, vec![tool_start(), super::said("done", "0")], true).await;
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["msg", "done"]);
+    }
+
+    /// Stop while the agent runs: `claude` handles SIGINT itself and exits 0 or 130, so the code
+    /// says "done" or "failed". The task knows better, and the turn closes as stopped.
+    #[tokio::test]
+    async fn a_turn_stopped_mid_run_closes_as_stopped_whatever_the_exit_code() {
+        for code in ["0", "130"] {
+            let got = run(
+                true,
+                vec![
+                    super::said("starting", "reading"),
+                    tool_start(),
+                    super::said(super::STOPPED, ""),
+                    super::said("done", code),
+                ],
+                true,
+            )
+            .await;
+            assert!(
+                got.iter().any(|(_, w)| w.contains("stopped")),
+                "{code}: {got:?}"
+            );
+            assert!(
+                !got.iter().any(|(n, _)| n == super::STOPPED),
+                "never sent to the client"
+            );
+        }
     }
 }

@@ -4,13 +4,14 @@
 //! reimplement any of that — it reads the same cache and shells out to `claude plugin`, so what you
 //! install here is installed everywhere, and uninstalling from the CLI is reflected here.
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::sse::{Event, Sse};
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::Infallible;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::process::Command;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -246,6 +247,9 @@ pub async fn list(Query(q): Query<CatalogQuery>) -> axum::Json<CatalogResponse> 
 pub struct InstallQuery {
     pub name: String,
     pub marketplace: String,
+    /// Commit `.claude/settings.json` after, as the person's "commit after every turn" says.
+    #[serde(default)]
+    pub commit: bool,
 }
 
 /// What a plugin actually contains, from `claude plugin details`.
@@ -282,7 +286,7 @@ pub async fn details(Query(q): Query<DetailsQuery>) -> axum::Json<Details> {
             });
         }
 
-        let mut command = std::process::Command::new("claude");
+        let mut command = std::process::Command::new(crate::permissions::program("claude"));
         command.args(["plugin", "details", &q.name]);
         // Bounded and killed on the way out: a `claude` that never answers must not hold the
         // request, or a thread, for ever.
@@ -392,6 +396,12 @@ pub struct ActionQuery {
     pub action: String,
     pub name: String,
     pub marketplace: Option<String>,
+    /// Where the plugin is installed, from the listing. `project` acts on the project's
+    /// `.claude/settings.json`; anything else is the CLI's default, the person's own.
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub commit: bool,
 }
 
 /// A configured marketplace.
@@ -406,7 +416,7 @@ pub struct Marketplace {
 /// Shelling out rather than reading a file: the on-disk layout is not a contract, and the CLI is.
 pub async fn marketplaces() -> axum::Json<Vec<Marketplace>> {
     crate::serve::in_blocking(move || {
-        let mut command = std::process::Command::new("claude");
+        let mut command = std::process::Command::new(crate::permissions::program("claude"));
         command.args(["plugin", "marketplace", "list"]);
         let out = crate::git::output_within(command, CLAUDE_CEILING);
         let Ok(out) = out else {
@@ -439,6 +449,7 @@ pub async fn marketplaces() -> axum::Json<Vec<Marketplace>> {
 /// The action set is closed rather than passed through, so a crafted request cannot reach an
 /// arbitrary `claude plugin` subcommand.
 pub async fn action(
+    State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<ActionQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let verb = match q.action.as_str() {
@@ -458,14 +469,24 @@ pub async fn action(
         _ => q.name.clone(),
     };
 
+    let project = q.scope.as_deref() == Some("project");
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
-        let _ = tx
-            .send(Ok(Event::default()
-                .event("line")
-                .data(format!("$ claude plugin {verb} {target}"))))
-            .await;
-        let code = pipe(Command::new("claude").args(["plugin", verb, &target]), &tx).await;
+        let mut args = vec!["plugin".to_string(), verb.to_string(), target.clone()];
+        if project {
+            args.extend(["--scope".into(), "project".into()]);
+        }
+        let message = format!("Keel: {verb} plugin {target}");
+        let code = crate::vouched::run(
+            &state,
+            ".claude/settings.json",
+            project,
+            &args,
+            q.commit,
+            &message,
+            &tx,
+        )
+        .await;
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))
             .await;
@@ -483,7 +504,11 @@ pub async fn refresh_marketplaces() -> Sse<ReceiverStream<Result<Event, Infallib
                 .data("$ claude plugin marketplace update")))
             .await;
         let code = pipe(
-            Command::new("claude").args(["plugin", "marketplace", "update"]),
+            Command::new(crate::permissions::program("claude")).args([
+                "plugin",
+                "marketplace",
+                "update",
+            ]),
             &tx,
         )
         .await;
@@ -502,6 +527,7 @@ fn valid(s: &str) -> bool {
 
 /// Install a plugin, adding its marketplace first when Keel knows one is needed.
 pub async fn install(
+    State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<InstallQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
@@ -524,13 +550,6 @@ pub async fn install(
         .and_then(|s| s.add_source);
 
     tokio::spawn(async move {
-        let send = |line: String| {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(Ok(Event::default().event("line").data(line))).await;
-            }
-        };
-
         // Every suggestion names the marketplace it comes from, including the official one.
         // Assuming that one was already configured worked on a machine where it had been added at
         // some point and failed on a fresh one, with `claude` reporting a marketplace it had never
@@ -538,18 +557,42 @@ pub async fn install(
         //
         // Adding one that is already configured is a no-op that prints a notice, so it is safe to
         // run every time rather than checking first.
+        //
+        // Both at project scope: into this repository's `.claude/settings.json`, so the plugin is
+        // part of the project rather than of this machine, and a teammate who clones it gets it
+        // (through their own Keel's quarantine and trust prompt, as for any repository config).
         if let Some(source) = add_source {
-            send(format!("$ claude plugin marketplace add {source}")).await;
-            let _ = pipe(
-                Command::new("claude").args(["plugin", "marketplace", "add", source]),
+            let args: Vec<String> = ["plugin", "marketplace", "add", source, "--scope", "project"]
+                .map(String::from)
+                .to_vec();
+            let message = format!("Keel: add plugin marketplace {source}");
+            let _ = crate::vouched::run(
+                &state,
+                ".claude/settings.json",
+                true,
+                &args,
+                q.commit,
+                &message,
                 &tx,
             )
             .await;
         }
 
         let id = format!("{}@{}", q.name, q.marketplace);
-        send(format!("$ claude plugin install {id}")).await;
-        let code = pipe(Command::new("claude").args(["plugin", "install", &id]), &tx).await;
+        let args: Vec<String> = ["plugin", "install", &id, "--scope", "project"]
+            .map(String::from)
+            .to_vec();
+        let message = format!("Keel: install plugin {id}");
+        let code = crate::vouched::run(
+            &state,
+            ".claude/settings.json",
+            true,
+            &args,
+            q.commit,
+            &message,
+            &tx,
+        )
+        .await;
 
         let _ = tx
             .send(Ok(Event::default().event("done").data(code.to_string())))

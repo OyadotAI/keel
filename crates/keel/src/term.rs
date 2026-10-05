@@ -8,20 +8,118 @@
 //! buffering it into lines would break every progress bar and prompt.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 /// The shell to run. Honour the user's own, since their prompt, aliases and PATH live there.
+#[cfg(unix)]
 fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
 }
 
+/// `%COMSPEC%`, the shell Windows itself says is the command shell.
+#[cfg(windows)]
+fn shell() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
+}
+
+#[derive(serde::Deserialize)]
+pub struct TermQuery {
+    /// `claude` or `codex` to run the agent itself; absent for the person's shell.
+    agent: Option<String>,
+    /// The conversation: one Keel chose for a new session, or one to resume.
+    session: Option<String>,
+    #[serde(default)]
+    resume: bool,
+    lane: Option<String>,
+    /// The person chose "Take over here": resume even though another process has it open.
+    #[serde(default)]
+    takeover: bool,
+}
+
+/// The close code that says "this conversation is open in another process": the page shows
+/// that it is following it there, rather than an agent that exited. Private range (4000–4999).
+pub const ELSEWHERE: u16 = 4001;
+
+/// What the PTY runs.
+enum Launch {
+    Shell,
+    Agent {
+        agent: String,
+        repo: camino::Utf8PathBuf,
+        port: u16,
+        session: String,
+        resume: bool,
+        lane: Option<String>,
+    },
+}
+
+/// A session id goes on a command line: a UUID's characters and nothing else, so it can never be
+/// read as a flag.
+fn plausible_session(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
 pub async fn ws(
     ws: WebSocketUpgrade,
-    crate::serve::Checkout(repo): crate::serve::Checkout,
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::serve::AppState>>,
+    crate::serve::Checkout(checkout): crate::serve::Checkout,
+    axum::extract::Query(q): axum::extract::Query<TermQuery>,
 ) -> Response {
     // no-blocking: a WebSocket upgrade; the PTY runs in its own task and threads.
-    ws.on_upgrade(move |socket| session(socket, repo.to_string()))
+    let launch = match (q.agent, q.session) {
+        (Some(agent), Some(session)) if plausible_session(&session) => Launch::Agent {
+            agent,
+            repo: state.repo(),
+            port: state.port(),
+            session,
+            resume: q.resume,
+            lane: q.lane.filter(|l| !l.is_empty()),
+        },
+        (Some(_), _) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                "an agent terminal needs a session id",
+            )
+                .into_response();
+        }
+        _ => Launch::Shell,
+    };
+    // A resume of a conversation another `claude` has open is two processes appending to one
+    // transcript. Every way a lane resumes passes here — opened from History, restored at launch,
+    // started again — so this is where it is refused, not in whichever of them remembered to ask.
+    let elsewhere = match &launch {
+        Launch::Agent {
+            agent,
+            session,
+            resume: true,
+            ..
+        } if agent == "claude" && !q.takeover => Some(session.clone()),
+        _ => None,
+    };
+    // The desktop app offers `keel` beside its token (`pair::app_token`); a browser closes a
+    // socket whose server picked none of the protocols it offered.
+    ws.protocols(["keel"])
+        .on_upgrade(move |mut socket| async move {
+            if let Some(id) = elsewhere {
+                let open = tokio::task::spawn_blocking(move || {
+                    keel_workspace::claude_home()
+                        .is_some_and(|home| keel_workspace::status(&home, &id).is_some())
+                })
+                .await
+                .unwrap_or(false);
+                if open {
+                    let _ = socket
+                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: ELSEWHERE,
+                            reason: "open in another process".into(),
+                        })))
+                        .await;
+                    return;
+                }
+            }
+            session(socket, checkout.to_string(), launch).await
+        })
 }
 
 /// What the browser can ask the pty to do.
@@ -62,7 +160,7 @@ fn foreground(pid: i32) -> Option<String> {
     program_name(&String::from_utf8_lossy(&out.stdout))
 }
 
-async fn session(socket: WebSocket, cwd: String) {
+async fn session(socket: WebSocket, cwd: String, launch: Launch) {
     use futures_util::{SinkExt, StreamExt};
     let (mut sender, mut receiver) = socket.split();
 
@@ -71,21 +169,32 @@ async fn session(socket: WebSocket, cwd: String) {
 
     // The pty master is Send but not Sync, so it cannot live in an async task that awaits. One
     // owning thread holds it, reads from it, and applies commands; the async side only moves bytes.
-    let spawned = std::thread::spawn(move || pty_thread(&cwd, out_tx, cmd_rx));
+    let spawned = std::thread::spawn(move || pty_thread(&cwd, launch, out_tx, cmd_rx));
 
-    let pump = tokio::spawn(async move {
+    let mut pump = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             let frame = match msg {
                 Out::Bytes(bytes) => Message::Binary(bytes.into()),
                 Out::Title(name) => Message::Text(name.into()),
             };
             if sender.send(frame).await.is_err() {
-                break;
+                return;
             }
         }
+        // The program ended — or never started — and its output is all sent. Closing the socket
+        // is what tells the page so: without it a terminal whose agent had exited sat there
+        // taking keystrokes into nothing, with no "exited" and no way to start it again.
+        let _ = sender.send(Message::Close(None)).await;
     });
 
-    while let Some(Ok(msg)) = receiver.next().await {
+    loop {
+        let msg = tokio::select! {
+            m = receiver.next() => match m {
+                Some(Ok(m)) => m,
+                _ => break,
+            },
+            _ = &mut pump => break,
+        };
         let cmd = match msg {
             Message::Binary(b) => Cmd::Input(b.to_vec()),
             Message::Text(t) => {
@@ -115,6 +224,7 @@ async fn session(socket: WebSocket, cwd: String) {
 /// Own the pty for the life of one session.
 fn pty_thread(
     cwd: &str,
+    launch: Launch,
     out: tokio::sync::mpsc::Sender<Out>,
     cmds: std::sync::mpsc::Receiver<Cmd>,
 ) {
@@ -129,13 +239,57 @@ fn pty_thread(
         return;
     };
 
-    let mut cmd = CommandBuilder::new(shell());
+    let mut cmd = match launch {
+        Launch::Shell => CommandBuilder::new(shell()),
+        Launch::Agent {
+            agent,
+            repo,
+            port,
+            session,
+            resume,
+            lane,
+        } => {
+            // Two agents may share a tree: one reading or planning beside one editing is the
+            // point of a shared lane. What must not happen is two *turns* writing it at once,
+            // and that is held where it can be seen — a busy terminal session claims
+            // `term:<session>` on its tree (non-negotiable 11), so the overlapping turn gets its
+            // files noted and nothing committed. Refusing the second terminal outright blocked
+            // every second lane in a project behind an idle prompt.
+            let checkout = camino::Utf8PathBuf::from(cwd);
+            match crate::agent::interactive(
+                &agent,
+                &repo,
+                &checkout,
+                port,
+                &session,
+                resume,
+                lane.as_deref(),
+            ) {
+                Ok((program, args)) => {
+                    let mut c = CommandBuilder::new(program);
+                    c.args(args);
+                    c
+                }
+                Err(why) => {
+                    let _ = out.blocking_send(Out::Bytes(format!("{why}\r\n").into_bytes()));
+                    return;
+                }
+            }
+        }
+    };
     cmd.cwd(cwd);
+    // Not a child of whatever Claude Code session launched Keel — in the shell either, where the
+    // person may well type `claude` themselves.
+    for name in crate::agent::INHERITED {
+        cmd.env_remove(name);
+    }
     // Tell the shell what it is talking to, so colour and line editing behave.
     cmd.env("TERM", "xterm-256color");
 
     let Ok(mut child) = pair.slave.spawn_command(cmd) else {
-        let _ = out.blocking_send(Out::Bytes(b"could not start a shell\r\n".to_vec()));
+        let _ = out.blocking_send(Out::Bytes(
+            b"could not start it: is it installed and on PATH?\r\n".to_vec(),
+        ));
         return;
     };
     drop(pair.slave);
@@ -168,7 +322,14 @@ fn pty_thread(
     // `pid_t` is `i32` everywhere this runs, and a whole dependency to spell that is not worth it.
     let mut showing: Option<i32> = None;
     let announce = |master: &(dyn portable_pty::MasterPty + Send), showing: &mut Option<i32>| {
+        // Windows' ConPTY has no foreground group to read; the tab keeps its plain name there.
+        #[cfg(unix)]
         let pgid = master.process_group_leader();
+        #[cfg(not(unix))]
+        let pgid: Option<i32> = {
+            let _ = master;
+            None
+        };
         if pgid == *showing {
             return true;
         }
@@ -199,12 +360,37 @@ fn pty_thread(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        // It exited on its own — `/exit`, ⌃C twice, a crash. Say so, and end the session.
+        if let Ok(Some(status)) = child.try_wait() {
+            let _ = titles.blocking_send(Out::Bytes(
+                format!("\r\n[exited {}]\r\n", status.exit_code()).into_bytes(),
+            ));
+            break;
+        }
         if !announce(pair.master.as_ref(), &mut showing) {
             break;
         }
     }
 
-    let _ = child.kill();
+    // The agent's whole tree, not its top: `claude` with a `cargo test` under it is the ordinary
+    // shape, and killing the leader alone leaves the rest running.
+    if matches!(child.try_wait(), Ok(None)) {
+        if let Some(pid) = child.process_id() {
+            // Asked first, briefly: an interrupted `claude` flushes its transcript and removes
+            // its own pid file. Killed outright it leaves that file saying "busy", and a
+            // session that reads as live is refused a resume and holds its tree.
+            crate::signals::group(pid, crate::signals::INTERRUPT);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+            while std::time::Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            crate::signals::end_tree(pid);
+        }
+        let _ = child.kill();
+    }
+    // Reaped, always: a zombie answers `kill(pid, 0)`, so an unreaped agent read as a live
+    // session for the rest of the daemon's life. Bounded — it has been sent SIGKILL.
+    let _ = child.wait();
 }
 
 #[cfg(test)]

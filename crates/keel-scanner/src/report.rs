@@ -20,6 +20,77 @@ pub struct Report {
     /// `keel scan` reports everything.
     #[serde(default)]
     pub ignored: Vec<String>,
+    /// Every check that applies to this repository, passing or not, in road order — so a list
+    /// can show what is already fine beside what is not. Empty for a report built from findings
+    /// alone.
+    pub checks: Vec<CheckState>,
+}
+
+/// One check as it stands on this repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CheckState {
+    pub id: &'static str,
+    /// The finding's title when it fails; what it is called when it passes.
+    pub label: String,
+    /// The road phase it belongs to — the same grouping `plan` uses.
+    pub phase: &'static str,
+    pub passed: bool,
+}
+
+/// Every judged id plus every finding, one row each, grouped by phase. A judged id with no
+/// passing label is skipped rather than shown as its raw id; the catalog test keeps that empty.
+pub(crate) fn checks(findings: &[Finding], judged: &[&'static str]) -> Vec<CheckState> {
+    let mut rows: Vec<(usize, CheckState)> = Vec::new();
+    for f in findings {
+        if rows.iter().any(|(_, r)| r.id == f.id) {
+            continue;
+        }
+        let i = phase_of(f.id, f.dimension);
+        rows.push((
+            i,
+            CheckState {
+                id: f.id,
+                label: f.title.clone(),
+                phase: PHASES[i].0,
+                passed: false,
+            },
+        ));
+    }
+    for id in judged {
+        if rows.iter().any(|(_, r)| r.id == *id) {
+            continue;
+        }
+        let Some((dimension, label)) = crate::catalog::passing(id) else {
+            continue;
+        };
+        let i = phase_of(id, dimension);
+        rows.push((
+            i,
+            CheckState {
+                id,
+                label: label.to_string(),
+                phase: PHASES[i].0,
+                passed: true,
+            },
+        ));
+    }
+    rows.sort_by_key(|(i, r)| (*i, r.passed));
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// Which phase an id is on: named in `PHASES`, or else by its dimension, so a new check is never
+/// invisible.
+fn phase_of(id: &str, dimension: Dimension) -> usize {
+    if let Some(i) = PHASES.iter().position(|(_, _, ids)| ids.contains(&id)) {
+        return i;
+    }
+    match dimension {
+        Dimension::Security => 0,
+        Dimension::Verifiability | Dimension::AgentLegibility => 1,
+        Dimension::Deployability | Dimension::EnvironmentHygiene | Dimension::WorkersCompat => 2,
+        Dimension::RuntimeContract | Dimension::StatePlacement => 3,
+        Dimension::Observability => 4,
+    }
 }
 
 /// One step on the road from "it runs on my machine" to production.
@@ -39,7 +110,7 @@ const PHASES: &[(&str, &str, &[&str])] = &[
         "Nothing else matters while someone can run code on your machine or read a secret from the repository.",
         &[
             "security/untrusted-agent-config",
-            "security/committed-secret",
+            "security/committed-secrets",
             "security/no-input-validation",
         ],
     ),
@@ -49,7 +120,7 @@ const PHASES: &[(&str, &str, &[&str])] = &[
         &[
             "verify/no-gate",
             "verify/no-tests",
-            "verify/no-ci",
+            "deploy/no-ci",
             "agent/no-instructions",
             "agent/no-reviewers",
             "docs/no-readme",
@@ -68,7 +139,7 @@ const PHASES: &[(&str, &str, &[&str])] = &[
             "deploy/no-environments",
             "deploy/no-pipeline",
             "env/no-wrangler-config",
-            "env/shared-binding",
+            "env/shared-bindings",
         ],
     ),
     (
@@ -113,6 +184,7 @@ impl Report {
             profile: None,
             plan,
             ignored: Vec::new(),
+            checks: Vec::new(),
         }
     }
 
@@ -140,16 +212,7 @@ impl Report {
             if phases.iter().any(|p| p.findings.contains(&f.id)) {
                 continue;
             }
-            let i = match f.dimension {
-                Dimension::Security => 0,
-                Dimension::Verifiability | Dimension::AgentLegibility => 1,
-                Dimension::Deployability
-                | Dimension::EnvironmentHygiene
-                | Dimension::WorkersCompat => 2,
-                Dimension::RuntimeContract | Dimension::StatePlacement => 3,
-                Dimension::Observability => 4,
-            };
-            phases[i].findings.push(f.id);
+            phases[phase_of(f.id, f.dimension)].findings.push(f.id);
         }
         phases.retain(|p| !p.findings.is_empty());
         phases
@@ -190,6 +253,20 @@ impl Report {
 mod tests {
     use super::*;
     use crate::finding::Fix;
+
+    /// A phase that names an id no check emits never claims anything, and the finding lands
+    /// by dimension instead. Three such typos were found this way.
+    #[test]
+    fn every_phase_names_a_real_check() {
+        for (title, _, ids) in PHASES {
+            for id in *ids {
+                assert!(
+                    crate::catalog::emitted(id),
+                    "{title}: {id} is not a check id"
+                );
+            }
+        }
+    }
 
     fn finding(severity: Severity) -> Finding {
         Finding::new(

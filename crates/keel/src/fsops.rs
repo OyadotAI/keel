@@ -302,7 +302,12 @@ pub async fn reveal(
         let spawned = std::process::Command::new("xdg-open")
             .arg(target.parent().unwrap_or(&target).as_str())
             .spawn();
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        // `/select,` and the path as one argument: Explorer's own syntax for "show this file".
+        #[cfg(windows)]
+        let spawned = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", target.as_str().replace('/', "\\")))
+            .spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let spawned: std::io::Result<std::process::Child> =
             Err(std::io::Error::other("unsupported platform"));
 

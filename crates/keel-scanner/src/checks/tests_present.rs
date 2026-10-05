@@ -26,6 +26,10 @@ impl Check for TestsPresent {
         Dimension::Verifiability
     }
 
+    fn always(&self) -> bool {
+        true
+    }
+
     fn run(&self, ctx: &RepoContext) -> Vec<Finding> {
         let by_path = ctx
             .files()

@@ -104,9 +104,6 @@ reader means using these, not re-deriving them.
   check could not see the case it existed to refuse. The daemon is the only process that sees
   every window. A claim is reserved before the spawn and given back by `serve::Held` on drop,
   because a lane left claimed can take no further turn and nothing on screen would say why.
-- **`Int(_: Double)` traps.** Not an exception — SIGTRAP, the whole app. Every number parsed out
-  of a page (`Picked.short`) is clamped, because "the renderer always normalises that" is a
-  promise about somebody else's code.
 - **`git::output()`** — every synchronous git runs under a 60-second ceiling, with both pipes
   drained on threads. The drain is not tidiness: polling `try_wait` while a chatty command fills a
   64 KB pipe buffer deadlocks, and `git log` on a real repository is well past 64 KB. The ceiling
@@ -177,10 +174,6 @@ reader means using these, not re-deriving them.
   nothing called it. The list was written to `UserDefaults` after every turn and read back never,
   so `/` in a freshly opened project offered Keel's one own command and nothing else. Deleting it
   would have removed the evidence that the feature was broken. Check which it is first.
-- **`SessionModel.closed()` for a lane leaving the window.** `stop()` deliberately leaves the
-  lane's watchdog and debounces alone, which is right when a turn ends and wrong when the lane
-  does. Before this the only thing that ended them was the model being deallocated, and when
-  SwiftUI lets go of a view's model is not a lifetime anyone here controls.
 
 ## Non-negotiables
 
@@ -231,56 +224,64 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
     `one_working_tree_takes_one_writer`, `turns::tests::a_terminal_writer_refuses_a_keel_lane_on_the_same_tree`,
     `events::tests::an_unfollowed_busy_terminal_session_holds_its_tree`.
 
-## The Mac app and the daemon
+## The desktop app and the daemon
 
-The application is Swift (`app/`, SwiftPM, no `.xcodeproj` — same reasoning as the bundle script:
-nothing here needs Xcode's project format, and `xcodebuild` will not run until its licence is
-accepted). It spawns `keel serve` as a child process and talks to it over loopback.
+The application is `desktop/`: Tauri 2, a React page, and one `keel serve` per open project. It
+replaced the Swift macOS app (`app/`, deleted 2026-10-05) because testers reported hangs while a
+reply streamed and on every lane switch, a chat pane that went blank, sessions cut off by sleep,
+no way to open two projects, and no Windows build.
 
-The split is the point. Everything that knows anything — the scanner, the workspace reader, the
-permission model, the approval hook, and now the turn itself — stays in Rust and stays
-independently runnable as `keel scan`, `keel workspace`, `keel serve`. Swift is the view layer. A
-rewrite that moved that logic into the app would have thrown away the product in order to change
-the window.
+The split is the point, and the rewrite moved knowledge *into* Rust rather than out of it: the
+scanner, the workspace reader, the permission model, the approval hook, the turn — and now the
+conversation decoder (`keel-workspace::conversation`) — are Rust, and stay runnable as `keel scan`,
+`keel workspace`, `keel serve`. The page draws ops; it decodes nothing a second client would have
+to decode again.
 
-**Inside the app, state lives in stores and view models; views read a lane, which forwards.**
-`Project` is one per window and holds `ProjectStore` (what the daemon says about the project) and
-one `RepoStore` per checkout (what git says about that tree). A lane (`SessionModel`) holds a
-`SessionStore` (the turns, whether one runs, where a transcript read stands), a
-`DesignerViewModel` and a `WorkbenchViewModel`, and forwards every one of their properties, so a
-view that reads `model.changes` is reading `project.repo(for: worktree).changes` and Observation
-tracks that access. Every lane used to hold its own *copy* of the project — thirty fields, copied
-by `adopt(project:)` at six call sites — and a copy is a thing that goes stale: a new tab that
-missed the copy drew "Reading…" over data every other tab had. One object held by reference
-cannot disagree with itself. The rule that follows: **state that two panes or the window read
-belongs on a store or a view model; state that dies with its view stays `@State`;** and a tick
-counter is an event pretending to be state. `modelTick`, `designTick`, `reloadTick` and the
-counter behind `diffTick` are gone: a stored property is observable on its own, "show the page"
-is a Bool the window puts back, a reload is a call on the bridge, and a diff card compares the
-repo store's `treeVersion`, which climbs with every read of git. `pinTick` and
-`focusComposerTick` stay, because a scroll and a focus are actions with no value to compare.
-`WorkbenchViewModel.detour` is one value where four optionals with a "first one wins" order used
-to be read and cleared at every site.
+**One window, a sidebar of projects, lanes under each.** `desktop/src-tauri/src/main.rs` is the
+whole native side: it starts a daemon per project on a free port the first time the project is
+used, ties each one to itself, and hands the page `{port, token}`. One daemon per project rather
+than one for all: a daemon's state — claims, the dev server, the watchers — is one project's, and
+several side by side change nothing inside any of them.
 
-**The centre of a window is the turn, not the chat.** Files changed, commands run with their output,
-the gate's verdict, the duration and the cost — one reviewable artifact. All of that data already
-existed; it was scattered across four panels. `make check` runs both halves (`cargo test` and
-`swift test`), and the Swift side includes budgets that can fail: no `claude` left running at rest,
-no more than one daemon from the app, and — the one that matters — a real
-launch-and-quit cycle proving **the daemon dies with the app**.
+**The daemon dies with the app through its stdin.** `--exit-on-stdin-eof`: the app holds the
+write end of a pipe and the kernel closes it however the app dies — ⌘Q, a crash, a force quit,
+on Windows too, which has no parent to poll. The Swift app's `--exit-with-parent` (`getppid`)
+is still accepted. `tests/lifecycle.rs` is the budget that cannot be faked: it starts the binary,
+lets go of the pipe and fails if the daemon is still there ten seconds later.
 
-That last one is why `keel serve` takes `--exit-with-parent`. macOS has no `PR_SET_PDEATHSIG`, and
-`applicationWillTerminate` runs on a ⌘Q and on nothing else: SIGTERM, a force quit and a crash all
-skip it, and the daemon then reparents to init and keeps serving. The daemon polls `getppid()`
-instead. The first version of the budget only counted processes *at rest*, passed happily while
-every quit orphaned a daemon, and is the reason the test now launches the bundle: a budget that
-cannot fail reads as proof and is worse than no budget.
+**The page is a page, and the daemon knows its own.** The webview's origin (`tauri://localhost`,
+`http://tauri.localhost`) is shared by every Tauri app on the machine, so the origin alone proves
+nothing: the app writes a random token as the first line of the daemon's stdin, and
+`pair::app_token` lets a page in only with that token beside an `APP_ORIGINS` origin — in
+`Authorization`, or as a `keel.<token>` WebSocket subprotocol for the terminal, since a page's
+WebSocket cannot set headers. Loopback without an `Origin` (the hook, the CLI) is unchanged.
 
-The terminal is **SwiftTerm**, not a renderer of our own. Orca built its own and 678 of its issues
-mention the terminal — garbled output, IME breakage in Korean and Chinese, escape sequences leaking
-into the shell. The daemon's PTY framing is easy to get wrong in one specific way: **a text frame
-is the tab title, not output** (`term.rs:82-83`). Treating text frames as output prints the word
-`zsh` into the shell.
+**What keeps it fast, each a rule in the code rather than a habit:**
+- SSE is read and JSON-decoded in a Web Worker (`stream.worker.ts`) and handed over in one batch
+  per 16 ms — one store update per frame however fast the agent writes.
+- `reduce.ts` copies the turn an op touches and the one block or call inside it; a view
+  subscribed to a block (`Turn.tsx`) re-renders when that block changes and never for a sibling.
+- The transcript and every long list are `react-virtuoso`; the chat follows the bottom only
+  while you are at the bottom, and nothing computes a scroll target from estimated heights.
+- `Conversation` is keyed by lane, so nothing in it outlives the lane it was drawn for — the
+  Swift pane's scroll anchor named a row from the lane you had left and scrolled into nothing.
+- Diffs are prepared once on arrival (`git.ts`), never per render.
+- `pnpm budget` fails the build past 400 KB gzip at launch (150 KB now); the terminal is a lazy
+  chunk.
+- A long action started from a panel — a pull request, a check, a plugin install — lives in
+  `runs.ts`, not the panel's state. A panel unmounts on a tab switch; a run held there came back
+  as an idle button over a `gh pr create` still pushing, and a second click made a second PR.
+- One of each primitive (`ui/kit.tsx`: `Tabs` with roving focus, `Empty`, `Banner`;
+  `InlineDiff`), after Oya's browser renderer. Four tablists had been hand-written and none
+  took an arrow key. Tokens are Oya's too — shadows with a hairline instead of 1px borders, one
+  focus ring, one spring — and DM Sans ships in `src/fonts`.
+- `pnpm lint` is in the gate: typescript-eslint, the rules of hooks, and size budgets as a
+  ratchet (`--max-warnings`): the count of oversized functions can go down and never up.
+
+`make check` runs `cargo test` and `desktop-test` (type-check, vitest, bundle, budget).
+`make dev` runs the app against a daemon built from this tree. The terminal is xterm.js, for
+the reason the Swift app used SwiftTerm: Orca built its own renderer and 678 of its issues mention
+the terminal. The PTY framing rule stands — **a text frame is the tab title, not output**.
 
 ### The web UI is gone
 
@@ -307,38 +308,20 @@ deletion, not a route.
 The chat pane is what a person watches while a turn runs, so the two failures it can have are the
 two the bar names: it can be slow, and it can show less than the terminal it replaced.
 
-**A turn is a sequence, not two lists.** `Turn.text` was one accumulating string and `Turn.calls`
-a list beside it, so the order — said something, ran a command, read the result, said something
-else — was not recoverable from what was stored. `Turn.steps` is that order; `text` and `calls`
-remain, because everything outside the pane (the copy buttons, the reports, the review packet)
-wants the merged form. A `Step.call` references its call by id rather than holding it, so grouping,
-risk and the trace pane are unchanged.
+**The decoder is in Rust, and every ending closes every call.** Claude Code's stream-json (and
+Codex's events) become `turn` ops in `keel-workspace::conversation`: `open`, `text` appends,
+`call` upserts, `result`, `usage`, `failure`, `raw`, `close`. `/api/chat` and `/api/session/tail`
+send them when asked with `?ops=1`, and the raw `msg` records otherwise (the evals read those).
+Three properties, each tested there: `close` answers every call still running with
+`result{interrupted}` first — `agent::translate` is the one place a chat turn closes, before
+`done`, before `fatal`, or when the task drops its sender — so no row is left spinning; a step's
+id is `<message id>:<block index>` on both paths, so live and replay fold to the same turn; and
+text goes out as appends batched at 40 ms, so no byte is sent twice. The Swift decoder this
+replaced was 4,300 lines and had all three bugs.
 
-**A call keeps its whole input.** `begin` used to store one field of it — first line, 160
-characters — which is a path for an `Edit` and the word `cat` for a heredoc. The arguments arrive
-as `input_json_delta` and were ignored outright, so a call did not exist on screen until it was
-complete; now it appears when its block opens and fills in as it is typed, which is what the CLI
-does.
-
-**A `Turn.Block` is where a delta lands.** Appending to the turn invalidated every view that read
-the turn, which was both panes and every finished row in them. Appending to a block invalidates
-that row. The block also holds its own parse, which is the memoisation `Markdown` never had: its
-cache was keyed by the source string, and a streaming reply makes a new string per token — so every
-delta missed, paid a full-string hash, and evicted a finished turn's entry on the way out. Fifty
-turns meant fifty replies re-parsed from scratch per token. Nothing on the render path parses
-anything now; `AttributedString(markdown:)` runs once per block, at parse time.
-
-**Reading a value in `body` registers the dependency against that body.** `model.tailToken` was
-read from an `.onChange` written inline in both panes, so every text delta rebuilt the whole
-transcript. The scroll was coalesced at 80 ms; the rebuild was not. `TailFollower` is a zero-size
-view that owns the dependency and calls back — the pattern to reach for whenever a pane needs to
-*know* about a stream without being *rebuilt* by it.
-
-**View `@State` outlives its model unless it is keyed.** `ChatRail` holds its scroll position as a
-row id, deliberately — offsets resolve against a lazy stack's estimates. Mounted without
-`.id(model.id)` the view survived a lane swap while the model did not, so the anchor named a turn
-from the conversation you just left, and an id that resolves to nothing scrolls into empty space.
-That is the white pane, and it is one line in `SessionWindow`.
+**A call keeps its whole input.** It appears when its block opens, its arguments are buffered
+(capped at 2 MB) and arrive when they parse, and the complete message repairs them. Output is
+capped at 64 KB, head and tail.
 
 ### One reader
 
@@ -349,7 +332,7 @@ snapshot from the moment of the click and then sat still, which reads as Keel be
 own state rather than as a missing feature.
 
 `tail()` returns the records appended since a byte offset, and `/api/session/tail` is woken by
-kqueue on the transcript — a 2 s sleep is the fallback, not the mechanism — and emits **the same
+a file watch on the transcript — a 2 s sleep is the fallback, not the mechanism — and emits **the same
 `msg` events `/api/chat` emits**, because the records on disk are the shape the live decoder
 already reads. So replaying a session and following one are one path, and it is the path that
 has always drawn a live turn. Both streams carry `fact` events as well; see "Facts". The first
@@ -495,21 +478,24 @@ fields; Keel makes no usage API calls and shows tokens rather than a guessed per
 
 ## Shipping it: never crash, know when it does, update itself
 
-Testers crash the app on machines with no logs. Three answers, in order of how little they need:
-a bar on the next launch that offers the `.ips` macOS already wrote (`Crashes.swift`); Sentry in
-both halves — the app via `sentry-cocoa`, the daemon via `keel serve --sentry-dsn` — tagged
-`app=keel`, `component=app|daemon`, sharing A2ABase's project; PostHog for usage counts, same
-project, same tag. Both sit behind `Telemetry.swift` so the two switches in Settings › Privacy
-actually silence them, and no call site ever passes a prompt, path or repository name. Keys are
-read at build time by `packaging/build-app.sh` from the environment or a gitignored `.env`
-(`KEEL_SENTRY_DSN`, `KEEL_POSTHOG_KEY/HOST`); PostHog falls back to A2ABase's public client key.
-A build with no key has that SDK off.
+**Updates are the Tauri updater** against `latest.json` on the public `OyadotAI/keel-releases`
+repository (this one is private, and an app on a tester's machine has no token). It checks at
+launch and every six hours, downloads in the background, and installs only on **Restart to
+update** — a restart ends every agent the app runs, so the status bar asks first when a lane is
+mid-turn, and that is never Keel's call. `make release` bumps the workspace and the shell
+(`desktop/src-tauri/Cargo.toml`) together and pushes the tag; `release.yml` builds the universal
+macOS app and the Windows installer, signs, notarises, staples the DMG and publishes. The daemon
+ships inside the app (`externalBin`, staged by `packaging/sidecar.sh`). Details and secrets:
+`packaging/README.md`.
 
-Updates are Sparkle. `make sparkle-keys` once per release machine (private key in the keychain,
-public key read by the build); `make release` builds, signs, notarises, writes `appcast.xml` and
-publishes a GitHub release to the **public** `OyadotAI/keel-releases` repository (this one is
-private, and Sparkle on a tester's Mac has no token) — the feed is that repo's
-`releases/latest/download/appcast.xml`, so nothing is hosted. The version is the workspace version in `Cargo.toml`; bump it before `make release`.
+**Installed Swift builds reach this one through Sparkle.** The Tauri app keeps the Swift app's
+bundle identifier (`ai.oya.keel`) and Team ID, so the old updater accepts it as the next version
+and installs it in place; the release still writes a Sparkle `appcast.xml` for them. Changing the
+identifier strands every one of those installs on the last Swift build.
+
+**Crash and usage reporting is not ported yet.** The Swift app had a crash-report bar, Sentry and
+PostHog behind `Telemetry.swift`; the desktop app has none of them, and the daemon's
+`--sentry-dsn` is not passed. Do not describe reporting as present until it is.
 
 Two rules the crashes taught: **WebKit's `takeSnapshot` returns nil for a rect outside the view
 and its async import force-unwraps it** — always the completion form, always clamped to bounds
@@ -518,6 +504,10 @@ size, never draw until there is room. `RenderTests` lays every pane out at 0×0,
 the next one of these fails a test instead of a tester.
 
 ## Design turns and the live canvas
+
+**Not ported yet.** Everything below describes the Swift app's preview, which went with it. The
+desktop app's Preview tab frames the dev server and nothing more; the picker, the pins and the
+pixel verdict come back as a child webview with an init script in every frame.
 
 Click an element in the preview and the turn that follows carries a **pixel column**: the element
 photographed before and after, with a verdict. Several clicks are several **pins**, each with its
@@ -702,7 +692,7 @@ dependency is the point: the daemon knows about them, none of them knows about t
   hooks, MCP servers). Read-only, and the listing never surfaces session message bodies — see
   non-negotiable 7. `tail()` is the one path that reads a conversation, on an explicit ask, and it
   is also how a session running outside Keel is watched: see "One reader".
-- `app/` — the Swift macOS application. A client of the daemon, and nothing else.
+- `desktop/` — the Tauri app: a page and a supervisor of daemons. A client, and nothing else.
 
 Inside `keel` itself, one module is one thing:
 

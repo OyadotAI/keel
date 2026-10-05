@@ -30,3 +30,4 @@ packaging/sparkle/
 
 # Local Python environment for packaging/icon.py.
 .venv/
+desktop/src-tauri/binaries/

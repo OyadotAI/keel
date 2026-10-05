@@ -1,7 +1,7 @@
-//! Creating a subagent.
+//! Creating a subagent or a slash command.
 //!
-//! A subagent is a Markdown file with YAML frontmatter under `.claude/agents/`, so this writes one
-//! and opens it. The form exists because the frontmatter has required keys with meaning attached —
+//! Both are a Markdown file with YAML frontmatter — `.claude/agents/` and `.claude/commands/` — so
+//! one writer serves both. The form exists because the frontmatter has required keys with meaning attached —
 //! `description` is what the main agent reads to decide whether to delegate at all — and a file
 //! created from a blank template gets those wrong quietly.
 //!
@@ -36,6 +36,23 @@ pub struct NewAgent {
     /// its own rather than swept into the next turn's checkpoint under that turn's prompt.
     #[serde(default)]
     pub commit: bool,
+}
+
+/// What is being written. The two differ in folder, in frontmatter keys and in what a blank body
+/// should say, and in nothing else.
+#[derive(Clone, Copy)]
+enum Kind {
+    Agent,
+    Command,
+}
+
+impl Kind {
+    fn folder(self) -> &'static str {
+        match self {
+            Kind::Agent => ".claude/agents",
+            Kind::Command => ".claude/commands",
+        }
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -75,23 +92,45 @@ pub(crate) fn yaml(value: &str) -> String {
 }
 
 pub async fn create(
+    state: State<Arc<AppState>>,
+    req: Json<NewAgent>,
+) -> Result<Json<Created>, (StatusCode, String)> {
+    // no-blocking: `make` does the write inside `blocking(…)`.
+    make(state, req, Kind::Agent).await
+}
+
+/// A slash command: `/name` in Claude Code sends the file's body as the prompt.
+pub async fn create_command(
+    state: State<Arc<AppState>>,
+    req: Json<NewAgent>,
+) -> Result<Json<Created>, (StatusCode, String)> {
+    // no-blocking: `make` does the write inside `blocking(…)`.
+    make(state, req, Kind::Command).await
+}
+
+async fn make(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewAgent>,
+    kind: Kind,
 ) -> Result<Json<Created>, (StatusCode, String)> {
     let repo = state.repo();
     crate::serve::blocking(
         move || {
-            // A project agent is a write into the tree a turn may be writing; a user one is not.
+            // A project file is a write into the tree a turn may be writing; a user one is not.
             let _held = if req.scope == "user" {
                 None
             } else {
                 Some(crate::writes::hold(&state, &repo, "agent")?)
             };
             let commit = req.commit && req.scope != "user";
-            let rel = format!(".claude/agents/{}.md", req.name);
-            let mut made = write(&repo, req)?;
+            let rel = format!("{}/{}.md", kind.folder(), req.name);
+            let mut made = write(&repo, req, kind)?;
             if commit {
-                made.note = crate::writes::commit_only(&repo, &[rel], "Add a subagent").note;
+                let message = match kind {
+                    Kind::Agent => "Add a subagent",
+                    Kind::Command => "Add a slash command",
+                };
+                made.note = crate::writes::commit_only(&repo, &[rel], message).note;
             }
             Ok(made)
         },
@@ -102,7 +141,7 @@ pub async fn create(
 }
 
 /// What `create` does, off the executor: it creates directories, checks for a file and writes.
-fn write(repo: &Utf8Path, req: NewAgent) -> Result<Created, (StatusCode, String)> {
+fn write(repo: &Utf8Path, req: NewAgent, kind: Kind) -> Result<Created, (StatusCode, String)> {
     if !valid_name(&req.name) {
         return Err(bad(
             "Use lowercase letters, digits and hyphens, at most 64 characters — the name becomes \
@@ -111,29 +150,41 @@ fn write(repo: &Utf8Path, req: NewAgent) -> Result<Created, (StatusCode, String)
     }
     let description = req.description.trim();
     if description.is_empty() {
-        return Err(bad(
-            "A description is required: it is the only thing the main agent reads when deciding \
-             whether to delegate.",
-        ));
+        return Err(bad(match kind {
+            Kind::Agent => {
+                "A description is required: it is the only thing the main agent reads when \
+                 deciding whether to delegate."
+            }
+            Kind::Command => {
+                "A description is required: it is what the / menu shows beside the name."
+            }
+        }));
     }
 
     let dir: Utf8PathBuf = if req.scope == "user" {
-        let home = std::env::var("HOME").map_err(|_| bad("no home directory"))?;
-        Utf8PathBuf::from(home).join(".claude/agents")
+        let home = keel_workspace::home()
+            .map(String::from)
+            .ok_or(std::env::VarError::NotPresent)
+            .map_err(|_| bad("no home directory"))?;
+        Utf8PathBuf::from(home).join(kind.folder())
     } else {
-        repo.join(".claude/agents")
+        repo.join(kind.folder())
     };
     let path = dir.join(format!("{}.md", req.name));
     if req.scope != "user" {
-        crate::writes::no_link_under(repo, &format!(".claude/agents/{}.md", req.name))
+        crate::writes::no_link_under(repo, &format!("{}/{}.md", kind.folder(), req.name))
             .map_err(|e| (StatusCode::CONFLICT, e))?;
     }
 
-    let mut front = format!(
-        "---\nname: {}\ndescription: {}\n",
-        req.name,
-        yaml(description)
-    );
+    // A command is named by its filename; only an agent carries `name` in its frontmatter.
+    let mut front = match kind {
+        Kind::Agent => format!(
+            "---\nname: {}\ndescription: {}\n",
+            req.name,
+            yaml(description)
+        ),
+        Kind::Command => format!("---\ndescription: {}\n", yaml(description)),
+    };
     // A tool list is one line of frontmatter; a newline in it writes whatever keys follow.
     if req.tools.chars().any(char::is_control) {
         return Err(bad("Tools are a comma-separated list on one line."));
@@ -145,11 +196,19 @@ fn write(repo: &Utf8Path, req: NewAgent) -> Result<Created, (StatusCode, String)
         .filter(|t| !t.is_empty())
         .collect();
     if !tools.is_empty() {
-        front.push_str(&format!("tools: {}\n", tools.join(", ")));
+        let key = match kind {
+            Kind::Agent => "tools",
+            Kind::Command => "allowed-tools",
+        };
+        front.push_str(&format!("{key}: {}\n", tools.join(", ")));
     }
     front.push_str("---\n\n");
 
-    let body = if req.prompt.trim().is_empty() {
+    let body = if req.prompt.trim().is_empty() && matches!(kind, Kind::Command) {
+        "Write the prompt this command sends. $ARGUMENTS is whatever is typed after the \
+         command's name.\n"
+            .to_string()
+    } else if req.prompt.trim().is_empty() {
         // A placeholder that says what belongs here rather than an empty file. An agent whose
         // prompt is blank inherits nothing useful and behaves like a worse copy of the main one.
         "Describe what this agent does, what it should read before acting, and what it should \
@@ -201,10 +260,10 @@ mod tests {
     fn a_tool_list_cannot_add_frontmatter() {
         let dir = tempfile::tempdir().unwrap();
         let repo = Utf8Path::from_path(dir.path()).unwrap();
-        let err = write(repo, ask("tooly", "Read\nname: hijack")).unwrap_err();
+        let err = write(repo, ask("tooly", "Read\nname: hijack"), Kind::Agent).unwrap_err();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(!repo.join(".claude/agents/tooly.md").exists());
-        write(repo, ask("tooly", "Read, Bash(git commit:*)")).unwrap();
+        write(repo, ask("tooly", "Read, Bash(git commit:*)"), Kind::Agent).unwrap();
     }
 
     /// Check-then-write let two creates of one name both succeed, the last silently winning.
@@ -212,11 +271,25 @@ mod tests {
     fn a_second_create_of_one_name_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let repo = Utf8Path::from_path(dir.path()).unwrap();
-        write(repo, ask("a", "")).unwrap();
-        let err = write(repo, ask("a", "Read")).unwrap_err();
+        write(repo, ask("a", ""), Kind::Agent).unwrap();
+        let err = write(repo, ask("a", "Read"), Kind::Agent).unwrap_err();
         assert_eq!(err.0, StatusCode::CONFLICT);
         let body = std::fs::read_to_string(repo.join(".claude/agents/a.md")).unwrap();
         assert!(!body.contains("tools:"), "{body}");
+    }
+
+    /// A command is named by its file and allows tools under Claude Code's own key for it.
+    #[test]
+    fn a_command_is_written_where_the_slash_menu_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap();
+        write(repo, ask("ship", "Bash(git push:*)"), Kind::Command).unwrap();
+        let body = std::fs::read_to_string(repo.join(".claude/commands/ship.md")).unwrap();
+        assert!(
+            body.starts_with("---\ndescription: \"d\"\nallowed-tools: Bash(git push:*)\n---"),
+            "{body}"
+        );
+        assert!(body.contains("$ARGUMENTS"), "{body}");
     }
 
     #[test]

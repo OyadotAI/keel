@@ -49,6 +49,11 @@ pub struct AppState {
     /// belongs to its follower, which finishes the turn; an unfollowed one's belongs to the
     /// sessions watcher, which only holds the tree.
     followers: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// Terminal sessions writing a checkout whose claim someone else holds: session → checkout.
+    /// A terminal `claude` cannot be refused the way a Keel turn can — it writes whether or not
+    /// it got the claim — so the holder's checkpoint must know it is there, or its `git add -A`
+    /// commits this one's half-written files under the holder's prompt.
+    contending: std::sync::Mutex<std::collections::HashMap<String, Utf8PathBuf>>,
 }
 
 /// One running turn: which checkout it is in, whether it can write to it, and what to signal.
@@ -84,6 +89,26 @@ struct Turn {
 
 struct CheckoutWriter(std::fs::File);
 
+/// The file whose lock says "a Keel turn is writing this tree", shared by every daemon on the
+/// machine.
+///
+/// It used to be the checkout directory itself, opened and locked — which Windows refuses
+/// outright (a directory is not a file there), so every write turn would have been refused. Not a
+/// file inside the checkout either: an untracked lock file is a change, and the turn's own
+/// auto-commit would sweep it in. Not `/tmp`: on Linux that is every user's, and another user
+/// could hold the name or plant a link at it. A private directory of this user's, named by the
+/// tree's path, hashed.
+fn writer_lock(checkout: &Utf8Path) -> Result<std::fs::File, String> {
+    use sha2::{Digest, Sha256};
+    // Resolved first: a symlinked parent or another letter case on a case-insensitive disk is
+    // the same tree, and must be the same lock.
+    let real = checkout
+        .canonicalize_utf8()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let name = format!("{:x}.lock", Sha256::digest(real.as_str().as_bytes()));
+    crate::permissions::private_lock(&name)
+}
+
 impl Drop for CheckoutWriter {
     fn drop(&mut self) {
         // A concurrent fork can temporarily inherit our descriptor until exec closes it.
@@ -102,6 +127,7 @@ impl AppState {
             tokens: std::sync::atomic::AtomicU64::new(1),
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
             followers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            contending: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -116,6 +142,7 @@ impl AppState {
             tokens: std::sync::atomic::AtomicU64::new(1),
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
             followers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            contending: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -254,7 +281,7 @@ impl AppState {
             ));
         }
         let writer_lock = if writes {
-            let lock = std::fs::File::open(&checkout)
+            let lock = writer_lock(&checkout)
                 .map_err(|e| format!("Could not reserve this working tree for editing: {e}"))?;
             lock.try_lock().map_err(|e| match e {
                 std::fs::TryLockError::WouldBlock => {
@@ -385,6 +412,10 @@ impl AppState {
     /// leaves the listing, and a claim released only on "idle" held the tree until the daemon
     /// restarted.
     pub fn release_terminal_except(&self, busy: &std::collections::HashSet<&str>) {
+        // Contention ends with the session's turn, whoever was watching it.
+        self.contending
+            .locked()
+            .retain(|session, _| busy.contains(session.as_str()));
         // Keys first and the lock let go, because `is_followed` takes a lock of its own.
         let lanes: Vec<String> = self.running.locked().keys().cloned().collect();
         let stale: Vec<String> = lanes
@@ -428,6 +459,26 @@ impl AppState {
             .locked()
             .values()
             .any(|t| t.writes && t.checkout == checkout && t.session.as_deref() != Some(session))
+            || self
+                .contending
+                .locked()
+                .iter()
+                .any(|(other, tree)| other != session && *tree == checkout)
+    }
+
+    /// A terminal session's turn opened on a tree another writer holds: it writes anyway, so it
+    /// is recorded where `writer_in_other` will see it until the turn closes.
+    pub fn contend(&self, session: &str, checkout: &Utf8Path) {
+        let checkout = self
+            .claim_checkout(checkout)
+            .unwrap_or_else(|_| checkout.to_owned());
+        self.contending
+            .locked()
+            .insert(session.to_string(), checkout);
+    }
+
+    pub fn uncontend(&self, session: &str) {
+        self.contending.locked().remove(session);
     }
 
     /// Record the process, so Stop has something to signal.
@@ -438,7 +489,7 @@ impl AppState {
             turn.pid = Some(pid);
             // Close the race between the final cancellation check and registering the child.
             if turn.interrupted {
-                crate::signals::group(pid, libc::SIGINT);
+                crate::signals::group(pid, crate::signals::INTERRUPT);
             }
         }
     }
@@ -516,7 +567,7 @@ impl AppState {
         // The group, not the process: `claude` spawns the tools it runs, and a bare `kill(pid)`
         // leaves a `cargo test` it started alive and holding the terminal. See `crate::signals`.
         if let Some(pid) = turn.pid {
-            crate::signals::group(pid, libc::SIGINT);
+            crate::signals::group(pid, crate::signals::INTERRUPT);
         }
         true
     }
@@ -818,6 +869,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             "/api/agents/create",
             axum::routing::post(crate::agents::create),
         )
+        .route(
+            "/api/commands/create",
+            axum::routing::post(crate::agents::create_command),
+        )
         .route("/api/skills/catalog", get(crate::skills::catalog))
         .route("/api/skills/add", axum::routing::post(crate::skills::add))
         .route(
@@ -850,6 +905,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
+        .route("/api/claude/theme", get(api_claude_theme))
         .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/claude/login", get(crate::clitools::login_claude))
         .route("/api/cli", get(crate::clitools::status))
@@ -886,6 +942,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .layer(axum::middleware::from_fn(crate::pair::guard))
         .layer(axum::middleware::from_fn(report_failures))
         .layer(axum::middleware::from_fn(crate::events::after_mutation))
+        .layer(axum::middleware::from_fn(cors))
         .with_state(state.clone());
 
     // What happens outside Keel — a session started in a terminal, a file saved in an editor —
@@ -909,6 +966,51 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
     .await
     .context("serving")?;
     Ok(())
+}
+
+/// The desktop app's webview, and only it, may read responses from another origin
+/// ([`crate::pair::APP_ORIGINS`]). Echoing those exact origins — never `*` — is what lets it read
+/// the answers without letting an ordinary web page in a browser do the same.
+async fn cors(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // no-blocking: a header comparison.
+    use axum::http::{HeaderValue, Method, StatusCode, header};
+    use axum::response::IntoResponse;
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|o| o.to_str().ok())
+        .filter(|o| crate::pair::APP_ORIGINS.contains(o))
+        .map(str::to_string);
+    let preflight = req.method() == Method::OPTIONS;
+    let mut response = match (&origin, preflight) {
+        (Some(_), true) => StatusCode::NO_CONTENT.into_response(),
+        _ => next.run(req).await,
+    };
+    if let Some(origin) = origin
+        && let Ok(value) = HeaderValue::from_str(&origin)
+    {
+        let h = response.headers_mut();
+        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+        h.insert(header::VARY, HeaderValue::from_static("Origin"));
+        if preflight {
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST, DELETE"),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static("content-type, authorization"),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_static("600"),
+            );
+        }
+    }
+    response
 }
 
 /// Every failure the daemon returns, reported once, from one place.
@@ -1062,6 +1164,30 @@ struct TailQuery {
     /// Where the last read stopped. `0` for the whole transcript.
     #[serde(default)]
     from: u64,
+    /// `1` for decoded `turn` ops in place of raw `msg` records (`keel_workspace::conversation`).
+    /// Absent, the stream is exactly what it has always been, so the Swift app is untouched.
+    ops: Option<String>,
+}
+
+impl TailQuery {
+    fn ops(&self) -> bool {
+        matches!(self.ops.as_deref(), Some("1" | "true"))
+    }
+}
+
+/// One `turn` event: the ops a record or a batch produced, as one frame.
+fn turn_event(
+    frames: &[keel_workspace::conversation::Frame],
+) -> Option<axum::response::sse::Event> {
+    if frames.is_empty() {
+        return None;
+    }
+    let json = serde_json::to_string(frames).ok()?;
+    Some(
+        axum::response::sse::Event::default()
+            .event("turn")
+            .data(json),
+    )
 }
 
 /// Follow one session's transcript, live.
@@ -1130,9 +1256,18 @@ async fn api_session_tail(
     }
 
     let watched = state.clone();
+    let ops = query.ops();
     tokio::spawn(async move {
         let _stop = stop;
         let mut from = query.from;
+        // Decoded here rather than in every client, when asked for. Lives as long as the stream:
+        // it holds the one open turn and nothing else.
+        let mut decoder = ops.then(|| {
+            keel_workspace::conversation::Decoder::new(
+                keel_workspace::conversation::Provider::Claude,
+                keel_workspace::conversation::Source::Transcript,
+            )
+        });
         // The first read is the catch-up; every one after it is the few hundred bytes that were
         // appended.
         let mut first = true;
@@ -1152,7 +1287,7 @@ async fn api_session_tail(
             )
             .await
         };
-        // Woken by the file rather than by a clock. kqueue on the transcript and on Claude
+        // Woken by the file rather than by a clock. A watch on the transcript and on Claude
         // Code's pid files; the sleep below is the fallback for a watcher that could not be made.
         let (wake_tx, mut wake) = tokio::sync::mpsc::channel::<()>(1);
         let _watcher = watch_session(&dir, &home, &query.id, wake_tx);
@@ -1161,7 +1296,7 @@ async fn api_session_tail(
         // turn-end after it. A follower that starts at catch-up would otherwise never see that
         // turn open, and a window relaunched mid-turn — every `make dev` — lost the turn's
         // files, gate and commit for good.
-        let mut inflight: Option<(String, String, Option<String>)> = None;
+        let mut inflight: Option<(String, String, Option<String>, String)> = None;
         let mut alive = keel_workspace::status(&home, &query.id).is_some();
         let mut last_bytes = std::time::Instant::now();
         let mut said_ended = false;
@@ -1186,6 +1321,12 @@ async fn api_session_tail(
                 .await
             };
             let Some((lines, next, started_at)) = read else {
+                if let Some(d) = decoder.as_mut()
+                    && let Some(e) =
+                        turn_event(&d.close(keel_workspace::conversation::Ending::Interrupted))
+                {
+                    let _ = tx.send(Ok(e)).await;
+                }
                 let _ = tx
                     .send(Ok(Event::default()
                         .event("fatal")
@@ -1210,9 +1351,45 @@ async fn api_session_tail(
                     )))
                     .await;
             }
+            // Decoded off the executor: the first pass is up to `MAX_READ` of JSON, and the source
+            // test that guards handlers cannot see inside a spawned task. One frame per record,
+            // in step with the lines below, plus whatever the batch's end flushes.
+            let mut decoded: std::collections::VecDeque<Vec<keel_workspace::conversation::Frame>> =
+                Default::default();
+            if let Some(d) = decoder.take() {
+                // No per-record offsets: `tail` has already dropped the records nobody is shown,
+                // so they cannot be rebuilt from what is left, and a wrong one is worse than none.
+                // A client resumes from `caught-up`, which is the reader's own.
+                let batch = lines.clone();
+                let done = blocking(
+                    move || {
+                        let mut d = d;
+                        let now = std::time::Instant::now();
+                        let mut out: Vec<Vec<keel_workspace::conversation::Frame>> =
+                            batch.iter().map(|l| d.feed(l, None, now)).collect();
+                        if let Some(last) = out.last_mut() {
+                            last.extend(d.flush_all());
+                        }
+                        Some((d, out))
+                    },
+                    None,
+                )
+                .await;
+                let Some((d, out)) = done else {
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .event("fatal")
+                            .data("the transcript could not be read")))
+                        .await;
+                    break;
+                };
+                decoder = Some(d);
+                decoded = out.into();
+            }
             let mut wrote = false;
             for line in lines {
                 wrote = true;
+                let frames = decoded.pop_front();
                 let kind = keel_workspace::kind_of(&line);
                 let opener = if first && !known.is_empty() {
                     keel_workspace::opener_of(&line)
@@ -1222,11 +1399,13 @@ async fn api_session_tail(
                 // A task notification is Claude Code's note to itself. It is read here, as a
                 // job finishing, and never drawn: drawn, it was a blue bubble attributed to the
                 // person that split the turn.
-                if !matches!(kind, keel_workspace::Kind::JobDone { .. })
-                    && tx
-                        .send(Ok(Event::default().event("msg").data(line)))
-                        .await
-                        .is_err()
+                let event = match frames {
+                    Some(frames) => turn_event(&frames),
+                    None if matches!(kind, keel_workspace::Kind::JobDone { .. }) => None,
+                    None => Some(Event::default().event("msg").data(line)),
+                };
+                if let Some(event) = event
+                    && tx.send(Ok(event)).await.is_err()
                 {
                     break; // The window closed, or the lane opened something else.
                 }
@@ -1247,8 +1426,13 @@ async fn api_session_tail(
                 if follower.is_none() {
                     match &kind {
                         keel_workspace::Kind::Opener {
-                            uuid, prompt, cwd, ..
-                        } => inflight = Some((uuid.clone(), prompt.clone(), cwd.clone())),
+                            uuid,
+                            prompt,
+                            cwd,
+                            at,
+                        } => {
+                            inflight = Some((uuid.clone(), prompt.clone(), cwd.clone(), at.clone()))
+                        }
                         keel_workspace::Kind::TurnEnd => inflight = None,
                         _ => {}
                     }
@@ -1256,8 +1440,11 @@ async fn api_session_tail(
                 if let Some(f) = &mut follower {
                     match kind {
                         keel_workspace::Kind::Opener {
-                            uuid, prompt, cwd, ..
-                        } => f.opened(uuid, prompt, cwd).await,
+                            uuid,
+                            prompt,
+                            cwd,
+                            at,
+                        } => f.opened(uuid, prompt, cwd, Some(at)).await,
                         keel_workspace::Kind::TurnEnd => f.turn_ended(),
                         keel_workspace::Kind::JobStarted { id, command } => {
                             f.job(crate::turns::Fact::JobStarted { id, command }).await
@@ -1279,6 +1466,21 @@ async fn api_session_tail(
             }
             if first {
                 first = false;
+                // A replay that ends inside a turn nobody is still writing: that turn is over,
+                // and every call in it that never answered is answered now. A busy one stays open
+                // and belongs to the follower.
+                if let Some(d) = decoder.as_mut()
+                    && d.is_open()
+                    && !matches!(
+                        keel_workspace::status(&home, &query.id),
+                        Some(keel_workspace::Status::Busy | keel_workspace::Status::Unknown)
+                    )
+                    && let Some(e) =
+                        turn_event(&d.close(keel_workspace::conversation::Ending::CaughtUp))
+                    && tx.send(Ok(e)).await.is_err()
+                {
+                    break;
+                }
                 // "Everything that already happened has been sent." Turns before this are a
                 // replay; turns after it are the session running now.
                 // The offset, not an empty string — axum writes no `data:` line at all for an
@@ -1307,13 +1509,13 @@ async fn api_session_tail(
                     // Busy, with a prompt nothing has closed: that turn is running now, and it
                     // is this follower's from here. The photograph is late — the turn may have
                     // written already — which beats no record of the turn at all.
-                    if let Some((uuid, prompt, cwd)) = inflight.take()
+                    if let Some((uuid, prompt, cwd, at)) = inflight.take()
                         && matches!(
                             keel_workspace::status(&home, &query.id),
                             Some(keel_workspace::Status::Busy | keel_workspace::Status::Unknown)
                         )
                     {
-                        f.opened(uuid, prompt, cwd).await;
+                        f.opened(uuid, prompt, cwd, Some(at)).await;
                     }
                     follower = Some(f);
                 }
@@ -1332,6 +1534,12 @@ async fn api_session_tail(
             {
                 if let Some(f) = &mut follower {
                     f.close().await;
+                }
+                if let Some(d) = decoder.as_mut()
+                    && let Some(e) =
+                        turn_event(&d.close(keel_workspace::conversation::Ending::Gone))
+                {
+                    let _ = tx.send(Ok(e)).await;
                 }
                 let _ = tx
                     .send(Ok(Event::default().event("ended").data("gone")))
@@ -1362,7 +1570,8 @@ const MAX_REPLAY: usize = 1_500;
 
 /// Watch a session's transcript and Claude Code's pid files, waking `wake` on any change.
 ///
-/// kqueue, per file: instant, and never a recursive walk. `None` when a watcher cannot be made,
+/// A watch per file (FSEvents with no latency on macOS, `ReadDirectoryChangesW` on Windows):
+/// instant, and never a recursive walk. `None` when a watcher cannot be made,
 /// in which case the poll's fallback sleep is the whole of it.
 fn watch_session(
     dir: &Utf8Path,
@@ -1385,6 +1594,26 @@ fn watch_session(
         notify::RecursiveMode::NonRecursive,
     );
     Some(watcher)
+}
+
+/// Claude Code's own colour theme, from `~/.claude.json`: what the terminal a lane runs it in
+/// has to be drawn for. Claude Code paints diffs with exact colours meant for its theme's
+/// background, so a dark-theme CLI on a light terminal was black-green slabs and invisible dim
+/// text. Absent means Claude Code's default, which is dark.
+async fn api_claude_theme() -> Json<serde_json::Value> {
+    let theme = blocking(
+        || {
+            let path = keel_workspace::home()?.join(".claude.json");
+            let raw = std::fs::read(&path).ok()?;
+            let json: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+            json["theme"].as_str().map(str::to_string)
+        },
+        None,
+    )
+    .await
+    .unwrap_or_else(|| "dark".into());
+    let dark = !theme.starts_with("light");
+    Json(serde_json::json!({ "theme": theme, "dark": dark }))
 }
 
 async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {
@@ -1537,6 +1766,8 @@ async fn api_git_commit_staged(
 #[derive(serde::Deserialize)]
 struct ShaQuery {
     sha: String,
+    /// One file of the commit rather than all of them.
+    path: Option<String>,
 }
 
 async fn api_git_commit_diff(
@@ -1544,7 +1775,7 @@ async fn api_git_commit_diff(
     Query(q): Query<ShaQuery>,
 ) -> Result<Json<Vec<crate::repo::DiffResponse>>, (axum::http::StatusCode, String)> {
     blocking(
-        move || crate::repo::git_commit_diff(&repo, &q.sha),
+        move || crate::repo::git_commit_diff(&repo, &q.sha, q.path.as_deref()),
         Err("timed out".into()),
     )
     .await
@@ -1786,7 +2017,14 @@ mod tests {
             let (file, source) = (file.as_str(), source.as_str());
             // The test module, not the first `#[cfg(test)]`: a test-only method in the middle of
             // `serve.rs` once cut the check off there, and nothing after line 460 was read.
-            let body = &source[..source.find("\n#[cfg(test)]\nmod ").unwrap_or(source.len())];
+            // `cfg(all(test, unix))` too: a test module that only runs where its stubs do is
+            // still a test module.
+            let cut = ["\n#[cfg(test)]\nmod ", "\n#[cfg(all(test, unix))]\nmod "]
+                .iter()
+                .filter_map(|m| source.find(m))
+                .min()
+                .unwrap_or(source.len());
+            let body = &source[..cut];
             for part in body.split("async fn ").skip(1) {
                 let name = part
                     .split(['(', '<', ' '])
@@ -1824,7 +2062,7 @@ mod tests {
     }
 
     use super::*;
-    use std::os::unix::process::CommandExt;
+    use crate::signals::Leads;
 
     fn temporary_checkout() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -1836,7 +2074,7 @@ mod tests {
     fn spawn_sleeper() -> std::process::Child {
         let mut command = std::process::Command::new("sleep");
         command.arg("30");
-        command.process_group(0);
+        command.lead_group();
         command.spawn().expect("could not spawn `sleep`")
     }
 
@@ -2027,6 +2265,38 @@ mod tests {
     /// finishes first commits the other's half-written files under the wrong prompt. Tearing a
     /// lane into its own window is a gesture this app offers, and it puts the two lanes in
     /// different arrays, so the Swift check cannot see the pair it exists to refuse.
+    /// Two terminal sessions on one tree: the second is refused the claim and writes anyway,
+    /// because a `claude` in a terminal cannot be stopped by a refusal. The first's checkpoint
+    /// must see it, or it commits the second's half-written files under its own prompt.
+    #[test]
+    fn a_refused_terminal_writer_stops_the_holders_commit() {
+        let state = AppState::empty();
+        let (_dir, path) = temporary_checkout();
+        let tree = path.as_path();
+        state
+            .claim_terminal("a", tree)
+            .expect("the first takes the tree");
+        assert!(state.claim_terminal("b", tree).is_err());
+        assert!(
+            !state.writer_in_other(tree, "a"),
+            "nobody else is writing yet"
+        );
+        state.contend("b", tree);
+        assert!(
+            state.writer_in_other(tree, "a"),
+            "a's commit cannot see b writing"
+        );
+        state.uncontend("b");
+        assert!(!state.writer_in_other(tree, "a"));
+        // A session that went idle without its follower closing the turn stops contending.
+        state.contend("b", tree);
+        state.release_terminal_except(&std::collections::HashSet::from(["a"]));
+        assert!(
+            !state.writer_in_other(tree, "a"),
+            "contention outlived the session's turn"
+        );
+    }
+
     #[test]
     fn one_working_tree_takes_one_writer() {
         let state = AppState::empty();
@@ -2083,6 +2353,7 @@ mod tests {
         assert!(second.claim("detached-window", checkout, true).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn checkout_aliases_share_a_lock_but_linked_worktrees_are_independent() {
         let (_dir, folder) = temporary_checkout();
@@ -2136,6 +2407,10 @@ mod tests {
                 "--nocapture",
             ])
             .env("KEEL_TEST_CLAIM_CHECKOUT", &checkout)
+            .env(
+                "KEEL_TEST_PERMISSIONS_DIR",
+                crate::permissions::permissions_dir().unwrap(),
+            )
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -2184,5 +2459,37 @@ mod tests {
             state.claim("lane-a", lane, true).is_ok(),
             "the guard did not release the lane"
         );
+    }
+
+    /// Following a session is woken by its transcript, not by the 2 s fallback: an append is on
+    /// screen at once. Pinned on the real backend, because the backend moved from kqueue to
+    /// FSEvents and a watch on a single file is exactly the case that could quietly stop firing.
+    #[tokio::test]
+    async fn appending_to_a_transcript_wakes_its_follower_at_once() {
+        let repo = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let repo = Utf8PathBuf::from_path_buf(repo.path().canonicalize().unwrap()).unwrap();
+        let home = Utf8PathBuf::from_path_buf(home.path().canonicalize().unwrap()).unwrap();
+        let project = home
+            .join("projects")
+            .join(keel_workspace::project_key(&repo));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let file = project.join("s-1.jsonl");
+        std::fs::write(&file, "{}\n").unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let _w = watch_session(&repo, &home, "s-1", tx).expect("a watcher");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        while rx.try_recv().is_ok() {}
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(b"{}\n")
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_millis(1_000), rx.recv())
+            .await
+            .expect("woken well inside the 2 s fallback");
     }
 }

@@ -8,6 +8,7 @@
 //! agent tool call that never returns is a hang, not a feature.
 
 use crate::lock::Locked;
+use crate::signals::Leads;
 use axum::Json;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
@@ -300,7 +301,7 @@ pub async fn start(
         }
     };
 
-    let mut child = Command::new("sh")
+    let mut child = Command::new(crate::path::posix_shell())
         .arg("-c")
         .arg(&command)
         .current_dir(&dir)
@@ -311,7 +312,7 @@ pub async fn start(
         // which starts the framework, which starts workers — and it is the workers that hold the
         // port. Without a group there is nothing to signal but the top of that, and Stop then
         // reports success over a server that is still listening.
-        .process_group(0)
+        .lead_group()
         .spawn()
         .map_err(|e| bad(e.to_string()))?;
 

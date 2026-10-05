@@ -16,6 +16,7 @@
 
 mod agents;
 mod config;
+pub mod conversation;
 mod plugins;
 mod sessions;
 mod skills;
@@ -81,7 +82,7 @@ impl Workspace {
     /// plugins installed is not an error, and neither is one where the layout has moved on.
     pub fn discover(repo: impl AsRef<Utf8Path>, claude_home: &Utf8Path) -> Self {
         let repo = repo.as_ref();
-        let plugins = discover_plugins(claude_home);
+        let plugins = discover_plugins(repo, claude_home);
         let mut skills = discover_skills(repo, claude_home);
         skills.extend(plugin_skills(&plugins));
         Self {
@@ -120,8 +121,17 @@ pub fn claude_home() -> Option<Utf8PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         return Some(Utf8PathBuf::from(dir));
     }
-    let home = std::env::var("HOME").ok()?;
-    Some(Utf8PathBuf::from(home).join(".claude"))
+    Some(home()?.join(".claude"))
+}
+
+/// The person's home directory: `$HOME`, or the profile directory on Windows, where a process
+/// started from the Start menu has no `HOME` at all.
+pub fn home() -> Option<Utf8PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(Utf8PathBuf::from)
+        .or_else(|| std::env::home_dir().and_then(|h| Utf8PathBuf::from_path_buf(h).ok()))
 }
 
 /// Read the `name` and `description` fields out of a Markdown file's YAML frontmatter.

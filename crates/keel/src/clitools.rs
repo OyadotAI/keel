@@ -10,6 +10,7 @@
 //! act on: `gh auth login --web` shows a one-time code to type into the browser. Swallowing that
 //! would leave someone staring at a spinner with no idea what is being asked of them.
 
+use crate::signals::Leads;
 use axum::Json;
 use axum::extract::Query;
 use axum::response::sse::{Event, Sse};
@@ -81,15 +82,31 @@ pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> 
     const COMMAND: &str = "echo '$ curl -fsSL https://claude.ai/install.sh | bash'; \
                            curl -fsSL https://claude.ai/install.sh | bash";
 
-    let mut command = Command::new("bash");
-    // A login shell, so the PATH the installer writes into is the one a terminal would read.
-    command.args(["-o", "pipefail", "-lc", COMMAND]);
+    #[cfg(not(windows))]
+    let command = {
+        let mut command = Command::new("bash");
+        // A login shell, so the PATH the installer writes into is the one a terminal would read.
+        command.args(["-o", "pipefail", "-lc", COMMAND]);
+        command
+    };
+    // Windows has its own installer script, run the way the vendor documents it.
+    #[cfg(windows)]
+    let command = {
+        let _ = COMMAND;
+        let mut command = Command::new("powershell");
+        command.args([
+            "-NoProfile",
+            "-Command",
+            "Write-Output '> irm https://claude.ai/install.ps1 | iex'; irm https://claude.ai/install.ps1 | iex",
+        ]);
+        command
+    };
     stream(command)
 }
 
 pub async fn login_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     // no-blocking: spawns a tokio process and streams it.
-    let mut command = Command::new("claude");
+    let mut command = Command::new(crate::permissions::program("claude"));
     command.args(["auth", "login"]);
     stream(command)
 }
@@ -794,7 +811,7 @@ async fn run_checked(program: &str, args: &[&str]) -> Result<String, String> {
     // Through `git::output_within`, like every other bounded process here: its own group, ended
     // on timeout, and a short grace after exit rather than the whole ceiling — a tool that forks
     // an updater and exits was read as "not installed" after eight seconds.
-    let mut command = std::process::Command::new(program);
+    let mut command = std::process::Command::new(crate::permissions::program(program));
     command.args(args);
     let name = program.to_string();
     let output = crate::serve::in_blocking(move || {
@@ -943,7 +960,7 @@ pub async fn kubernetes_select(Json(selection): Json<KubernetesSelection>) -> Ku
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod kubernetes_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
@@ -1064,7 +1081,7 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .kill_on_drop(true)
-            .process_group(0);
+            .lead_group();
         let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -1222,6 +1239,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn disconnecting_setup_reaps_a_silent_process() {
         use axum::response::IntoResponse;

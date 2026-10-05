@@ -16,6 +16,7 @@
 //! is no cron here and no retry — a job runs once, and the person can stop it.
 
 use crate::lock::Locked;
+use crate::signals::Leads;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
@@ -77,7 +78,7 @@ fn now() -> u64 {
 /// The id is short and readable because it goes into the conversation: the agent is told
 /// "monitoring as job m3", and the person sees `m3` in the panel.
 pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String, String> {
-    let mut child = Command::new("sh")
+    let mut child = Command::new(crate::path::posix_shell())
         .arg("-c")
         .arg(command)
         .current_dir(dir)
@@ -85,7 +86,7 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
         .stderr(Stdio::piped())
         // Its own group, so Stop reaches whatever the command itself started. A `gh run watch`
         // piped into `tail` is two processes, and signalling only the shell leaves the other.
-        .process_group(0)
+        .lead_group()
         .spawn()
         .map_err(|e| e.to_string())?;
 
@@ -124,6 +125,7 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     tokio::spawn(drain(id.clone(), err));
 
     let waiting = id.clone();
+    let lane_done = lane.to_string();
     tokio::spawn(async move {
         let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
         {
@@ -133,9 +135,9 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
                 r.job.exit = Some(code);
             }
         }
-        crate::events::emit("monitors.changed", None, serde_json::Value::Null);
+        changed(&lane_done);
     });
-    crate::events::emit("monitors.changed", None, serde_json::Value::Null);
+    changed(lane);
 
     Ok(id)
 }
@@ -174,14 +176,47 @@ fn prune(all: &mut Vec<Run>) {
     });
 }
 
+/// How often a job that is printing says so. The event used to go out per line, and every lane
+/// of every window answered each one by fetching every job's log: a dev server that never goes
+/// quiet was three full fetches a second per lane, forever. Once a second still moves the panel
+/// while the job does, and a trailing one lands when it goes quiet.
+const EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The jobs changed, for `lane`. Carried so a window can ignore a lane it does not hold.
+fn changed(lane: &str) {
+    crate::events::emit(
+        "monitors.changed",
+        None,
+        serde_json::json!({ "lane": lane }),
+    );
+}
+
 async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
     let Some(pipe) = pipe else { return };
     let mut lines = BufReader::new(pipe).lines();
+    let mut last: Option<tokio::time::Instant> = None;
+    // A line arrived since the last event. `next_line` is cancel-safe, so waiting on it under a
+    // deadline loses nothing.
+    let mut owed: Option<String> = None;
     // Undecodable bytes are not EOF: stopping there leaves the pipe to fill, and a full pipe
     // blocks the job mid-write. Same lesson as the agent's own stderr drain, and the same helper,
     // which is also what keeps a genuinely broken reader from becoming a busy loop.
     loop {
-        match crate::lines::next(&mut lines).await {
+        let next = match (&owed, last) {
+            (Some(lane), Some(at)) => {
+                match tokio::time::timeout_at(at + EVERY, crate::lines::next(&mut lines)).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        changed(lane);
+                        last = Some(tokio::time::Instant::now());
+                        owed = None;
+                        continue;
+                    }
+                }
+            }
+            _ => crate::lines::next(&mut lines).await,
+        };
+        match next {
             crate::lines::Next::Line(line) => {
                 let mut all = jobs().locked();
                 let Some(r) = all.iter_mut().find(|r| r.job.id == id) else {
@@ -192,13 +227,23 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
                 if len > MAX_LOG {
                     r.job.log.drain(..len - MAX_LOG);
                 }
+                let lane = r.job.lane.clone();
                 drop(all);
-                // Per line; the window coalesces. A build prints hundreds and the panel shows
-                // the last forty, so what matters is that it moves while the job does.
-                crate::events::emit("monitors.changed", None, serde_json::Value::Null);
+                if last.is_none_or(|at| at.elapsed() >= EVERY) {
+                    changed(&lane);
+                    last = Some(tokio::time::Instant::now());
+                    owed = None;
+                } else {
+                    owed = Some(lane);
+                }
             }
             crate::lines::Next::Skipped => continue,
-            crate::lines::Next::Done => return,
+            crate::lines::Next::Done => {
+                if let Some(lane) = owed {
+                    changed(&lane);
+                }
+                return;
+            }
         }
     }
 }
@@ -273,7 +318,7 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
         return Json(false);
     };
     // Safety: a pid this process spawned, negated to reach the group it leads.
-    crate::signals::group(pid, libc::SIGINT);
+    crate::signals::group(pid, crate::signals::INTERRUPT);
     Json(true)
 }
 
@@ -286,7 +331,7 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
 pub fn stop_all() {
     let all = jobs().locked();
     for r in all.iter().filter(|r| r.job.running() && r.pid != 0) {
-        crate::signals::group(r.pid, libc::SIGKILL);
+        crate::signals::group(r.pid, crate::signals::KILL);
     }
 }
 
@@ -294,12 +339,14 @@ pub fn stop_all() {
 pub async fn api_ack(Json(body): Json<IdBody>) -> Json<bool> {
     // no-blocking: the registry is memory.
     let mut all = jobs().locked();
+    // `true` to the first ack only. Two reads of the list can both see a job unreported, and an
+    // ack that said yes to both put its result into the conversation twice.
     match all.iter_mut().find(|r| r.job.id == body.id) {
-        Some(r) => {
+        Some(r) if !r.job.reported => {
             r.job.reported = true;
             Json(true)
         }
-        None => Json(false),
+        _ => Json(false),
     }
 }
 
@@ -336,8 +383,15 @@ mod tests {
     async fn a_completion_is_only_reported_once() {
         let id = start("lane-2", "true", &camino::Utf8PathBuf::from("/tmp")).expect("started");
         assert!(!list(Some("lane-2"))[0].reported);
-        let _ = api_ack(Json(IdBody { id })).await;
+        assert!(
+            api_ack(Json(IdBody { id: id.clone() })).await.0,
+            "the first ack delivers"
+        );
         assert!(list(Some("lane-2"))[0].reported);
+        assert!(
+            !api_ack(Json(IdBody { id })).await.0,
+            "a second ack does not"
+        );
     }
 
     /// A job nobody claimed is seen by whoever asks. Filed under `""` — a spawn whose hook
@@ -367,5 +421,32 @@ mod tests {
         assert_eq!(list(Some("lane-a")).len(), 1);
         assert_eq!(list(Some("lane-b")).len(), 1);
         assert!(list(Some("lane-a")).iter().all(|j| j.lane == "lane-a"));
+    }
+
+    /// A job that prints is not an event per line. Every lane of every window answered each one
+    /// by fetching every job's log, so a dev server was three full fetches a second per lane for
+    /// as long as it ran. Two hundred lines in a burst must come out as a handful of events, and
+    /// the last of them must still arrive after the job goes quiet.
+    #[tokio::test]
+    async fn a_chatty_job_is_a_handful_of_events_not_one_per_line() {
+        let mut events = crate::events::subscribe();
+        let dir = camino::Utf8PathBuf::from("/tmp");
+        start("lane-chatty", "seq 1 200; sleep 1.5", &dir).expect("started");
+        let mut ours = 0;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+        while let Ok(Ok(e)) = tokio::time::timeout_at(deadline, events.recv()).await {
+            if e.kind == "monitors.changed" && e.data["lane"] == "lane-chatty" {
+                ours += 1;
+            }
+        }
+        let job = list(Some("lane-chatty"))
+            .into_iter()
+            .next()
+            .expect("the job");
+        assert_eq!(job.log.last().map(String::as_str), Some("200"));
+        assert!(!job.running());
+        // Start, the first line, one trailing edge (stdout), finish. Allow some slack for stderr
+        // and scheduling, but nowhere near two hundred.
+        assert!((2..=8).contains(&ours), "{ours} events for 200 lines");
     }
 }

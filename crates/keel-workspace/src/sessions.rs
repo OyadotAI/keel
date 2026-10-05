@@ -288,7 +288,7 @@ pub fn opener_of(line: &str) -> Option<String> {
 
 /// A person asking, as `(uuid, prompt, timestamp)`; `None` for a tool result, a compaction
 /// summary, a meta record, or a subagent's chatter — none of which opens a turn.
-fn opener(record: &Value) -> Option<(String, String, String)> {
+pub(crate) fn opener(record: &Value) -> Option<(String, String, String)> {
     if record["type"].as_str() != Some("user")
         || record["isSidechain"].as_bool() == Some(true)
         || record["isCompactSummary"].as_bool() == Some(true)
@@ -376,8 +376,16 @@ fn followable(record: &Value) -> bool {
 /// and the answer was an empty conversation. The session was still *listed*, because the listing
 /// finds it by scanning for directories that extend the repository's key rather than by building
 /// one, so History showed 81 messages and opening it showed a blank pane.
+///
+/// Every character that is not an ASCII letter or digit, in fact — which is what Claude Code does,
+/// and what a path with a space, an underscore or a Windows drive (`C:\\Users\\mk` is
+/// `C--Users-mk`) needs. Replacing only the two that a Mac path usually has left those reading a
+/// directory that does not exist.
 pub fn project_key(cwd: &Utf8Path) -> String {
-    cwd.as_str().replace(['/', '.'], "-")
+    cwd.as_str()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// The directories whose sessions belong to this repository: itself, up to two parents (never
@@ -387,7 +395,7 @@ pub fn project_key(cwd: &Utf8Path) -> String {
 /// folder above — the monorepo, the client's folder — has their sessions there, and a Keel that
 /// only looked at the exact path listed one session where they remembered thirteen.
 pub fn session_dirs(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<(Utf8PathBuf, &'static str)> {
-    let home = std::env::var("HOME").map(Utf8PathBuf::from).ok();
+    let home = crate::home();
     let mut out = vec![(repo.to_owned(), "here")];
     let mut up = repo.parent();
     for _ in 0..2 {
@@ -487,9 +495,7 @@ fn running(claude_home: &Utf8Path) -> std::collections::HashMap<String, Option<b
         let Some((pid, id, busy)) = parsed else {
             continue;
         };
-        // SAFETY: signal 0 delivers nothing; it only asks whether the pid exists.
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
-        if alive {
+        if pid_alive(pid) {
             out.insert(id, busy);
         }
     }
@@ -685,6 +691,37 @@ impl Cache {
             map.clear();
         }
         map.insert(path.to_owned(), (stamp, session.clone()));
+    }
+}
+
+/// Whether a process with this pid is running.
+#[cfg(unix)]
+pub fn pid_alive(pid: i32) -> bool {
+    // SAFETY: signal 0 delivers nothing; it only asks whether the pid exists.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Whether a process with this pid is running. Windows has no signal 0: open it and ask whether
+/// it has an exit code yet.
+#[cfg(windows)]
+pub fn pid_alive(pid: i32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: a handle opened here is closed here, and nothing else reads it.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code) != 0;
+        CloseHandle(handle);
+        ok && code == STILL_ACTIVE as u32
     }
 }
 
@@ -1139,6 +1176,20 @@ mod tests {
             second.last_active.as_deref(),
             Some("2026-01-01T00:05:00Z"),
             "and the clock moved with it"
+        );
+    }
+
+    /// Every character that is not a letter or digit, which is Claude Code's own rule: a space,
+    /// an underscore and a Windows drive all become dashes.
+    #[test]
+    fn a_project_key_dashes_everything_but_letters_and_digits() {
+        assert_eq!(
+            project_key(Utf8Path::new("/Users/mk/My Projects/a_b")),
+            "-Users-mk-My-Projects-a-b"
+        );
+        assert_eq!(
+            project_key(Utf8Path::new("C:\\Users\\mk\\x")),
+            "C--Users-mk-x"
         );
     }
 }

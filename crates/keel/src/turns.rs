@@ -305,8 +305,14 @@ impl Record {
                 snapshot,
                 prompt,
             } => {
-                self.started = Some(started.clone());
-                self.snapshot = snapshot.clone();
+                // The first word on when a turn began is the true one. A daemon that restarts
+                // mid-turn follows the transcript again and opens the same turn a second time,
+                // and its "now" and its photograph of a tree the turn had already written are
+                // both later than the turn — the row read "running · 0s" twenty minutes in.
+                if self.started.is_none() {
+                    self.started = Some(started.clone());
+                    self.snapshot = snapshot.clone();
+                }
                 if self.prompt.is_empty() {
                     self.prompt = truncated(prompt, 200);
                 }
@@ -1365,7 +1371,15 @@ impl Follower {
 
     /// A person asked: a turn opens. Whatever was open before it is over — a prompt is the one
     /// boundary that cannot be missed.
-    pub async fn opened(&mut self, uuid: String, prompt: String, cwd: Option<String>) {
+    /// `at` is the prompt record's own timestamp: a follower that starts mid-turn is late, and
+    /// the turn began when it was asked, not when Keel noticed.
+    pub async fn opened(
+        &mut self,
+        uuid: String,
+        prompt: String,
+        cwd: Option<String>,
+        at: Option<String>,
+    ) {
         self.close_open().await;
         let checkout = self
             .state
@@ -1373,7 +1387,11 @@ impl Follower {
             .unwrap_or_else(|| self.repo.clone());
         let (claim, refused) = match self.state.claim_terminal(&self.session, &checkout) {
             Ok(token) => (Some(token), None),
-            Err(why) => (None, Some(why)),
+            Err(why) => {
+                // Refused, and writing anyway: say so to the holder's checkpoint.
+                self.state.contend(&self.session, &checkout);
+                (None, Some(why))
+            }
         };
         let begun = {
             let checkout = checkout.clone();
@@ -1389,7 +1407,9 @@ impl Follower {
         {
             let (repo, session, turn) = (self.repo.clone(), self.session.clone(), uuid.clone());
             let fact = Fact::Started {
-                started: begun.started.clone(),
+                started: at
+                    .filter(|a| !a.is_empty())
+                    .unwrap_or_else(|| begun.started.clone()),
                 snapshot: begun.snapshot.clone(),
                 prompt: truncated(&prompt, 200),
             };
@@ -1460,6 +1480,7 @@ impl Follower {
 
     async fn close_open(&mut self) {
         let Some(open) = self.open.take() else { return };
+        self.state.uncontend(&self.session);
         let (home, session) = (self.home.clone(), self.session.clone());
         finish(
             &self.state,
@@ -1942,8 +1963,13 @@ mod tests {
     async fn a_followed_turn_gets_its_files_from_git() {
         let (repo, home, state) = followed("s-files", "busy");
         let mut f = Follower::new(state, repo.clone(), home.clone(), "s-files".into());
-        f.opened("u-1".into(), "write a file".into(), Some(repo.to_string()))
-            .await;
+        f.opened(
+            "u-1".into(),
+            "write a file".into(),
+            Some(repo.to_string()),
+            None,
+        )
+        .await;
         std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
         f.turn_ended();
         set_status(&home, "s-files", "idle");
@@ -1966,7 +1992,7 @@ mod tests {
     async fn a_followed_turn_that_committed_its_own_work_reports_the_files() {
         let (repo, home, state) = followed("s-self", "busy");
         let mut f = Follower::new(state, repo.clone(), home.clone(), "s-self".into());
-        f.opened("u-1".into(), "commit something".into(), None)
+        f.opened("u-1".into(), "commit something".into(), None, None)
             .await;
         std::fs::write(repo.join("made.txt"), "by the agent\n").unwrap();
         for args in [
@@ -2006,7 +2032,7 @@ mod tests {
     async fn a_followed_turn_is_committed_only_at_an_idle_boundary() {
         let (repo, home, state) = followed("s-idle", "busy");
         let mut f = Follower::new(state, repo.clone(), home.clone(), "s-idle".into());
-        f.opened("u-1".into(), "work".into(), None).await;
+        f.opened("u-1".into(), "work".into(), None, None).await;
         std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
         f.quiet();
         f.tick().await;
@@ -2024,7 +2050,7 @@ mod tests {
     async fn a_turn_that_goes_busy_again_commits_nothing() {
         let (repo, home, state) = followed("s-busy", "idle");
         let mut f = Follower::new(state, repo.clone(), home.clone(), "s-busy".into());
-        f.opened("u-1".into(), "work".into(), None).await;
+        f.opened("u-1".into(), "work".into(), None, None).await;
         std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
         f.turn_ended();
         f.quiet();
@@ -2044,7 +2070,7 @@ mod tests {
     async fn a_terminal_writer_refuses_a_keel_lane_on_the_same_tree() {
         let (repo, home, state) = followed("s-nn11", "busy");
         let mut f = Follower::new(state.clone(), repo.clone(), home.clone(), "s-nn11".into());
-        f.opened("u-1".into(), "work".into(), None).await;
+        f.opened("u-1".into(), "work".into(), None, None).await;
         assert!(
             state.claim("lane-a", &repo, true).is_err(),
             "the terminal holds the tree"
@@ -2068,7 +2094,7 @@ mod tests {
         let (repo, home, state) = followed("s-beside", "idle");
         let token = state.claim("lane-a", &repo, true).unwrap();
         let mut f = Follower::new(state.clone(), repo.clone(), home.clone(), "s-beside".into());
-        f.opened("u-1".into(), "work".into(), None).await;
+        f.opened("u-1".into(), "work".into(), None, None).await;
         std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
         f.turn_ended();
         f.quiet();

@@ -113,10 +113,10 @@ pub fn output(command: Command) -> std::io::Result<Output> {
 
 /// The same, with the ceiling named — so a test can assert the timeout without sitting through it.
 pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result<Output> {
-    use std::os::unix::process::CommandExt;
+    use crate::signals::Leads;
     // Its own group, so a timeout ends everything it started (`crate::signals`): a `claude` or a
     // credential helper that forks and hangs left its children reparented to init.
-    command.process_group(0);
+    command.lead_group();
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -294,6 +294,7 @@ mod tests {
 
     /// Keel reads git every two seconds; a read that refreshed the index took `index.lock` from
     /// the person's own `git add` and fired `post-index-change`.
+    #[cfg(unix)]
     #[test]
     fn a_read_writes_nothing_and_runs_no_hook() {
         let dir = tempfile::tempdir().unwrap();
@@ -349,6 +350,7 @@ mod tests {
 
     /// A timeout ends the whole tree: a command that forked and hung left its child reparented
     /// to init with its pipes held open.
+    #[cfg(unix)]
     #[test]
     fn a_timeout_ends_what_the_command_started() {
         let dir = tempfile::tempdir().unwrap();

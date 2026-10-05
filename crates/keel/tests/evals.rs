@@ -23,6 +23,8 @@
 //! | 9 | Codex runs and streams |
 //! | 10 | A slash command is Claude Code's to resolve, and costs nothing |
 
+#![cfg(unix)]
+
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
