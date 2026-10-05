@@ -567,25 +567,27 @@ fn in_git_dir(
 
 /// One recursive watch of `root`. `None` where the platform has no watcher that is one handle
 /// for a whole tree.
+#[cfg(any(target_os = "macos", windows))]
 fn tree_watcher(
     root: &camino::Utf8Path,
     handler: impl notify::EventHandler,
 ) -> Option<Box<dyn notify::Watcher + Send>> {
     use notify::Watcher;
-    #[cfg(any(target_os = "macos", windows))]
     let mut w: Box<dyn Watcher + Send> =
         Box::new(notify::RecommendedWatcher::new(handler, notify::Config::default()).ok()?);
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        let _ = handler;
-        return None;
-    }
-    #[cfg(any(target_os = "macos", windows))]
-    {
-        w.watch(root.as_std_path(), notify::RecursiveMode::Recursive)
-            .ok()?;
-        Some(w)
-    }
+    w.watch(root.as_std_path(), notify::RecursiveMode::Recursive)
+        .ok()?;
+    Some(w)
+}
+
+/// Elsewhere — Linux's inotify watches one directory per handle — there is none, and the poll is
+/// what notices a change.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn tree_watcher(
+    _root: &camino::Utf8Path,
+    _handler: impl notify::EventHandler,
+) -> Option<Box<dyn notify::Watcher + Send>> {
+    None
 }
 
 trait LockedInsert {

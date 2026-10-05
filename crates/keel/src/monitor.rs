@@ -394,6 +394,7 @@ mod tests {
     // No `clear()` here on purpose: the registry is global and the test binary is threaded, so
     // wiping it is how one test deletes another's job. Every test uses lanes of its own instead.
 
+    #[cfg(unix)]
     fn pids_in(id: &str) -> Vec<i32> {
         let all = jobs().locked();
         all.iter()
@@ -408,10 +409,12 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[cfg(unix)]
     fn alive(pid: i32) -> bool {
         unsafe { libc::kill(pid, 0) == 0 }
     }
 
+    #[cfg(unix)]
     async fn settle(pids: &[i32]) -> bool {
         for _ in 0..100 {
             if pids.iter().all(|p| !alive(*p)) {
