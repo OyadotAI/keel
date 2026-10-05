@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "keel"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "keel-generator"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "keel-harness"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "keel-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "keel-providers"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "keel-scanner"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "keel-workspace"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "camino",
