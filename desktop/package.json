@@ -9,7 +9,8 @@
     "test": "vitest run",
     "budget": "node scripts/budget.mjs",
     "tauri": "tauri",
-    "lint": "eslint . --max-warnings 12"
+    "lint": "eslint . --max-warnings 12",
+    "picker-check": "node scripts/picker/check.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -136,7 +136,7 @@ fn system_prompt(repo: &Utf8Path) -> String {
     // research detour every time.
     if let Some(dev) = crate::dev::detect(repo) {
         out.push_str(&format!(
-            "- `{}` starts this project's dev server{}. Keel starts it from the Designer tab and \
+            "- `{}` starts this project's dev server{}. Keel starts it from the Preview tab and \
              points the preview at whatever URL it announces, so there is nothing to work out.\n",
             dev.command,
             if dev.dir.is_empty() {

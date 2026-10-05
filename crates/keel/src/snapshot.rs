@@ -159,7 +159,22 @@ pub async fn put_back(
     let lane = format!("rewind:{repo}");
     let token = state
         .claim(&lane, &repo, true)
-        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+        // The claim's own refusals are written for a turn ("this turn has not started"), and a
+        // rewind is not one: said for what it is.
+        .map_err(|e| {
+            let why = if e.contains("already has a turn running") {
+                "A rewind is already running in this working tree.".to_string()
+            } else if e.contains("terminal") {
+                "A session running in a terminal is editing this working tree. Rewind once it is \
+                 idle, so it is not undone underneath it."
+                    .to_string()
+            } else {
+                "An agent is editing this working tree. Rewind once it is done, so it is not \
+                 undone underneath it."
+                    .to_string()
+            };
+            (axum::http::StatusCode::CONFLICT, why)
+        })?;
     let _held = crate::serve::Held::new(state.clone(), lane, token);
     tokio::task::spawn_blocking(move || restore(&repo, &body.tree))
         .await

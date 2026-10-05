@@ -40,8 +40,8 @@ pub fn is_root(dir: &Utf8Path) -> bool {
     // Canonicalised on both sides: `/tmp` is a symlink to `/private/tmp` on macOS, and comparing
     // the raw strings would call every repository under it "not the top".
     match (
-        std::fs::canonicalize(top).ok(),
-        std::fs::canonicalize(dir.as_std_path()).ok(),
+        keel_workspace::real_std(std::path::Path::new(&top)).ok(),
+        keel_workspace::real_std(dir.as_std_path()).ok(),
     ) {
         (Some(a), Some(b)) => a == b,
         _ => false,

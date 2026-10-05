@@ -7,6 +7,7 @@ use axum::{
 };
 use camino::Utf8PathBuf;
 use keel_providers::{cloudflare, credentials, github};
+use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -177,7 +178,7 @@ pub async fn open_repo(
     crate::serve::in_blocking(move || {
         let path = Utf8PathBuf::from(shellexpand(&body.path));
         let path = path
-            .canonicalize_utf8()
+            .real()
             .map_err(|_| bad(format!("no such directory: {path}")))?;
         if !path.is_dir() {
             return Err(bad("that path is not a directory"));
@@ -237,7 +238,7 @@ pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
             .ok_or(std::env::VarError::NotPresent)
             .map_err(|_| bad("no home directory"))?;
         let home = Utf8PathBuf::from(home)
-            .canonicalize_utf8()
+            .real()
             .map_err(|_| bad("home directory is unreadable"))?;
 
         let requested = q
@@ -248,7 +249,7 @@ pub async fn browse(Query(q): Query<BrowseQuery>) -> ApiResult<Listing> {
             .unwrap_or_else(|| home.clone());
 
         let path = requested
-            .canonicalize_utf8()
+            .real()
             .map_err(|_| bad(format!("no such directory: {requested}")))?;
         if !path.starts_with(&home) {
             return Err(bad("Keel browses inside your home directory only."));
@@ -307,13 +308,13 @@ pub async fn browse_files(
     crate::serve::in_blocking(move || {
         let requested = q.path.unwrap_or_default();
         let dir = Utf8PathBuf::from(shellexpand(&requested))
-            .canonicalize_utf8()
+            .real()
             .map_err(|_| bad("no such directory"))?;
 
         let repo = state.repo();
-        let mut allowed: Vec<Utf8PathBuf> = repo.canonicalize_utf8().into_iter().collect();
+        let mut allowed: Vec<Utf8PathBuf> = repo.real().into_iter().collect();
         if let Some(home) = keel_workspace::claude_home()
-            && let Ok(c) = home.canonicalize_utf8()
+            && let Ok(c) = home.real()
         {
             allowed.push(c);
         }

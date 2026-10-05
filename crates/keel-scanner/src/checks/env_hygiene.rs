@@ -36,7 +36,17 @@ impl Check for SharedBindings {
             // Not every repository is a Cloudflare service. Telling a Rust CLI or a docs site that
             // it is missing a Wrangler config is noise, and noise is how a report loses its
             // audience. Only judge repos that could plausibly deploy as a Worker.
-            if !ctx.has("package.json") {
+            // And among those, only the ones already pointed at Cloudflare. A plain Node service
+            // with no Wrangler anywhere was told it was missing a Wrangler config, which is the
+            // one thing this product promises not to do: a repository with no Cloudflare config
+            // is never asked about one.
+            let Some(manifest) = ctx.read("package.json") else {
+                return Vec::new();
+            };
+            if !["\"wrangler\"", "@cloudflare/", "@opennextjs/cloudflare"]
+                .iter()
+                .any(|s| manifest.contains(s))
+            {
                 return Vec::new();
             }
             // A repository that already runs somewhere — an image, a cluster, a platform —
@@ -246,7 +256,7 @@ mod tests {
     #[test]
     fn ignores_example_templates() {
         let (_dir, ctx) = fixture(&[
-            ("package.json", "{}"),
+            ("package.json", r#"{"devDependencies":{"wrangler":"^4"}}"#),
             ("apps/api/wrangler.jsonc.example", SHARED),
         ]);
         let findings = SharedBindings.run(&ctx);
@@ -266,10 +276,17 @@ mod tests {
     }
 
     #[test]
-    fn a_node_project_without_wrangler_config_is_flagged() {
-        let (_dir, ctx) = fixture(&[("package.json", "{}")]);
+    fn a_cloudflare_project_without_wrangler_config_is_flagged() {
+        let (_dir, ctx) = fixture(&[("package.json", r#"{"devDependencies":{"wrangler":"^4"}}"#)]);
         let findings = SharedBindings.run(&ctx);
         assert_eq!(findings[0].id, "env/no-wrangler-config");
+    }
+
+    /// "A repository with no Cloudflare config is never asked about one."
+    #[test]
+    fn a_plain_node_project_is_not_asked_about_wrangler() {
+        let (_dir, ctx) = fixture(&[("package.json", r#"{"scripts":{"dev":"next dev"}}"#)]);
+        assert!(SharedBindings.run(&ctx).is_empty());
     }
 
     #[test]

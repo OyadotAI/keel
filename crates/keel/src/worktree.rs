@@ -55,7 +55,14 @@ fn remember_base(root: &Utf8Path, name: &str, base: &str) {
     // `HEAD` is where the project was standing, which is a position, not a branch. Resolve it to
     // the name now — by the time the lane is finished the project has usually moved.
     let branch = if base == "HEAD" {
-        git(root, &["branch", "--show-current"]).unwrap_or_default()
+        // On a detached HEAD there is no branch to name, and recording nothing made `base_of`
+        // fall back to whatever branch was checked out at finish — which merged the lane, and
+        // main's history under it, into an unrelated release branch. The commit is recorded
+        // instead, and `finish` refuses it as "not a branch" rather than guessing.
+        match git(root, &["branch", "--show-current"]).unwrap_or_default() {
+            b if b.is_empty() => git(root, &["rev-parse", "HEAD"]).unwrap_or_default(),
+            b => b,
+        }
     } else {
         base.to_string()
     };
@@ -75,6 +82,43 @@ pub fn base_of(root: &Utf8Path, name: &str) -> String {
 }
 
 use crate::git::trimmed as git;
+
+/// Whether `name` is a local branch.
+fn is_branch(root: &Utf8Path, name: &str) -> bool {
+    git(
+        root,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{name}"),
+        ],
+    )
+    .is_ok()
+}
+
+/// Why a lane's recorded base cannot be finished into, when it cannot: a commit (cut on a
+/// detached HEAD), or a branch that has since been renamed or deleted.
+fn unfinishable(root: &Utf8Path, name: &str, base: &str) -> Option<String> {
+    if base.is_empty() || is_branch(root, base) {
+        return None;
+    }
+    let branch = branch_of(name);
+    Some(
+        if base.len() == 40 && base.chars().all(|c| c.is_ascii_hexdigit()) {
+            format!(
+                "This feature was started on a detached HEAD (commit {}), not on a branch, so there is \
+             no branch to finish it into. Merge {branch} by hand where you want it.",
+                &base[..7]
+            )
+        } else {
+            format!(
+                "The branch this feature came from, “{base}”, no longer exists — renamed or deleted. \
+             Merge {branch} by hand, or recreate “{base}” and finish it there."
+            )
+        },
+    )
+}
 
 #[derive(Serialize, Clone)]
 pub struct Worktree {
@@ -101,11 +145,19 @@ pub fn create_from(root: &Utf8Path, name: &str, from: Option<&str>) -> Result<Wo
         .filter(|f| !f.is_empty())
         .unwrap_or("HEAD");
     if base != "HEAD"
-        && !base
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c))
+        && (base.starts_with('-')
+            || !base
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c)))
     {
         return Err(format!("{base} is not a branch name"));
+    }
+    // A local branch, because that is what `finish` merges into: a remote-tracking ref or a bare
+    // commit made a lane that could never be finished.
+    if base != "HEAD" && !is_branch(root, base) {
+        return Err(format!(
+            "There is no local branch called “{base}” to start from."
+        ));
     }
     create_at(root, name, base)
 }
@@ -121,6 +173,15 @@ fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String
     let path = path_of(root, name)?;
     if path.exists() {
         return Err(format!("lane {name} already exists"));
+    }
+    // A branch left by a lane whose checkout was deleted outside Keel: said in words, with the
+    // way out, rather than as git's `fatal: a branch named … already exists`.
+    if is_branch(root, &branch_of(name)) {
+        return Err(format!(
+            "A branch {} is left from an earlier lane whose checkout is gone. Discard that lane \
+             first, or pick another name.",
+            branch_of(name)
+        ));
     }
     // The two causes read identically to git (`fatal: Needed a single revision`) and could not be
     // told apart in the message, so a folder that was never a repository was told it had no
@@ -342,17 +403,44 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
 /// The person's commit (the button, a lane's finish): refuses only unresolved conflicts — a
 /// merge whose conflicts are resolved is finished by exactly this commit.
 pub fn commit_all(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
-    commit_every(checkout, message, false)
+    commit_every(checkout, message, false, None)
 }
 
 /// Keel's checkpoint after a turn: also refuses while a merge, rebase, cherry-pick, revert or
 /// `am` is under way, because finishing the person's operation under a turn's prompt is not
 /// Keel's to do.
+///
+/// Over the whole tree, so tests only now: a turn commits its own files, through
+/// `checkpoint_only`. Kept because the refusals above are the automatic commit's either way, and
+/// these are the tests that pin them.
+#[cfg(test)]
 pub fn checkpoint(checkout: &Utf8Path, message: &str) -> Result<bool, String> {
-    commit_every(checkout, message, true)
+    commit_every(checkout, message, true, None)
 }
 
-fn commit_every(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<bool, String> {
+/// Keel's checkpoint of one turn's own files and nothing else.
+///
+/// `add -A -- .` took the person's own uncommitted work into the turn's commit, under the
+/// agent's prompt: their half-written `a.txt` and their `notes-mine.txt` were committed as "hi"
+/// beside the one file the agent wrote. The turn knows what it changed — its files, against the
+/// fingerprint taken when it began — and that is all its checkpoint holds.
+pub fn checkpoint_only(
+    checkout: &Utf8Path,
+    message: &str,
+    paths: &[String],
+) -> Result<bool, String> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    commit_every(checkout, message, true, Some(paths))
+}
+
+fn commit_every(
+    checkout: &Utf8Path,
+    message: &str,
+    automatic: bool,
+    only: Option<&[String]>,
+) -> Result<bool, String> {
     let found = crate::gitroots::find(checkout);
     // Said in words, with the thing that fixes it, rather than passing git's own
     // "fatal: not a git repository (or any of the parent directories): .git" to somebody who
@@ -371,7 +459,27 @@ fn commit_every(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<b
         let mut committed = Vec::new();
         let mut failures = Vec::new();
         for root in &found {
-            match commit_one(&checkout.join(&root.dir), message, automatic) {
+            // Each repository commits the turn's paths that are inside it, relative to itself.
+            let mine: Option<Vec<String>> = only.map(|paths| {
+                let prefix = if root.dir.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}/", root.dir)
+                };
+                paths
+                    .iter()
+                    .filter_map(|p| p.strip_prefix(&prefix).map(str::to_string))
+                    .collect()
+            });
+            if mine.as_ref().is_some_and(Vec::is_empty) {
+                continue;
+            }
+            match commit_one(
+                &checkout.join(&root.dir),
+                message,
+                automatic,
+                mine.as_deref(),
+            ) {
                 Ok(true) => committed.push(root.dir.as_str()),
                 Ok(false) => {}
                 // One repository refusing must not lose the commit in the other.
@@ -388,10 +496,15 @@ fn commit_every(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<b
         }
         return Ok(!committed.is_empty());
     }
-    commit_one(checkout, message, automatic)
+    commit_one(checkout, message, automatic, only)
 }
 
-fn commit_one(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<bool, String> {
+fn commit_one(
+    checkout: &Utf8Path,
+    message: &str,
+    automatic: bool,
+    only: Option<&[String]>,
+) -> Result<bool, String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("a commit needs a message".into());
@@ -421,7 +534,37 @@ fn commit_one(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<boo
     });
     // `AUTOMATIC` on the `add` too: `post-index-change` is a hook, and `add` is what fires it.
     let mut add = crate::git::AUTOMATIC.to_vec();
-    add.extend_from_slice(&["add", "-A", "--", "."]);
+    // The paths, when given, travel in a file: a turn that rewrote a thousand files is a command
+    // line no shell takes.
+    let mut wanted: Option<std::collections::HashSet<String>> = None;
+    let listed = match only {
+        Some(paths) => {
+            let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+            // The quarantine is excluded here rather than as `:(exclude)` pathspecs, which git
+            // refuses beside `--pathspec-from-file`.
+            let quarantined = |p: &str| {
+                keel_harness::trust::UNTRUSTED
+                    .iter()
+                    .chain(&[".keel/quarantine"])
+                    .any(|q| p == *q || p.starts_with(&format!("{q}/")))
+            };
+            let keep: Vec<&String> = paths.iter().filter(|p| !quarantined(p)).collect();
+            wanted = Some(keep.iter().map(|p| p.to_string()).collect());
+            for p in keep {
+                std::io::Write::write_all(&mut file, p.as_bytes()).map_err(|e| e.to_string())?;
+                std::io::Write::write_all(&mut file, b"\0").map_err(|e| e.to_string())?;
+            }
+            Some(file)
+        }
+        None => None,
+    };
+    let from_file = listed
+        .as_ref()
+        .map(|f| format!("--pathspec-from-file={}", f.path().display()));
+    match &from_file {
+        Some(spec) => add.extend_from_slice(&["add", "-A", spec.as_str(), "--pathspec-file-nul"]),
+        None => add.extend_from_slice(&["add", "-A", "--", "."]),
+    }
     // What Keel quarantined is Keel's doing, not the turn's or the person's: committing it
     // deleted the repository's shared config on the branch under somebody's prompt.
     let excluded: Vec<String> = keel_harness::trust::UNTRUSTED
@@ -429,20 +572,38 @@ fn commit_one(checkout: &Utf8Path, message: &str, automatic: bool) -> Result<boo
         .chain(&[".keel/quarantine"])
         .map(|p| format!(":(exclude){p}"))
         .collect();
-    add.extend(excluded.iter().map(String::as_str));
+    if from_file.is_none() {
+        add.extend(excluded.iter().map(String::as_str));
+    }
     git(checkout, &add)?;
-    if git(checkout, &["diff", "--cached", "--name-only"])?
-        .trim()
-        .is_empty()
-    {
+    // Anything to commit — of the turn's paths, when it has them; the person may have staged
+    // things of their own, which do not count and are not committed.
+    let staged = git(checkout, &["diff", "--cached", "--name-only"])?;
+    let any = staged
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .any(|l| wanted.as_ref().is_none_or(|w| w.contains(l)));
+    if !any {
         return Ok(false);
     }
-    // `crate::git::AUTOMATIC` and `--no-verify`: this is Keel's checkpoint, not the person's
-    // commit. See the note on `AUTOMATIC` for why running the repository's own `pre-commit` hook
-    // after every turn is both slow and a thing nobody asked for. `git_commit_staged`, which is
-    // the button, keeps its hooks.
-    let mut args = crate::git::AUTOMATIC.to_vec();
-    args.extend_from_slice(&["commit", "-q", "--no-verify", "-m", message]);
+    // `crate::git::AUTOMATIC` and `--no-verify` for Keel's checkpoint only: see the note on
+    // `AUTOMATIC` for why running the repository's own `pre-commit` hook after every turn is both
+    // slow and a thing nobody asked for. A commit the person asked for — the Git panel's "Commit
+    // all" comes through here too — is theirs, and keeps their hooks; it once skipped them as well.
+    let mut args = if automatic {
+        crate::git::AUTOMATIC.to_vec()
+    } else {
+        Vec::new()
+    };
+    args.extend_from_slice(&["commit", "-q"]);
+    if automatic {
+        args.push("--no-verify");
+    }
+    args.extend_from_slice(&["-m", message]);
+    // With paths, `commit` takes those paths only — what the person staged themselves stays out.
+    if let Some(spec) = &from_file {
+        args.extend_from_slice(&[spec.as_str(), "--pathspec-file-nul"]);
+    }
     git(checkout, &args).map(|_| true).inspect_err(|_| {
         if let (Some(index), Some(saved)) = (&index, saved) {
             // Renamed over it: the index is replaced whole, never half-written.
@@ -468,6 +629,9 @@ pub fn finish(root: &Utf8Path, name: &str, message: &str) -> Result<(), String> 
     // person's working tree under them is exactly the surprise this file exists to avoid — so
     // this refuses and names the branch instead.
     let base = base_of(root, name);
+    if let Some(why) = unfinishable(root, name, &base) {
+        return Err(why);
+    }
     let here = git(root, &["branch", "--show-current"]).unwrap_or_default();
     if !base.is_empty() && base != here {
         let where_now = if here.is_empty() {
@@ -476,7 +640,8 @@ pub fn finish(root: &Utf8Path, name: &str, message: &str) -> Result<(), String> 
             format!("“{here}”")
         };
         return Err(format!(
-            "This feature was branched from “{base}”, and the project is on {where_now}.              Switch to “{base}” and finish it there, so the work lands where it came from."
+            "This feature was branched from “{base}”, and the project is on {where_now}. \
+             Switch to “{base}” and finish it there, so the work lands where it came from."
         ));
     }
     if !git(root, &["status", "--porcelain"])?.is_empty() {
@@ -491,7 +656,9 @@ pub fn finish(root: &Utf8Path, name: &str, message: &str) -> Result<(), String> 
     if let Err(why) = git(root, &["merge", "--no-ff", "-q", "-m", message, &branch]) {
         let _ = git(root, &["merge", "--abort"]);
         return Err(format!(
-            "Could not merge {branch}: {why}. The lane is untouched; resolve it in a terminal."
+            "Could not merge {branch}: {}. Nothing was merged — the lane's changes are \
+             committed on {branch}, and the project is as it was. Resolve it in a terminal.",
+            why.trim_end_matches('.')
         ));
     }
     remove(root, name)
@@ -501,7 +668,13 @@ pub fn finish(root: &Utf8Path, name: &str, message: &str) -> Result<(), String> 
 pub fn unmerged(root: &Utf8Path, name: &str) -> Result<u32, String> {
     let base = base_of(root, name);
     let branch = branch_of(name);
-    git(root, &["rev-list", "--count", &format!("{base}..{branch}")])?
+    git(root, &["rev-list", "--count", &format!("{base}..{branch}")])
+        .map_err(|_| {
+            format!(
+                "Could not count what discarding {branch} would lose: the branch it came from, \
+                 “{base}”, is not there any more. Discard it anyway only if you are sure."
+            )
+        })?
         .parse()
         .map_err(|e| format!("Could not count unmerged commits for {branch}: {e}"))
 }
@@ -512,7 +685,7 @@ pub fn unmerged(root: &Utf8Path, name: &str) -> Result<u32, String> {
 pub fn discard(root: &Utf8Path, name: &str, force: bool) -> Result<(), String> {
     let path = path_of(root, name)?;
     if !path.exists() {
-        return Err(format!("no lane {name}"));
+        return discard_without_checkout(root, name, force);
     }
     // A missing base or a failed Git command is not evidence that the lane has no work. Only
     // an explicit forced discard may proceed without a reliable count.
@@ -521,7 +694,9 @@ pub fn discard(root: &Utf8Path, name: &str, force: bool) -> Result<(), String> {
     // removable at all, so a lane where the agent had written twenty files and committed none
     // reported nothing to lose and lost all of it — while this module's own header promised that
     // a discard says what it would lose before it loses it.
-    let uncommitted = git(&path, &["status", "--porcelain"])?
+    // `-uall`: an untracked folder is one line otherwise, and 5,000 new files under `src/` were
+    // reported as "1 uncommitted file" right before all of them were deleted.
+    let uncommitted = git(&path, &["status", "--porcelain", "-uall"])?
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count();
@@ -572,6 +747,37 @@ pub fn discard(root: &Utf8Path, name: &str, force: bool) -> Result<(), String> {
 
 /// Remove a merged lane. `-d`, never `-D`: a branch git will not delete safely is one whose
 /// commits would vanish, and that is the data-loss bug every other tool has shipped.
+/// A lane whose checkout was deleted outside Keel: its branch is all that is left, and it has to
+/// be removable, or `worktree add` refuses that name for good and nothing in the app can clear it.
+/// The same promise as a discard with a checkout — the unmerged commits are counted and said
+/// before anything is deleted.
+fn discard_without_checkout(root: &Utf8Path, name: &str, force: bool) -> Result<(), String> {
+    let branch = branch_of(name);
+    if git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_err()
+    {
+        return Err(format!("no lane {name}"));
+    }
+    let _ = git(root, &["worktree", "prune"]);
+    let lost = if force { 0 } else { unmerged(root, name)? };
+    if lost > 0 && !force {
+        return Err(format!(
+            "This feature's checkout is gone, and its branch has {lost} unmerged commit{}, which \
+             would be lost.",
+            if lost == 1 { "" } else { "s" }
+        ));
+    }
+    git(root, &["branch", "-D", &branch]).map(|_| ())
+}
+
 fn remove(root: &Utf8Path, name: &str) -> Result<(), String> {
     let path = path_of(root, name)?;
     git(root, &["worktree", "remove", "--force", path.as_str()])?;
@@ -653,6 +859,14 @@ pub async fn api_finish(
     Json(body): Json<FinishBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
     let root = state.repo();
+    // The lane's checkout is committed and the project is merged into: neither while an agent is
+    // writing either. Finish committed a half-written file mid-turn as "Finish …".
+    if let Ok(lane) = path_of(&root, &body.name)
+        && lane.exists()
+    {
+        crate::serve::not_mid_turn(&state, &lane)?;
+    }
+    crate::serve::not_mid_turn(&state, &root)?;
     off_thread(move || finish(&root, &body.name, &body.message))
         .await
         .map(|()| Json(true))
@@ -663,6 +877,12 @@ pub async fn api_discard(
     Json(body): Json<DiscardBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
     let root = state.repo();
+    // Not the checkout an agent is writing: a forced discard deleted it under the running agent.
+    if let Ok(lane) = path_of(&root, &body.name)
+        && lane.exists()
+    {
+        crate::serve::not_mid_turn(&state, &lane)?;
+    }
     off_thread(move || discard(&root, &body.name, body.force))
         .await
         .map(|()| Json(true))
@@ -674,7 +894,7 @@ pub async fn api_commit(
     crate::serve::Checkout(checkout): crate::serve::Checkout,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
-    let _ = &state;
+    crate::serve::not_mid_turn(&state, &checkout)?;
     off_thread(move || commit_all(&checkout, &body.message))
         .await
         .map(Json)
@@ -1210,6 +1430,108 @@ link
         assert!(git(&root, &["rev-parse", "--verify", "keel/feature"]).is_err());
     }
 
+    /// A turn's checkpoint holds the turn's files. It held the person's too: their unsaved
+    /// edit and their own new file were committed under the agent's prompt.
+    #[test]
+    fn a_checkpoint_commits_the_turns_files_and_not_the_persons() {
+        let (_d, root) = repo();
+        std::fs::write(root.join("a.txt"), "one\nmine, unfinished\n").unwrap();
+        std::fs::write(root.join("notes-mine.txt"), "notes\n").unwrap();
+        std::fs::write(root.join("staged-mine.txt"), "staged\n").unwrap();
+        git(&root, &["add", "staged-mine.txt"]).unwrap();
+        std::fs::write(root.join("agent.txt"), "the turn wrote this\n").unwrap();
+
+        assert!(checkpoint_only(&root, "the turn", &["agent.txt".into()]).unwrap());
+        let shown = git(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
+        assert_eq!(
+            shown.trim(),
+            "agent.txt",
+            "the commit took more than the turn's file"
+        );
+        let status = git(&root, &["status", "--porcelain"]).unwrap();
+        assert!(
+            status.contains("a.txt") && status.contains("notes-mine.txt"),
+            "{status}"
+        );
+        assert!(
+            status.contains("A  staged-mine.txt"),
+            "the person's staging was disturbed: {status}"
+        );
+    }
+
+    /// A lane cut on a detached HEAD has no branch to go back to. Finishing it merged it into
+    /// whatever was checked out by then; it refuses and says why now.
+    #[test]
+    fn a_lane_from_a_detached_head_is_not_finished_into_another_branch() {
+        let (_d, root) = repo();
+        git(&root, &["checkout", "-q", "--detach"]).unwrap();
+        let wt = create(&root, "det").unwrap();
+        std::fs::write(Utf8PathBuf::from(&wt.path).join("x.txt"), "x\n").unwrap();
+        git(&root, &["checkout", "-q", "-b", "release"]).unwrap();
+        let err = finish(&root, "det", "Finish det").unwrap_err();
+        assert!(err.contains("detached HEAD"), "{err}");
+        assert_ne!(
+            git(&root, &["log", "--format=%s", "-1"]).unwrap(),
+            "Finish det",
+            "it merged anyway"
+        );
+    }
+
+    /// A base renamed after the lane was cut: named, not merged somewhere else, not raw git.
+    #[test]
+    fn a_lane_whose_base_was_renamed_says_so() {
+        let (_d, root) = repo();
+        git(&root, &["branch", "release"]).unwrap();
+        create_from(&root, "rel", Some("release")).unwrap();
+        git(&root, &["branch", "-m", "release", "release-2026"]).unwrap();
+        let err = finish(&root, "rel", "Finish").unwrap_err();
+        assert!(err.contains("no longer exists"), "{err}");
+        let err = discard(&root, "rel", false).unwrap_err();
+        assert!(!err.contains("fatal"), "{err}");
+    }
+
+    /// Only a local branch can be finished into, so only a local branch can be started from.
+    #[test]
+    fn a_lane_starts_from_a_local_branch_or_not_at_all() {
+        let (_d, root) = repo();
+        assert!(create_from(&root, "a", Some("--force")).is_err());
+        assert!(create_from(&root, "b", Some("origin/release")).is_err());
+        let head = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        assert!(create_from(&root, "c", Some(&head)).is_err());
+    }
+
+    /// 5,000 new files in one folder were "1 uncommitted file" right before they were deleted.
+    #[test]
+    fn a_discard_counts_every_new_file() {
+        let (_d, root) = repo();
+        let wt = create(&root, "many").unwrap();
+        let src = Utf8PathBuf::from(&wt.path).join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        for i in 0..20 {
+            std::fs::write(src.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let err = discard(&root, "many", false).unwrap_err();
+        assert!(err.contains("20 uncommitted files"), "{err}");
+    }
+
+    /// A checkout deleted outside Keel left a branch nothing could remove, and `worktree add`
+    /// then refused that name for good. It can be discarded now, with the same count first.
+    #[test]
+    fn a_lane_whose_checkout_was_deleted_can_still_be_discarded() {
+        let (_d, root) = repo();
+        let wt = create(&root, "gone").unwrap();
+        let path = Utf8PathBuf::from(&wt.path);
+        std::fs::write(path.join("a.txt"), "two\n").unwrap();
+        commit_all(&path, "work").unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+
+        let err = discard(&root, "gone", false).unwrap_err();
+        assert!(err.contains("1 unmerged commit"), "{err}");
+        discard(&root, "gone", true).unwrap();
+        assert!(git(&root, &["rev-parse", "--verify", "keel/gone"]).is_err());
+        create(&root, "gone").expect("the name is free again");
+    }
+
     #[test]
     fn discard_refuses_when_the_base_branch_no_longer_exists() {
         let (_dir, root) = repo();
@@ -1255,11 +1577,21 @@ link
         }
 
         std::fs::write(root.join("b.txt"), "two\n").unwrap();
-        assert!(commit_all(&root, "an automatic checkpoint").unwrap());
+        assert!(checkpoint(&root, "an automatic checkpoint").unwrap());
         assert!(
             !root.join("hook-ran").exists(),
             "the repository's pre-commit hook ran inside Keel's automatic commit"
         );
+
+        // "Commit all" in the Git panel is the person's commit too; it used to skip the hooks
+        // because it shared the checkpoint's path.
+        std::fs::write(root.join("d.txt"), "four\n").unwrap();
+        assert!(commit_all(&root, "commit all, from the Git panel").unwrap());
+        assert!(
+            root.join("hook-ran").exists(),
+            "the person's Commit all skipped the repository's pre-commit hook"
+        );
+        std::fs::remove_file(root.join("hook-ran")).unwrap();
 
         // The explicit one is the person's own act, and keeps every hook the repository has.
         std::fs::write(root.join("c.txt"), "three\n").unwrap();

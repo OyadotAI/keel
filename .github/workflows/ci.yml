@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           packaging/sidecar.sh
-          cd desktop/src-tauri && cargo build
+          cd desktop/src-tauri && cargo test
 
   # Keel is subject to its own scanner. If the readiness bar is worth holding other repositories
   # to, it is worth holding this one to — and a regression here means the scanner shipped a false

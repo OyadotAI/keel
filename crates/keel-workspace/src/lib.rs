@@ -124,9 +124,53 @@ pub fn claude_home() -> Option<Utf8PathBuf> {
     Some(home()?.join(".claude"))
 }
 
+/// A path resolved the way the rest of the machine writes it. `canonicalize` on Windows returns
+/// the verbatim form, `\\?\C:\work\app`, which git does not accept as `-C`, Claude Code does not
+/// file transcripts under (so `project_key` found no sessions), and a person does not recognise.
+/// The prefix is dropped when what follows is a plain drive path; a verbatim UNC path is kept,
+/// because there the prefix is what makes it reachable. Everywhere Keel resolves a path it uses
+/// this, so two resolved paths still compare equal.
+pub trait Real {
+    fn real(&self) -> std::io::Result<Utf8PathBuf>;
+}
+
+impl Real for Utf8Path {
+    fn real(&self) -> std::io::Result<Utf8PathBuf> {
+        self.canonicalize_utf8().map(plain)
+    }
+}
+
+/// [`Real`] for a `std` path.
+pub fn real_std(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let p = std::fs::canonicalize(path)?;
+    Ok(match Utf8PathBuf::from_path_buf(p) {
+        Ok(u) => plain(u).into_std_path_buf(),
+        Err(p) => p,
+    })
+}
+
+/// Drop `\\?\` before a drive letter; leave everything else as it is.
+pub fn plain(path: Utf8PathBuf) -> Utf8PathBuf {
+    if let Some(rest) = path.as_str().strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+        && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+    {
+        return Utf8PathBuf::from(rest);
+    }
+    path
+}
+
 /// The person's home directory: `$HOME`, or the profile directory on Windows, where a process
 /// started from the Start menu has no `HOME` at all.
+///
+/// `KEEL_HOME` first: where Keel keeps its own state and reads Claude Code's (`.keel`, `.claude`),
+/// for a run that must not touch the person's — a test, a QA pass. It moves Keel's own lookups
+/// and nothing else: the `HOME` the processes Keel starts inherit (git, `claude`, a dev server) is
+/// left exactly as it was.
 pub fn home() -> Option<Utf8PathBuf> {
+    if let Some(keel) = std::env::var("KEEL_HOME").ok().filter(|h| !h.is_empty()) {
+        return Some(Utf8PathBuf::from(keel));
+    }
     std::env::var("HOME")
         .ok()
         .filter(|h| !h.is_empty())
@@ -224,5 +268,27 @@ mod tests {
     fn truncate_respects_character_boundaries() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("héllo wörld", 6), "héllo…");
+    }
+}
+
+#[cfg(test)]
+mod real_tests {
+    use super::*;
+
+    /// The verbatim drive form is the one git and Claude Code do not write; UNC keeps its prefix.
+    #[test]
+    fn a_verbatim_drive_path_is_written_plainly() {
+        assert_eq!(
+            plain(r"\\?\C:\work\app".into()),
+            Utf8PathBuf::from(r"C:\work\app")
+        );
+        assert_eq!(
+            plain(r"\\?\UNC\server\share".into()),
+            Utf8PathBuf::from(r"\\?\UNC\server\share")
+        );
+        assert_eq!(
+            plain("/Users/me/app".into()),
+            Utf8PathBuf::from("/Users/me/app")
+        );
     }
 }

@@ -63,6 +63,26 @@ function cliIsDark(ep: Endpoint): Promise<boolean> {
 /// `term::ELSEWHERE`: the close code for "this conversation is open in another process".
 const ELSEWHERE = 4001;
 
+/// The wheel scrolls the history. A TUI that turns on mouse reporting (Claude Code does) gets
+/// every wheel event instead, and the scrollback above it could no longer be reached. In the
+/// normal buffer the history is Keel's to scroll; in the alternate screen there is none, and the
+/// wheel is the program's.
+function wheelScrollsHistory(term: import("@xterm/xterm").Terminal) {
+  let wheel = 0;
+  term.attachCustomWheelEventHandler((e) => {
+    if (term.buffer.active.type !== "normal") return true;
+    const line = (term.options.fontSize ?? 13) * (term.options.lineHeight ?? 1.2);
+    wheel += e.deltaMode === 1 ? e.deltaY * line : e.deltaMode === 2 ? e.deltaY * line * term.rows : e.deltaY;
+    const lines = Math.trunc(wheel / line);
+    if (lines) {
+      term.scrollLines(lines);
+      wheel -= lines * line;
+    }
+    e.preventDefault();
+    return false;
+  });
+}
+
 function setElsewhere(lane: string, elsewhere: boolean) {
   useStore.setState((s) => (s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], elsewhere } } } : s));
 }
@@ -129,6 +149,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       term.loadAddon(fit);
       // Keel's own chords go up to the window; every other key, Esc and ⌃C included, is the CLI's.
       term.attachCustomKeyEventHandler((e) => !isKeel(e));
+      wheelScrollsHistory(term);
       term.open(host.current);
       // A shell follows the system's light and dark; an agent keeps its CLI's.
       const retheme = () => {

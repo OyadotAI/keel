@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>.card{padding:20px;width:240px;border:1px solid #ccc}</style>
+<script>window.__msgs=[];window.__TAURI_INTERNALS__={invoke:(cmd,a)=>{window.__msgs.push(a.msg);return Promise.resolve()}};</script>
+<script src="/src-tauri/src/picker.js"></script></head>
+<body><main><div class="card css-1x2y3z hover:bg-blue" data-inspector-relative-path="src/Hero.tsx" data-inspector-line="12"><h1>Hello</h1><button class="cta">Get started</button><button class="cta">Learn more</button></div>
+<section data-testid="pricing"><p>Plans</p></section></main>
+<script>
+addEventListener("load", () => run().catch((e) => document.body.setAttribute("data-result", JSON.stringify({ error: String(e && e.stack || e) }))));
+async function run() {
+  const out = {};
+  let clicked = 0;
+  document.addEventListener("click", () => clicked++);  // page's own handler: must not fire while armed
+  __keelPicker({ arm: true });
+  const b = document.querySelectorAll("button.cta")[1], r = b.getBoundingClientRect();
+  const at = (t, el) => el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: r.x + 5, clientY: r.y + 5 }));
+  at("mousemove", b);
+  out.hoverLabel = document.querySelector('#__keel_layer [data-id="hover"] span')?.textContent;
+  at("click", b);
+  out.pageClicks = clicked;
+  dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+  out.afterUp = document.querySelector('#__keel_layer [data-id="hover"] span')?.textContent;
+  dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  const [pick, parentPick] = __msgs.filter((m) => m.type === "pick").map((m) => m.pin);
+  out.pick = { selector: pick.selector, exact: pick.exact, tag: pick.tag, text: pick.text, sources: pick.sources };
+  out.parentSelector = parentPick && parentPick.selector;
+  out.unique = document.querySelectorAll(pick.selector).length;
+  __keelPicker({ probe: [{ id: "a", selector: pick.selector }, { id: "b", selector: "#nope" }] });
+  const p1 = __msgs.at(-1).results;
+  out.sameBefore = p1[0].print === pick.print; out.goneFound = p1[1].found;
+  b.style.width = "300px";
+  __keelPicker({ probe: [{ id: "a", selector: pick.selector }] });
+  out.changedAfter = __msgs.at(-1).results[0].print !== pick.print;
+  dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  out.disarmMsg = __msgs.at(-1);
+  b.click(); out.pageClicksAfterDisarm = clicked;
+  // Two frames down: arm from the top, pick in the innermost frame, and the pick reaches the top.
+  // Two frames deep, each with the picker the host installs in every frame.
+  const tag = '<script src="/src-tauri/src/picker.js"></scr' + 'ipt>';
+  const innerDoc = tag + '<button id="deep">Deep</button>';
+  const outerFrame = document.createElement("iframe");
+  outerFrame.id = "outer";
+  outerFrame.srcdoc = tag + '<iframe id="inner" style="width:250px;height:120px"></iframe>';
+  document.body.appendChild(outerFrame);
+  await new Promise((r) => outerFrame.addEventListener("load", r, { once: true }));
+  const innerFrame = outerFrame.contentWindow.document.getElementById("inner");
+  innerFrame.srcdoc = innerDoc;
+  await new Promise((r) => innerFrame.addEventListener("load", r, { once: true }));
+  let inner, deep;
+  for (let i = 0; i < 100 && !deep; i++) {
+    inner = document.getElementById("outer").contentWindow.document.getElementById("inner")?.contentWindow;
+    deep = inner?.document.getElementById("deep");
+    if (!deep || !inner.__keelPickerInstalled) { deep = null; await new Promise((r) => setTimeout(r, 30)); }
+  }
+  __keelPicker({ arm: true });
+  await new Promise((r) => setTimeout(r, 50));
+  const dr = deep.getBoundingClientRect();
+  deep.dispatchEvent(new inner.MouseEvent("mousemove", { bubbles: true, clientX: dr.x + 3, clientY: dr.y + 3 }));
+  deep.dispatchEvent(new inner.MouseEvent("click", { bubbles: true, cancelable: true, clientX: dr.x + 3, clientY: dr.y + 3 }));
+  await new Promise((r) => setTimeout(r, 100));
+  const deepPick = __msgs.filter((m) => m.type === "pick").map((m) => m.pin).find((p) => p.text === "Deep");
+  out.deepPicked = !!deepPick;
+  __keelPicker({ disarm: true });
+  document.body.setAttribute("data-result", JSON.stringify(out));
+}
+</script></body></html>

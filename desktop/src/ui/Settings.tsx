@@ -47,8 +47,8 @@ export function Settings() {
           <p className="muted">Starting Keel for {name}…</p>
         ) : (
           <>
-            <ClaudeSection ep={ep} />
             <TrustSection ep={ep} project={project} />
+            <ClaudeSection ep={ep} />
           </>
         )}
         <UpdatesSection />

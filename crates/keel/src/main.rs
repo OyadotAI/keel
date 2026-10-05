@@ -51,6 +51,7 @@ use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use keel_harness::quarantine;
 use keel_scanner::{RepoContext, scan};
+use keel_workspace::Real;
 use keel_workspace::Workspace;
 
 #[derive(Parser)]
@@ -208,9 +209,7 @@ fn discover(path: &Utf8PathBuf) -> Result<Workspace> {
 
     // Session transcripts are filed under the absolute working directory, so a relative path finds
     // nothing until it is canonicalised.
-    let repo = path
-        .canonicalize_utf8()
-        .with_context(|| format!("resolving {path}"))?;
+    let repo = path.real().with_context(|| format!("resolving {path}"))?;
 
     Ok(Workspace::discover(&repo, &home))
 }
@@ -226,7 +225,13 @@ fn main() -> Result<()> {
 
     // Before anything is spawned. A Dock launch inherits launchd's PATH, which has none of the
     // places these tools install to, and every `Command::new` after this point depends on it.
-    path::adopt_shell_path();
+    //
+    // Not for `keel approve`: it is the hook, it runs on every Bash and Edit the agent makes, and
+    // it spawns nothing — one loopback request. Starting the person's login shell there cost up
+    // to a second per tool call with a heavy `.zshrc`.
+    if std::env::args_os().nth(1).is_none_or(|a| a != "approve") {
+        path::adopt_shell_path();
+    }
 
     // macOS hands a bundled process a `-psn_0_…` serial number on some launches. It is not an
     // argument anyone typed, and clap would reject it and take the application down on start.
@@ -325,9 +330,7 @@ fn main() -> Result<()> {
             if resume_last {
                 runtime.block_on(serve::run_app(port))?;
             } else {
-                let repo = path
-                    .canonicalize_utf8()
-                    .with_context(|| format!("resolving {path}"))?;
+                let repo = path.real().with_context(|| format!("resolving {path}"))?;
                 runtime.block_on(serve::run(repo, port))?;
             }
         }
@@ -425,6 +428,7 @@ fn watch_parent(stdin: bool) {
     let gone = || {
         monitor::stop_all();
         dev::stop_now();
+        verify::stop_all();
         std::process::exit(0);
     };
     if stdin {
@@ -478,13 +482,18 @@ mod shutdown_tests {
     fn the_parent_death_path_stops_everything_that_owns_a_process() {
         let source = include_str!("main.rs");
         let path = source
-            .split("fn watch_parent()")
+            // `fn watch_parent(` — the split on `fn watch_parent()` stopped matching when the
+            // function took an argument, and then found only this test's own string, so the
+            // test searched itself and passed whatever the function did.
+            .split(concat!("fn watch_", "parent("))
             .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
             .expect("watch_parent is where a dying parent is noticed");
 
         for (module, call) in [
             ("monitor", "monitor::stop_all()"),
             ("dev", "dev::stop_now()"),
+            ("verify", "verify::stop_all()"),
         ] {
             assert!(
                 path.contains(call),

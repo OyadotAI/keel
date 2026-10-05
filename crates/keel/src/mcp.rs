@@ -123,6 +123,18 @@ fn committed_secret(transport: &str, target: &str) -> Option<String> {
         {
             return Some(format!("the value of {flag}"));
         }
+        // `env GITHUB_TOKEN=ghp_… npx server`, or the assignment alone before the command: a
+        // variable set inline is a literal in the committed file just as a flag's value is.
+        if let Some((name, value)) = arg.split_once('=')
+            && !name.starts_with('-')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && SECRET.iter().any(|s| name.to_ascii_lowercase().contains(s))
+            && !value.is_empty()
+            && !reference(value)
+        {
+            return Some(format!("the value of {name}"));
+        }
         if secretish(arg)
             && !arg.contains('=')
             && args
@@ -151,6 +163,7 @@ pub async fn add(
     State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<AddQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: input validation in memory; the `claude mcp` process runs in a spawned task.
     if !valid_name(&q.name) {
         return refuse("A name can hold letters, digits, hyphens and underscores.");
     }
@@ -235,6 +248,7 @@ pub async fn remove(
     State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<RemoveQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: input validation in memory; the `claude mcp` process runs in a spawned task.
     if !valid_name(&q.name) {
         return refuse("invalid server name");
     }
@@ -289,6 +303,9 @@ mod tests {
         assert!(committed_secret("stdio", "npx srv --api-key sk-123").is_some());
         assert!(committed_secret("stdio", "npx srv --token=sk-123").is_some());
         assert!(committed_secret("stdio", "npx srv --api-key ${KEY}").is_none());
+        assert!(committed_secret("stdio", "env GITHUB_TOKEN=ghp_abc123 npx server").is_some());
+        assert!(committed_secret("stdio", "env GITHUB_TOKEN=${GITHUB_TOKEN} npx server").is_none());
+        assert!(committed_secret("stdio", "env NODE_ENV=production npx server").is_none());
         assert!(committed_secret("stdio", "npx -y @modelcontextprotocol/server-github").is_none());
     }
 

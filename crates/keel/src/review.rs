@@ -13,6 +13,7 @@ use crate::serve::{AppState, Checkout};
 use axum::{Json, extract::State};
 use camino::{Utf8Path, Utf8PathBuf};
 use keel_scanner::{Profile, Report};
+use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -1205,9 +1206,9 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
     let link = repo.join(&name);
     match std::fs::symlink_metadata(&link) {
         Ok(m) if m.file_type().is_symlink() => {
-            let root = repo.canonicalize_utf8().map_err(|e| e.to_string())?;
+            let root = repo.real().map_err(|e| e.to_string())?;
             let target = link
-                .canonicalize_utf8()
+                .real()
                 .map_err(|_| "a symbolic link to nothing — left alone".to_string())?;
             let rel = target
                 .strip_prefix(&root)
@@ -1223,7 +1224,7 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
                 crate::git::trimmed(repo, &["rev-parse", flag])
                     .ok()
                     .map(|d| repo.join(d))
-                    .and_then(|d| d.canonicalize_utf8().ok())
+                    .and_then(|d| d.real().ok())
             });
             // By name, and by where git actually keeps it: `--separate-git-dir` can put it
             // anywhere, under any name, inside the tree.

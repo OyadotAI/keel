@@ -97,6 +97,14 @@ export function App() {
     setPanel(true);
     setTab(t);
   };
+  // A tab asked for from outside — the sidebar's setup list has no window state to reach.
+  const asked = useStore((s) => s.panelTab);
+  useEffect(() => {
+    if (!asked) return;
+    setPanel(true);
+    setTab(asked);
+    useStore.setState({ panelTab: undefined });
+  }, [asked]);
 
 
   useEffect(() => {

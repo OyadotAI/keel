@@ -2008,3 +2008,146 @@ h3 {
   background: var(--accent);
   font-weight: 600;
 }
+.preview-host {
+  flex: 1;
+  min-height: 120px;
+  position: relative;
+}
+.pins {
+  flex: none;
+  max-height: 42%;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.pins-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+.pins-head .spacer {
+  flex: 1;
+}
+.pin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+}
+.pin-list > li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 4px;
+  border-top: 1px solid var(--line);
+}
+.pin-n {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2f5fb3;
+  color: #fff;
+  font: 600 var(--t-tiny) var(--font);
+}
+.pin-body {
+  flex: 1;
+  min-width: 0;
+}
+.pin-what {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pin-source {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.pin-note {
+  width: 100%;
+  margin-top: 6px;
+}
+.pin-verdict {
+  margin-left: auto;
+  flex: none;
+  font: 600 var(--t-tiny) var(--font);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.pin-verdict.ok {
+  color: var(--add);
+  background: var(--add-bg);
+}
+.pin-verdict.bad {
+  color: var(--del);
+  background: var(--del-bg);
+}
+.pin-verdict.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.pin-verdict.idle {
+  color: var(--faint);
+  background: var(--hover);
+}
+.preview-log { text-align: left; max-height: 160px; overflow: auto; margin: 8px 0; }
+
+.setup-list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+.setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px 10px;
+  position: sticky;
+  top: 0;
+  background: var(--raised);
+}
+.setup-doing {
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: var(--r-sm);
+  background: var(--hover);
+}
+.setup-aside {
+  padding: 0 2px 8px;
+}
+.setup-item {
+  padding: 10px 2px;
+  border-top: 1px solid var(--line);
+}
+.setup-title {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-weight: 500;
+  margin-bottom: 2px;
+  overflow-wrap: anywhere;
+}
+.setup-sev {
+  flex: none;
+  font: 600 var(--t-tiny) var(--font);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.setup-sev.bad {
+  color: var(--del);
+}
+.setup-sev.warn {
+  color: var(--warn);
+}
+.setup-item .link {
+  margin-top: 4px;
+  padding: 0;
+}

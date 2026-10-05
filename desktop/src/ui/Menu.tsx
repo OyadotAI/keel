@@ -1,8 +1,10 @@
+import { cover } from "../cover";
 import { useEffect, useRef, type ReactNode } from "react";
 
 /// A small menu or popover anchored under its button. Esc or a click outside closes it.
 export function Floating({ anchor, onClose, children, kind = "menu", width }: { anchor: DOMRect; onClose: () => void; children: ReactNode; kind?: "menu" | "popover"; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => cover(), []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);

@@ -443,6 +443,7 @@ fn condense(id: &str, raw: &str) -> String {
 /// Sequential rather than parallel: brew serialises its own work anyway, and interleaved output
 /// from six installs is not something anyone can read.
 pub async fn install_all() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: validation only; the installs run in a spawned task that awaits child processes.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
     tokio::spawn(async move {

@@ -6,6 +6,7 @@
 //!
 //! So Keel runs them itself after every turn. The agent does not get to grade its own work.
 
+use crate::lock::Locked;
 use crate::signals::Leads;
 use axum::response::sse::{Event, Sse};
 use camino::Utf8Path;
@@ -370,6 +371,10 @@ pub async fn run_all(
             }
         };
         let pid = child.id().unwrap_or(0);
+        // Known to the parent-death path for as long as it runs: a check is somebody's whole
+        // test suite, and it outlived the app when the app went away mid-run.
+        running().locked().insert(pid);
+        let _registered = Registered(pid);
 
         let (out, err) = (child.stdout.take(), child.stderr.take());
         let scans = async { tokio::join!(scan_pipe(out, &check.dir), scan_pipe(err, &check.dir)) };
@@ -421,11 +426,35 @@ pub struct RunQuery {
 }
 
 /// Run the check and stream its output — the "Run checks" button.
+fn running() -> &'static std::sync::Mutex<std::collections::HashSet<u32>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u32>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// Forgets a check's group when its run ends, however it ends.
+struct Registered(u32);
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        running().locked().remove(&self.0);
+    }
+}
+
+/// End every check that is running. Called when the daemon is about to exit with its app.
+pub fn stop_all() {
+    for pid in running().locked().iter().copied().filter(|p| *p != 0) {
+        crate::signals::group(pid, crate::signals::KILL);
+    }
+}
+
 pub async fn run(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::serve::AppState>>,
     Checkout(repo): Checkout,
     axum::extract::Query(query): axum::extract::Query<RunQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: everything runs in the spawned task, through `run_all`, whose detection is in
+    // spawn_blocking and whose checks are awaited child processes.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     tokio::spawn(async move {
@@ -458,7 +487,12 @@ pub async fn run(
                 };
                 let _ = relay.send(e);
             },
-            || false,
+            // The person's window went away — closed, reloaded, timed out — and nobody is
+            // watching this run any more. `|| false` left three `sleep 301` suites running.
+            {
+                let tx = tx.clone();
+                move || tx.is_closed()
+            },
         )
         .await;
         let _ = forward.await;

@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use camino::{Utf8Path, Utf8PathBuf};
+use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -134,11 +135,11 @@ pub struct FileQuery {
 /// browser, so the boundary has to be explicit rather than implied by the UI never asking.
 fn roots(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
-    if let Ok(c) = repo.canonicalize_utf8() {
+    if let Ok(c) = repo.real() {
         out.push(c);
     }
     if let Some(home) = keel_workspace::claude_home()
-        && let Ok(c) = home.canonicalize_utf8()
+        && let Ok(c) = home.real()
     {
         out.push(c);
     }
@@ -154,7 +155,7 @@ pub fn resolve(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, String> 
     let allowed = roots(repo);
 
     for candidate in candidates {
-        let Ok(canonical) = candidate.canonicalize_utf8() else {
+        let Ok(canonical) = candidate.real() else {
             continue;
         };
         if allowed.iter().any(|r| canonical.starts_with(r)) {
@@ -185,10 +186,10 @@ pub fn resolve_dir(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, Stri
 pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static str), String> {
     let canonical = root
         .join(requested)
-        .canonicalize_utf8()
+        .real()
         .map_err(|_| "no such file".to_string())?;
     let root_canonical = root
-        .canonicalize_utf8()
+        .real()
         .map_err(|_| "repository unavailable".to_string())?;
     if !canonical.starts_with(&root_canonical) {
         return Err("path escapes the repository".to_string());

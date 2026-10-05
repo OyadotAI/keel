@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview",
+  "description": "The design preview: the dev server's page may report what the picker saw, and nothing else. It runs the project's dependencies.",
+  "webviews": [
+    "preview"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://127.0.0.1:*",
+      "https://localhost:*",
+      "https://127.0.0.1:*"
+    ]
+  },
+  "permissions": [
+    "allow-preview-msg"
+  ]
+}

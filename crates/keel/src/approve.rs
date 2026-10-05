@@ -119,6 +119,28 @@ pub fn waiters() -> &'static Waiters {
     W.get_or_init(Default::default)
 }
 
+/// Withdraws a question however its wait ends. The hook process is killed by Stop, or by Claude
+/// Code's own hook timeout, and axum then drops the waiting future — and only the timeout branch
+/// used to clean up, so the card stayed on screen for the life of the daemon and answering it
+/// reported success to nobody.
+struct Withdraw(String);
+
+impl Drop for Withdraw {
+    fn drop(&mut self) {
+        let gone = waiters().locked().remove(&self.0).is_some();
+        let before = {
+            let mut q = queue().locked();
+            let n = q.len();
+            q.retain(|p| p.id != self.0);
+            n != q.len()
+        };
+        if gone || before {
+            // The window reads the queue again and the card goes.
+            crate::events::emit("pending", None, serde_json::json!({ "withdrawn": self.0 }));
+        }
+    }
+}
+
 /// Requests the UI has not yet been shown, so a page that reloads mid-question still sees it.
 pub fn queue() -> &'static Mutex<Vec<Pending>> {
     static Q: OnceLock<Mutex<Vec<Pending>>> = OnceLock::new();
@@ -297,7 +319,8 @@ pub fn edit_is_inside(repo: &camino::Utf8Path, input: &serde_json::Value) -> boo
         return false;
     };
     let path = std::path::Path::new(path);
-    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let canon =
+        |p: &std::path::Path| keel_workspace::real_std(p).unwrap_or_else(|_| p.to_path_buf());
     // The file may not exist yet; its nearest existing ancestor decides.
     let mut probe = path.to_path_buf();
     while !probe.exists() {
@@ -447,6 +470,7 @@ pub async fn ask(
         },
     );
 
+    let _withdraw = Withdraw(id.clone());
     // A person who walked away must not leave the agent wedged. Timing out falls back to the
     // allowlist, which will refuse it — the same outcome as before, reached without hanging.
     match tokio::time::timeout(WAIT, rx).await {
@@ -473,7 +497,19 @@ pub async fn ask(
             );
             Ok(Json(Decision {
                 decision: if background { "deny" } else { "defer" }.into(),
-                reason: "nobody answered".into(),
+                // For a background command the refusal is the agent's next prompt, and "nobody
+                // answered" on its own sent it to detach the command by hand.
+                reason: if background {
+                    unanswered_background(
+                        &state.repo(),
+                        hook.tool_input
+                            .get("command")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    "nobody answered".into()
+                },
             }))
         }
     }
@@ -570,13 +606,51 @@ fn detaches(command: &str) -> bool {
 /// say — "I am watching this for you, end your turn" is not a refusal even though it travels as
 /// one. The agent's own call must not also run: a duplicate shell that dies at teardown helps
 /// nobody.
+/// The command without its own way of leaving: the monitor is what keeps it running past the
+/// turn now, so `nohup`, `setsid`, a trailing `&` or `disown`, and the `>/dev/null` that went with
+/// them are taken off. Run verbatim, `sleep 30 &` detached a second time inside the job — the job
+/// "finished" at once with no output, and the real process ran on with nothing able to stop it.
+fn attached(command: &str) -> String {
+    let mut c = command.trim().to_string();
+    loop {
+        let before = c.clone();
+        for tail in [
+            "disown",
+            "2>&1 >/dev/null",
+            ">/dev/null 2>&1",
+            "> /dev/null 2>&1",
+            "&>/dev/null",
+            "&> /dev/null",
+        ] {
+            if let Some(rest) = c.strip_suffix(tail) {
+                c = rest.trim_end().to_string();
+            }
+        }
+        for sep in [';', '&'] {
+            // A lone trailing `&` or `;` — never the second half of `&&`.
+            if c.ends_with(sep) && !c.ends_with("&&") {
+                c.pop();
+                c = c.trim_end().to_string();
+            }
+        }
+        for head in ["nohup ", "setsid -f ", "setsid "] {
+            if let Some(rest) = c.strip_prefix(head) {
+                c = rest.trim_start().to_string();
+            }
+        }
+        if c == before {
+            return c;
+        }
+    }
+}
+
 async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
-    let command = hook
-        .tool_input
-        .get("command")
-        .and_then(|c| c.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let command = attached(
+        hook.tool_input
+            .get("command")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default(),
+    );
 
     // The lane's checkout, so a monitored `make check` sees the lane's work and not the project's.
     let dir = if hook.cwd.is_empty() {
@@ -681,6 +755,7 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
         serde_json::json!({ "lane": hook.lane, "session": hook.session_id }),
     );
 
+    let _withdraw = Withdraw(id.clone());
     let answer = match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(d)) => d
             .reason
@@ -732,6 +807,17 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
 ///
 /// So: say which of the two happened, name the thing that actually works, and close the door the
 /// agent would otherwise find on its own.
+/// A background command nobody was at the keyboard to approve: which of the two cases this is,
+/// and the same way forward `not_monitored` gives.
+fn unanswered_background(repo: &camino::Utf8Path, command: &str) -> String {
+    let rest = not_monitored(repo, command);
+    let advice = rest.split_once("\n\n").map_or("", |(_, a)| a);
+    format!(
+        "Not started: it needed the person's approval to run in the background, and nobody \
+         answered in four minutes. Nobody said no.\n\n{advice}"
+    )
+}
+
 fn not_monitored(repo: &camino::Utf8Path, command: &str) -> String {
     let mut out = String::from(
         "Not started: Keel tried to run this as a background job and could not. This is a fault \
@@ -745,7 +831,7 @@ fn not_monitored(repo: &camino::Utf8Path, command: &str) -> String {
     {
         out.push_str(
             "\n\nThis looks like the project's dev server, which Keel runs itself: the person \
-             starts it from the Designer tab and the preview follows whatever URL it announces. \
+             starts it from the Preview tab and the preview follows whatever URL it announces. \
              Ask them to start it rather than starting one of your own — a second server on the \
              same port fails, and one they cannot see is worse.",
         );
@@ -991,6 +1077,50 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 pub(crate) mod tests {
     use super::*;
 
+    /// The monitor keeps a job alive; the command's own detaching is what escaped it.
+    #[test]
+    fn a_monitored_command_is_run_attached() {
+        assert_eq!(attached("sleep 30 &"), "sleep 30");
+        assert_eq!(attached("nohup pnpm dev > /dev/null 2>&1 &"), "pnpm dev");
+        assert_eq!(attached("setsid -f npm run dev & disown"), "npm run dev");
+        assert_eq!(
+            attached("make build && make serve &"),
+            "make build && make serve"
+        );
+        assert_eq!(
+            attached("make build && make test"),
+            "make build && make test"
+        );
+    }
+
+    /// A hook that went away — Stop, or Claude Code's own hook timeout — takes its card with it.
+    #[tokio::test]
+    async fn a_question_is_withdrawn_when_its_wait_ends_any_way_at_all() {
+        // The queue is shared by every test here; the others assert it ends empty.
+        let _serial = lock().await;
+        let id = "withdraw-test-1".to_string();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        waiters().locked().insert(id.clone(), (tx, String::new()));
+        queue().locked().push(Pending {
+            id: id.clone(),
+            lane: String::new(),
+            tool: "Bash".into(),
+            command: "rsync c d".into(),
+            rules: Vec::new(),
+            input: serde_json::json!({}),
+            session_id: "K2".into(),
+        });
+        drop(Withdraw(id.clone()));
+        assert!(
+            !waiters().locked().contains_key(&id),
+            "the waiter outlived its hook"
+        );
+        assert!(
+            !queue().locked().iter().any(|p| p.id == id),
+            "the card outlived its hook"
+        );
+    }
+
     #[tokio::test]
     async fn publication_background_commands_wait_for_authorization() {
         check_background_authorization(false, "deny").await;
@@ -1155,8 +1285,13 @@ pub(crate) mod tests {
         let detected = crate::dev::detect(&repo).expect("a dev script is a dev server");
 
         let text = not_monitored(&repo, &detected.command);
-        assert!(text.contains("Designer tab"), "{text}");
-        assert!(!not_monitored(&repo, "gh run watch 123").contains("Designer tab"));
+        assert!(text.contains("Preview tab"), "{text}");
+        let late = unanswered_background(&repo, &detected.command);
+        assert!(
+            late.contains("nobody answered") && late.contains("Preview tab"),
+            "{late}"
+        );
+        assert!(!not_monitored(&repo, "gh run watch 123").contains("Preview tab"));
     }
 
     /// The queue is a process-wide static, and the tests that touch it run in parallel.

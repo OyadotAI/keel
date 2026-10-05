@@ -13,6 +13,7 @@
 
 use axum::{Json, extract::State, http::StatusCode};
 use camino::{Utf8Path, Utf8PathBuf};
+use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -87,6 +88,12 @@ pub(crate) fn valid_name(name: &str) -> bool {
 /// frontmatter inside the quotes, while one followed by `name: x` renames the file's owner to
 /// every line-by-line reader. A description is one sentence to the model either way.
 pub(crate) fn yaml(value: &str) -> String {
+    // Control characters are not allowed in a YAML scalar at all, quoted or not: one `\x07` in a
+    // description and the file loaded with no frontmatter.
+    let value: String = value
+        .chars()
+        .filter(|c| !c.is_control() || c.is_whitespace())
+        .collect();
     let line = value.split_whitespace().collect::<Vec<_>>().join(" ");
     format!("\"{}\"", line.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -200,7 +207,9 @@ fn write(repo: &Utf8Path, req: NewAgent, kind: Kind) -> Result<Created, (StatusC
             Kind::Agent => "tools",
             Kind::Command => "allowed-tools",
         };
-        front.push_str(&format!("{key}: {}\n", tools.join(", ")));
+        // Quoted: `Bash(git commit: *)` and a `#` are YAML syntax unquoted, and the file then
+        // loaded with no frontmatter at all.
+        front.push_str(&format!("{key}: {}\n", yaml(&tools.join(", "))));
     }
     front.push_str("---\n\n");
 
@@ -227,7 +236,7 @@ fn write(repo: &Utf8Path, req: NewAgent, kind: Kind) -> Result<Created, (StatusC
         ));
     }
 
-    let shown = match repo.canonicalize_utf8() {
+    let shown = match repo.real() {
         Ok(root) => path
             .strip_prefix(&root)
             .map(|p| p.to_string())
@@ -286,10 +295,28 @@ mod tests {
         write(repo, ask("ship", "Bash(git push:*)"), Kind::Command).unwrap();
         let body = std::fs::read_to_string(repo.join(".claude/commands/ship.md")).unwrap();
         assert!(
-            body.starts_with("---\ndescription: \"d\"\nallowed-tools: Bash(git push:*)\n---"),
+            body.starts_with("---\ndescription: \"d\"\nallowed-tools: \"Bash(git push:*)\"\n---"),
             "{body}"
         );
         assert!(body.contains("$ARGUMENTS"), "{body}");
+    }
+
+    /// Both of these wrote frontmatter that no YAML parser loads.
+    #[test]
+    fn frontmatter_stays_yaml_whatever_is_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap();
+        write(repo, ask("odd", "Bash(x: y), #Read"), Kind::Agent).unwrap();
+        let body = std::fs::read_to_string(repo.join(".claude/agents/odd.md")).unwrap();
+        assert!(body.contains("tools: \"Bash(x: y), #Read\"\n"), "{body}");
+        let mut bell = ask("bell", "");
+        bell.description = "ring\u{7} the \u{1b}[31mbell".into();
+        write(repo, bell, Kind::Command).unwrap();
+        let body = std::fs::read_to_string(repo.join(".claude/commands/bell.md")).unwrap();
+        assert!(
+            !body.chars().any(|c| c.is_control() && c != '\n'),
+            "{body:?}"
+        );
     }
 
     #[test]

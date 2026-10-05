@@ -94,6 +94,53 @@ pub fn group(pid: u32, _signal: i32) {
         .spawn();
 }
 
+/// Every process descended from `pid`, by parent link — including ones that moved to a process
+/// group of their own. Claude Code starts its Bash tool's shells detached, each leading its own
+/// group, so ending `claude`'s group alone could leave a tool's `sleep` or `cargo test` running.
+/// Read once from `ps`; the walk is in memory.
+#[cfg(unix)]
+pub fn descendants(pid: u32) -> Vec<u32> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let pairs: Vec<(u32, u32)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+        })
+        .collect();
+    let mut found = Vec::new();
+    let mut frontier = vec![pid];
+    while let Some(parent) = frontier.pop() {
+        for &(child, of) in &pairs {
+            if of == parent && !found.contains(&child) {
+                found.push(child);
+                frontier.push(child);
+            }
+        }
+    }
+    found
+}
+
+/// End `pid`'s tree and everything descended from it that left the group: the group asked, then
+/// each straggler — and the group of each, which is where a detached tool shell's own children are.
+#[cfg(unix)]
+pub fn end_all(pid: u32, stragglers: &[u32]) {
+    end_tree(pid);
+    for &p in stragglers {
+        // Safety: kill(2) on a pid, then on the group it may lead. A pid that is already gone is
+        // ESRCH and ignored.
+        unsafe {
+            libc::kill(-(p as i32), KILL);
+            libc::kill(p as i32, KILL);
+        }
+    }
+}
+
 /// End a process tree: ask, then insist.
 ///
 /// SIGINT first, and to the group, because that is what ends things cleanly — `claude` flushes its
@@ -159,5 +206,79 @@ mod tests {
         // Do not leave it behind if the assertion is about to fail.
         unsafe { libc::kill(grandchild, libc::SIGKILL) };
         panic!("the grandchild outlived the turn — the group was not signalled");
+    }
+
+    /// The leader gone first — an agent that `/exit`s — and what it left in its group still
+    /// ends: the group outlives its leader, and the terminal ends it after every exit.
+    #[test]
+    fn a_group_is_ended_after_its_leader_has_exited() {
+        use std::os::unix::process::CommandExt;
+
+        let mut leader = Command::new("/bin/sh");
+        leader
+            .args(["-c", "sleep 30 & echo $!"])
+            .stdout(Stdio::piped());
+        leader.process_group(0);
+        let mut leader = leader.spawn().expect("could not spawn the leader");
+        let mut line = String::new();
+        {
+            use std::io::{BufRead, BufReader};
+            BufReader::new(leader.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+        }
+        let left: i32 = line.trim().parse().expect("no pid on stdout");
+        let _ = leader.wait(); // the leader has exited; `sleep` is still in its group
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(left), "what the leader left did not start");
+
+        end_tree(leader.id());
+        for _ in 0..50 {
+            if !alive(left) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unsafe { libc::kill(left, libc::SIGKILL) };
+        panic!("what the agent left behind outlived it");
+    }
+
+    /// A descendant that left the group — Claude Code's tool shells start detached — still ends.
+    #[test]
+    fn a_descendant_in_its_own_group_is_ended_too() {
+        use std::os::unix::process::CommandExt;
+
+        let mut leader = Command::new("/bin/sh");
+        leader
+            .args(["-c", "/usr/bin/python3 -c 'import os,time; os.setpgid(0,0); time.sleep(300)' & echo $!; sleep 300"])
+            .stdout(Stdio::piped());
+        leader.process_group(0);
+        let mut leader = leader.spawn().expect("could not spawn the leader");
+        let mut line = String::new();
+        {
+            use std::io::{BufRead, BufReader};
+            BufReader::new(leader.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+        }
+        let detached: i32 = line.trim().parse().expect("no pid on stdout");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let found = descendants(leader.id());
+        assert!(
+            found.contains(&(detached as u32)),
+            "{found:?} does not hold {detached}"
+        );
+
+        end_all(leader.id(), &found);
+        let _ = leader.wait();
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        for _ in 0..50 {
+            if !alive(detached) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unsafe { libc::kill(detached, libc::SIGKILL) };
+        panic!("a detached descendant outlived its tree");
     }
 }

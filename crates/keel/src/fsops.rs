@@ -10,6 +10,7 @@
 
 use axum::{Json, http::StatusCode};
 use camino::{Utf8Path, Utf8PathBuf};
+use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -78,7 +79,7 @@ fn valid_name(name: &str) -> Result<(), (StatusCode, String)> {
 
 /// Express a path back to the UI the way the tree keys it.
 fn relative(repo: &Utf8Path, path: &Utf8Path) -> String {
-    match repo.canonicalize_utf8() {
+    match repo.real() {
         Ok(root) => path
             .strip_prefix(&root)
             .map(|p| p.to_string())
@@ -97,7 +98,7 @@ pub async fn create(
         // The parent must already exist and be inside the boundary; the new entry is then a name within
         // it, which is why the name is validated separately and never resolved.
         let parent = if req.parent.is_empty() || req.parent == "." {
-            repo.canonicalize_utf8().map_err(bad)?
+            repo.real().map_err(bad)?
         } else {
             crate::tree::resolve_dir(&repo, &req.parent).map_err(bad)?
         };
@@ -127,7 +128,7 @@ pub async fn rename(
         valid_name(&req.name)?;
         let from = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
-        if Some(&from) == repo.canonicalize_utf8().ok().as_ref() {
+        if Some(&from) == repo.real().ok().as_ref() {
             return Err(bad("that is the repository itself"));
         }
 
@@ -153,7 +154,7 @@ pub async fn delete(
         let target = crate::tree::resolve(&repo, &req.path).map_err(bad)?;
 
         // Deleting the repository from inside the IDE that has it open is never what was meant.
-        if Some(&target) == repo.canonicalize_utf8().ok().as_ref() {
+        if Some(&target) == repo.real().ok().as_ref() {
             return Err(bad("that is the repository itself"));
         }
 

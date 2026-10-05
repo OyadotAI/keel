@@ -6,6 +6,8 @@
 //! project's, and running several side by side changes nothing inside any of them.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod preview;
+
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -275,7 +277,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Daemons::default())
-        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, sign_packet, save_text, is_dir, stop_all])
+        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg])
         .build(tauri::generate_context!())
         .expect("the window")
         .run(|app, event| {

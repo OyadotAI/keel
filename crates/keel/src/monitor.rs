@@ -43,6 +43,11 @@ pub struct Job {
     pub finished: Option<u64>,
     pub exit: Option<i32>,
     pub log: Vec<String>,
+    /// The first page on this machine the job announced — a dev server the agent started. Kept
+    /// apart from the log, which shows the last lines only: the URL scrolled out of it after 80
+    /// requests and the preview lost the server.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Its completion has been handed to the conversation. Set by `ack`, so a job is never
     /// reported twice — not on a reconnect, and not by a second window polling the same lane.
     pub reported: bool,
@@ -71,6 +76,20 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default()
+}
+
+/// A page served on this machine: what the preview can show.
+fn local_url(url: &str) -> bool {
+    [
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://0.0.0.0",
+        "http://[::1]",
+        "https://localhost",
+        "https://127.0.0.1",
+    ]
+    .iter()
+    .any(|p| url.starts_with(p))
 }
 
 /// Start a command and return its id, or say why it could not start.
@@ -113,6 +132,7 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
                 finished: None,
                 exit: None,
                 log: Vec::new(),
+                url: None,
                 reported: false,
             },
             pid,
@@ -128,6 +148,12 @@ pub fn start(lane: &str, command: &str, dir: &camino::Utf8Path) -> Result<String
     let lane_done = lane.to_string();
     tokio::spawn(async move {
         let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
+        // The command is done; whatever it started and left in its group is not a job any more,
+        // and nothing could stop it. `a & b & wait` interrupted, or `server &` at the end of a
+        // script, left processes listening after the job read "finished".
+        if pid != 0 {
+            crate::signals::group(pid, crate::signals::KILL);
+        }
         {
             let mut all = jobs().locked();
             if let Some(r) = all.iter_mut().find(|r| r.job.id == waiting) {
@@ -222,7 +248,10 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(id: String, pipe: Option<R>) {
                 let Some(r) = all.iter_mut().find(|r| r.job.id == id) else {
                     return;
                 };
-                r.job.log.push(line);
+                if r.job.url.is_none() {
+                    r.job.url = crate::dev::find_url(&line).filter(|u| local_url(u));
+                }
+                r.job.log.push(crate::dev::capped(line));
                 let len = r.job.log.len();
                 if len > MAX_LOG {
                     r.job.log.drain(..len - MAX_LOG);
@@ -317,8 +346,14 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
     let Some(pid) = pid.filter(|p| *p != 0) else {
         return Json(false);
     };
-    // Safety: a pid this process spawned, negated to reach the group it leads.
+    // Interrupted first, so it can unwind and say why it ended; then the group is ended. `&`
+    // children of a non-interactive `sh` ignore SIGINT, and so does anything that traps it — Stop
+    // said true and both servers in `a & b & wait` kept listening.
     crate::signals::group(pid, crate::signals::INTERRUPT);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        crate::signals::group(pid, crate::signals::KILL);
+    });
     Json(true)
 }
 
@@ -330,7 +365,9 @@ pub async fn api_stop(Json(body): Json<IdBody>) -> Json<bool> {
 /// serve on the same port forever, which is precisely the orphan the app's own budget forbids.
 pub fn stop_all() {
     let all = jobs().locked();
-    for r in all.iter().filter(|r| r.job.running() && r.pid != 0) {
+    // Every job's group, finished or not: a finished job's leftovers are exactly what outlived
+    // the app before this.
+    for r in all.iter().filter(|r| r.pid != 0) {
         crate::signals::group(r.pid, crate::signals::KILL);
     }
 }
@@ -356,6 +393,99 @@ mod tests {
 
     // No `clear()` here on purpose: the registry is global and the test binary is threaded, so
     // wiping it is how one test deletes another's job. Every test uses lanes of its own instead.
+
+    fn pids_in(id: &str) -> Vec<i32> {
+        let all = jobs().locked();
+        all.iter()
+            .find(|r| r.job.id == id)
+            .map(|r| {
+                r.job
+                    .log
+                    .iter()
+                    .filter_map(|l| l.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    async fn settle(pids: &[i32]) -> bool {
+        for _ in 0..100 {
+            if pids.iter().all(|p| !alive(*p)) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        for p in pids {
+            unsafe { libc::kill(*p, libc::SIGKILL) };
+        }
+        false
+    }
+
+    /// `&` children of `sh -c` ignore SIGINT: Stop said true and both kept running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_ends_what_the_job_put_in_the_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let here = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let id = start(
+            "stop-bg",
+            "sleep 300 & echo $!; sleep 301 & echo $!; wait",
+            here,
+        )
+        .unwrap();
+        let mut pids = Vec::new();
+        for _ in 0..100 {
+            pids = pids_in(&id);
+            if pids.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(pids.len(), 2, "the job did not report its children");
+        assert!(api_stop(Json(IdBody { id })).await.0);
+        assert!(
+            settle(&pids).await,
+            "Stop left the job's background processes running"
+        );
+    }
+
+    /// The command ended; what it left behind ends with it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_finished_job_leaves_nothing_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let here = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let id = start("leftovers", "sleep 300 & echo $!", here).unwrap();
+        let mut pids = Vec::new();
+        for _ in 0..100 {
+            pids = pids_in(&id);
+            if !pids.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(pids.len(), 1);
+        assert!(
+            settle(&pids).await,
+            "a finished job left its background process running"
+        );
+    }
+
+    #[test]
+    fn a_job_keeps_the_url_it_announced_and_lines_are_capped() {
+        assert!(local_url("http://localhost:5173"));
+        assert!(!local_url("https://example.com"));
+        assert_eq!(
+            crate::dev::find_url("  ➜  Local:   http://localhost:\u{1b}[1m5173\u{1b}[22m/")
+                .as_deref(),
+            Some("http://localhost:5173")
+        );
+        assert!(crate::dev::capped("x".repeat(2_000_000)).len() < 5000);
+    }
 
     /// The whole point: the command outlives the call that started it, and its output is here
     /// afterwards rather than in a file nobody reads.

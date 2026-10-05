@@ -18,6 +18,7 @@
 //! and two watchers, for what happens outside Keel altogether — a session started in a terminal,
 //! a file saved in an editor.
 
+use keel_workspace::Real;
 use std::sync::{Arc, OnceLock};
 
 use axum::extract::State;
@@ -70,6 +71,7 @@ pub fn subscribe() -> broadcast::Receiver<Arc<Emitted>> {
 /// `GET /api/events`: every change, as it happens, for the life of the window.
 // no-blocking: forwards a channel.
 pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response::IntoResponse {
+    // no-blocking: subscribes to an in-memory bus; nothing touches the disk.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
     tokio::spawn(async move {
         let mut events = subscribe();
@@ -489,7 +491,7 @@ fn git_dirs(
             };
             let git = crate::git::read(&dir, &["rev-parse", "--absolute-git-dir"])?;
             let git = std::path::PathBuf::from(git.trim());
-            Some((git.canonicalize().unwrap_or(git), wt.clone()))
+            Some((keel_workspace::real_std(&git).unwrap_or(git), wt.clone()))
         })
         .collect();
     out.sort_by_key(|(d, _)| std::cmp::Reverse(d.as_os_str().len()));
@@ -497,9 +499,7 @@ fn git_dirs(
 }
 
 fn found_under_root(dir: &std::path::Path, root: &camino::Utf8Path) -> bool {
-    let real = root
-        .canonicalize_utf8()
-        .unwrap_or_else(|_| root.to_path_buf());
+    let real = root.real().unwrap_or_else(|_| root.to_path_buf());
     dir.starts_with(real.as_std_path())
 }
 
@@ -512,9 +512,7 @@ fn handler(
     wake: Arc<tokio::sync::Notify>,
 ) -> impl notify::EventHandler {
     // Events arrive with resolved paths; on macOS a temp dir or a symlinked home is not one.
-    let real = root
-        .canonicalize_utf8()
-        .unwrap_or_else(|_| root.to_path_buf());
+    let real = root.real().unwrap_or_else(|_| root.to_path_buf());
     move |event: Result<notify::Event, notify::Error>| {
         let everything = || {
             rescan.store(true, std::sync::atomic::Ordering::Relaxed);

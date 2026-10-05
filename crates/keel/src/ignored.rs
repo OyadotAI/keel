@@ -41,10 +41,46 @@ pub fn set(repo: &Utf8Path, id: &str, ignored: bool, why: &str) -> Result<(), St
     } else {
         store.ignored.remove(id);
     }
+    // Never through a link. A cloned repository can ship `.keel` or `.keel/ignored.json` as a
+    // symlink to anywhere, and a plain write followed it and replaced that file. The folders are
+    // checked, and the file is written beside itself and renamed over: a rename replaces a link,
+    // it does not follow one.
+    crate::writes::no_link_under(repo, ".keel/ignored.json")?;
     let dir = repo.join(".keel");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let body = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
-    std::fs::write(path(repo), body).map_err(|e| e.to_string())
+    let mut tmp = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
+    std::io::Write::write_all(&mut tmp, body.as_bytes()).map_err(|e| e.to_string())?;
+    tmp.persist(path(repo))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, unix))]
+mod link_tests {
+    use super::*;
+
+    /// A `.keel/ignored.json` that links outside the repository is replaced, not written through.
+    #[test]
+    fn setting_aside_never_writes_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap().join("repo");
+        let outside = Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("precious.txt");
+        std::fs::create_dir_all(repo.join(".keel")).unwrap();
+        std::fs::write(&outside, "keep me").unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join(".keel/ignored.json")).unwrap();
+        set(&repo, "deploy/no-ci", true, "").unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep me");
+        assert!(ids(&repo).contains(&"deploy/no-ci".to_string()));
+
+        // A linked `.keel` folder is refused outright.
+        let other = Utf8Path::from_path(dir.path()).unwrap().join("other");
+        std::fs::create_dir_all(other.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(other.join("elsewhere"), other.join(".keel")).unwrap();
+        assert!(set(&other, "x", true, "").is_err());
+    }
 }
 
 /// The report as the panel should show it: ignored findings removed from the list and from

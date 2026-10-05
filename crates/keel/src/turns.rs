@@ -1155,9 +1155,11 @@ pub async fn finish(
         } else {
             let checkout = f.checkout.clone();
             let message = commit_message(&f.prompt, gate.as_ref());
+            // The turn's own files only; the person's uncommitted work is not the turn's to commit.
+            let own = uncommitted.clone();
             let made: Result<Option<String>, String> = crate::serve::blocking(
                 move || {
-                    crate::worktree::checkpoint(&checkout, &message).map(|done| {
+                    crate::worktree::checkpoint_only(&checkout, &message, &own).map(|done| {
                         done.then(|| {
                             crate::repo::git_log(&checkout, 1)
                                 .first()

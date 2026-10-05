@@ -48,7 +48,8 @@ pub fn holds(root: &Utf8Path, rel: &str, bytes: &[u8]) -> bool {
 /// record for identical bytes elsewhere is not a decision about this repository — a stdio
 /// server's `npx foo` resolves inside whichever tree it runs in.
 fn owner(root: &Utf8Path) -> Option<Utf8PathBuf> {
-    let real = Utf8PathBuf::from_path_buf(std::fs::canonicalize(root).ok()?).ok()?;
+    let real =
+        Utf8PathBuf::from_path_buf(keel_workspace::real_std(root.as_std_path()).ok()?).ok()?;
     let parent = real.parent()?;
     if parent.file_name() == Some("worktrees")
         && parent.parent().and_then(Utf8Path::file_name) == Some(".keel")

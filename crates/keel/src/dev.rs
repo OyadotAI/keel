@@ -159,9 +159,45 @@ fn renders_pages(dir: &Utf8Path) -> bool {
 
 /// Pull a servable URL out of a line of tool output.
 ///
+/// A line without its terminal colour codes (`ESC [ … m`).
+pub fn plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A line of somebody's output, capped: one 2 MB line was sent whole on every read of the list.
+pub fn capped(mut line: String) -> String {
+    const MAX_LINE: usize = 4000;
+    if line.len() > MAX_LINE {
+        let mut end = MAX_LINE;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+        line.push_str(" …");
+    }
+    line
+}
+
 /// Dev servers and deploys both announce themselves this way, and the announcement is the only
 /// reliable place the port appears — it is chosen at runtime when the preferred one is taken.
 pub fn find_url(line: &str) -> Option<String> {
+    // Colour first: Vite bolds the port, and `http://localhost:\x1b[1m5173\x1b[22m` stored as the
+    // URL was one no page could load and the preview refused as not on this machine.
+    let line = &plain(line);
     let start = line.find("http://").or_else(|| line.find("https://"))?;
     let rest = &line[start..];
     let end = rest
@@ -289,7 +325,15 @@ pub async fn start(
     let (command, dir) = match body.command.filter(|c| !c.trim().is_empty()) {
         Some(typed) => (typed, repo.clone()),
         None => {
-            let found = detect(&repo).ok_or_else(|| {
+            // Off the executor: detection walks the checkout's package.json files.
+            let found = {
+                let repo = repo.clone();
+                tokio::task::spawn_blocking(move || detect(&repo))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            .ok_or_else(|| {
                 bad("No dev command found. Add a `dev` script to package.json.".into())
             })?;
             let dir = if found.dir.is_empty() {
@@ -363,7 +407,7 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
                 s.url = Some(url);
                 announced = true;
             }
-            s.log.push(line);
+            s.log.push(capped(line));
             if s.log.len() > MAX_LOG {
                 let excess = s.log.len() - MAX_LOG;
                 s.log.drain(..excess);
@@ -374,7 +418,24 @@ async fn watch<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) {
             crate::events::emit("dev.changed", None, serde_json::Value::Null);
         }
     }
-    // The pipe closed: the server is gone, or going.
+    // The pipe closed: the server is gone, or going. Gone is said as gone — a server that died
+    // on start (`next: command not found`, a taken port) stayed "running", a zombie, and Start
+    // refused because one was. The log stays, so the app can say why it stopped.
+    for _ in 0..40 {
+        {
+            let mut s = state().locked();
+            match s.child.as_mut().map(|c| c.try_wait()) {
+                Some(Ok(Some(_))) | Some(Err(_)) => {
+                    s.child = None;
+                    s.url = None;
+                    break;
+                }
+                Some(Ok(None)) => {}
+                None => break,
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     crate::events::emit("dev.changed", None, serde_json::Value::Null);
 }
 
@@ -410,6 +471,34 @@ mod tests {
     use super::*;
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
+
+    /// A server that dies on start — `next: command not found` — is not running, and says why.
+    /// It stayed "running" as a zombie, and Start refused because one was.
+    #[tokio::test]
+    async fn a_server_that_dies_on_start_is_not_running() {
+        let (_d, root) = repo(&[]);
+        stop_now();
+        let _started = start(
+            crate::serve::Checkout(root.clone()),
+            Json(StartBody {
+                command: Some("echo 'sh: next: command not found' >&2; exit 127".into()),
+            }),
+        )
+        .await
+        .expect("it starts");
+        for _ in 0..100 {
+            if state().locked().child.is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let s = state().locked();
+        assert!(s.child.is_none(), "a dead server still reads as running");
+        assert!(
+            s.log.iter().any(|l| l.contains("command not found")),
+            "the reason was dropped"
+        );
+    }
 
     fn repo(files: &[(&str, &str)]) -> (TempDir, Utf8PathBuf) {
         let dir = TempDir::new().expect("tempdir");

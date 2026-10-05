@@ -1,3 +1,4 @@
+import { cover } from "../cover";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 export interface Command {
@@ -43,6 +44,7 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  useEffect(() => cover(), []);
   useEffect(() => input.current?.focus(), []);
   const rows = useMemo(
     () =>

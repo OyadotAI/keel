@@ -452,6 +452,7 @@ pub async fn action(
     State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<ActionQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: input validation in memory; the CLI runs in a spawned task.
     let verb = match q.action.as_str() {
         "uninstall" => "uninstall",
         "enable" => "enable",
@@ -496,6 +497,7 @@ pub async fn action(
 
 /// Refresh every marketplace, which is how updates become visible.
 pub async fn refresh_marketplaces() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: the CLI runs in a spawned task.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
         let _ = tx
@@ -530,6 +532,7 @@ pub async fn install(
     State(state): State<Arc<crate::serve::AppState>>,
     Query(q): Query<InstallQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    // no-blocking: input validation in memory; the CLI runs in a spawned task.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
     if !valid(&q.name) || !valid(&q.marketplace) {

@@ -18,6 +18,7 @@ use axum::{
     routing::get,
 };
 use camino::{Utf8Path, Utf8PathBuf};
+use keel_workspace::Real;
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -102,9 +103,7 @@ fn writer_lock(checkout: &Utf8Path) -> Result<std::fs::File, String> {
     use sha2::{Digest, Sha256};
     // Resolved first: a symlinked parent or another letter case on a case-insensitive disk is
     // the same tree, and must be the same lock.
-    let real = checkout
-        .canonicalize_utf8()
-        .unwrap_or_else(|_| checkout.to_path_buf());
+    let real = checkout.real().unwrap_or_else(|_| checkout.to_path_buf());
     let name = format!("{:x}.lock", Sha256::digest(real.as_str().as_bytes()));
     crate::permissions::private_lock(&name)
 }
@@ -205,7 +204,7 @@ impl AppState {
         let Some(cwd) = cwd.filter(|c| !c.is_empty()).map(Utf8PathBuf::from) else {
             return Some(repo);
         };
-        let Ok(cwd) = cwd.canonicalize_utf8() else {
+        let Ok(cwd) = cwd.real() else {
             return Some(repo);
         };
         let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
@@ -221,9 +220,9 @@ impl AppState {
     /// separate writer slot. A linked worktree's own `.git` file is the nearest boundary.
     fn claim_checkout(&self, checkout: &Utf8Path) -> Result<Utf8PathBuf, String> {
         let mut checkout = checkout
-            .canonicalize_utf8()
+            .real()
             .map_err(|e| format!("Could not open this working tree: {e}"))?;
-        if let Ok(project) = self.repo().canonicalize_utf8()
+        if let Ok(project) = self.repo().real()
             && project.starts_with(&checkout)
         {
             checkout = project;
@@ -1689,9 +1688,14 @@ struct BranchBody {
 }
 
 async fn api_git_branch(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Json(b): Json<BranchBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    // Switching the tree under a turn moves every file the agent is in the middle of.
+    if matches!(b.action.as_str(), "create" | "checkout") {
+        not_mid_turn(&state, &repo)?;
+    }
     blocking(
         move || crate::repo::git_branch_act(&repo, &b.action, &b.name),
         Err("timed out".into()),
@@ -1720,9 +1724,34 @@ async fn api_git_remote(
     .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
+/// A commit or a discard while an agent is mid-turn in this tree takes its half-written files with
+/// it — into the commit, or into the bin. Rewind refused this case from the start; these did not.
+pub(crate) fn not_mid_turn(
+    state: &AppState,
+    checkout: &Utf8Path,
+) -> Result<(), (axum::http::StatusCode, String)> {
+    match state.writer_of(checkout) {
+        Some(who) => Err((
+            axum::http::StatusCode::CONFLICT,
+            format!(
+                "{} is writing this working tree right now. Wait for it to finish — doing this now \
+                 would take its half-written files with it.",
+                if who.starts_with("term:") {
+                    "An agent in a terminal".to_string()
+                } else {
+                    format!("“{who}”")
+                }
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 async fn api_git_discard_all(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
 ) -> Result<Json<(u32, u32)>, (axum::http::StatusCode, String)> {
+    not_mid_turn(&state, &repo)?;
     blocking(
         move || crate::repo::git_discard_all(&repo),
         Err("timed out".into()),
@@ -1751,9 +1780,11 @@ async fn api_git_stage_all(
 }
 
 async fn api_git_commit_staged(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Json(b): Json<crate::worktree::CommitBody>,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    not_mid_turn(&state, &repo)?;
     blocking(
         move || crate::repo::git_commit_staged(&repo, &b.message),
         Err("timed out".into()),
@@ -1796,8 +1827,10 @@ async fn api_git_push(
 }
 
 async fn api_git_uncommit(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
 ) -> Result<Json<bool>, (axum::http::StatusCode, String)> {
+    not_mid_turn(&state, &repo)?;
     blocking(
         move || crate::repo::git_uncommit(&repo),
         Err("timed out".into()),
@@ -1828,6 +1861,9 @@ async fn api_git_act(
     // been made in the project itself, or in a nested repository — and "no such file" for a
     // path the person is looking at is the least useful error there is. The project root is
     // the second place to look, and `resolve` still refuses anything outside it.
+    if req.action.starts_with("discard") {
+        not_mid_turn(&state, &repo)?;
+    }
     let root = state.repo();
     blocking(
         move || {
@@ -2042,11 +2078,13 @@ mod tests {
                 // Its own body only: up to the next `fn` at column zero, so a well-behaved
                 // handler cannot vouch for the one after it.
                 let own = part.split("\n}\n").next().unwrap_or(part);
+                // `tokio::spawn(` used to count here, and it is not off the executor: a spawned
+                // task runs on the same pool. `pr::create` ran three gits inline before its
+                // spawn and passed for that reason. A handler that spawns says why it is safe.
                 if own.contains("blocking(")
                     || own.contains("spawn_blocking(")
                     || own.contains("off_thread(")
                     || own.contains("// no-blocking:")
-                    || own.contains("tokio::spawn(")
                 {
                     continue;
                 }
@@ -2268,6 +2306,19 @@ mod tests {
     /// Two terminal sessions on one tree: the second is refused the claim and writes anyway,
     /// because a `claude` in a terminal cannot be stopped by a refusal. The first's checkpoint
     /// must see it, or it commits the second's half-written files under its own prompt.
+    /// Commit and discard while an agent is writing the tree took its half-written files with
+    /// them. They wait now, and say who for.
+    #[test]
+    fn commit_and_discard_wait_for_a_writer() {
+        let state = AppState::empty();
+        let (_dir, path) = temporary_checkout();
+        assert!(not_mid_turn(&state, &path).is_ok());
+        state.claim_terminal("s", &path).unwrap();
+        let (code, why) = not_mid_turn(&state, &path).unwrap_err();
+        assert_eq!(code, axum::http::StatusCode::CONFLICT);
+        assert!(why.contains("agent in a terminal"), "{why}");
+    }
+
     #[test]
     fn a_refused_terminal_writer_stops_the_holders_commit() {
         let state = AppState::empty();

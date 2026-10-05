@@ -133,11 +133,24 @@ pub fn tail(
     let end = len.min(from.saturating_add(MAX_READ));
     file.seek(SeekFrom::Start(from)).ok()?;
     let mut buffer = Vec::with_capacity((end - from) as usize);
-    file.take(end - from).read_to_end(&mut buffer).ok()?;
+    file.by_ref()
+        .take(end - from)
+        .read_to_end(&mut buffer)
+        .ok()?;
 
     // Everything up to the last newline is whole; what follows it is the writer mid-append.
     let complete = match buffer.iter().rposition(|b| *b == b'\n') {
         Some(i) => i + 1,
+        // A whole window and no newline is one record bigger than a read (a pasted image, an
+        // enormous tool result), not a writer mid-append. Returning `from` again would read the
+        // same window forever and the follower would never see another record — so it is
+        // stepped over, to just past its own newline, and dropped.
+        None if end - from == MAX_READ && end < len => {
+            return Some((
+                Vec::new(),
+                past_next_newline(&mut file, end)?.unwrap_or(from),
+            ));
+        }
         None => return Some((Vec::new(), from)),
     };
     let text = String::from_utf8_lossy(&buffer[..complete]);
@@ -148,6 +161,25 @@ pub fn tail(
         .map(str::to_string)
         .collect();
     Some((lines, from + complete as u64))
+}
+
+/// The offset just past the first newline at or after `at`, or `None` inside `Some` when the file
+/// ends first (the record is still being written).
+fn past_next_newline(file: &mut std::fs::File, at: u64) -> Option<Option<u64>> {
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(at)).ok()?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut pos = at;
+    loop {
+        let n = file.read(&mut chunk).ok()?;
+        if n == 0 {
+            return Some(None);
+        }
+        if let Some(i) = chunk[..n].iter().position(|b| *b == b'\n') {
+            return Some(Some(pos + i as u64 + 1));
+        }
+        pos += n as u64;
+    }
 }
 
 /// The most a single read of a transcript may take in.
@@ -382,10 +414,48 @@ fn followable(record: &Value) -> bool {
 /// `C--Users-mk`) needs. Replacing only the two that a Mac path usually has left those reading a
 /// directory that does not exist.
 pub fn project_key(cwd: &Utf8Path) -> String {
-    cwd.as_str()
+    // Exactly Claude Code's own (`eI` in 2.1.290): every UTF-16 code unit that is not an ASCII
+    // letter or digit becomes `-` — so an emoji, two code units, is two dashes, where a per-`char`
+    // map wrote one and found no folder — and a name past 200 is cut there, with a hash of the
+    // whole path appended so long paths stay distinct. A lane's checkout in a deep repository
+    // crossed 200, and its conversations were never found.
+    const MAX: usize = 200;
+    let key: String = cwd
+        .as_str()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+        .flat_map(|c| {
+            let dash = if c.is_ascii_alphanumeric() {
+                None
+            } else {
+                Some(c.len_utf16())
+            };
+            std::iter::repeat_n('-', dash.unwrap_or(0)).chain(dash.is_none().then_some(c))
+        })
+        .collect();
+    if key.len() <= MAX {
+        return key;
+    }
+    // `(h << 5) - h + unit | 0` over the UTF-16 units, then `Math.abs(h).toString(36)`.
+    let hash = cwd.as_str().encode_utf16().fold(0i32, |h, unit| {
+        h.wrapping_shl(5)
+            .wrapping_sub(h)
+            .wrapping_add(i32::from(unit))
+    });
+    format!("{}-{}", &key[..MAX], base36(i64::from(hash).unsigned_abs()))
+}
+
+fn base36(mut n: u64) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if n == 0 {
+        return "0".into();
+    }
+    let mut out = Vec::new();
+    while n > 0 {
+        out.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// The directories whose sessions belong to this repository: itself, up to two parents (never
@@ -1070,6 +1140,49 @@ mod tests {
             let (all, _, at) = tail_last(Utf8Path::new("/repo"), &home, "big-1", len * 2).unwrap();
             assert_eq!(at, 0);
             assert_eq!(all.len(), 20_000);
+        }
+
+        /// The folder name Claude Code files a transcript under — checked against its own function
+        /// (`eI`, 2.1.290), run in node over the same paths.
+        #[test]
+        fn the_transcript_folder_is_named_exactly_as_claude_code_names_it() {
+            assert_eq!(project_key(Utf8Path::new("/tmp/e😀mid")), "-tmp-e--mid");
+            assert_eq!(
+                project_key(Utf8Path::new("/Users/mk/Dev/My Projects/it's here ü 😀")),
+                "-Users-mk-Dev-My-Projects-it-s-here-----"
+            );
+            let long = format!(
+                "/private/tmp/scratch/deep-{}/.keel/worktrees/add-the-settings-page-with-dark-mode-tog",
+                "d".repeat(150)
+            );
+            assert_eq!(
+                project_key(Utf8Path::new(&long)),
+                format!(
+                    "-private-tmp-scratch-deep-{}--keel-worktrees-add-the-hw5oc1",
+                    "d".repeat(150)
+                )
+            );
+        }
+
+        /// One record bigger than a read used to return the same offset forever, and nothing
+        /// after it was ever seen. It is stepped over now.
+        #[test]
+        fn a_record_bigger_than_a_read_does_not_stall_the_follower() {
+            let (_d, home) = home_with("-repo", "huge-1.jsonl", "");
+            let path = home.join("projects").join("-repo").join("huge-1.jsonl");
+            let giant = user(&"x".repeat((MAX_READ + 1024) as usize));
+            let after = user("after the giant");
+            std::fs::write(&path, format!("{giant}\n{after}\n")).unwrap();
+            let (lines, next) = tail(Utf8Path::new("/repo"), &home, "huge-1", 0).unwrap();
+            assert!(lines.is_empty());
+            assert_eq!(
+                next,
+                giant.len() as u64 + 1,
+                "stepped to just past the giant record"
+            );
+            let (lines, _) = tail(Utf8Path::new("/repo"), &home, "huge-1", next).unwrap();
+            assert_eq!(lines.len(), 1, "the record after it is read");
+            assert!(lines[0].contains("after the giant"));
         }
 
         #[test]

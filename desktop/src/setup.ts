@@ -10,7 +10,14 @@ export interface Warning {
   detail: string;
   /// Where the fix is: Settings (log in, install), Extensions (plugins), Readiness (the rest).
   fix: "settings" | "extensions" | "readiness";
+  /// For a suggested plugin: where it installs from.
+  marketplace?: string;
 }
+
+/// Whether this one actually stops a lane from working: Claude Code missing or logged out. A
+/// repository's hook script is critical to *know* about, but Keel sets it aside before every
+/// run, so it blocks nothing — and calling it "Blocks lanes" said something untrue.
+export const blocks = (w: Warning) => w.id.startsWith("claude/");
 
 interface Finding {
   id: string;
@@ -20,6 +27,7 @@ interface Finding {
 }
 interface Plugin {
   name: string;
+  marketplace: string;
   installed: boolean;
   reason?: string | null;
 }
@@ -57,7 +65,7 @@ export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings:
   } else out.push(unread("scan", "the project's configuration", state.reason));
   if (plugins.status === "fulfilled") {
     for (const p of plugins.value.suggested)
-      if (!p.installed) out.push({ id: `plugin/${p.name}`, severity: "medium", title: `Plugin “${p.name}” is not installed`, detail: p.reason ?? "Suggested for this project.", fix: "extensions" });
+      if (!p.installed) out.push({ id: `plugin/${p.name}`, severity: "medium", title: `Plugin “${p.name}” is not installed`, detail: p.reason ?? "Suggested for this project.", fix: "extensions", marketplace: p.marketplace });
   } else out.push(unread("plugins", "the plugin catalog", plugins.reason));
   const rank = { critical: 0, high: 1, medium: 2 };
   return { warnings: out.sort((a, b) => rank[a.severity] - rank[b.severity]), readiness };

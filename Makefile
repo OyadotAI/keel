@@ -27,6 +27,7 @@ test:
 # bundle is what the 400 KB budget is measured on. Installs its own dependencies the first time.
 desktop-test:
 	cd desktop && pnpm install --frozen-lockfile --silent && pnpm exec tsc --noEmit && pnpm lint && pnpm test && pnpm build && pnpm budget
+	packaging/sidecar.sh && cd desktop/src-tauri && cargo test --quiet
 
 # The desktop app with a live reload, against a daemon built from this tree.
 dev:

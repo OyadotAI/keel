@@ -77,17 +77,38 @@ pub(crate) fn permissions_dir() -> Result<Utf8PathBuf, String> {
 }
 
 fn project_identity(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
-    let canonical = repo.canonicalize_utf8().map_err(|e| e.to_string())?;
+    let canonical = keel_workspace::Real::real(repo).map_err(|e| e.to_string())?;
     let metadata = std::fs::metadata(&canonical).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         return Err("Permissions require an existing project directory.".into());
     }
-    // A new clone at the same path must not inherit the deleted directory's authorization.
-    let identity = format!("{}\0{}", canonical, private::identity(&metadata));
+    // A new clone at the same path must not inherit the deleted directory's authorization, and a
+    // directory whose identity cannot be read is not trusted at all. The folder alone was not
+    // enough: emptying it and cloning into it keeps its inode, and the new repository inherited
+    // the old one's trust. Its `.git` is new in that case, so it is part of the identity too.
+    let folder = private::identity(&canonical, &metadata)?;
+    let git = canonical.join(".git");
+    let repository = match std::fs::metadata(&git) {
+        Ok(m) => private::identity(&git, &m)?,
+        Err(_) => String::new(),
+    };
+    let identity = format!("{canonical}\0{folder}\0{repository}");
     Ok((
         canonical,
         format!("{:x}", Sha256::digest(identity.as_bytes())),
     ))
+}
+
+/// The key before `.git` was part of the identity, for a one-time move of an existing store.
+fn legacy_key(repo: &Utf8Path) -> Option<String> {
+    let canonical = keel_workspace::Real::real(repo).ok()?;
+    let metadata = std::fs::metadata(&canonical).ok()?;
+    let identity = format!(
+        "{}\0{}",
+        canonical,
+        private::identity(&canonical, &metadata).ok()?
+    );
+    Some(format!("{:x}", Sha256::digest(identity.as_bytes())))
 }
 
 /// What "a private file of this user's, reached without following a link" means on each platform.
@@ -95,8 +116,8 @@ fn project_identity(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
 mod private {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 
-    pub fn identity(m: &std::fs::Metadata) -> String {
-        format!("{}\0{}", m.dev(), m.ino())
+    pub fn identity(_path: &camino::Utf8Path, m: &std::fs::Metadata) -> Result<String, String> {
+        Ok(format!("{}\0{}", m.dev(), m.ino()))
     }
 
     pub fn create_dir(dir: &camino::Utf8Path) -> std::io::Result<()> {
@@ -131,15 +152,36 @@ mod private {
 mod private {
     use std::os::windows::fs::OpenOptionsExt;
 
-    /// The volume serial and file index are the inode's equivalent and still unstable in std;
-    /// the directory's creation time does the same job here — a fresh clone at the same path is a
-    /// new directory, made later.
-    pub fn identity(m: &std::fs::Metadata) -> String {
-        m.created()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos().to_string())
-            .unwrap_or_default()
+    /// The volume serial and file index: the inode's equivalent, read from the directory's own
+    /// handle because std keeps them unstable. Not its creation time — NTFS "tunnelling" gives a
+    /// directory made under a deleted one's name, within about fifteen seconds, the old one's
+    /// creation time, so `rd /s /q app && git clone other app` inherited the old clone's trust.
+    /// Unreadable is an error, and the project then reads as untrusted.
+    pub fn identity(path: &camino::Utf8Path, _m: &std::fs::Metadata) -> Result<String, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+        };
+        // A directory opens only with backup semantics, and asking for no access rights is enough
+        // to read its information.
+        let dir = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .map_err(|e| format!("Could not identify {path}: {e}"))?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle is open for the duration of the call and `info` is a valid out-pointer.
+        if unsafe { GetFileInformationByHandle(dir.as_raw_handle() as _, &mut info) } == 0 {
+            return Err(format!(
+                "Could not identify {path}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(format!(
+            "{}\0{}",
+            info.dwVolumeSerialNumber,
+            (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)
+        ))
     }
 
     pub fn create_dir(dir: &camino::Utf8Path) -> std::io::Result<()> {
@@ -226,14 +268,24 @@ fn store_path(repo: &Utf8Path) -> Result<Utf8PathBuf, String> {
                 .into(),
         );
     }
-    let canonical = dir.canonicalize_utf8().map_err(|e| e.to_string())?;
+    let canonical = keel_workspace::Real::real(dir.as_path()).map_err(|e| e.to_string())?;
     if canonical.starts_with(&project) {
         return Err(
             "Permission storage cannot be inside the open project. Open a narrower project folder."
                 .into(),
         );
     }
-    Ok(canonical.join(format!("{key}.json")))
+    let file = canonical.join(format!("{key}.json"));
+    // Once, on the first read after the identity gained `.git`: the store moves to the new key,
+    // bound to the repository that is there now. Without it every trusted project would quietly
+    // read as untrusted after an update, with every approved rule gone.
+    if std::fs::symlink_metadata(&file).is_err()
+        && let Some(old) = legacy_key(repo).map(|k| canonical.join(format!("{k}.json")))
+        && std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_file())
+    {
+        let _ = std::fs::rename(&old, &file);
+    }
+    Ok(file)
 }
 
 fn open_store(repo: &Utf8Path, write: bool) -> Result<std::fs::File, String> {
@@ -682,6 +734,14 @@ pub fn remember(
     if !valid_rule(rule) {
         return Err("That does not look like a permission rule, e.g. `Bash(bun *)`.".into());
     }
+    // Stored and then dropped on every read by `sane`, it was accepted and never took effect: the
+    // same card came back for the same command, and Settings said it was added.
+    if scope != "once" && !sane(rule) {
+        return Err(format!(
+            "{rule} names a program that is not on this machine's PATH, so a rule for it would \
+             never match. Allow it once, or trust the project."
+        ));
+    }
     match scope {
         // The held hook receives this approval directly. Do not turn one invocation into a
         // reusable rule, and do not require init to have supplied a conversation ID yet.
@@ -850,6 +910,36 @@ mod tests {
         );
         std::fs::remove_dir(&root).unwrap();
         std::fs::rename(moved, root).unwrap();
+    }
+
+    /// Emptying a folder keeps its inode; cloning into it makes a new `.git`. The new repository
+    /// is a new project, and it is not trusted.
+    #[test]
+    fn a_clone_into_an_emptied_folder_is_not_trusted() {
+        let (_dir, root) = repo(&[]);
+        std::fs::create_dir(root.join(".git")).unwrap();
+        set_trusted(&root, true).unwrap();
+        assert!(trusted(&root));
+        std::fs::remove_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        assert!(
+            !trusted(&root),
+            "a new repository in the same folder inherited trust"
+        );
+    }
+
+    /// The identity gained `.git`; a store written under the old key moves over once, so an
+    /// update does not quietly untrust every project and drop every rule.
+    #[test]
+    fn a_store_under_the_old_key_moves_to_the_new_one() {
+        let (_dir, root) = repo(&[]);
+        std::fs::create_dir(root.join(".git")).unwrap();
+        set_trusted(&root, true).unwrap();
+        let new = store_path(&root).unwrap();
+        let old = new.with_file_name(format!("{}.json", legacy_key(&root).unwrap()));
+        std::fs::rename(&new, &old).unwrap();
+        assert!(trusted(&root), "the old store was not carried over");
+        assert!(!old.exists() && new.exists());
     }
 
     #[cfg(unix)]

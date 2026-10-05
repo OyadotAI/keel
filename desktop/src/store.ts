@@ -33,6 +33,8 @@ export interface Job {
   finished?: number | null;
   exit?: number | null;
   log: string[];
+  /// The first page on this machine the job announced, kept apart from the log's last lines.
+  url?: string | null;
   reported: boolean;
 }
 
@@ -134,6 +136,9 @@ interface State {
   setup: Record<string, Warning[]>;
   /// Open readiness findings per project, for the tab's count.
   readiness: Record<string, Readiness>;
+  /// A side-panel tab asked for from outside the window's own state (the sidebar's setup list).
+  /// The window shows it and clears the request.
+  panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness";
   /// The project's daemon, started if it is not running. For views that talk to it directly.
   ensure(project: string): Promise<Endpoint>;
   openProject(path: string): Promise<void>;
@@ -304,7 +309,16 @@ export const useStore = create<State>()((set, getState) => {
   }
   /// What each daemon event means here — one entry per event, so adding one is a line.
   const on: Record<string, (path: string, ep: Endpoint, data: unknown) => void> = {
-    pending: (path, _ep, data) => void poll(path, (data as { data?: { lane?: string } })?.data?.lane),
+    pending: (path, _ep, data) => {
+      const d = (data as { data?: { lane?: string; withdrawn?: string } })?.data;
+      // The hook that asked is gone — stopped, or timed out — so its card is a question nobody
+      // is waiting on any more. The daemon has already dropped it; so does every lane here.
+      if (d?.withdrawn) {
+        for (const lid of lanesOf(path)) lane(lid, (l) => (l.pending.some((p) => p.id === d.withdrawn) ? { pending: l.pending.filter((p) => p.id !== d.withdrawn) } : {}));
+        return;
+      }
+      void poll(path, d?.lane);
+    },
     "permissions.changed": (path, ep) => trust(path, ep),
     "state.changed": (path, ep) => setup(path, ep),
     connected: (path, ep) => {
@@ -473,6 +487,11 @@ export const useStore = create<State>()((set, getState) => {
         else if (error && !missing) lane(lid, { error: `Could not follow this conversation: ${error}` });
         const tries = (retries.get(lid) ?? 0) + 1;
         retries.set(lid, tries);
+        // Not there yet is normal for a session that has not said anything. Still not there, for
+        // one Keel has already seen, is not a wait — the pane sat empty saying nothing while this
+        // retried every two seconds forever. It keeps looking, and says why it has nothing.
+        if (missing && now.known && tries === 5)
+          lane(lid, { error: "Keel cannot find this conversation's transcript under ~/.claude/projects. It keeps looking; if the folder was moved or renamed, open the conversation from History." });
         // Not written yet is a wait; anything else backs off, to a ceiling.
         const wait = missing ? 2000 : Math.min(30_000, 1000 * 2 ** Math.min(tries, 5));
         setTimeout(() => void follow(lid), wait);
@@ -601,7 +620,9 @@ export const useStore = create<State>()((set, getState) => {
       lane(lid, { jobs });
       // Acknowledged before it is delivered, by the lane that owns it: the result reaching the
       // conversation twice is worse than not reaching it at all.
-      for (const job of jobs.filter((j) => j.finished && !j.reported && j.lane === lid)) {
+      // A job with no lane belongs to whoever asks — and is delivered by whoever asks first: the
+      // ack is compare-and-set, so exactly one lane carries it into its conversation.
+      for (const job of jobs.filter((j) => j.finished && !j.reported && (j.lane === lid || j.lane === ""))) {
         const ok = await post<boolean>(ep, "/api/monitors/ack", { id: job.id }).catch(() => false);
         if (!ok) continue;
         const secs = Math.max(0, (job.finished ?? 0) - job.started);

@@ -123,6 +123,20 @@ pub fn git_act(
             }
         }
         "discard" => {
+            // Outside a repository every file reads as untracked, and "discard" trashed the
+            // person's own file there. There is nothing to restore it from, so nothing is done.
+            if !crate::gitroots::is_root(root) && git(root, &["rev-parse", "--git-dir"]).is_none() {
+                return Err(
+                    "This folder is not a git repository, so there is nothing to discard back to."
+                        .into(),
+                );
+            }
+            if holds_repository(&target) {
+                return Err(format!(
+                    "{path} is a git repository of its own — Keel will not throw it away. Remove it \
+                     yourself if you mean to."
+                ));
+            }
             if tracked(root, path) {
                 git_run(root, &["restore", "--staged", "--worktree", "--", path]).map(|_| ())
             } else {
@@ -439,10 +453,21 @@ pub fn git_discard_all(root: &Utf8Path) -> Result<(u32, u32), String> {
                 .collect()
         })
         .unwrap_or_default();
+    // A nested repository is listed as one untracked folder, and it went to the Trash whole,
+    // history and all. It is somebody's repository, not a stray file; it is left where it is.
+    let untracked: Vec<String> = untracked
+        .into_iter()
+        .filter(|rel| !holds_repository(&root.join(rel.trim_end_matches('/'))))
+        .collect();
     for rel in &untracked {
         crate::fsops::trash(root.join(rel).as_std_path())?;
     }
     Ok((tracked, untracked.len() as u32))
+}
+
+/// A folder that is a git repository of its own (a `.git` directory or file inside it).
+fn holds_repository(path: &Utf8Path) -> bool {
+    path.is_dir() && std::fs::symlink_metadata(path.join(".git")).is_ok()
 }
 
 /// Add a path to the repository's `.gitignore`, and stop tracking it if it was tracked.
@@ -501,6 +526,17 @@ pub fn git_uncommit(root: &Utf8Path) -> Result<(), String> {
         .unwrap_or(0);
     if count < 2 {
         return Err("This is the first commit; there is nothing to go back to.".into());
+    }
+    // A merge is not one commit to take back. `reset --soft HEAD~1` on Keel's own `--no-ff`
+    // finish flattened the whole lane into staged changes, and the lane's branch is deleted by
+    // then, so its commits were left in the reflog alone.
+    let parents = git(root, &["rev-list", "--parents", "-n", "1", "HEAD"]).unwrap_or_default();
+    if parents.split_whitespace().count() > 2 {
+        return Err(
+            "The last commit is a merge — undoing it would flatten everything it brought in. Use \
+             `git revert -m 1 HEAD` in a terminal if you want it gone."
+                .into(),
+        );
     }
     git_run(root, &["reset", "--soft", "HEAD~1"]).map(|_| ())
 }
@@ -667,6 +703,55 @@ fn git_status_in(root: &Utf8Path) -> GitStatus {
 mod git_tests {
     use super::*;
     use camino::Utf8PathBuf;
+
+    fn committed() -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            git_run(&root, args).unwrap();
+        }
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        git_run(&root, &["add", "-A"]).unwrap();
+        git_run(&root, &["commit", "-qm", "one"]).unwrap();
+        (dir, root)
+    }
+
+    /// A nested repository is one untracked folder to git, and Discard all trashed it whole.
+    #[test]
+    fn discard_all_leaves_a_nested_repository_alone() {
+        let (_d, root) = committed();
+        std::fs::write(root.join("a.txt"), "changed\n").unwrap();
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        git_run(&nested, &["init", "-q"]).unwrap();
+        std::fs::write(nested.join("keep.txt"), "mine").unwrap();
+        let (tracked, untracked) = git_discard_all(&root).unwrap();
+        assert_eq!((tracked, untracked), (1, 0));
+        assert!(nested.join(".git").exists() && nested.join("keep.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert!(git_act(&root, "discard", "nested", None).is_err());
+    }
+
+    /// Undoing a merge flattened a whole finished lane into staged changes.
+    #[test]
+    fn uncommit_refuses_a_merge() {
+        let (_d, root) = committed();
+        git_run(&root, &["checkout", "-qb", "side"]).unwrap();
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        git_run(&root, &["add", "-A"]).unwrap();
+        git_run(&root, &["commit", "-qm", "two"]).unwrap();
+        git_run(&root, &["checkout", "-q", "main"]).unwrap();
+        git_run(&root, &["merge", "--no-ff", "-qm", "merge side", "side"]).unwrap();
+        let err = git_uncommit(&root).unwrap_err();
+        assert!(err.contains("merge"), "{err}");
+    }
 
     #[test]
     fn status_preserves_leading_spaces_and_consumes_rename_source_records() {

@@ -12,6 +12,17 @@
     "opener:allow-reveal-item-in-dir",
     "notification:default",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "allow-open-project",
+    "allow-close-project",
+    "allow-stop-all",
+    "allow-scratch-dir",
+    "allow-sign-packet",
+    "allow-save-text",
+    "allow-is-dir",
+    "allow-preview-show",
+    "allow-preview-bounds",
+    "allow-preview-hide",
+    "allow-preview-send"
   ]
 }

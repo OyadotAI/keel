@@ -505,9 +505,26 @@ the next one of these fails a test instead of a tester.
 
 ## Design turns and the live canvas
 
-**Not ported yet.** Everything below describes the Swift app's preview, which went with it. The
-desktop app's Preview tab frames the dev server and nothing more; the picker, the pins and the
-pixel verdict come back as a child webview with an init script in every frame.
+**What the desktop app has, and how it differs.** The Preview tab is a child webview
+(`desktop/src-tauri/src/preview.rs`) laid over the panel, with `picker.js` installed in every
+frame — the Tauri form of `forMainFrameOnly: false`. Pick, hover names the element and its best
+source, ↑↓ walk parent and child, Esc disarms, and each pin takes a note; **Send to agent** types
+one prompt into the lane's CLI. When the lane goes idle the pins are located again and compared.
+Three differences from the Swift app below, each deliberate:
+
+- **The verdict compares a fingerprint, not pixels**: the element's markup, its computed style
+  and its size, hashed. Tauri has no snapshot API on either platform, and "identical before and
+  after means the edit went to the wrong file" is the same answer from the DOM — on macOS and
+  Windows alike. What it cannot see is a change only a canvas or an image would show.
+- **The dev server's page may call exactly one command.** It runs the project's dependencies, so
+  `build.rs` names every app command (so none is reachable by default) and
+  `capabilities/preview.json` grants the preview `preview_msg` and nothing else.
+- **A native webview draws above the page**, so menus, dialogs and the palette count themselves
+  in `cover.ts` and the preview hides while any is open — otherwise they open behind it.
+
+Not ported: nudges (⌘-drag, resize handles, text edit as a sentence), ⌥-measure, and the preview
+coming forward and rippling the regions HMR changed. `pnpm picker-check` runs the picker in a real
+browser (Chrome) against ten behaviours.
 
 Click an element in the preview and the turn that follows carries a **pixel column**: the element
 photographed before and after, with a verdict. Several clicks are several **pins**, each with its

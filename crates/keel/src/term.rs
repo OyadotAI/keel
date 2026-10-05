@@ -57,7 +57,11 @@ enum Launch {
 /// A session id goes on a command line: a UUID's characters and nothing else, so it can never be
 /// read as a flag.
 fn plausible_session(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    // At least one hex digit, and not starting with a dash: `-` alone, or `--x`, is a flag.
+    id.len() >= 8
+        && id.len() <= 64
+        && !id.starts_with('-')
+        && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
 pub async fn ws(
@@ -85,16 +89,14 @@ pub async fn ws(
         }
         _ => Launch::Shell,
     };
-    // A resume of a conversation another `claude` has open is two processes appending to one
-    // transcript. Every way a lane resumes passes here — opened from History, restored at launch,
-    // started again — so this is where it is refused, not in whichever of them remembered to ask.
+    // A conversation another `claude` has open is two processes appending to one transcript,
+    // whether this one resumes it or names it as new. Every way a lane starts passes here —
+    // opened from History, restored at launch, started again — so this is where it is refused,
+    // not in whichever of them remembered to ask.
     let elsewhere = match &launch {
-        Launch::Agent {
-            agent,
-            session,
-            resume: true,
-            ..
-        } if agent == "claude" && !q.takeover => Some(session.clone()),
+        Launch::Agent { agent, session, .. } if agent == "claude" && !q.takeover => {
+            Some(session.clone())
+        }
         _ => None,
     };
     // The desktop app offers `keel` beside its token (`pair::app_token`); a browser closes a
@@ -292,6 +294,8 @@ fn pty_thread(
         ));
         return;
     };
+    // Taken now: the group outlives its leader, so ending it after an exit needs the number.
+    let leader = child.process_id();
     drop(pair.slave);
 
     let Ok(mut reader) = pair.master.try_clone_reader() else {
@@ -374,6 +378,10 @@ fn pty_thread(
 
     // The agent's whole tree, not its top: `claude` with a `cargo test` under it is the ordinary
     // shape, and killing the leader alone leaves the rest running.
+    // Everything under the agent, taken while it is still alive to be walked from: its tool
+    // shells lead process groups of their own, and its group alone does not reach them.
+    #[cfg(unix)]
+    let stragglers = leader.map(crate::signals::descendants).unwrap_or_default();
     if matches!(child.try_wait(), Ok(None)) {
         if let Some(pid) = child.process_id() {
             // Asked first, briefly: an interrupted `claude` flushes its transcript and removes
@@ -388,6 +396,16 @@ fn pty_thread(
         }
         let _ = child.kill();
     }
+    // Whatever the agent left in its group, however it ended. An agent that exits on its own —
+    // `/exit`, a crash — can leave a `sleep &` or a `cargo test` behind in its process group,
+    // reparented to init and running with nothing left that could stop it. The group outlives
+    // its leader while anything in it is alive, so it is ended either way.
+    if let Some(pid) = leader {
+        #[cfg(unix)]
+        crate::signals::end_all(pid, &stragglers);
+        #[cfg(not(unix))]
+        crate::signals::end_tree(pid);
+    }
     // Reaped, always: a zombie answers `kill(pid, 0)`, so an unreaped agent read as a live
     // session for the rest of the daemon's life. Bounded — it has been sent SIGKILL.
     let _ = child.wait();
@@ -398,6 +416,16 @@ mod tests {
     use super::*;
 
     /// What `ps -o comm=` actually prints, on both platforms and for a login shell.
+    /// A session id goes on a command line, so nothing that reads as a flag gets there.
+    #[test]
+    fn a_session_id_cannot_be_a_flag() {
+        assert!(plausible_session("6aa9ed86-7016-449f-958b-b65909ed4c3b"));
+        assert!(!plausible_session("-"));
+        assert!(!plausible_session("--------"));
+        assert!(!plausible_session("--resume"));
+        assert!(!plausible_session("../../etc"));
+    }
+
     #[test]
     fn a_tab_is_named_after_the_program_not_its_path() {
         assert_eq!(program_name("/bin/zsh\n").as_deref(), Some("zsh"));

@@ -23,3 +23,6 @@ window.addEventListener("contextmenu", (e) => {
 
 // Look for a new version in the background; a dev build never does.
 void import("./update").then((u) => u.watchForUpdates());
+
+// Picks and checks from the design preview.
+void import("./design").then((d) => d.watchDesign());

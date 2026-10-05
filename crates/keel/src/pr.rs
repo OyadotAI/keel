@@ -49,34 +49,47 @@ pub async fn create(
         return refuse("This is not a git repository. Initialise one from Changes first.");
     }
 
-    // A branch with no commits on it is not a thing to open a pull request from, and it is the
-    // ordinary state right after `git init` — so it gets its own sentence rather than being
-    // folded into "not a git repository", which is both wrong and unactionable.
-    if !has_commits(&repo) {
-        return refuse(
-            "This repository has no commits yet. Make one first — a pull request is a request to \
-             merge commits, and there are none.",
-        );
-    }
-
-    // A pull request is a branch, and `main` is not one. Catching it here is the difference
-    // between a clear refusal and `gh` failing four steps in with something about a head ref.
-    let branch = match branch_of(&repo) {
-        Some(b) => b,
-        None => return refuse("Could not read the current branch."),
+    // Three gits, read off the executor: one slow `git status` here held up every other request.
+    let checked = {
+        let repo = repo.clone();
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            // A branch with no commits on it is not a thing to open a pull request from, and it
+            // is the ordinary state right after `git init` — so it gets its own sentence rather
+            // than being folded into "not a git repository", which is both wrong and unactionable.
+            if !has_commits(&repo) {
+                return Err(
+                    "This repository has no commits yet. Make one first — a pull request is a \
+                            request to merge commits, and there are none."
+                        .into(),
+                );
+            }
+            // A pull request is a branch, and `main` is not one. Catching it here is the
+            // difference between a clear refusal and `gh` failing four steps in with something
+            // about a head ref.
+            let branch = branch_of(&repo).ok_or("Could not read the current branch.")?;
+            if matches!(branch.as_str(), "main" | "master" | "trunk") {
+                return Err(format!(
+                    "You are on `{branch}`. Make a branch for the change first — a pull request \
+                     needs somewhere to merge from."
+                ));
+            }
+            if !uncommitted(&repo).is_empty() {
+                return Err(
+                    "There are uncommitted changes. Commit them first — a pull request only \
+                            carries what is committed, and opening one now would leave the rest \
+                            behind."
+                        .into(),
+                );
+            }
+            Ok(branch)
+        })
+        .await
+        .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
     };
-    if matches!(branch.as_str(), "main" | "master" | "trunk") {
-        return refuse(&format!(
-            "You are on `{branch}`. Make a branch for the change first — a pull request needs \
-             somewhere to merge from."
-        ));
-    }
-    if !uncommitted(&repo).is_empty() {
-        return refuse(
-            "There are uncommitted changes. Commit them first — a pull request only carries what \
-             is committed, and opening one now would leave the rest behind.",
-        );
-    }
+    let branch = match checked {
+        Ok(b) => b,
+        Err(why) => return refuse(&why),
+    };
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {

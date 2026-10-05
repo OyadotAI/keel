@@ -1,6 +1,7 @@
 // The shell's primitives, after agentchrome's `ui/`: one Tabs, one empty state, one banner. Each
 // of these was hand-written in four places and had drifted — four tablists, none with arrow keys.
 
+import { cover } from "../cover";
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 /// A tab row with roving focus: only the selected tab is in the Tab order, ←/→ move between them.
@@ -54,6 +55,7 @@ export const Count = ({ n }: { n?: number }) => (n ? <span className="tab-count"
 /// be a small box beside whatever was clicked.
 export function Dialog({ title, children, onClose, tone }: { title: string; children: ReactNode; onClose: () => void; tone?: "danger" }) {
   const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => cover(), []);
   useEffect(() => {
     const key = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);

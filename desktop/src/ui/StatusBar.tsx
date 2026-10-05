@@ -103,11 +103,16 @@ export function StatusBar({ openTab }: { openTab: (tab: Tab) => void }) {
         </button>
       )}
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
-      {trusted && (
-        <button className="warn" onClick={() => useStore.setState({ settings: true })} title="Commands here run without asking. Click to change.">
-          <Icon name="shield" size={12} /> Trusted
-        </button>
-      )}
+      {l &&
+        (trusted ? (
+          <button className="warn" onClick={() => useStore.setState({ settings: true })} title="Commands here run without asking. Click to change.">
+            <Icon name="shield" size={12} /> Trusted
+          </button>
+        ) : (
+          <button onClick={() => useStore.setState({ settings: true })} title="Every command outside the allowlist asks first. Trusting the project lets the agent run them without asking.">
+            <Icon name="shield" size={12} /> Trust this project…
+          </button>
+        ))}
       <UpdateButton />
       {project?.error ? (
         <button className="bad" onClick={() => l && useStore.getState().load(l.id)}>
