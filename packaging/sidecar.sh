@@ -20,6 +20,12 @@ if [ "$triple" = universal ]; then
   done
   lipo -create -output "$out/keel-universal-apple-darwin" \
     "$root/target/aarch64-apple-darwin/$profile/keel" "$root/target/x86_64-apple-darwin/$profile/keel"
+  # Each architecture as well: `tauri build --target universal-apple-darwin` builds the app once
+  # per architecture, and each of those builds looks for its own triple's file — the release
+  # failed on `binaries/keel-aarch64-apple-darwin doesn't exist` with only the universal one here.
+  for t in aarch64-apple-darwin x86_64-apple-darwin; do
+    cp "$root/target/$t/$profile/keel" "$out/keel-$t"
+  done
   exit 0
 fi
 
