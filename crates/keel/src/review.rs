@@ -169,7 +169,7 @@ fn walk(repo: &Utf8Path) -> Vec<Utf8PathBuf> {
         }) {
             continue;
         }
-        out.push(rel.to_owned());
+        out.push(Utf8PathBuf::from(keel_workspace::slashed(rel)));
         if out.len() > 20_000 {
             break;
         }

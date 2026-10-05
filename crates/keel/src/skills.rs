@@ -392,7 +392,7 @@ fn read_folder(dir: &Utf8Path) -> Folder {
                 truncated = true;
                 continue;
             }
-            let rel = path.strip_prefix(dir).unwrap_or(&path).to_string();
+            let rel = keel_workspace::slashed(path.strip_prefix(dir).unwrap_or(&path));
             let content = (meta.is_file() && meta.len() <= MAX_FILE_BYTES as u64)
                 .then(|| std::fs::read(&path).ok())
                 .flatten()

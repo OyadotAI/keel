@@ -719,7 +719,11 @@ mod tests {
     #[tokio::test]
     async fn a_save_wakes_the_tree_watch_and_build_output_does_not() {
         let dir = tempfile::tempdir().unwrap();
-        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        // Resolved as Keel resolves a project: Windows hands out temp dirs in their short 8.3
+        // form, and the watcher reports long paths, so an unresolved root matched no event.
+        let root =
+            camino::Utf8PathBuf::from_path_buf(keel_workspace::real_std(dir.path()).unwrap())
+                .unwrap();
         std::fs::create_dir_all(root.join("target")).unwrap();
         let dirty: Dirty = Default::default();
         let wake = Arc::new(tokio::sync::Notify::new());

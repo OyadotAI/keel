@@ -1476,12 +1476,13 @@ link
     fn a_turns_paths_are_literal_not_patterns() {
         let (_d, root) = repo();
         std::fs::write(root.join("mine.txt"), "the person's\n").unwrap();
-        std::fs::write(root.join("*"), "the agent's oddly named file\n").unwrap();
-        assert!(checkpoint_only(&root, "the turn", &["*".into()]).unwrap());
+        // `[m]ine.txt` is a filename on every platform, and as a pattern it matches `mine.txt`.
+        std::fs::write(root.join("[m]ine.txt"), "the agent's oddly named file\n").unwrap();
+        assert!(checkpoint_only(&root, "the turn", &["[m]ine.txt".into()]).unwrap());
         let shown = git(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
         assert_eq!(
             shown.trim(),
-            "*",
+            "[m]ine.txt",
             "a pattern took more than the turn's file: {shown}"
         );
         assert!(

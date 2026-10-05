@@ -149,6 +149,16 @@ pub fn real_std(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     })
 }
 
+/// A path inside a repository the way git, the page and every other platform write it: `/`
+/// between its parts. On Windows `strip_prefix` leaves `components\onboarding.tsx`, and the
+/// imports, a skill's files and the project map all came back unmatched against `/` paths.
+pub fn slashed(rel: &Utf8Path) -> String {
+    rel.components()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Drop `\\?\` before a drive letter; leave everything else as it is.
 pub fn plain(path: Utf8PathBuf) -> Utf8PathBuf {
     if let Some(rest) = path.as_str().strip_prefix(r"\\?\")

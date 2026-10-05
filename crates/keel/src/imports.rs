@@ -60,7 +60,8 @@ pub fn importers_of(root: &Utf8Path, file: &str) -> Vec<String> {
         }) {
             continue;
         }
-        if rel.as_str() == file {
+        let rel = keel_workspace::slashed(rel);
+        if rel == file {
             continue; // a file does not import itself
         }
         // Big files are almost never the page that renders one component, and reading them all is
@@ -72,7 +73,7 @@ pub fn importers_of(root: &Utf8Path, file: &str) -> Vec<String> {
             continue;
         }
         if text.lines().any(|line| line_imports(line, &names)) {
-            found.push(rel.to_string());
+            found.push(rel);
         }
         if found.len() >= 40 {
             break;
