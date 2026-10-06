@@ -353,13 +353,13 @@ button.link {
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 28px;
+  height: 36px;
   border: none;
   background: none;
   padding: 0 8px 0 20px;
   border-radius: var(--r-sm);
   font-weight: 400;
-  font-size: var(--t-small);
+  font-size: var(--t-body);
   color: var(--text);
 }
 .lane:hover {
@@ -438,6 +438,13 @@ button.link {
 }
 .history .lane {
   padding-left: 28px;
+  height: 28px;
+  font-size: var(--t-small);
+}
+.lane-rename {
+  margin: 2px 0;
+  height: 32px;
+  width: 100%;
 }
 
 /* ── Agent column ─────────────────────────────────────────────────────── */

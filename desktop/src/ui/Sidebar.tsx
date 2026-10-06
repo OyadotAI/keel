@@ -5,6 +5,8 @@ import { useStore, type Agent, type Session } from "../store";
 import { Floating } from "./Menu";
 import { SetupBadge } from "./SetupWarnings";
 import { Icon } from "./icons";
+import { label } from "../keys";
+import { cycle } from "./App";
 
 export async function pickProject() {
   const path = await open({ directory: true, multiple: false, title: "Open a project" });
@@ -140,10 +142,21 @@ function ProjectRow({ path }: { path: string }) {
   );
 }
 
+/// ↑↓ on a focused lane moves to the next one and keeps focus in the list, so the rail can be
+/// walked without the mouse.
+function arrows(e: React.KeyboardEvent) {
+  const by = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+  if (!by || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+  e.preventDefault();
+  cycle(by);
+  requestAnimationFrame(() => (document.querySelector('.sidebar .lane[aria-current="true"]') as HTMLElement | null)?.focus());
+}
+
 function LaneRow({ id }: { id: string }) {
   const l = useStore((s) => s.lanes[id]);
   const active = useStore((s) => s.active === id);
   const failed = useStore((s) => s.lanes[id]?.conv.turns.at(-1)?.gate?.status === "failed");
+  const renaming = useStore((s) => s.renaming === id);
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   const root = useStore((s) => (l ? s.projects[l.project]?.path : undefined));
   if (!l) return null;
@@ -155,10 +168,26 @@ function LaneRow({ id }: { id: string }) {
     select(id);
     useStore.setState({ asking: what });
   };
+  const rename = (name: string | null) => {
+    const title = name?.trim();
+    useStore.setState((s) => ({ renaming: null, ...(title ? { lanes: { ...s.lanes, [id]: { ...s.lanes[id], title } } } : {}) }));
+    requestAnimationFrame(() => (document.querySelector('.sidebar .lane[aria-current="true"]') as HTMLElement | null)?.focus());
+  };
   const checkout = root && (l.wt ? `${root}/.keel/worktrees/${l.wt}` : root);
   return (
     <div className="lane-row">
-    <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={l.wt ? `keel/${l.wt}` : "Shares the project's working tree"}>
+    {renaming ? (
+      <input
+        autoFocus
+        className="field lane-rename"
+        defaultValue={l.title}
+        aria-label="Lane name"
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={(e) => rename(e.target.value)}
+        onKeyDown={(e) => (e.key === "Enter" ? rename(e.currentTarget.value) : e.key === "Escape" && rename(null))}
+      />
+    ) : (
+    <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => useStore.setState({ renaming: id })} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), useStore.setState({ renaming: id })) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : null}
       </span>
@@ -167,11 +196,15 @@ function LaneRow({ id }: { id: string }) {
       {l.agent === "codex" && <span className="faint" style={{ fontSize: 10 }}>codex</span>}
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
+    )}
     <button className="ghost lane-close" aria-label={`Close ${l.title}`} title="Close lane (⌘W)" onClick={() => ask("close")}>
       <Icon name="x" size={12} />
     </button>
     {ctx && (
       <Floating anchor={ctx} onClose={() => setCtx(null)} width={250}>
+        <button onClick={() => (setCtx(null), useStore.setState({ renaming: id }))}>
+          <Icon name="pencil" size={14} /> Rename… <kbd style={{ marginLeft: "auto" }}>F2</kbd>
+        </button>
         {checkout && (
           <button onClick={() => (setCtx(null), void revealItemInDir(checkout))}>
             <Icon name="folder" size={14} /> {REVEAL}
@@ -208,7 +241,7 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
   // A string, so the selector's answer compares equal when nothing changed.
   const openKey = useStore((s) => (s.projects[path]?.lanes ?? []).map((l) => s.lanes[l]?.session ?? "").join(","));
   const openIds = useMemo(() => new Set(openKey.split(",")), [openKey]);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const [ctx, setCtx] = useState<{ at: DOMRect; session: Session } | null>(null);
   if (!sessions) return null;

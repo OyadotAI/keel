@@ -128,6 +128,8 @@ interface State {
   creating: boolean;
   /// A confirmation open for the active lane: merge, discard or close.
   asking: "merge" | "discard" | "close" | null;
+  /// The lane whose sidebar row is an input right now — set by F2, a double-click, the menu or the palette.
+  renaming: string | null;
   /// The extensions page — skills, subagents, MCP servers, plugins — over the window.
   extensions: boolean;
   /// Whether each project is trusted, for the marker that says so while it holds.
@@ -505,6 +507,7 @@ export const useStore = create<State>()((set, getState) => {
     settings: false,
     creating: false,
     asking: null,
+    renaming: null,
     extensions: false,
     trusted: {},
     setup: {},

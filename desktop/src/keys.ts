@@ -15,7 +15,8 @@ export interface Chord {
   alt?: boolean;
 }
 
-const CODES: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace" };
+const CODES: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown" };
+const GLYPHS: Record<string, string> = { Backspace: "⌫", ArrowUp: "↑", ArrowDown: "↓" };
 
 function code(key: string): string {
   if (CODES[key]) return CODES[key];
@@ -31,7 +32,7 @@ export function matches(e: KeyboardEvent, c: Chord): boolean {
 }
 
 export function label(c: Chord): string {
-  if (MAC) return `${c.alt ? "⌥" : ""}${c.shift ? "⇧" : ""}⌘${c.key.length === 1 ? c.key.toUpperCase() : c.key === "Backspace" ? "⌫" : c.key}`;
+  if (MAC) return `${c.alt ? "⌥" : ""}${c.shift ? "⇧" : ""}⌘${c.key.length === 1 ? c.key.toUpperCase() : (GLYPHS[c.key] ?? c.key)}`;
   return `Ctrl+Shift+${c.shift || c.alt ? "Alt+" : ""}${c.key.length === 1 ? c.key.toUpperCase() : c.key}`;
 }
 
@@ -54,6 +55,8 @@ export const KEEL: Chord[] = [
   { key: "Backspace", shift: true },
   { key: "]", shift: true },
   { key: "[", shift: true },
+  { key: "ArrowUp", alt: true },
+  { key: "ArrowDown", alt: true },
   ...["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((key) => ({ key })),
   ...["1", "2", "3", "4", "5", "6"].map((key) => ({ key, alt: true })),
 ];

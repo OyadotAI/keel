@@ -118,6 +118,8 @@ export function App() {
       [{ key: "," }, () => useStore.setState((s) => ({ settings: !s.settings }))],
       [{ key: "]", shift: true }, () => cycle(1)],
       [{ key: "[", shift: true }, () => cycle(-1)],
+      [{ key: "ArrowDown", alt: true }, () => cycle(1)],
+      [{ key: "ArrowUp", alt: true }, () => cycle(-1)],
       ...TABS.map((t, i): [Chord, () => void] => [{ key: String(i + 1), alt: true }, () => showTab(t)]),
       ...Array.from({ length: 9 }, (_, i): [Chord, () => void] => [{ key: String(i + 1) }, () => nth(i)]),
     ];
@@ -193,7 +195,7 @@ function lanesInOrder() {
   const s = useStore.getState();
   return s.order.flatMap((p) => s.projects[p]?.lanes ?? []);
 }
-function cycle(by: number) {
+export function cycle(by: number) {
   const all = lanesInOrder();
   const at = all.indexOf(useStore.getState().active ?? "");
   if (all.length) useStore.getState().select(all[(at + by + all.length) % all.length]);
@@ -246,12 +248,15 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
       out.push({ id: "merge", title: "Merge lane…", keys: label({ key: "m", shift: true }), run: () => setAsking("merge") });
       out.push({ id: "discard", title: "Discard lane…", keys: label({ key: "Backspace", shift: true }), run: () => setAsking("discard") });
     }
+    out.push({ id: "rename", title: "Rename lane…", keys: "F2", run: () => useStore.setState({ renaming: lane! }) });
     out.push({ id: "close", title: "Close lane", keys: label({ key: "w" }), run: () => setAsking("close") });
     out.push({ id: "focus", title: "Focus terminal", keys: label({ key: "l" }), run: focusTerminal });
     out.push({ id: "shell", title: "Toggle the shell", keys: label({ key: "j" }), run: () => setShell((x) => !x) });
     TABS.forEach((t, i) => out.push({ id: `tab-${t}`, title: `Show ${t[0].toUpperCase()}${t.slice(1)}`, keys: label({ key: String(i + 1), alt: true }), run: () => showTab(t) }));
     out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => useStore.setState({ settings: true }) });
   }
+  out.push({ id: "next-lane", title: "Next lane", keys: label({ key: "ArrowDown", alt: true }), run: () => cycle(1) });
+  out.push({ id: "prev-lane", title: "Previous lane", keys: label({ key: "ArrowUp", alt: true }), run: () => cycle(-1) });
   out.push({ id: "open", title: "Open project…", keys: label({ key: "o" }), run: () => void pickProject() });
   out.push({ id: "new-project", title: "New project…", run: () => useStore.setState({ creating: true, settings: false }) });
   out.push({ id: "sidebar", title: "Toggle sidebar", keys: label({ key: "e", shift: true }), run: toggleSidebar });
