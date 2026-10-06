@@ -159,6 +159,16 @@ pub fn slashed(rel: &Utf8Path) -> String {
         .join("/")
 }
 
+/// Two paths to one place: equal as written, or once both are resolved on disk — which settles
+/// the slash direction and the letter case Windows lets a path be written in.
+pub(crate) fn same_path(a: &Utf8Path, b: &Utf8Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
 /// Drop `\\?\` before a drive letter; leave everything else as it is.
 pub fn plain(path: Utf8PathBuf) -> Utf8PathBuf {
     if let Some(rest) = path.as_str().strip_prefix(r"\\?\")

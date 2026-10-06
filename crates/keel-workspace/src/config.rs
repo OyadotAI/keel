@@ -129,9 +129,19 @@ pub fn discover_mcp_servers(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<McpS
     let home_config = config_file(claude_home);
     if let Ok(contents) = std::fs::read_to_string(&home_config)
         && let Ok(config) = serde_json::from_str::<Value>(&contents)
+        // Matched as a path, not as a string: Claude Code writes the key as it saw the folder,
+        // and on Windows that may be `C:/work/app` or another letter case than Keel's `C:\work\app`.
         && let Some(entries) = config
             .get("projects")
-            .and_then(|p| p.get(repo.as_str()))
+            .and_then(Value::as_object)
+            .and_then(|projects| {
+                projects.get(repo.as_str()).or_else(|| {
+                    projects
+                        .iter()
+                        .find(|(key, _)| crate::same_path(Utf8Path::new(key), repo))
+                        .map(|(_, v)| v)
+                })
+            })
             .and_then(|p| p.get("mcpServers"))
             .and_then(Value::as_object)
     {
@@ -224,10 +234,8 @@ mod tests {
         std::fs::create_dir_all(&repo).expect("repo");
         std::fs::write(
             home.join(".claude.json"),
-            format!(
-                r#"{{"projects":{{"{}":{{"mcpServers":{{"sentry":{{"url":"https://mcp.sentry.dev"}}}}}}}}}}"#,
-                repo.as_str()
-            ),
+            serde_json::json!({"projects": {repo.as_str(): {"mcpServers": {"sentry": {"url": "https://mcp.sentry.dev"}}}}})
+                .to_string(),
         )
         .expect("write");
 

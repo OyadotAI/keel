@@ -110,13 +110,7 @@ pub fn discover_plugins(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Plugin> 
 
 /// The same directory, through any links: Claude Code records a resolved path, and on macOS a
 /// repository's own path very often is not one (`/tmp` is `/private/tmp`).
-fn same_path(a: &Utf8Path, b: &Utf8Path) -> bool {
-    a == b
-        || matches!(
-            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
-            (Ok(x), Ok(y)) if x == y
-        )
-}
+use crate::same_path;
 
 #[cfg(test)]
 mod tests {
@@ -142,11 +136,11 @@ mod tests {
         for d in [&home.join("plugins"), &repo.join(".claude"), &other] {
             std::fs::create_dir_all(d).unwrap();
         }
+        // Built, not formatted: a Windows path dropped into a JSON string is `C:\Users…`, whose
+        // backslashes are escapes, and the file did not parse at all.
         std::fs::write(
             home.join("plugins/installed_plugins.json"),
-            format!(
-                r#"{{"plugins":{{"a@m":[{{"scope":"project","projectPath":"{repo}"}}],"u@m":[{{"scope":"user"}}]}}}}"#
-            ),
+            serde_json::json!({"plugins": {"a@m": [{"scope": "project", "projectPath": repo.as_str()}], "u@m": [{"scope": "user"}]}}).to_string(),
         )
         .unwrap();
         std::fs::write(
