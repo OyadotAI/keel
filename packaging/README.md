@@ -41,8 +41,10 @@ appcast until no Swift build is left in use.
 
 ## Releasing
 
-`make release` bumps the version in `Cargo.toml` and `desktop/src-tauri/Cargo.toml` together,
-commits it, and pushes a `v*` tag. `.github/workflows/release.yml` does the rest:
+`make release` bumps the patch version (0.3.2 → 0.3.3) in `Cargo.toml` and
+`desktop/src-tauri/Cargo.toml` together, commits it, and pushes a `v*` tag.
+`make release VERSION=0.4.0` sets the version instead. A version that is already tagged is refused
+before anything is committed or pushed. `.github/workflows/release.yml` does the rest:
 
 1. `draft` opens a draft release on the feed.
 2. `macos` builds the universal app, signs and notarises it, and staples the DMG.
