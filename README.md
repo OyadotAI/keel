@@ -10,10 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OyadotAI/keel/releases/latest"><img src="https://img.shields.io/badge/macOS-15%2B-black?style=flat&logo=apple" alt="macOS 15+"></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows-black?style=flat" alt="macOS and Windows"></a>
   <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat" alt="MIT License"></a>
   <a href="https://getoya.ai"><img src="https://img.shields.io/badge/sponsored%20by-getOya.ai-7928CA?style=flat" alt="Sponsored by getOya.ai"></a>
-  <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><img src="https://img.shields.io/badge/download-Keel.dmg-007AFF?style=flat" alt="Download Keel"></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><img src="https://img.shields.io/badge/download-macOS-007AFF?style=flat" alt="Download Keel for macOS"></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><img src="https://img.shields.io/badge/download-Windows-007AFF?style=flat" alt="Download Keel for Windows"></a>
 </p>
 
 <p align="center"><b>Free. Open source. Always.</b><br>
@@ -22,7 +23,8 @@ Used daily by engineers at Oya.ai and Jumpermedia.co.</p>
 <p align="center">Sponsored by <a href="https://getoya.ai">getOya.ai</a>, a runtime for accurate agents.</p>
 
 <p align="center">
-  <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><b>Download for macOS</b></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><b>Download for macOS</b></a>
+  · <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><b>Download for Windows</b></a>
   · <a href="#see-it-in-action">Watch the demo</a>
   · <a href="#why-engineers-switch-from-cli--vs-code">Why switch</a>
   · <a href="#get-started">Get started</a>
@@ -153,7 +155,7 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 
 ## Get started in 60 seconds
 
-1. **Download Keel.** Grab the latest [Keel.dmg release][releases], or build from source below.
+1. **Download Keel** for [macOS](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg) or [Windows](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe), or build from source below. It updates itself after that.
 2. **Connect Claude.** Already signed in? Keel detects your setup instantly. Otherwise, click **Install Claude Code** and **Sign in with Claude** via Anthropic's official browser flow.
 3. **Open any repository.** Start a new feature lane, inspect past sessions, or follow an active terminal agent.
 

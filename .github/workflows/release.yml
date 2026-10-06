@@ -226,12 +226,57 @@ jobs:
               }
             }' > latest.json
           rm -f *.sig
+      # The notes are the download page people are sent to: this version, both installers,
+      # linked directly, written here so no release goes out saying only "signed and notarised".
+      - name: Write the download notes
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          base="https://github.com/$FEED/releases/download/$GITHUB_REF_NAME"
+          cat > out/notes.md <<NOTES
+          ## Download Keel $v
+
+          - **macOS** (Apple silicon and Intel): [Keel.dmg]($base/Keel.dmg)
+          - **Windows**: [Keel-setup.exe]($base/Keel-setup.exe)
+
+          Keel needs [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in.
+          Installed copies update themselves — **Restart to update** appears in the status bar.
+
+          Windows is not code-signed yet: on first run SmartScreen asks, and **More info → Run anyway** opens it.
+          NOTES
+
       - name: Publish the feed
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
           gh release upload "$GITHUB_REF_NAME" out/latest.json -R "$FEED" --clobber
-          gh release edit "$GITHUB_REF_NAME" -R "$FEED" --draft=false --latest
+          gh release edit "$GITHUB_REF_NAME" -R "$FEED" --notes-file out/notes.md --draft=false --latest
+
+      # The feed's front page names the current version and links both installers straight at the
+      # files. `latest/download/…` never goes stale, but the version beside it does, so it is
+      # rewritten with every release rather than kept by hand.
+      - name: Point the feed's README at this release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          latest="https://github.com/$FEED/releases/latest/download"
+          cat > out/feed-readme.md <<README
+          # Keel
+
+          Signed builds of [Keel](https://github.com/OyadotAI/keel), the agentic development environment.
+          The current version is **$v**.
+
+          - **macOS** (Apple silicon and Intel, macOS 13+): [Download Keel.dmg]($latest/Keel.dmg)
+          - **Windows** (64-bit): [Download Keel-setup.exe]($latest/Keel-setup.exe)
+
+          Keel needs [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in.
+          Installed copies update themselves from this repository's releases.
+          README
+          sha="$(gh api "repos/$FEED/contents/README.md" --jq .sha 2>/dev/null || true)"
+          gh api -X PUT "repos/$FEED/contents/README.md" \
+            -f message="Keel $v" \
+            -f content="$(base64 -w0 out/feed-readme.md)" \
+            ${sha:+-f sha="$sha"} >/dev/null
 
       # Mirror the exact signed artifacts, not a second build, so visitors to the source repository
       # see the current downloadable version.
@@ -245,5 +290,5 @@ jobs:
             --pattern 'Keel.dmg' --pattern 'Keel-setup.exe'
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
           || gh release create "$GITHUB_REF_NAME" --verify-tag --title "Keel ${GITHUB_REF_NAME#v}" \
-               --notes "Download Keel.dmg (macOS) or Keel-setup.exe (Windows). Installed copies update themselves." --latest
+               --notes-file out/notes.md --latest
           gh release upload "$GITHUB_REF_NAME" mirror/* --clobber
