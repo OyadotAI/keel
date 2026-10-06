@@ -171,7 +171,6 @@ No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's of
 <p><img src="docs/media/installers.png" width="900" alt="Settings with Claude browser sign-in and explicit Install actions for optional developer tools."></p>
 </details>
 
-[releases]: https://github.com/OyadotAI/keel-releases/releases/latest
 
 ---
 
