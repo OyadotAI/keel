@@ -7,6 +7,36 @@ import { SetupBadge } from "./SetupWarnings";
 import { Icon } from "./icons";
 import { label } from "../keys";
 import { cycle } from "./App";
+import { activity } from "./StatusBar";
+import type { Lane } from "../store";
+import type { Turn } from "../reduce";
+
+// The last line of a finished turn, worked out once per turn object: `reduce.ts` copies a turn
+// whenever it changes, so the object is the cache key, and a row reading it on every store
+// update — every 16 ms while another lane streams — costs a lookup rather than a split.
+const said = new WeakMap<Turn, string>();
+function lastLine(t: Turn): string {
+  const hit = said.get(t);
+  if (hit !== undefined) return hit;
+  let out = "";
+  for (let i = t.steps.length - 1; i >= 0 && !out; i--) {
+    const b = t.blocks[t.steps[i].slice(2)];
+    if (b?.kind !== "say") continue;
+    out = (b.text.split("\n").map((x) => x.replace(/[#*`>_]/g, "").trim()).filter(Boolean).at(-1) ?? "").slice(0, 120);
+  }
+  said.set(t, out);
+  return out;
+}
+
+/// The line under a lane's name: what it is doing while it works, and the last thing it said once
+/// it stops — so the rail answers "where is each of them" without opening any of them.
+function lastWord(l: Lane): { text: string; tone: string } {
+  const a = activity(l);
+  if (a.tone !== "idle") return { text: a.label, tone: a.tone };
+  const t = l.conv.turns.at(-1);
+  if (t?.gate?.status === "failed") return { text: "Checks failed", tone: "bad" };
+  return { text: t ? lastLine(t) : "", tone: "idle" };
+}
 
 export async function pickProject() {
   const path = await open({ directory: true, multiple: false, title: "Open a project" });
@@ -18,7 +48,7 @@ export function Sidebar() {
   return (
     <nav className="sidebar" aria-label="Projects">
       <div className="sidebar-actions">
-        <button className="open" onClick={pickProject} title="Open a project folder (⌘O)">
+        <button className="open" onClick={pickProject} title={`Open a project folder (${label({ key: "o" })})`}>
           <Icon name="folder" size={17} /> Open project…
         </button>
         <button className="ghost" onClick={() => useStore.setState({ creating: true, settings: false })} aria-label="New project" title="New project from a template, or clone from GitHub">
@@ -27,7 +57,7 @@ export function Sidebar() {
         <button className="ghost" onClick={() => useStore.setState((s) => ({ extensions: !s.extensions, settings: false, creating: false }))} aria-label="Extensions" title="Extensions — skills, subagents, MCP servers, plugins">
           <Icon name="puzzle" size={17} />
         </button>
-        <button className="ghost" onClick={() => useStore.setState((s) => ({ settings: !s.settings }))} aria-label="Settings" title="Settings (⌘,)">
+        <button className="ghost" onClick={() => useStore.setState((s) => ({ settings: !s.settings }))} aria-label="Settings" title={`Settings (${label({ key: "," })})`}>
           <Icon name="gear" size={17} />
         </button>
       </div>
@@ -89,10 +119,10 @@ function ProjectRow({ path }: { path: string }) {
         <Floating anchor={menu.at} onClose={() => setMenu(null)} width={260}>
           <div className="eyebrow" style={{ padding: "4px 8px" }}>Claude Code</div>
           <button onClick={() => make(false, "claude")}>
-            <Icon name="terminal" size={14} /> In the project's tree <kbd style={{ marginLeft: "auto" }}>⌘N</kbd>
+            <Icon name="terminal" size={14} /> In the project's tree <kbd style={{ marginLeft: "auto" }}>{label({ key: "n" })}</kbd>
           </button>
           <button onClick={() => make(true, "claude")}>
-            <Icon name="branch" size={14} /> On its own branch <kbd style={{ marginLeft: "auto" }}>⌘⇧N</kbd>
+            <Icon name="branch" size={14} /> On its own branch <kbd style={{ marginLeft: "auto" }}>{label({ key: "n", shift: true })}</kbd>
           </button>
           <div className="sep" />
           <div className="eyebrow" style={{ padding: "4px 8px" }}>Codex</div>
@@ -112,10 +142,10 @@ function ProjectRow({ path }: { path: string }) {
       {ctx && (
         <Floating anchor={ctx} onClose={() => setCtx(null)} width={250}>
           <button onClick={() => (setCtx(null), make(false, "claude"))}>
-            <Icon name="terminal" size={14} /> New Claude Code lane <kbd style={{ marginLeft: "auto" }}>⌘N</kbd>
+            <Icon name="terminal" size={14} /> New Claude Code lane <kbd style={{ marginLeft: "auto" }}>{label({ key: "n" })}</kbd>
           </button>
           <button onClick={() => (setCtx(null), make(true, "claude"))}>
-            <Icon name="branch" size={14} /> New lane on its own branch <kbd style={{ marginLeft: "auto" }}>⌘⇧N</kbd>
+            <Icon name="branch" size={14} /> New lane on its own branch <kbd style={{ marginLeft: "auto" }}>{label({ key: "n", shift: true })}</kbd>
           </button>
           <button onClick={() => (setCtx(null), make(false, "codex"))}>
             <Icon name="terminal" size={14} /> New Codex lane
@@ -152,11 +182,23 @@ function arrows(e: React.KeyboardEvent) {
   requestAnimationFrame(() => (document.querySelector('.sidebar .lane[aria-current="true"]') as HTMLElement | null)?.focus());
 }
 
+/// The editor is in the lane's header, so the lane is selected first.
+function startRename(id: string) {
+  useStore.getState().select(id);
+  useStore.setState({ renaming: id });
+}
+
 function LaneRow({ id }: { id: string }) {
   const l = useStore((s) => s.lanes[id]);
   const active = useStore((s) => s.active === id);
   const failed = useStore((s) => s.lanes[id]?.conv.turns.at(-1)?.gate?.status === "failed");
-  const renaming = useStore((s) => s.renaming === id);
+  // Two strings, so a row re-renders when its own line changes and not on every op.
+  const sub = useStore((s) => {
+    const w = s.lanes[id] ? lastWord(s.lanes[id]) : { text: "", tone: "idle" };
+    return `${w.tone}|${w.text}`;
+  });
+  const subTone = sub.slice(0, sub.indexOf("|"));
+  const subText = sub.slice(sub.indexOf("|") + 1);
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   const root = useStore((s) => (l ? s.projects[l.project]?.path : undefined));
   if (!l) return null;
@@ -168,41 +210,27 @@ function LaneRow({ id }: { id: string }) {
     select(id);
     useStore.setState({ asking: what });
   };
-  const rename = (name: string | null) => {
-    const title = name?.trim();
-    useStore.setState((s) => ({ renaming: null, ...(title ? { lanes: { ...s.lanes, [id]: { ...s.lanes[id], title } } } : {}) }));
-    requestAnimationFrame(() => (document.querySelector('.sidebar .lane[aria-current="true"]') as HTMLElement | null)?.focus());
-  };
   const checkout = root && (l.wt ? `${root}/.keel/worktrees/${l.wt}` : root);
   return (
     <div className="lane-row">
-    {renaming ? (
-      <input
-        autoFocus
-        className="field lane-rename"
-        defaultValue={l.title}
-        aria-label="Lane name"
-        onFocus={(e) => e.currentTarget.select()}
-        onBlur={(e) => rename(e.target.value)}
-        onKeyDown={(e) => (e.key === "Enter" ? rename(e.currentTarget.value) : e.key === "Escape" && rename(null))}
-      />
-    ) : (
-    <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => useStore.setState({ renaming: id })} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), useStore.setState({ renaming: id })) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
+    <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => startRename(id)} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), startRename(id)) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : null}
       </span>
-      <span className="lane-title">{l.title}</span>
+      <span className="lane-text">
+        <span className="lane-title">{l.title}</span>
+        {subText && <span className={`lane-sub ${subTone}`}>{subText}</span>}
+      </span>
       {l.isolated && <Icon name="branch" size={11} style={{ color: "var(--faint)" }} />}
       {l.agent === "codex" && <span className="faint" style={{ fontSize: 10 }}>codex</span>}
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
-    )}
-    <button className="ghost lane-close" aria-label={`Close ${l.title}`} title="Close lane (⌘W)" onClick={() => ask("close")}>
+    <button className="ghost lane-close" aria-label={`Close ${l.title}`} title={`Close lane (${label({ key: "w" })})`} onClick={() => ask("close")}>
       <Icon name="x" size={12} />
     </button>
     {ctx && (
       <Floating anchor={ctx} onClose={() => setCtx(null)} width={250}>
-        <button onClick={() => (setCtx(null), useStore.setState({ renaming: id }))}>
+        <button onClick={() => (setCtx(null), startRename(id))}>
           <Icon name="pencil" size={14} /> Rename… <kbd style={{ marginLeft: "auto" }}>F2</kbd>
         </button>
         {checkout && (
@@ -226,7 +254,7 @@ function LaneRow({ id }: { id: string }) {
           </button>
         )}
         <button onClick={() => ask("close")}>
-          <Icon name="x" size={14} /> Close lane <kbd style={{ marginLeft: "auto" }}>⌘W</kbd>
+          <Icon name="x" size={14} /> Close lane <kbd style={{ marginLeft: "auto" }}>{label({ key: "w" })}</kbd>
         </button>
       </Floating>
     )}

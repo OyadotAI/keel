@@ -235,7 +235,16 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
   useEffect(() => {
-    if (!hidden) requestAnimationFrame(() => fitRef.current());
+    if (hidden) {
+      // A hidden xterm that keeps focus still takes keystrokes — into a lane nobody can see.
+      if (host.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+      return;
+    }
+    requestAnimationFrame(() => {
+      fitRef.current();
+      // Typing follows the lane on screen — unless focus is in the rail, the palette or a dialog.
+      if (!document.activeElement?.closest(".sidebar, .palette, [role=dialog], .strip, .side-panel, input, textarea:not(.xterm-helper-textarea)")) host.current?.querySelector("textarea")?.focus();
+    });
   }, [hidden]);
 
   const name = agent ? (kind === "codex" ? "Codex" : "Claude Code") : "Shell";

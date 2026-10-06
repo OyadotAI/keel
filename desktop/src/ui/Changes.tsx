@@ -1,5 +1,7 @@
 import { Virtuoso } from "react-virtuoso";
+import { useEffect, useRef } from "react";
 import { useStore } from "../store";
+import { focusTerminal } from "./kit";
 
 /// What git says moved in this lane's checkout. Read on events, never on a clock.
 export function Changes({ lane }: { lane: string }) {
@@ -22,7 +24,7 @@ export function Changes({ lane }: { lane: string }) {
         itemContent={(i) => {
           const c = git.changes[i];
           return (
-            <button className="change" onClick={() => !c.dir && openDiff(lane, c.path)} title={c.label} disabled={c.dir}>
+            <button data-file={c.path} className="change" onClick={() => !c.dir && openDiff(lane, c.path)} title={c.label} disabled={c.dir}>
               <span className={`status s-${c.status.trim().slice(0, 1).toLowerCase() || "m"}`}>{c.status.trim() || "M"}</span>
               <span className="change-path">{c.path}</span>
             </button>
@@ -33,15 +35,41 @@ export function Changes({ lane }: { lane: string }) {
   );
 }
 
+/// Esc goes back to the list with this file focused; ] and [ step through the changed files, so a
+/// review is read without the mouse.
 function Diff({ lane }: { lane: string }) {
   const viewing = useStore((s) => s.lanes[lane]?.viewing);
   const diff = useStore((s) => s.lanes[lane]?.diff);
   const openDiff = useStore((s) => s.openDiff);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => box.current?.focus({ preventScroll: true }), [viewing]);
+  const back = () => {
+    openDiff(lane, undefined);
+    requestAnimationFrame(() => {
+      const row = viewing && document.querySelector<HTMLElement>(`.side-panel [data-file="${CSS.escape(viewing)}"]`);
+      if (row) row.focus();
+      else focusTerminal();
+    });
+  };
+  const step = (by: number) => {
+    const files = (useStore.getState().lanes[lane]?.git?.changes ?? []).filter((c) => !c.dir).map((c) => c.path);
+    const next = files[files.indexOf(viewing ?? "") + by];
+    if (next) openDiff(lane, next);
+  };
+  function keys(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape") back();
+    else if (e.key === "]") step(1);
+    else if (e.key === "[") step(-1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
   return (
-    <div className="changes">
+    <div className="changes" ref={box} tabIndex={-1} onKeyDown={keys} style={{ outline: "none" }}>
       <div className="panel-head">
-        <button className="link" onClick={() => openDiff(lane, undefined)}>
-          ← Changes
+        <button className="link" onClick={back} title="Back to the list (Esc)">
+          ← Changes <kbd>Esc</kbd>
         </button>
         <span className="change-path" title={viewing}>
           {viewing}
@@ -51,6 +79,9 @@ function Diff({ lane }: { lane: string }) {
             <span className="add">+{diff.adds}</span> <span className="del">−{diff.dels}</span>
           </span>
         )}
+        <span className="small faint" title="Previous and next changed file">
+          <kbd>[</kbd> <kbd>]</kbd>
+        </span>
       </div>
       {!diff ? (
         <div className="panel-empty muted">Reading the diff…</div>

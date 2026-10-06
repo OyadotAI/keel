@@ -10,6 +10,7 @@ import { Preview } from "./Preview";
 import { Readiness } from "./Readiness";
 import { Icon } from "./icons";
 import { label } from "../keys";
+import { walkFiles } from "./kit";
 import { Tabs } from "./kit";
 
 const Terminal = lazy(() => import("./Terminal").then((m) => ({ default: m.Terminal })));
@@ -75,17 +76,17 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
               {names[id]} {badge[id]}
             </>
           ),
-          title: `${names[id]} (⌘⌥${i + 1})`,
+          title: `${names[id]} (${label({ key: String(i + 1), alt: true })})`,
         }))} value={tab} onChange={setTab}>
         <span className="spacer" />
-        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the terminal" : "Expand the panel"} title={expanded ? "Restore (⌘⌥⇧I)" : "Expand (⌘⌥⇧I)"}>
+        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the terminal" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}>
           <Icon name="maximize" size={14} />
         </button>
-        <button className="ghost" onClick={close} aria-label="Close the panel" title="Close the panel (⌘⌥I)">
+        <button className="ghost" onClick={close} aria-label="Close the panel" title={`Close the panel (${label({ key: "i", alt: true })})`}>
           <Icon name="x" size={14} />
         </button>
       </Tabs>
-      <div className="tab-body">
+      <div className="tab-body" onKeyDown={walkFiles}>
         {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : <Readiness lane={lane} />}
       </div>
     </aside>

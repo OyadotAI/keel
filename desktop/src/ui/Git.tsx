@@ -214,7 +214,7 @@ function ChangeList({ lane, ep, wt, act }: { lane: string; ep: Endpoint; wt?: st
         ) : (
           <div key={g.dir}>
             <div className="change folder" style={{ alignItems: "center" }}>
-              <button className="link change-path" style={{ textAlign: "left", justifyContent: "flex-start", gap: 6 }} aria-expanded={!!open[g.dir]} onClick={() => setOpen({ ...open, [g.dir]: !open[g.dir] })}>
+              <button data-file="" className="link change-path" style={{ textAlign: "left", justifyContent: "flex-start", gap: 6 }} aria-expanded={!!open[g.dir]} onClick={() => setOpen({ ...open, [g.dir]: !open[g.dir] })}>
                 <Icon name={open[g.dir] ? "chevron-down" : "chevron-right"} size={12} />
                 {g.dir}
                 <span className="faint small">{summary(g.files)}</span>
@@ -247,14 +247,23 @@ function summary(files: Change[]) {
 function ChangeRow({ lane, ep, wt, act, c, indent }: { lane: string; ep: Endpoint; wt?: string; act: Act; c: Change; indent?: boolean }) {
   const openDiff = useStore((s) => s.openDiff);
   const [sure, setSure] = useState(false);
+  const stage = () => act(c.staged ? "Unstaged." : "Staged.", () => post(ep, "/api/git/act", { action: c.staged ? "unstage" : "stage", path: c.path }, { wt }));
   return (
     <div className="change" style={{ alignItems: "center", paddingLeft: indent ? 30 : undefined }}>
       <span className={`status s-${c.status.trim().slice(0, 1).toLowerCase() || "m"}`}>{c.status.trim() || "M"}</span>
-      <button className="link change-path" style={{ textAlign: "left", justifyContent: "flex-start" }} disabled={c.dir} onClick={() => openDiff(lane, c.path)} title={c.label}>
+      <button
+        data-file={c.path}
+        className="link change-path"
+        style={{ textAlign: "left", justifyContent: "flex-start" }}
+        disabled={c.dir}
+        onClick={() => openDiff(lane, c.path)}
+        onKeyDown={(e) => e.key === " " && (e.preventDefault(), stage())}
+        title={`${c.label} — Enter opens the diff, Space ${c.staged ? "unstages" : "stages"}`}
+      >
         {indent ? c.path.slice(c.path.lastIndexOf("/") + 1) : c.path}
         {indent && <span className="faint small"> {c.path.slice(0, c.path.lastIndexOf("/") + 1)}</span>}
       </button>
-      <button className="link small" onClick={() => act(c.staged ? "Unstaged." : "Staged.", () => post(ep, "/api/git/act", { action: c.staged ? "unstage" : "stage", path: c.path }, { wt }))}>
+      <button className="link small" onClick={stage}>
         {c.staged ? "Unstage" : "Stage"}
       </button>
       {sure ? (

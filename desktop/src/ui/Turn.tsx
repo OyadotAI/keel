@@ -5,6 +5,7 @@ import { JOB_PREFIX, useStore } from "../store";
 import type { Call, Turn, Usage } from "../reduce";
 import { Icon, type IconName } from "./icons";
 import { InlineDiff } from "./InlineDiff";
+import { Dialog } from "./kit";
 
 /// A turn as a card: what it was asked, what it did to the repository, and how the checks went.
 /// Not what it said — the terminal shows that, and two panes printing the same prose made both
@@ -291,7 +292,7 @@ const FileRow = memo(function FileRow({ lane, id, commit, path }: { lane: string
             {diff.rows.length > INLINE_ROWS && (
               <div className="small faint" style={{ padding: "0 24px 6px" }}>
                 Showing {INLINE_ROWS} of {diff.rows.length.toLocaleString()} lines —{" "}
-                <button className="link small" onClick={() => void useStore.getState().openDiff(lane, path)}>
+                <button className="link small" onClick={() => (void useStore.getState().openDiff(lane, path), useStore.setState({ panelTab: "git" }))}>
                   Open in Changes
                 </button>
               </div>
@@ -400,20 +401,17 @@ function Rewind({ lane, turn, number }: { lane: string; turn: Turn; number: numb
         <Icon name="rewind" size={13} />
       </button>
       {asking && (
-        <>
-          <div className="scrim" onClick={() => setAsking(false)} />
-          <div className="popover" style={{ position: "absolute", right: 0, top: 28 }}>
-            <p style={{ margin: "0 0 8px" }}>
-              <strong>Rewind files to before turn {number}?</strong> Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. claude's conversation still remembers the edits; tell it, or use <code>/rewind</code> in the terminal.
-            </p>
-            <div className="actions">
-              <button className="primary" onClick={rewind}>
-                Rewind files
-              </button>
-              <button onClick={() => setAsking(false)}>Cancel</button>
-            </div>
+        <Dialog title={`Rewind files to before turn ${number}?`} onClose={() => setAsking(false)}>
+          <p>
+            Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. claude's conversation still remembers the edits; tell it, or use <code>/rewind</code> in the terminal.
+          </p>
+          <div className="actions">
+            <button className="primary" onClick={rewind}>
+              Rewind files
+            </button>
+            <button onClick={() => setAsking(false)}>Cancel</button>
           </div>
-        </>
+        </Dialog>
       )}
     </span>
   );

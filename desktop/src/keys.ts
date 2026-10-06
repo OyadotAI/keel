@@ -15,7 +15,7 @@ export interface Chord {
   alt?: boolean;
 }
 
-const CODES: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown" };
+const CODES: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", "/": "Slash" };
 const GLYPHS: Record<string, string> = { Backspace: "⌫", ArrowUp: "↑", ArrowDown: "↓" };
 
 function code(key: string): string {
@@ -51,11 +51,13 @@ export const KEEL: Chord[] = [
   { key: "n", shift: true },
   { key: "a", shift: true },
   { key: "d", shift: true },
+  { key: "s", shift: true },
   { key: "m", shift: true },
   { key: "Backspace", shift: true },
   { key: "]", shift: true },
   { key: "[", shift: true },
   { key: "ArrowUp", alt: true },
+  { key: "/" },
   { key: "ArrowDown", alt: true },
   ...["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((key) => ({ key })),
   ...["1", "2", "3", "4", "5", "6"].map((key) => ({ key, alt: true })),

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Sidebar, pickProject } from "./Sidebar";
+import { Shortcuts } from "./Shortcuts";
+import { focusTerminal } from "./kit";
 import { useStore } from "../store";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
@@ -92,10 +94,11 @@ export function App() {
   const lane = active && exists ? active : undefined;
   const togglePanel = useCallback(() => setPanel((p) => (remember("keel.panel", p ? "0" : "1"), !p)), []);
   const toggleSidebar = useCallback(() => setSidebar((p) => (remember("keel.sidebar", p ? "0" : "1"), !p)), []);
-  const focusTerminal = () => (document.querySelector(".agents .terminal:not(.hidden) textarea") as HTMLElement | null)?.focus();
   const showTab = (t: Tab) => {
     setPanel(true);
     setTab(t);
+    // Into the tab, so ↑↓ and Enter work at once; two frames so the list has rendered.
+    requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector<HTMLElement>(".side-panel .tab-body [data-file]:not(:disabled), .side-panel .tab-body button:not(:disabled)")?.focus()));
   };
   // A tab asked for from outside — the sidebar's setup list has no window state to reach.
   const asked = useStore((s) => s.panelTab);
@@ -118,6 +121,7 @@ export function App() {
       [{ key: "," }, () => useStore.setState((s) => ({ settings: !s.settings }))],
       [{ key: "]", shift: true }, () => cycle(1)],
       [{ key: "[", shift: true }, () => cycle(-1)],
+      [{ key: "/" }, () => useStore.setState((s) => ({ shortcuts: !s.shortcuts }))],
       [{ key: "ArrowDown", alt: true }, () => cycle(1)],
       [{ key: "ArrowUp", alt: true }, () => cycle(-1)],
       ...TABS.map((t, i): [Chord, () => void] => [{ key: String(i + 1), alt: true }, () => showTab(t)]),
@@ -128,6 +132,7 @@ export function App() {
       [{ key: "n", shift: true }, (l) => newIn(l, true)],
       [{ key: "a", shift: true }, (l) => answerOldest(l, "allow")],
       [{ key: "d", shift: true }, (l) => answerOldest(l, "deny")],
+      [{ key: "s", shift: true }, (l) => answerOldest(l, "allow", "session")],
       [{ key: "m", shift: true }, (l) => useStore.getState().lanes[l]?.wt && setAsking("merge")],
       [{ key: "Backspace", shift: true }, (l) => useStore.getState().lanes[l]?.wt && setAsking("discard")],
       [{ key: "w" }, () => setAsking("close")],
@@ -170,9 +175,10 @@ export function App() {
         {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={togglePanel} ask={(what) => setAsking(what)} />}
         {overlay}
       </main>
-      <StatusBar openTab={showTab} />
+      <StatusBar openTab={showTab} panel={showPanel} togglePanel={togglePanel} />
       <Drop />
       {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
+      <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
     </div>
   );
@@ -211,10 +217,20 @@ function newIn(lane: string, isolated: boolean) {
   const project = s.lanes[lane]?.project;
   if (project) s.select(s.newLane(project, isolated, s.lanes[lane]?.agent));
 }
-function answerOldest(lane: string, decision: "allow" | "deny") {
+/// Never answers something the person has not seen: with nothing waiting here, the first press
+/// goes to the lane that is waiting and the second answers there. A question is focused, not
+/// answered — its options are its own keys.
+function answerOldest(lane: string, decision: "allow" | "deny", scope: "once" | "session" = "once") {
   const s = useStore.getState();
   const p = s.lanes[lane]?.pending[0];
-  if (p && p.tool !== "AskUserQuestion") void s.answer(lane, p, decision);
+  if (!p) {
+    const waiting = lanesInOrder().find((l) => s.lanes[l]?.pending.length);
+    if (waiting) s.select(waiting);
+    return;
+  }
+  if (p.tool === "AskUserQuestion") return void document.querySelector<HTMLElement>(".strip-row .actions button")?.focus();
+  if (scope === "session" && !p.rules.length) return;
+  void s.answer(lane, p, decision, undefined, scope);
 }
 
 /// Mounted only while the palette is open: building its list reads the whole store, and doing that
@@ -231,6 +247,10 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
   for (const p of l?.pending ?? []) {
     if (p.tool === "AskUserQuestion") continue;
     out.push({ id: `allow-${p.id}`, title: `Allow once: ${p.tool} ${p.command.slice(0, 60)}`, keys: label({ key: "a", shift: true }), run: () => void s.answer(lane!, p, "allow") });
+    if (p.rules.length) {
+      out.push({ id: `session-${p.id}`, title: `Allow ${p.rules.join(", ")} for this session`, keys: label({ key: "s", shift: true }), run: () => void s.answer(lane!, p, "allow", undefined, "session") });
+      out.push({ id: `project-${p.id}`, title: `Always allow ${p.rules.join(", ")} in this project`, run: () => void s.answer(lane!, p, "allow", undefined, "project") });
+    }
     out.push({ id: `deny-${p.id}`, title: `Deny: ${p.tool} ${p.command.slice(0, 60)}`, keys: label({ key: "d", shift: true }), run: () => void s.answer(lane!, p, "deny") });
   }
   for (const pid of s.order) {
@@ -255,6 +275,7 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
     TABS.forEach((t, i) => out.push({ id: `tab-${t}`, title: `Show ${t[0].toUpperCase()}${t.slice(1)}`, keys: label({ key: String(i + 1), alt: true }), run: () => showTab(t) }));
     out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => useStore.setState({ settings: true }) });
   }
+  out.push({ id: "shortcuts", title: "Keyboard shortcuts", keys: label({ key: "/" }), run: () => useStore.setState({ shortcuts: true }) });
   out.push({ id: "next-lane", title: "Next lane", keys: label({ key: "ArrowDown", alt: true }), run: () => cycle(1) });
   out.push({ id: "prev-lane", title: "Previous lane", keys: label({ key: "ArrowUp", alt: true }), run: () => cycle(-1) });
   out.push({ id: "open", title: "Open project…", keys: label({ key: "o" }), run: () => void pickProject() });

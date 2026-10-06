@@ -130,6 +130,7 @@ interface State {
   asking: "merge" | "discard" | "close" | null;
   /// The lane whose sidebar row is an input right now — set by F2, a double-click, the menu or the palette.
   renaming: string | null;
+  shortcuts: boolean;
   /// The extensions page — skills, subagents, MCP servers, plugins — over the window.
   extensions: boolean;
   /// Whether each project is trusted, for the marker that says so while it holds.
@@ -167,7 +168,8 @@ interface State {
   /// Read a lane's conversation back if it has one and it is not on screen yet.
   load(lane: string): void;
   send(lane: string, prompt: string): Promise<void>;
-  answer(lane: string, p: Pending, decision: "allow" | "deny", answer?: string): Promise<void>;
+  /// `scope`: "once" lets this call through; "session" and "project" also remember `p.rules`.
+  answer(lane: string, p: Pending, decision: "allow" | "deny", answer?: string, scope?: "once" | "session" | "project"): Promise<void>;
 }
 
 const SAVED = "keel.layout.v1";
@@ -508,6 +510,7 @@ export const useStore = create<State>()((set, getState) => {
     creating: false,
     asking: null,
     renaming: null,
+    shortcuts: false,
     extensions: false,
     trusted: {},
     setup: {},
@@ -785,7 +788,7 @@ export const useStore = create<State>()((set, getState) => {
       lane(lid, (l) => ({ queued: [...l.queued, prompt] }));
     },
 
-    async answer(lid, p, decision, text) {
+    async answer(lid, p, decision, text, scope = "once") {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
@@ -799,7 +802,7 @@ export const useStore = create<State>()((set, getState) => {
           decision: question ? "deny" : decision,
           session: p.session_id || l.session,
           rules: question ? [] : p.rules,
-          scope: question ? "session" : "once",
+          scope: question ? "session" : scope,
           answer: text ?? "",
         });
       } catch (e) {

@@ -239,7 +239,7 @@ button.link {
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 6px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) 24px;
+  grid-template-rows: minmax(0, 1fr) 32px;
   height: 100%;
 }
 .app.no-sidebar {
@@ -376,6 +376,39 @@ button.link {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.lane-row .lane {
+  height: auto;
+  min-height: 36px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.lane-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.lane-text .lane-title {
+  white-space: nowrap;
+}
+.lane-sub {
+  font: 400 var(--t-small) var(--font);
+  color: var(--faint);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lane-sub.live {
+  color: var(--accent);
+}
+.lane-sub.warn {
+  color: var(--warn);
+}
+.lane-sub.bad {
+  color: var(--del);
+}
 .marker {
   width: 10px;
   flex: none;
@@ -441,11 +474,7 @@ button.link {
   height: 28px;
   font-size: var(--t-small);
 }
-.lane-rename {
-  margin: 2px 0;
-  height: 32px;
-  width: 100%;
-}
+
 
 /* ── Agent column ─────────────────────────────────────────────────────── */
 .agent-pane {
@@ -1073,20 +1102,20 @@ pre.code {
   padding: 0 6px;
   background: var(--surface);
   border-top: 1px solid var(--line);
-  font-size: var(--t-micro);
+  font-size: var(--t-body);
   min-width: 0;
 }
 .statusbar button {
-  height: 20px;
+  height: 26px;
   border: none;
   background: none;
   color: var(--dim);
-  font: var(--t-micro) var(--font);
-  padding: 0 6px;
-  gap: 5px;
+  font: var(--t-body) var(--font);
+  padding: 0 8px;
+  gap: 6px;
 }
 .statusbar button:hover {
-  background: var(--hover);
+  background: var(--hover) !important;
   color: var(--text);
 }
 .statusbar .spacer {
@@ -1105,6 +1134,114 @@ pre.code {
 }
 .statusbar .bad {
   color: var(--del);
+}
+/* One language for the whole bar: flat items, hover is the only box, groups split by a hairline.
+   The global button shadow made every item a chip and the bar read as nine buttons. */
+.statusbar {
+  gap: 4px;
+  padding: 0 8px;
+}
+.statusbar button {
+  box-shadow: none;
+  border-radius: 6px;
+  height: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.statusbar button:active:not(:disabled) {
+  transform: none;
+}
+.sb-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--line-strong);
+  flex: none;
+}
+.sb-mono {
+  font-family: var(--mono);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.sb-pill {
+  font: 600 var(--t-micro) var(--font);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+.sb-now .sb-agent {
+  color: var(--text);
+  font-weight: 600;
+}
+.sb-now .sb-label {
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-now.live .sb-label {
+  color: var(--accent);
+}
+.sb-now.warn .sb-label,
+.sb-now.warn {
+  color: var(--warn);
+}
+.sb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  flex: none;
+}
+.sb-now .clock {
+  font-size: var(--t-small);
+}
+.sb-usage {
+  gap: 12px !important;
+}
+.sb-key {
+  color: var(--faint);
+  font-size: var(--t-small);
+}
+.statusbar .sb-trusted {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  border-radius: 999px;
+  padding: 0 10px;
+}
+.statusbar .sb-trusted:hover {
+  background: color-mix(in srgb, var(--warn) 18%, transparent) !important;
+  color: var(--warn);
+}
+.statusbar .sb-shortcuts {
+  color: var(--accent);
+}
+.statusbar .sb-shortcuts:hover {
+  background: var(--tint) !important;
+  color: var(--accent);
+}
+.statusbar kbd {
+  font: 600 var(--t-micro) var(--font);
+  min-width: 26px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--raised);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 35%, transparent), 0 0 0 0.5px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.statusbar .sb-icon {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.statusbar .sb-icon.on {
+  color: var(--accent);
+  background: var(--tint);
 }
 
 /* Menus, popovers, palette */
@@ -2009,6 +2146,19 @@ h3 {
 .finding,
 .finding * {
   overflow-wrap: anywhere;
+}
+.shortcuts {
+  display: grid;
+  gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+  min-width: 380px;
+}
+.shortcut {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 0;
 }
 .statusbar button.update {
   color: var(--on-accent);

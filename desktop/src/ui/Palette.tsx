@@ -1,4 +1,5 @@
 import { cover } from "../cover";
+import { restoreFocus } from "./kit";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 export interface Command {
@@ -45,7 +46,13 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => cover(), []);
-  useEffect(() => input.current?.focus(), []);
+  const list = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const back = document.activeElement;
+    input.current?.focus();
+    // After the pick has run: a "Go to lane" lands in that lane's terminal, not the old one.
+    return () => void requestAnimationFrame(() => restoreFocus(back));
+  }, []);
   const rows = useMemo(
     () =>
       commands
@@ -56,12 +63,13 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
     [commands, query],
   );
   useEffect(() => setIndex(0), [query]);
+  useEffect(() => list.current?.children[index]?.scrollIntoView({ block: "nearest" }), [index]);
   function key(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") close();
-    else if (e.key === "ArrowDown") {
+    else if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) {
       e.preventDefault();
       setIndex((i) => Math.min(rows.length - 1, i + 1));
-    } else if (e.key === "ArrowUp") {
+    } else if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p")) {
       e.preventDefault();
       setIndex((i) => Math.max(0, i - 1));
     }
@@ -79,7 +87,7 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
         {rows.length === 0 ? (
           <div className="none">No matches — try a lane, a session or an action.</div>
         ) : (
-          <ul role="listbox">
+          <ul ref={list} role="listbox">
             {rows.map((r, i) => (
               <li
                 key={r.c.id}
