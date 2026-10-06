@@ -66,10 +66,14 @@ sparkle-keys: sparkle-tools
 # in step, and the workflow refuses a tag either disagrees with. `make release` bumps the patch; `make release VERSION=0.3.0`
 # sets it. The bump is committed before the tag, and the workflow refuses a tag that disagrees.
 release:
-	@current="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
+	@set -e; \
+	current="$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"; \
 	next="$(VERSION)"; \
 	if [ -z "$$next" ]; then \
 	  next="$$(echo "$$current" | awk -F. '{ printf "%d.%d.%d", $$1, $$2, $$3 + 1 }')"; \
+	fi; \
+	if git rev-parse -q --verify "refs/tags/v$$next" >/dev/null; then \
+	  echo "    v$$next is already released — run make release with a newer VERSION"; exit 1; \
 	fi; \
 	if [ "$$next" = "$$current" ]; then echo "    version unchanged ($$current)"; else \
 	  sed -i '' "s/^version = \"$$current\"/version = \"$$next\"/" Cargo.toml; \
