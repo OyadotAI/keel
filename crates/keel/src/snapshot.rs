@@ -130,7 +130,10 @@ pub fn restore(root: &Utf8Path, tree: &str) -> Result<String, String> {
     let undo = snapshot(root)?;
     with_temporary_index(root, |index| {
         git(root, Some(index), &["read-tree", &undo])?;
-        git(root, Some(index), &["update-index", "--refresh"])?;
+        // `-q`: this refresh only fills in stat data for the merge below. Without it a file
+        // written within the index's own second ("racy git") made the whole rewind fail with
+        // "needs update" — seen in CI. The merge still refuses a file that genuinely differs.
+        git(root, Some(index), &["update-index", "-q", "--refresh"])?;
         git(root, Some(index), &["read-tree", "-m", "-u", &undo, tree])?;
         Ok(())
     })?;

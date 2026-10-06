@@ -76,7 +76,14 @@ impl RepoContext {
             {
                 continue;
             }
-            files.insert(rel.to_owned());
+            // `/` between parts on every platform, which is how every check spells a path: on
+            // Windows `strip_prefix` left `.github\workflows\ci.yml`, and no check matched.
+            files.insert(Utf8PathBuf::from(
+                rel.components()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            ));
         }
 
         Ok(Self { root, files })
