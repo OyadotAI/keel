@@ -34,8 +34,13 @@ if (!process.argv[2]) {
     const expected = hashes.split('\n').find((line) => line.endsWith(`  ${archive}`))?.split(' ')[0];
     if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error(`Checksum mismatch for ${archive}`);
     const file = join(stage, archive); writeFileSync(file, bytes);
-    if (os === 'win') execFileSync('tar', ['-xf', file, '-C', stage]);
-    else execFileSync('tar', ['-xzf', file, '-C', stage]);
+    // Git Bash can put GNU tar ahead of Windows' ZIP-capable bsdtar. Select the
+    // native executable on Windows and use a relative archive path so a drive
+    // letter cannot be interpreted as a remote host.
+    const tar = process.platform === 'win32'
+      ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+      : 'tar';
+    execFileSync(tar, [os === 'win' ? '-xf' : '-xzf', archive], { cwd: stage });
     stageBinary(join(stage, name, os === 'win' ? 'node.exe' : 'bin/node'), new URL(`keel-node-${triple}${os === 'win' ? '.exe' : ''}`, out));
     // Keep the runtime's required notice in the bundle resources.
     writeFileSync(new URL('../src-tauri/runtime/NODE-LICENSE', import.meta.url), readFileSync(join(stage, name, 'LICENSE')));
