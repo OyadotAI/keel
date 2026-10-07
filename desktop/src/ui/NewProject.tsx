@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { get, post, type Endpoint } from "../api";
 import { useStore } from "../store";
+import { InterfaceSetting } from "./InterfaceSetting";
 import { Tabs } from "./kit";
 
 interface Repo {
@@ -90,6 +91,7 @@ export function NewProject() {
         <button onClick={close}>Cancel</button>
       </header>
       <div className="settings-body">
+        <InterfaceSetting />
         <Tabs
           tabs={[
             { id: "template", label: "From a template" },

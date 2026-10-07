@@ -3,6 +3,8 @@ import { useStore, type Pending } from "../store";
 import { Icon } from "./icons";
 import { label } from "../keys";
 import { focusTerminal } from "./kit";
+import { post } from "../api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
@@ -31,6 +33,7 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const answer = useStore((s) => s.answer);
   const [all, setAll] = useState(false);
   if (p.tool === "AskUserQuestion") return <Questions lane={lane} p={p} />;
+  if (p.provider) return <RuntimeRequest lane={lane} p={p} />;
   const lines = p.command.split("\n");
   return (
     <div className="strip-row">
@@ -73,13 +76,16 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
   const [picked, setPicked] = useState<Record<number, string>>({});
   const complete = questions.length > 0 && questions.every((_, i) => picked[i] !== undefined);
   function send(chosen: Record<number, string>) {
+    if (p.provider) {
+      void runtimeAnswer(lane, p, { answers: Object.fromEntries(questions.map((q, i) => [q.question, chosen[i]])) });
+      return;
+    }
     void answer(lane, p, "deny", questions.map((q, i) => `${q.question}: ${chosen[i]}`).join("\n"));
     after();
   }
   function pick(i: number, option: string) {
     const next = { ...picked, [i]: option };
     setPicked(next);
-    if (questions.length === 1) send(next);
   }
   // 1–9 pick from the first question still open; ←→ walk the options. Only while focus is here,
   // so the digits never leave the terminal.
@@ -118,13 +124,47 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
               </button>
             ))}
           </div>
+          <input className="field" aria-label={`Your answer: ${q.question}`} placeholder="Or write your own answer…" value={picked[i] ?? ""} onChange={(e) => setPicked((old) => ({ ...old, [i]: e.target.value }))} />
         </div>
       ))}
-      {questions.length > 1 && (
+      {questions.length > 0 && (
         <button className="primary" disabled={!complete} onClick={() => send(picked)}>
           {complete ? "Send answers" : `Answer all ${questions.length} questions`}
         </button>
       )}
     </div>
   );
+}
+
+async function runtimeAnswer(lane: string, p: Pending, answer: unknown) {
+  const s = useStore.getState();
+  const l = s.lanes[lane];
+  const ep = l && s.projects[l.project]?.endpoint;
+  if (!ep) return;
+  try { await post(ep, "/api/chat/control", { lane, method: "answer", id: p.id, answer }); }
+  catch (error) { useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: `Could not deliver your answer: ${error}` } } })); }
+}
+
+function RuntimeRequest({ lane, p }: { lane: string; p: Pending }) {
+  const [content, setContent] = useState("{}");
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+  const schema = p.input.requestedSchema;
+  async function answer(decision: unknown) {
+    let value;
+    try { value = schema && decision === "accept" ? JSON.parse(content) : null; }
+    catch { setError("Enter valid JSON for the requested fields."); return; }
+    setSending(true);
+    await runtimeAnswer(lane, p, { decision, content: value });
+    setSending(false);
+  }
+  return <div className="strip-row"><div className="strip-title"><Icon name="hand" />{p.tool}</div>
+    {p.command && <pre className="code">{p.command}</pre>}
+    {typeof p.input.reason === "string" && <p>{p.input.reason}</p>}
+    {typeof p.input.url === "string" && /^https?:\/\//.test(p.input.url) && <button onClick={() => void openUrl(String(p.input.url))}>Open verification page</button>}
+    <details><summary>Request details</summary><pre className="code">{JSON.stringify(p.input, null, 2)}</pre></details>
+    {!!schema && <><pre className="code">{JSON.stringify(schema, null, 2)}</pre><textarea aria-label="Requested fields as JSON" value={content} onChange={(e) => setContent(e.target.value)} /></>}
+    {error && <p role="alert">{error}</p>}
+    <div className="actions">{p.choices?.map((choice, i) => <button key={i} disabled={sending} className={i === 0 ? "primary" : undefined} onClick={() => void answer(choice.value)}>{choice.label}</button>)}</div>
+  </div>;
 }

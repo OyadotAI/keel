@@ -15,7 +15,7 @@ export interface Chord {
   alt?: boolean;
 }
 
-const CODES: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", "/": "Slash" };
+const CODES: Record<string, string> = { ".": "Period", "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", "/": "Slash" };
 const GLYPHS: Record<string, string> = { Backspace: "⌫", ArrowUp: "↑", ArrowDown: "↓" };
 
 function code(key: string): string {
@@ -40,6 +40,7 @@ export function label(c: Chord): string {
 /// nothing else, so a key the CLI uses (Ctrl+_ for undo, say) still reaches it.
 export const KEEL: Chord[] = [
   { key: "k" },
+  { key: "." },
   { key: "o" },
   { key: "l" },
   { key: "j" },

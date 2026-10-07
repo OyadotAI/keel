@@ -35,3 +35,12 @@ export function clean(text: string): string {
   // eslint-disable-next-line no-control-regex -- matching control characters is the point.
   return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }
+
+export function interruptTerminal(lane: string): boolean {
+  const type = typers.get(lane);
+  if (!type) return false;
+  type("\x03");
+  return true;
+}
+
+export function terminalConnected(lane: string): boolean { return typers.has(lane); }

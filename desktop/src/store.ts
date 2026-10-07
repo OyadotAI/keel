@@ -8,10 +8,11 @@ import { readSetup, type Readiness, type Warning } from "./setup";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url } from "./api";
-import { applyFact, applyFrames, type Conversation, type Fact, type Frame } from "./reduce";
+import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
 import { notify } from "./notify";
-import { typeInto } from "./typers";
+
+import { typeInto, interruptTerminal, terminalConnected } from "./typers";
 import { prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
 export interface Pending {
@@ -22,6 +23,9 @@ export interface Pending {
   rules: string[];
   input: Record<string, unknown>;
   session_id: string;
+  provider?: Agent;
+  kind?: "permission" | "question" | "elicitation";
+  choices?: { label: string; value: unknown }[];
 }
 
 export interface Job {
@@ -76,11 +80,16 @@ export interface Project {
   history?: boolean;
 }
 
+export type ChatInterface = "chat" | "terminal";
 export type Agent = "claude" | "codex";
+
+export interface Attachment { path: string; name: string; mime?: string; preview?: string }
+export interface QueuedMessage { id: string; text: string; attachments: Attachment[] }
 
 export interface Lane {
   id: string;
   project: string;
+  interface?: ChatInterface;
   title: string;
   /// The conversation, chosen by Keel when the lane is made so the transcript to follow is known
   /// before anything is typed.
@@ -109,15 +118,29 @@ export interface Lane {
   dev?: Dev;
   /// Prompts waiting for the turn in flight to end — a finished job's report, mainly. Drained by
   /// every way a turn ends, not just the happy one.
-  queued: string[];
+  queued: QueuedMessage[];
+  attachments?: Attachment[];
   conv: Conversation;
   running: boolean;
   loaded: boolean;
   error?: string;
   pending: Pending[];
+  draft?: string;
+  mode?: "plan" | "acceptEdits";
+  model?: string;
+  models?: { value?: string; id?: string; displayName?: string; display_name?: string; name?: string }[];
+  commands?: string[];
+  managed?: boolean;
+  cursor?: number;
+  submitting?: boolean;
+  disconnected?: boolean;
+  receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; wt?: string; attachments?: Attachment[] };
 }
 
 interface State {
+  chatInterface: ChatInterface;
+  setChatInterface(value: ChatInterface): void;
+  switchInterface(lane: string, value: ChatInterface): Promise<void>;
   order: string[];
   projects: Record<string, Project>;
   lanes: Record<string, Lane>;
@@ -167,7 +190,9 @@ interface State {
   select(lane: string): void;
   /// Read a lane's conversation back if it has one and it is not on screen yet.
   load(lane: string): void;
-  send(lane: string, prompt: string): Promise<void>;
+  send(lane: string, prompt: string, attachments?: Attachment[]): Promise<void>;
+  stop(lane: string): Promise<void>;
+  draft(lane: string, text: string): void;
   /// `scope`: "once" lets this call through; "session" and "project" also remember `p.rules`.
   answer(lane: string, p: Pending, decision: "allow" | "deny", answer?: string, scope?: "once" | "session" | "project"): Promise<void>;
 }
@@ -179,7 +204,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean }[];
+  lanes: { id: string; project: string; title: string; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; attachments?: Attachment[]; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
   active?: string;
 }
 
@@ -192,7 +217,7 @@ function load(): Pick<State, "order" | "projects" | "lanes" | "active"> {
     const lanes: Record<string, Lane> = {};
     for (const l of s.lanes) {
       // A lane saved before lanes were the CLI has no session of its own yet; it gets one.
-      lanes[l.id] = { ...l, session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: [], conv: empty, running: false, loaded: !l.session, pending: [] };
+      lanes[l.id] = { ...l, interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: [], conv: empty, running: false, loaded: !l.session, pending: [] };
     }
     return { order: s.order.filter((p) => projects[p]), projects, lanes, active: s.active };
   } catch {
@@ -204,7 +229,7 @@ function save(s: State) {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, session, isolated, wt, agent, known }) => ({ id, project, title, session, isolated, wt, agent, known })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments, draft, model, mode, managed, receipt }) => ({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), draft, model, mode, managed, receipt })),
     active: s.active,
   };
   try {
@@ -299,7 +324,7 @@ export const useStore = create<State>()((set, getState) => {
       const l = getState().lanes[lid];
       const s = l && list.find((x) => x.id === l.session);
       const busy = !!s && s.live && s.busy;
-      if (!l || (l.running === busy && (!s || l.known))) continue;
+      if (!l || (l.managed && l.interface !== "terminal") || l.submitting || (l.running === busy && (!s || l.known))) continue;
       // Idle again: whatever it was asking is no longer being waited on — Esc in the terminal,
       // or the hook's own wait ran out — and what was queued goes next.
       lane(lid, { running: busy, known: l.known || !!s, ...(!busy && l.running ? { pending: [] } : {}) });
@@ -395,10 +420,10 @@ export const useStore = create<State>()((set, getState) => {
     const l = getState().lanes[lid];
     if (!l || !l.queued.length) return;
     // The CLI queues typed input itself; anything else waits for the turn to end.
-    if (l.running && !l.agent) return;
+    if (l.running || l.submitting || l.disconnected || l.receipt) return;
     const [next, ...rest] = l.queued;
     lane(lid, { queued: rest });
-    void getState().send(lid, next);
+    void getState().send(lid, next.text, next.attachments);
   }
 
   const gitTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -445,7 +470,7 @@ export const useStore = create<State>()((set, getState) => {
   /// typed into has no transcript yet; that is a wait, retried, never an error on screen.
   async function follow(lid: string) {
     const l = getState().lanes[lid];
-    if (!l?.session || follows.has(lid) || l.agent !== "claude") return;
+    if (!l?.session || (l.managed && l.interface !== "terminal") || follows.has(lid) || l.agent !== "claude" || !l.known) return;
     let ep: Endpoint;
     try {
       ep = await endpoint(l.project);
@@ -504,8 +529,113 @@ export const useStore = create<State>()((set, getState) => {
     follows.set(lid, stream);
   }
 
+  const chats = new Map<string, Stream>();
+  const connecting = new Set<string>();
+  async function listen(lid: string) {
+    if (chats.has(lid) || connecting.has(lid)) return;
+    const l = getState().lanes[lid];
+    if (!l || l.interface === "terminal") return;
+    connecting.add(lid);
+    try {
+      const ep = await endpoint(l.project);
+      if (!getState().lanes[lid]) return;
+      const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
+        let idle = false;
+        lane(lid, (current) => {
+          let conv = current.conv;
+          const patch: Partial<Lane> = {};
+          let cursor = current.cursor ?? 0;
+          for (const incoming of events) {
+            if (incoming.event === "caught-up") {
+              patch.loaded = true;
+              patch.disconnected = false;
+              clearConnectionError(current, patch);
+              if (current.managed || cursor) patch.running = !!(incoming.data as { running?: boolean }).running;
+              continue;
+            }
+            if (incoming.event !== "record") continue;
+            const e = incoming.data as { seq: number; event: string; data: unknown };
+            if (e.seq <= cursor) continue;
+            if (cursor === 0) conv = empty;
+            cursor = e.seq;
+            patch.managed = true;
+            if (e.event === "accepted") {
+              patch.running = true;
+              patch.error = undefined;
+              const id = (e.data as { id: string }).id;
+              if (current.receipt?.id === id) patch.receipt = undefined;
+            } else if (e.event === "snapshot") {
+              conv = restoreTranscript(conv, (e.data as { frames: Frame[] }).frames);
+            } else if (e.event === "turn") {
+              const frames = e.data as Frame[];
+              Object.assign(patch, sessionPatch(frames));
+              conv = applyFrames(conv, frames.filter((f) => f.op !== "session"));
+            } else if (e.event === "request") {
+              const p = e.data as Pending;
+              patch.pending = [...(patch.pending ?? current.pending).filter((x) => x.id !== p.id), p];
+            } else if (e.event === "resolved") {
+              patch.pending = (patch.pending ?? current.pending).filter((p) => p.id !== (e.data as { id: string }).id);
+            } else if (e.event === "capabilities") {
+              const c = e.data as { models?: Lane["models"]; commands?: { name: string }[] };
+              patch.models = c.models;
+              patch.commands = c.commands?.map((c) => c.name);
+            } else if (e.event === "fact") conv = applyFact(conv, e.data as Fact);
+            else if (e.event === "fatal") patch.error = String(e.data);
+            else if (e.event === "idle") {
+              patch.running = false;
+              patch.pending = [];
+              idle = true;
+            }
+          }
+          return { ...patch, conv, cursor };
+        });
+        const now = getState().lanes[lid];
+        if (now?.managed) { follows.get(lid)?.close(); follows.delete(lid); }
+        if (idle || events.some((e) => e.event === "record" && ["accepted", "capabilities"].includes((e.data as { event: string }).event))) save(getState());
+        if (idle) { gitSoon(lid); drain(lid); }
+      }, (error) => {
+        if (chats.get(lid) !== stream) return;
+        chats.delete(lid);
+        if (!getState().lanes[lid]) return;
+        lane(lid, { disconnected: true, ...(error ? { error: `Connection interrupted. Reconnecting… ${error}` } : {}) });
+        lost(l.project, ep);
+        setTimeout(() => void listen(lid), 1500);
+      });
+      chats.set(lid, stream);
+    } catch (error) {
+      lane(lid, { disconnected: true, error: String(error) });
+      setTimeout(() => void listen(lid), 2000);
+    } finally { connecting.delete(lid); }
+  }
+
   return {
     ...load(),
+    chatInterface: (() => { try { return localStorage.getItem("keel.chat-interface") === "terminal" ? "terminal" : "chat"; } catch { return "chat"; } })(),
+    setChatInterface(value) {
+      set({ chatInterface: value });
+      try { localStorage.setItem("keel.chat-interface", value); } catch { /* current session still works */ }
+    },
+    async switchInterface(lid, value) {
+      const l = getState().lanes[lid];
+      if (!l || l.interface === value) return;
+      if (l.running || l.submitting || l.receipt) { lane(lid, { error: "Stop the active turn and resolve any unconfirmed submission before switching interfaces." }); return; }
+      if (l.interface === "terminal" && l.agent === "codex" && !l.known) {
+        lane(lid, { error: "This Codex terminal does not expose its session ID. Choose Formatted chat in Settings and open a new lane; this terminal and its history will remain available." }); return;
+      }
+      if (l.interface === "terminal" && l.agent === "codex" && terminalConnected(lid)) {
+        lane(lid, { error: "Exit Codex in this terminal before switching so its current work and history are saved." }); return;
+      }
+      const ep = await endpoint(l.project);
+      if (l.interface !== "terminal") {
+        try { await post(ep, "/api/chat/control", { lane: lid, method: "close" }); }
+        catch (error) { lane(lid, { error: String(error) }); return; }
+      }
+      follows.get(lid)?.close(); follows.delete(lid);
+      chats.get(lid)?.close(); chats.delete(lid);
+      lane(lid, { interface: value, conv: empty, cursor: 0, loaded: false, error: undefined });
+      save(getState());
+      getState().load(lid);
+    },
     settings: false,
     creating: false,
     asking: null,
@@ -522,7 +652,7 @@ export const useStore = create<State>()((set, getState) => {
       if (!l?.queued.length) return;
       const [next, ...rest] = l.queued;
       lane(lid, { queued: rest });
-      void getState().send(lid, next);
+      void getState().send(lid, next.text, next.attachments);
       if (rest.length) setTimeout(() => getState().connected(lid), 500);
     },
 
@@ -584,6 +714,8 @@ export const useStore = create<State>()((set, getState) => {
       for (const lid of lanes) {
         follows.get(lid)?.close();
         follows.delete(lid);
+        chats.get(lid)?.close();
+        chats.delete(lid);
         retries.delete(lid);
       }
       // A start still in flight is stopped by `endpoint` when it lands and finds no project.
@@ -595,7 +727,7 @@ export const useStore = create<State>()((set, getState) => {
       set((s) => ({
         lanes: {
           ...s.lanes,
-          [lid]: { id: lid, project, session: id(), agent, known: false, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
+          [lid]: { id: lid, project, interface: getState().chatInterface, session: id(), agent, known: false, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
         },
         projects: { ...s.projects, [project]: { ...s.projects[project], lanes: [...s.projects[project].lanes, lid], collapsed: false } },
       }));
@@ -607,6 +739,7 @@ export const useStore = create<State>()((set, getState) => {
       set((s) => ({ active: lid, settings: false, creating: false, extensions: false, opened: s.opened.includes(lid) ? s.opened : [...s.opened, lid] }));
       save(getState());
       void follow(lid);
+      void listen(lid);
       gitSoon(lid);
       soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
       soon(`dev:${lid}`, () => getState().refreshDev(lid));
@@ -679,6 +812,11 @@ export const useStore = create<State>()((set, getState) => {
     },
 
     closeLane(lid) {
+      const closing = getState().lanes[lid];
+      const closingEp = closing && getState().projects[closing.project]?.endpoint;
+      if (closingEp) void post(closingEp, "/api/chat/control", { lane: lid, method: "close" }).catch(() => undefined);
+      chats.get(lid)?.close();
+      chats.delete(lid);
       follows.get(lid)?.close();
       follows.delete(lid);
       set((s) => ({ opened: s.opened.filter((x) => x !== lid) }));
@@ -777,21 +915,61 @@ export const useStore = create<State>()((set, getState) => {
       if (l) void endpoint(l.project).then(() => gitSoon(lid), () => undefined);
       set((s) => (s.opened.includes(lid) ? s : { opened: [...s.opened, lid] }));
       void follow(lid);
+      void listen(lid);
     },
 
-    async send(lid, prompt) {
+    draft(lid, text) { lane(lid, { draft: text }); save(getState()); },
+
+    async stop(lid) {
+      const l = getState().lanes[lid];
+      if (l?.interface === "terminal") { interruptTerminal(lid); return; }
+      const ep = l && getState().projects[l.project]?.endpoint;
+      if (!ep) return;
+      lane(lid, { queued: [] });
+      try { await post(ep, "/api/chat/stop", {}, { lane: lid }); }
+      catch (error) { lane(lid, { error: `Could not stop the turn: ${error}` }); }
+    },
+
+    async send(lid, prompt, attachments = []) {
       const l = getState().lanes[lid];
       if (!l || !prompt.trim()) return;
-      // A lane is the CLI itself: type it in, and the CLI queues it behind whatever it is doing.
-      // A terminal not connected yet — still starting, or exited — keeps it until it is.
-      if (typeInto(lid, prompt)) return;
-      lane(lid, (l) => ({ queued: [...l.queued, prompt] }));
+      if (l.interface === "terminal") {
+        if (!typeInto(lid, prompt)) lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }] });
+        return;
+      }
+      if (l.elsewhere) { lane(lid, { error: "This session is running outside Keel. Stop it there before resuming here." }); return; }
+      if (l.receipt && l.receipt.prompt !== prompt) { lane(lid, { error: "The previous submission has not been confirmed. Retry it before sending another message." }); return; }
+      if (l.running || l.submitting) { lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }], draft: "", attachments: [] }); return; }
+      lane(lid, { submitting: true, running: true, error: undefined });
+      let submission: string | undefined;
+      try {
+        const ready = await getState().prepare(lid);
+        if (!ready) throw new Error("The lane could not be prepared.");
+        const receipt = l.receipt ?? { id: id(), prompt, session: l.known ? l.session : undefined, mode: l.mode ?? "plan", model: l.model, wt: ready.wt, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+        submission = receipt.id;
+        lane(lid, { receipt });
+        save(getState());
+        await post(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: false });
+        lane(lid, (now) => ({ managed: true, receipt: undefined, draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
+        follows.get(lid)?.close();
+        follows.delete(lid);
+        void listen(lid);
+      } catch (error) {
+        // A receipt delivered over SSE is authoritative even if the POST response was lost.
+        if (submission && getState().lanes[lid]?.receipt?.id !== submission) return;
+        lane(lid, { running: false, error: `Message not confirmed: ${error}. Retry uses the same submission id.`, draft: l.draft || prompt });
+      } finally { lane(lid, { submitting: false }); save(getState()); drain(lid); }
     },
 
     async answer(lid, p, decision, text, scope = "once") {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
+      if (p.provider) {
+        try { await post(ep, "/api/chat/control", { lane: lid, method: "answer", id: p.id, answer: { decision: p.provider === "codex" ? (decision === "allow" ? "accept" : "decline") : decision, reason: text } }); }
+        catch (error) { lane(lid, { error: `Could not deliver the answer: ${error}` }); }
+        return;
+      }
       lane(lid, (l) => ({ pending: l.pending.filter((x) => x.id !== p.id) }));
       // A question's answer travels as a `deny` whose reason is the answer; a permission carries
       // the rules that would let it through. The same bodies the Swift app sent.
@@ -815,3 +993,17 @@ export const useStore = create<State>()((set, getState) => {
     },
   };
 });
+
+function sessionPatch(frames: Frame[]): Partial<Lane> {
+  const patch: Partial<Lane> = {};
+  for (const frame of frames) if (frame.op === "session") {
+    patch.session = String(frame.id);
+    patch.known = true;
+    if (Array.isArray(frame.commands)) patch.commands = frame.commands as string[];
+  }
+  return patch;
+}
+
+function clearConnectionError(current: Lane, patch: Partial<Lane>) {
+  if (current.error?.startsWith("Connection interrupted.") && !patch.error) patch.error = undefined;
+}

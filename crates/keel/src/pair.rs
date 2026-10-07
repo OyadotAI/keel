@@ -303,6 +303,8 @@ pub const APP_ORIGINS: &[&str] = &[
     // `tauri dev` serves the page from Vite. A debug build only.
     #[cfg(debug_assertions)]
     "http://localhost:1420",
+    #[cfg(debug_assertions)]
+    "http://127.0.0.1:1420",
 ];
 
 /// The token the app that spawned this daemon handed it on stdin, once. Random per launch, never
@@ -477,6 +479,31 @@ mod tests {
         const TOKEN: &str =
             "Bearer kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk";
         set_app_token(&TOKEN["Bearer ".len()..]);
+        #[cfg(debug_assertions)]
+        for origin in ["http://localhost:1420", "http://127.0.0.1:1420"] {
+            assert_eq!(
+                with(&[
+                    ("host", "127.0.0.1:7777"),
+                    ("origin", origin),
+                    ("authorization", TOKEN)
+                ]),
+                None
+            );
+            assert!(
+                with(&[("host", "127.0.0.1:7777"), ("origin", origin)]).is_some(),
+                "a development origin still needs the app token"
+            );
+        }
+        assert!(
+            with(&[
+                ("host", "127.0.0.1:7777"),
+                ("origin", "http://127.0.0.1:1421"),
+                ("authorization", TOKEN)
+            ])
+            .is_some(),
+            "other local pages are not the development app"
+        );
+
         assert_eq!(
             with(&[
                 ("host", "127.0.0.1:7777"),

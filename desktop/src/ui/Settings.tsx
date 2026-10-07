@@ -1,3 +1,4 @@
+import { InterfaceSetting } from "./InterfaceSetting";
 import { check, useUpdate } from "../update";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
@@ -40,6 +41,7 @@ export function Settings() {
         <button onClick={close}>Done</button>
       </header>
       <div className="settings-body">
+        <InterfaceSetting applyToLane />
         {error && <div className="error">{error}</div>}
         {!project ? (
           <p className="muted">Settings belong to a project. Open one first.</p>

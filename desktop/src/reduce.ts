@@ -288,3 +288,14 @@ export function applyFact(conv: Conversation, fact: Fact): Conversation {
   turns[i] = t;
   return { turns };
 }
+
+/** Refresh provider history after a terminal handoff, retaining Keel's matching turn metadata. */
+export function restoreTranscript(previous: Conversation, frames: Frame[]): Conversation {
+  const restored = applyFrames({ turns: [] }, frames);
+  return { turns: restored.turns.map((turn, index) => {
+    const old = previous.turns[index];
+    if (!old || old.prompt !== turn.prompt) return turn;
+    return { ...turn, id: old.id, files: old.files, gate: old.gate, commit: old.commit,
+      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended };
+  }) };
+}

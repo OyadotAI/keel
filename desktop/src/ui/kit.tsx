@@ -55,7 +55,7 @@ export const Count = ({ n }: { n?: number }) => (n ? <span className="tab-count"
 /// be a small box beside whatever was clicked.
 /// The visible lane's terminal — where typing goes when nothing else is asking for it.
 export function focusTerminal() {
-  document.querySelector<HTMLElement>(".agents .terminal:not(.hidden) textarea")?.focus();
+  document.querySelector<HTMLElement>(".chat-composer textarea, .agents .terminal:not(.hidden) textarea")?.focus();
 }
 
 /// Give focus back to what had it, if that is still on screen; otherwise to the visible terminal.

@@ -4,6 +4,7 @@
 import type { SVGProps } from "react";
 
 const paths = {
+  chat: ["M21 11.5a8 8 0 0 1-8 8H6l-4 3V11.5a9.5 9.5 0 0 1 19 0Z", "M7 10h10", "M7 14h6"],
   "chevron-right": ["M9 18l6-6-6-6"],
   "chevron-down": ["M6 9l6 6 6-6"],
   plus: ["M12 5v14", "M5 12h14"],

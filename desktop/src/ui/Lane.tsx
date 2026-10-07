@@ -9,6 +9,7 @@ import { Jobs } from "./Jobs";
 import { Preview } from "./Preview";
 import { Readiness } from "./Readiness";
 import { Icon } from "./icons";
+import { Chat } from "./Chat";
 import { label } from "../keys";
 import { walkFiles } from "./kit";
 import { Tabs } from "./kit";
@@ -22,16 +23,16 @@ export const TABS: Tab[] = ["turns", "git", "review", "jobs", "preview", "readin
 /// shown; the rest stay mounted (hidden, not unmounted), because a terminal that closes ends the
 /// agent in it and switching lanes must never stop a turn.
 export function Agents() {
-  const opened = useStore((s) => s.opened);
   const active = useStore((s) => s.active);
+  const terminalLanes = useStore((s) => s.opened.filter((id) => s.lanes[id]?.interface === "terminal").join(","));
+  const surface = useStore((s) => s.active ? s.lanes[s.active]?.interface : undefined);
   const showing = useStore((s) => !s.settings && !s.creating && !s.extensions);
-  return (
-    <Suspense fallback={<div className="terminal-state muted">Loading the terminal…</div>}>
-      {opened.map((l) => (
-        <Terminal key={l} lane={l} agent hidden={!showing || l !== active} />
-      ))}
+  return <>
+    <Suspense fallback={<div className="terminal-state muted">Loading terminal…</div>}>
+      {terminalLanes.split(",").filter(Boolean).map((id) => <Terminal key={id} lane={id} agent hidden={!showing || active !== id} />)}
     </Suspense>
-  );
+    {active && surface !== "terminal" && <Chat key={active} lane={active} />}
+  </>;
 }
 
 /// A shell in the lane's checkout, under the agent: for the command you want to run yourself.
@@ -79,7 +80,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
           title: `${names[id]} (${label({ key: String(i + 1), alt: true })})`,
         }))} value={tab} onChange={setTab}>
         <span className="spacer" />
-        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the terminal" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}>
+        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the conversation" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}>
           <Icon name="maximize" size={14} />
         </button>
         <button className="ghost" onClick={close} aria-label="Close the panel" title={`Close the panel (${label({ key: "i", alt: true })})`}>
@@ -97,16 +98,13 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
 /// went.
 function Turns({ lane }: { lane: string }) {
   const count = useStore((s) => s.lanes[lane]?.conv.turns.length ?? 0);
-  const agent = useStore((s) => s.lanes[lane]?.agent);
   const loading = useStore((s) => !!s.lanes[lane]?.known && !s.lanes[lane]?.loaded);
   const rewound = useStore((s) => s.lanes[lane]?.rewound);
-  if (agent === "codex")
-    return <div className="panel-empty">Codex lanes have no turn timeline yet — Keel can't read Codex transcripts. Changes, Jobs and Preview still work.</div>;
   if (count === 0)
     return (
       <div className="panel-empty">
         <h3>{loading ? "Reading the conversation…" : "Nothing has run yet"}</h3>
-        {!loading && "Type in the terminal. Each turn shows up here with the files it changed, the commands it ran and the project's checks."}
+        {!loading && "Send a message. Each turn shows up here with the files it changed, the commands it ran and the project's checks."}
       </div>
     );
   return <TurnList lane={lane} count={count} rewound={rewound} />;

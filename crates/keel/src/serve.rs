@@ -24,6 +24,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub struct AppState {
+    pub(crate) chats: crate::chat::Chats,
+    pub(crate) runtimes: crate::runtime::Runtimes,
     /// A `Mutex`, not an `RwLock`: every reader clones it immediately and holds it for
     /// nanoseconds, so there is no reader concurrency to win — and `lock::Locked` exists for
     /// `Mutex` alone, which is the rule that keeps a panic from bricking every later request.
@@ -119,6 +121,8 @@ impl Drop for CheckoutWriter {
 impl AppState {
     pub fn new(repo: Utf8PathBuf) -> Self {
         Self {
+            chats: Default::default(),
+            runtimes: Default::default(),
             repo: std::sync::Mutex::new(repo),
             open: std::sync::atomic::AtomicBool::new(true),
             port: std::sync::atomic::AtomicU16::new(7777),
@@ -134,6 +138,8 @@ impl AppState {
     /// that has since moved.
     pub fn empty() -> Self {
         Self {
+            chats: Default::default(),
+            runtimes: Default::default(),
             repo: std::sync::Mutex::new(crate::prefs::no_project()),
             open: std::sync::atomic::AtomicBool::new(false),
             port: std::sync::atomic::AtomicU16::new(7777),
@@ -732,6 +738,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/raw", get(api_raw))
         .route("/api/chat", get(crate::agent::chat))
+        .route("/api/chat/send", axum::routing::post(crate::chat::send))
+        .route("/api/chat/events", get(crate::chat::events))
+        .route(
+            "/api/chat/control",
+            axum::routing::post(crate::runtime::control),
+        )
         .route("/api/chat/stop", axum::routing::post(crate::agent::stop))
         .route(
             "/api/attach",

@@ -9,6 +9,7 @@ mod agents;
 mod approve;
 mod askmcp;
 mod aws;
+mod chat;
 mod clitools;
 mod connect;
 mod dev;
@@ -34,6 +35,7 @@ mod project;
 mod render;
 mod repo;
 mod review;
+mod runtime;
 mod serve;
 mod signals;
 mod skills;
@@ -426,6 +428,7 @@ fn watch_parent(stdin: bool) {
     // long time that sentence was written here while the dev server was the one thing not in
     // this list.
     let gone = || {
+        runtime::stop_all();
         monitor::stop_all();
         dev::stop_now();
         verify::stop_all();

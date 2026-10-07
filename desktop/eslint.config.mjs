@@ -24,6 +24,6 @@ export default tseslint.config(
       complexity: ["warn", 25],
     },
   },
-  { files: ["scripts/**", "*.config.*"], languageOptions: { globals: { ...globals.node } } },
+  { files: ["scripts/**", "runtime/**", "*.config.*"], languageOptions: { globals: { ...globals.node } } },
   { files: ["**/*.test.ts", "scripts/**"], rules: { "max-lines-per-function": "off" } },
 );

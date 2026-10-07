@@ -9,6 +9,8 @@ import { Extensions } from "./Extensions";
 import { Agents, Shell, SidePanel, TABS, type Tab } from "./Lane";
 import { LaneHeader, Confirm, type Asking } from "./LaneHeader";
 import { ApprovalStrip } from "./Approvals";
+import { InterfaceSetting } from "./InterfaceSetting";
+import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
 import { Drop } from "./Drop";
 import { Palette, type Command } from "./Palette";
@@ -75,8 +77,8 @@ export function App() {
   const settings = useStore((s) => s.settings);
   const creating = useStore((s) => s.creating);
   const extensions = useStore((s) => s.extensions);
-  const [panel, setPanel] = useState(() => remembered("keel.panel", "1") !== "0");
-  const [sidebar, setSidebar] = useState(() => remembered("keel.sidebar", "1") !== "0");
+  const [panel, setPanel] = useState(() => window.innerWidth >= 1200 && remembered("keel.panel", "1") !== "0");
+  const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900 && remembered("keel.sidebar", "1") !== "0");
   const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<Tab>("turns");
   const [shell, setShell] = useState(false);
@@ -136,6 +138,7 @@ export function App() {
       [{ key: "m", shift: true }, (l) => useStore.getState().lanes[l]?.wt && setAsking("merge")],
       [{ key: "Backspace", shift: true }, (l) => useStore.getState().lanes[l]?.wt && setAsking("discard")],
       [{ key: "w" }, () => setAsking("close")],
+      [{ key: "." }, (l) => void useStore.getState().stop(l)],
     ];
     const handler = (e: KeyboardEvent) => {
       for (const [c, run] of chords)
@@ -169,7 +172,7 @@ export function App() {
             <Agents />
           </div>
           {lane && shell && <Shell key={lane} lane={lane} close={() => setShell(false)} />}
-          {lane && <ApprovalStrip lane={lane} />}
+          {lane && <LaneComposer key={lane} lane={lane} />}
         </section>
         {showPanel && <Handle name="--panel-w" min={320} max={720} fallback={420} from="right" />}
         {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={togglePanel} ask={(what) => setAsking(what)} />}
@@ -270,7 +273,7 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
     }
     out.push({ id: "rename", title: "Rename lane…", keys: "F2", run: () => useStore.setState({ renaming: lane! }) });
     out.push({ id: "close", title: "Close lane", keys: label({ key: "w" }), run: () => setAsking("close") });
-    out.push({ id: "focus", title: "Focus terminal", keys: label({ key: "l" }), run: focusTerminal });
+    out.push({ id: "focus", title: "Focus composer", keys: label({ key: "l" }), run: focusTerminal });
     out.push({ id: "shell", title: "Toggle the shell", keys: label({ key: "j" }), run: () => setShell((x) => !x) });
     TABS.forEach((t, i) => out.push({ id: `tab-${t}`, title: `Show ${t[0].toUpperCase()}${t.slice(1)}`, keys: label({ key: String(i + 1), alt: true }), run: () => showTab(t) }));
     out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => useStore.setState({ settings: true }) });
@@ -305,7 +308,13 @@ function Welcome() {
           ? "Each lane runs your own Claude Code or Codex in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
           : "Each lane is one conversation. Open one on the left, or start a new one under a project."}
       </p>
+      {none && <InterfaceSetting />}
       <p className="small faint">{label({ key: "k" })} opens the command palette.</p>
     </div>
   );
+}
+
+function LaneComposer({ lane }: { lane: string }) {
+  const surface = useStore((s) => s.lanes[lane]?.interface);
+  return surface === "terminal" ? <ApprovalStrip lane={lane} /> : <Composer lane={lane} />;
 }

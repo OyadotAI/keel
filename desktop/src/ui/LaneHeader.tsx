@@ -4,6 +4,7 @@ import { Floating } from "./Menu";
 import { Icon } from "./icons";
 import { Dialog, restoreFocus } from "./kit";
 import { label } from "../keys";
+import { LaneViewSwitch } from "./LaneViewSwitch";
 
 export type Asking = "merge" | "discard" | "close" | null;
 
@@ -64,6 +65,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
         {isolated ? <span className="lane-branch">{wt ? `keel/${wt}` : "own branch"}</span> : <span className="small faint">shares the project's tree</span>}
         {agent === "codex" && <span className="small faint">codex</span>}
       </div>
+      <LaneViewSwitch lane={lane} />
       <button className="ghost" aria-label="Lane actions" title="Lane actions" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}>
         <Icon name="more" />
       </button>
@@ -72,6 +74,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
       </button>
       {menu && (
         <Floating anchor={menu} onClose={() => setMenu(null)}>
+          <LaneViewSwitch lane={lane} menu onSwitch={() => setMenu(null)} />
           <button onClick={() => (setMenu(null), toggleShell())}>{shell ? "Close the shell" : "Open a shell"}</button>
           <button onClick={() => (setMenu(null), setRenaming(true))}>Rename lane…</button>
           <div className="sep" />

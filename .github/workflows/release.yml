@@ -108,6 +108,7 @@ jobs:
         run: |
           npm install -g pnpm@10
           pnpm install --frozen-lockfile
+          pnpm runtime:stage universal-apple-darwin
           pnpm tauri build --target universal-apple-darwin --bundles app,dmg
 
       # Sparkle in an installed Swift build rejects an update that carries no EdDSA key, after
@@ -184,6 +185,7 @@ jobs:
         run: |
           npm install -g pnpm@10
           pnpm install --frozen-lockfile
+          pnpm runtime:stage x86_64-pc-windows-msvc
           pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
       - name: Upload to the draft
         env:

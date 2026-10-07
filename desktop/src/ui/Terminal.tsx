@@ -167,7 +167,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         params.set("lane", lane);
         // Codex's sessions have ids of their own, which Keel does not learn: a Codex lane starts
         // fresh each time rather than resuming something that is not there.
-        if (current.known && current.agent === "claude") params.set("resume", "true");
+        if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
       }
       // The token goes as a subprotocol: a page's WebSocket cannot set headers, and a URL is

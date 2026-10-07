@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore, type Agent, type Session } from "../store";
 import { Floating } from "./Menu";
+import { LaneViewSwitch } from "./LaneViewSwitch";
 import { SetupBadge } from "./SetupWarnings";
 import { Icon } from "./icons";
 import { label } from "../keys";
@@ -230,6 +231,8 @@ function LaneRow({ id }: { id: string }) {
     </button>
     {ctx && (
       <Floating anchor={ctx} onClose={() => setCtx(null)} width={250}>
+        <LaneViewSwitch lane={id} menu onSwitch={() => { setCtx(null); select(id); }} />
+        <div className="sep" />
         <button onClick={() => (setCtx(null), startRename(id))}>
           <Icon name="pencil" size={14} /> Rename… <kbd style={{ marginLeft: "auto" }}>F2</kbd>
         </button>

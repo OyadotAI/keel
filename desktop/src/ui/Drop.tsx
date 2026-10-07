@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
-import { useStore } from "../store";
 import { pasteInto } from "../typers";
+import { useStore } from "../store";
+
 
 /// A path as a shell word: quoted, so a space or a quote in it stays one argument.
 const quote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
@@ -37,9 +38,13 @@ export function Drop() {
         });
         return;
       }
-      if (!pasteInto(lane, p.paths.map(quote).join(" ") + " ")) {
-        useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: "The agent's terminal is not running, so there is nowhere to put the files. Start it again first." } } }));
+      if (useStore.getState().lanes[lane]?.interface === "terminal") {
+        pasteInto(lane, p.paths.map(quote).join(" ") + " ");
+        return;
       }
+      const current = useStore.getState().lanes[lane];
+      useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], attachments: [...(current?.attachments ?? []), ...p.paths.map((path) => ({ path, name: path.split(/[\\/]/).pop() ?? path }))] } } }));
+      useStore.getState().draft(lane, current?.draft ?? "");
     });
     return () => void unlisten.then((f) => f());
   }, []);

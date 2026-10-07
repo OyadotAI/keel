@@ -21,7 +21,7 @@ const GROUPS: [string, [string, Chord | string][]][] = [
     ["Open the diff", "Enter"],
     ["Stage / unstage", "Space"],
     ["Next / previous file in a diff", "] ["],
-    ["Back to the list, then to the terminal", "Esc"],
+    ["Back to the list, then to the composer", "Esc"],
   ]],
   ["Approvals", [
     ["Allow the oldest request once (jumps to a waiting lane first)", { key: "a", shift: true }],
@@ -31,7 +31,7 @@ const GROUPS: [string, [string, Chord | string][]][] = [
   ]],
   ["Window", [
     ["Command palette (⌃N / ⌃P to move)", { key: "k" }],
-    ["Focus terminal", { key: "l" }],
+    ["Focus composer", { key: "l" }],
     ["Toggle the shell", { key: "j" }],
     ["Toggle sidebar", { key: "e", shift: true }],
     ["Toggle panel", { key: "i", alt: true }],

@@ -22,9 +22,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::lock::Locked;
 use crate::serve::AppState;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ChatQuery {
     pub prompt: String,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
     /// `1` for decoded `turn` ops in place of raw `msg` records. See [`translate`].
     pub ops: Option<String>,
     /// Resume an existing conversation rather than starting a new one.
@@ -51,6 +53,13 @@ pub struct ChatQuery {
     pub design: Option<bool>,
     /// The person's "commit after every turn" setting. Absent means yes.
     pub auto_commit: Option<bool>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Attachment {
+    pub path: String,
+    pub name: String,
+    pub mime: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -104,7 +113,7 @@ pub struct Stopped {
 /// not, that a refusal is a question being asked rather than a wall, or what the scan already
 /// found. Everything it *can* work out by reading the repository is deliberately absent — a system
 /// prompt restating what `ls` would show is tokens spent on every turn to say nothing.
-fn system_prompt(repo: &Utf8Path) -> String {
+pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
     // Facts about the room, not instructions about how to behave. The agent is Claude Code —
     // the person's own `claude`, with its own judgement — and this used to be eleven
     // paragraphs telling it how to talk, when to stop and what not to say, which is exactly
@@ -1462,7 +1471,7 @@ const BIG_RECORD: usize = 256 * 1024;
 
 /// One event of the chat stream, named, before it is an SSE frame — so the one place that turns
 /// them into frames can read them.
-pub(crate) struct Said(&'static str, String);
+pub(crate) struct Said(pub(crate) &'static str, pub(crate) String);
 
 fn said(name: &'static str, data: impl Into<String>) -> Said {
     Said(name, data.into())
@@ -1476,7 +1485,7 @@ fn said(name: &'static str, data: impl Into<String>) -> Said {
 /// (a panic, a path nobody thought of). Every call still running is answered on the way. The task
 /// has a dozen ways out; putting the close here rather than at each of them is what makes "a row
 /// left spinning" impossible rather than fixed.
-fn translate(
+pub(crate) fn translate(
     mut rx: tokio::sync::mpsc::Receiver<Result<Said, Infallible>>,
     query: &ChatQuery,
 ) -> tokio::sync::mpsc::Receiver<Result<Event, Infallible>> {
@@ -1599,7 +1608,9 @@ fn translate(
     out
 }
 
-fn alive(rx: tokio::sync::mpsc::Receiver<Result<Event, Infallible>>) -> axum::response::Response {
+pub(crate) fn alive(
+    rx: tokio::sync::mpsc::Receiver<Result<Event, Infallible>>,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
     Sse::new(ReceiverStream::new(rx))
         .keep_alive(KeepAlive::default())

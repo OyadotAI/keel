@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFact, applyFrames, interrupt, type Conversation, type Frame } from "./reduce";
+import { applyFact, applyFrames, restoreTranscript, interrupt, type Conversation, type Frame } from "./reduce";
 
 const empty: Conversation = { turns: [] };
 const f = (op: string, fields: Record<string, unknown> = {}, turn: string | null = null): Frame => ({ turn, op, ...fields });
@@ -80,5 +80,19 @@ describe("folding a turn", () => {
     ]);
     expect(c.turns[0].steps).toEqual(["c:task"]);
     expect(c.turns[0].children.task).toEqual(["inner"]);
+  });
+});
+
+describe("terminal history handoff", () => {
+  it("imports terminal messages without duplicating prior chat and preserves checkpoint metadata", () => {
+    let previous = applyFrames(empty, [f("open", { prompt: "first" }, "chat-first"), f("text", { step: "a", kind: "say", append: "old" }), f("close", { reason: "done" })]);
+    previous = { turns: previous.turns.map((t) => ({ ...t, snapshot: "tree-before", files: ["a.ts"] })) };
+    const frames = [f("open", { prompt: "first" }, "native-first"), f("text", { step: "a", kind: "say", append: "old" }), f("close", { reason: "done" }), f("open", { prompt: "from terminal" }, "native-next"), f("text", { step: "b", kind: "say", append: "new" }), f("close", { reason: "done" })];
+    const restored = restoreTranscript(previous, frames);
+    expect(restored.turns.map((t) => t.prompt)).toEqual(["first", "from terminal"]);
+    expect(restored.turns[0].snapshot).toBe("tree-before");
+    expect(restored.turns[0].id).toBe(previous.turns[0].id);
+    expect(restored.turns[1].snapshot).toBeUndefined();
+    expect(restoreTranscript(restored, frames).turns).toEqual(restored.turns);
   });
 });
