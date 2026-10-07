@@ -59,7 +59,7 @@ export class Codex {
       let result;
       if (message.method === 'item/tool/requestUserInput') {
         const answer = await this.ask('AskUserQuestion', '', p, [], 'question');
-        result = { answers: Object.fromEntries((p.questions ?? []).map((q) => [q.id, { answers: [answer.answers?.[q.question] ?? ''] }])) };
+        result = { answers: Object.fromEntries((p.questions ?? []).map((q) => [q.id, { answers: [answer.answers?.[q.id] ?? answer.answers?.[q.question] ?? ''] }])) };
       } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
         const choices = (p.availableDecisions ?? ['accept', 'acceptForSession', 'decline', 'cancel']).map((value) => ({ value, label: typeof value === 'string' ? ({ accept: 'Allow once', acceptForSession: 'Allow for session', decline: 'Deny', cancel: 'Cancel turn' }[value] ?? value) : 'Allow with proposed rule' }));
         const answer = await this.ask(message.method.includes('fileChange') ? 'File changes' : 'Command', p.command ?? '', p, choices);

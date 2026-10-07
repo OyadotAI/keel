@@ -39,6 +39,14 @@ test('unknown server requests fail explicitly without authorizing work', async (
   assert.ok(events.includes('fatal'));
 });
 
+test('identical question labels retain distinct answers by provider id', async () => {
+  const sent = [];
+  const c = new Codex(() => {}, async () => ({ answers: { first: 'A', second: 'B' } }));
+  c.write = (value) => sent.push(value);
+  await c.message({ id: 10, method: 'item/tool/requestUserInput', params: { questions: [{ id: 'first', question: 'Choose' }, { id: 'second', question: 'Choose' }] } });
+  assert.deepEqual(sent[0].result.answers, { first: { answers: ['A'] }, second: { answers: ['B'] } });
+});
+
 test('interrupt and steer target the current thread and turn', async () => {
   const requests = [];
   const c = new Codex(() => {}, () => {});

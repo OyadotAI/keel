@@ -256,6 +256,7 @@ pub async fn send(
     .await
     .map_err(internal)??;
     if accepted {
+        let h = h.clone();
         tokio::spawn(async move {
             // Keep consuming after every subscriber disappears. The existing runner still owns
             // checkout locking, cancellation, checkpoints and verification.
@@ -298,7 +299,9 @@ pub async fn send(
             .await;
         });
     }
-    Ok(Json(json!({"id": request.id, "accepted": accepted})))
+    Ok(Json(
+        json!({"id": request.id, "accepted": accepted, "running": h.locked().running}),
+    ))
 }
 
 #[derive(Deserialize)]

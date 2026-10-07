@@ -6,6 +6,8 @@ import { applyFrames } from '../../src/reduce';
 import { Chat } from '../../src/ui/Chat';
 import { Composer } from '../../src/ui/Composer';
 import { InterfaceSetting } from '../../src/ui/InterfaceSetting';
+import { ApprovalStrip } from '../../src/ui/Approvals';
+import { LaneViewSwitch } from '../../src/ui/LaneViewSwitch';
 import '../../src/styles.css';
 
 const project = '/workspace/keel';
@@ -28,9 +30,12 @@ useStore.setState({ projects: { [project]: { path: project, name: 'Keel', lanes:
 function Fixture() {
   const active = useStore((s) => s.active)!;
   const [setup, setSetup] = React.useState(false);
+  function question() {
+    useStore.setState((s) => ({ lanes: { ...s.lanes, [active]: { ...s.lanes[active], pending: [{ id: 'fixture-question', tool: 'AskUserQuestion', command: '', rules: [], input: { questions: [{ question: 'Which checks should run?', multiSelect: true, options: [{ label: 'Unit tests' }, { label: 'Browser checks' }] }] } }] } } }));
+  }
   return <div className="app no-sidebar"><main className="main" style={{ gridColumn: 3 }}><section className="agent-pane">
-    <header className="lane-header"><strong className="spacer">Keel · Chat verification</strong>{Object.keys(lanes).map((id, i) => <button key={id} onClick={() => useStore.setState({ active: id })}>Lane {i + 1}</button>)}<button onClick={() => setSetup(!setup)}>Setup</button></header>
-    {setup ? <div className="settings-body"><InterfaceSetting /></div> : <><div className="agents"><Chat key={active} lane={active} /></div><Composer key={`composer-${active}`} lane={active} /></>}
+    <header className="lane-header"><strong className="spacer">Keel QA</strong>{Object.keys(lanes).map((id, i) => <button key={id} onClick={() => useStore.setState({ active: id })}>Lane {i + 1}</button>)}<button onClick={question}>Question</button><button onClick={() => setSetup(!setup)}>Setup</button><LaneViewSwitch lane={active} /></header>
+    {setup ? <div className="settings-body"><InterfaceSetting /></div> : <><div className="agents"><Chat key={active} lane={active} /></div><ApprovalStrip lane={active} /><Composer key={`composer-${active}`} lane={active} /></>}
   </section></main></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture />);

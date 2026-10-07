@@ -8,7 +8,7 @@ export function Floating({ anchor, onClose, children, kind = "menu", width }: { 
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
+    ref.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
     return () => window.removeEventListener("keydown", key);
   }, [onClose]);
   const w = width ?? (kind === "menu" ? 240 : 340);
@@ -19,7 +19,14 @@ export function Floating({ anchor, onClose, children, kind = "menu", width }: { 
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div ref={ref} className={kind} role={kind === "menu" ? "menu" : "dialog"} style={{ top, left, width: w }}>
+      <div ref={ref} className={kind} role={kind === "menu" ? "menu" : "dialog"} style={{ top, left, width: w }} onKeyDown={(e) => {
+        if (kind !== "menu" || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+        const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled)")];
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : (at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+        e.preventDefault();
+      }}>
         {children}
       </div>
     </>

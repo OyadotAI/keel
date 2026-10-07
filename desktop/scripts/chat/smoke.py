@@ -1,5 +1,5 @@
 """Optional live-provider test: uses authenticated CLIs and consumes model tokens."""
-import subprocess, tempfile, os, json, time, urllib.request, socket, sys
+import subprocess, tempfile, os, json, time, urllib.request, socket, sys, secrets
 from pathlib import Path
 
 workspace = Path(__file__).resolve().parents[3]
@@ -7,7 +7,7 @@ repo=tempfile.mkdtemp(prefix='keel-chat-e2e-')
 subprocess.run(['git','init','-q',repo],check=True)
 subprocess.run(['git','-C',repo,'-c','user.name=Keel Test','-c','user.email=keel@example.invalid','commit','--allow-empty','-qm','fixture'],check=True)
 sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close()
-token='keel-chat-fixture-token'
+token=secrets.token_hex(32)
 env=os.environ.copy()
 env['KEEL_PERMISSIONS_DIR']=tempfile.mkdtemp(prefix='keel-chat-e2e-private-')
 for key in list(env):
@@ -37,6 +37,7 @@ try:
   query={'id':'first-'+provider,'lane':lane,'provider':provider,'prompt':'Remember the word ORBIT. Reply with exactly KEEL_CHAT_OK. Do not use tools.','mode':'plan','auto_commit':False}
   first=json.load(request('/api/chat/send',query)); duplicate=json.load(request('/api/chat/send',query))
   assert first['accepted'] and not duplicate['accepted'],(first,duplicate)
+  assert duplicate['running'],duplicate
   time.sleep(1)
   records, status=replay(lane)
   cursor=records[-1]['seq'] if records else 0
@@ -48,6 +49,8 @@ try:
   assert not [r for r in records if r['event']=='fatal'],[r for r in records if r['event']=='fatal']
   assert 'KEEL_CHAT_OK' in ''.join(f.get('append','') for r in records if r['event']=='turn' for f in r['data']),'missing response'
   assert sum(r['event']=='accepted' for r in records)==1,'duplicate execution'
+  finished=json.load(request('/api/chat/send',query))
+  assert not finished['accepted'] and not finished['running'],finished
   session=next(f['id'] for r in records if r['event']=='turn' for f in r['data'] if f['op']=='session')
   query={**query,'id':'second-'+provider,'session':session,'prompt':'What word did I ask you to remember? Reply with just that word. Do not use tools.'}
   json.load(request('/api/chat/send',query));status={'running':True};second=[]
@@ -58,8 +61,18 @@ try:
   assert not status['running'],'second turn timed out'
   assert not [r for r in second if r['event']=='fatal'],[r for r in second if r['event']=='fatal']
   assert 'ORBIT' in ''.join(f.get('append','') for r in second if r['event']=='turn' for f in r['data']),'session continuity failed'
+  query={**query,'id':'stop-'+provider,'prompt':'Write a detailed 5000-word explanation of sorting algorithms. Do not use tools.'}
+  json.load(request('/api/chat/send',query))
+  time.sleep(2)
+  json.load(request('/api/chat/stop?lane='+lane,{}))
+  stopped=[];status={'running':True};deadline=time.time()+20
+  while status['running'] and time.time()<deadline:
+   time.sleep(.2);batch,status=replay(lane,cursor);stopped+=batch
+   if batch:cursor=batch[-1]['seq']
+  assert not status['running'],'stop did not release the lane'
+  assert not [r for r in stopped if r['event']=='fatal'],[r for r in stopped if r['event']=='fatal']
   json.load(request('/api/chat/control',{'lane':lane,'method':'close'}))
-  print(provider+': durable POST, duplicate suppression, disconnected replay, two-turn continuity, close PASS',flush=True)
+  print(provider+': durable POST, duplicate suppression, disconnected replay, two-turn continuity, stop, close PASS',flush=True)
 finally:
  p.stdin.close()
  try:p.wait(timeout=8)

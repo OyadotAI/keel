@@ -538,7 +538,7 @@ export const useStore = create<State>()((set, getState) => {
     connecting.add(lid);
     try {
       const ep = await endpoint(l.project);
-      if (!getState().lanes[lid]) return;
+      if (!getState().lanes[lid] || getState().lanes[lid].interface === "terminal") return;
       const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
         let idle = false;
         lane(lid, (current) => {
@@ -627,6 +627,8 @@ export const useStore = create<State>()((set, getState) => {
       }
       const ep = await endpoint(l.project);
       if (l.interface !== "terminal") {
+        const current = getState().lanes[lid];
+        if (!current || current.running || current.submitting || current.receipt) return;
         try { await post(ep, "/api/chat/control", { lane: lid, method: "close" }); }
         catch (error) { lane(lid, { error: String(error) }); return; }
       }
@@ -944,19 +946,23 @@ export const useStore = create<State>()((set, getState) => {
       let submission: string | undefined;
       try {
         const ready = await getState().prepare(lid);
+        if (!getState().lanes[lid]) return;
         if (!ready) throw new Error("The lane could not be prepared.");
         const receipt = l.receipt ?? { id: id(), prompt, session: l.known ? l.session : undefined, mode: l.mode ?? "plan", model: l.model, wt: ready.wt, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
         submission = receipt.id;
         lane(lid, { receipt });
         save(getState());
-        await post(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: false });
-        lane(lid, (now) => ({ managed: true, receipt: undefined, draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
+        const delivery = await post<{ accepted: boolean; running: boolean }>(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: false });
+        lane(lid, (now) => ({ managed: true, receipt: undefined, running: (now.cursor ?? 0) > (l.cursor ?? 0) ? now.running : delivery.running, draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
         follows.get(lid)?.close();
         follows.delete(lid);
         void listen(lid);
       } catch (error) {
         // A receipt delivered over SSE is authoritative even if the POST response was lost.
-        if (submission && getState().lanes[lid]?.receipt?.id !== submission) return;
+        if (submission && getState().lanes[lid]?.receipt?.id !== submission) {
+          lane(lid, (now) => ({ draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
+          return;
+        }
         lane(lid, { running: false, error: `Message not confirmed: ${error}. Retry uses the same submission id.`, draft: l.draft || prompt });
       } finally { lane(lid, { submitting: false }); save(getState()); drain(lid); }
     },

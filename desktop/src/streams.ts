@@ -31,6 +31,7 @@ export function open(
   worker.postMessage({ type: "open", id, url, token });
   return {
     close() {
+      handlers.delete(id);
       worker.postMessage({ type: "close", id });
     },
   };

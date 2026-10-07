@@ -10,8 +10,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
 
 interface Question {
+  id?: string;
   question: string;
   options?: { label: string; description?: string }[];
+  multiSelect?: boolean;
 }
 
 /// A refused command is a question, docked under the terminal so it neither hides the CLI's own
@@ -74,16 +76,24 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
   const answer = useStore((s) => s.answer);
   const questions = (p.input.questions as Question[] | undefined) ?? [];
   const [picked, setPicked] = useState<Record<number, string>>({});
-  const complete = questions.length > 0 && questions.every((_, i) => picked[i] !== undefined);
+  const [selected, setSelected] = useState<Record<number, string[]>>({});
+  const complete = questions.length > 0 && questions.every((_, i) => !!picked[i]?.trim());
   function send(chosen: Record<number, string>) {
     if (p.provider) {
-      void runtimeAnswer(lane, p, { answers: Object.fromEntries(questions.map((q, i) => [q.question, chosen[i]])) });
+      void runtimeAnswer(lane, p, { answers: Object.fromEntries(questions.map((q, i) => [p.provider === "codex" ? q.id ?? q.question : q.question, chosen[i]])) });
       return;
     }
     void answer(lane, p, "deny", questions.map((q, i) => `${q.question}: ${chosen[i]}`).join("\n"));
     after();
   }
   function pick(i: number, option: string) {
+    if (questions[i].multiSelect) {
+      const current = selected[i] ?? [];
+      const next = current.includes(option) ? current.filter((o) => o !== option) : [...current, option];
+      setSelected({ ...selected, [i]: next });
+      setPicked({ ...picked, [i]: next.join(", ") });
+      return;
+    }
     const next = { ...picked, [i]: option };
     setPicked(next);
   }
@@ -91,7 +101,7 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
   // so the digits never leave the terminal.
   const open = questions.findIndex((_, i) => picked[i] === undefined);
   function keys(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable=true]"))) return;
     const n = Number(e.key);
     const option = open >= 0 && n >= 1 ? questions[open].options?.[n - 1] : undefined;
     if (option) return (e.preventDefault(), pick(open, option.label));
@@ -115,8 +125,8 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
               <button
                 key={o.label}
                 title={o.description}
-                className={picked[i] === o.label ? "primary" : undefined}
-                aria-pressed={picked[i] === o.label}
+                className={(q.multiSelect ? selected[i]?.includes(o.label) : picked[i] === o.label) ? "primary" : undefined}
+                aria-pressed={q.multiSelect ? !!selected[i]?.includes(o.label) : picked[i] === o.label}
                 onClick={() => pick(i, o.label)}
               >
                 {i === open && n < 9 && <kbd>{n + 1}</kbd>}
@@ -124,7 +134,7 @@ function Questions({ lane, p }: { lane: string; p: Pending }) {
               </button>
             ))}
           </div>
-          <input className="field" aria-label={`Your answer: ${q.question}`} placeholder="Or write your own answer…" value={picked[i] ?? ""} onChange={(e) => setPicked((old) => ({ ...old, [i]: e.target.value }))} />
+          <input className="field" aria-label={`Your answer: ${q.question}`} placeholder="Or write your own answer…" value={picked[i] ?? ""} onChange={(e) => { setSelected((old) => ({ ...old, [i]: [] })); setPicked((old) => ({ ...old, [i]: e.target.value })); }} />
         </div>
       ))}
       {questions.length > 0 && (

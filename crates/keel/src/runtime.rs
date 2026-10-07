@@ -440,8 +440,10 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             "resolved" => emit(tx, "resolved", data).await,
             "capabilities" => emit(tx, "capabilities", data).await,
             "fatal" => {
-                error = data.as_str().map(str::to_string);
-                emit(tx, "fatal", data).await;
+                if !state.was_interrupted(lane, token) {
+                    error = data.as_str().map(str::to_string);
+                    emit(tx, "fatal", data).await;
+                }
             }
             "err" => tracing::debug!("agent runtime: {}", data),
             _ => {}
