@@ -39,6 +39,12 @@ The final `make check` passed outside the filesystem/process sandbox: 586 Rust t
 
 Palette regression recipe: open the palette, press Down twice and Up once, search for a nonexistent command, press Down, search for Settings, press Enter, close Settings, then reopen the palette and press Escape. The app must remain rendered throughout.
 
+## Release follow-up — 0.3.7
+
+All 23 live-agent evaluations passed. Fresh Claude and Codex smoke tests passed durable submission, duplicate suppression, disconnected replay, two-turn continuity, Stop, and close. Oya also verified the minimum 720×480 window: the header, composer and status bar fit, and the projects backdrop and command palette remained usable.
+
+Reviewing Windows CI uncovered an append-only journal handle being truncated, which Windows rejects with Access Denied. Journal loading now opens a separate writable handle only when a partial final record needs repair, then uses the append handle for subsequent writes. A regression test covers recovery, new appends, reopening, and retained submission receipts.
+
 ## Native integration limits
 
 This is a local macOS development QA pass, not a guarantee of zero defects. Windows/Linux runtime behavior, signed/notarized installers, update delivery and every external MCP server require separate platform/integration testing. The fixture does not launch a native terminal; native PTY behavior has backend coverage but was not exhaustively exercised through the browser fixture.

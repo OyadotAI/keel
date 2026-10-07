@@ -192,8 +192,18 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
+    // Windows append-only handles cannot truncate. Repair a partial final record with
+    // a write handle, then retain append semantics for every subsequent journal write.
+    if complete != bytes.len() {
+        options
+            .clone()
+            .append(false)
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_len(complete as u64))
+            .map_err(internal)?;
+    }
     let file = options.open(path).map_err(internal)?;
-    file.set_len(complete as u64).map_err(internal)?;
     let mut h = History {
         file,
         records,
@@ -440,6 +450,31 @@ mod tests {
         assert!(!h.locked().running);
         assert!(!h.locked().accept("send-one", "prompt-a").unwrap());
         assert!(h.locked().records.iter().any(|e| e.event == "fatal"));
+    }
+    #[test]
+    fn partial_final_record_is_repaired_before_appending() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "partial-lane").unwrap();
+        {
+            let mut h = h.locked();
+            h.accept("send-one", "prompt-a").unwrap();
+            h.push("idle", Value::Null).unwrap();
+            h.file.write_all(b"{\"seq\":3").unwrap();
+            h.file.sync_data().unwrap();
+        }
+        state.chats.0.locked().clear();
+        drop(h);
+        let h = history(&state, "partial-lane").unwrap();
+        assert_eq!(h.locked().records.len(), 2);
+        assert!(!h.locked().accept("send-one", "prompt-a").unwrap());
+        assert!(h.locked().accept("send-two", "prompt-b").unwrap());
+        h.locked().push("idle", Value::Null).unwrap();
+        state.chats.0.locked().clear();
+        drop(h);
+        let h = history(&state, "partial-lane").unwrap();
+        assert_eq!(h.locked().records.len(), 4);
+        assert!(!h.locked().accept("send-two", "prompt-b").unwrap());
     }
     #[test]
     fn sse_handles_split_unicode_multiline_data_and_heartbeats() {
