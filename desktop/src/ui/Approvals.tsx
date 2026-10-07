@@ -5,6 +5,7 @@ import { label } from "../keys";
 import { focusTerminal } from "./kit";
 import { post } from "../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Markdown } from "./Markdown";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
@@ -35,6 +36,7 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const answer = useStore((s) => s.answer);
   const [all, setAll] = useState(false);
   if (p.tool === "AskUserQuestion") return <Questions lane={lane} p={p} />;
+  if (p.tool === "ExitPlanMode") return <PlanApproval lane={lane} p={p} />;
   if (p.provider) return <RuntimeRequest lane={lane} p={p} />;
   const lines = p.command.split("\n");
   return (
@@ -70,6 +72,35 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
       </div>
     </div>
   );
+}
+
+function PlanApproval({ lane, p }: { lane: string; p: Pending }) {
+  const answer = useStore((s) => s.answer);
+  const writtenPlan = useStore((s) => {
+    const turn = s.lanes[lane]?.conv.turns.at(-1);
+    const write = Object.values(turn?.calls ?? {}).reverse().find((call) => (call.tool === "Write" || call.tool === "Edit") && call.state === "ok" && typeof call.input?.file_path === "string" && /[\\/]\.claude[\\/]plans[\\/]/.test(call.input.file_path));
+    return write?.tool === "Write" && typeof write.input?.content === "string" ? write.input.content : undefined;
+  });
+  const [sending, setSending] = useState(false);
+  const plan = typeof p.input.plan === "string" ? p.input.plan : writtenPlan;
+  const permissions = Array.isArray(p.input.allowedPrompts) ? p.input.allowedPrompts : [];
+  async function decide(decision: "allow" | "deny") {
+    setSending(true);
+    await answer(lane, p, decision);
+    setSending(false);
+    after();
+  }
+  return <div className="strip-row plan-approval">
+    <div className="approval-eyebrow">Your approval</div>
+    <div className="strip-title">Ready to implement</div>
+    <p className="approval-description">Review the plan before allowing the agent to leave plan mode and start making changes.</p>
+    {plan && <details className="approval-plan" open><summary>Implementation plan</summary><Markdown text={plan} /></details>}
+    {permissions.length > 0 && <details className="approval-plan"><summary>Requested permissions</summary><ul>{permissions.map((p, i) => <li key={i}>{typeof p?.prompt === "string" ? p.prompt : JSON.stringify(p)}</li>)}</ul></details>}
+    <div className="actions">
+      <button className="primary" disabled={sending} onClick={() => void decide("allow")}>Approve plan <kbd>{label({ key: "a", shift: true })}</kbd></button>
+      <button disabled={sending} onClick={() => void decide("deny")}>Stay in plan mode <kbd>{label({ key: "d", shift: true })}</kbd></button>
+    </div>
+  </div>;
 }
 
 function Questions({ lane, p }: { lane: string; p: Pending }) {

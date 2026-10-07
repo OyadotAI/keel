@@ -9,6 +9,7 @@ import { InterfaceSetting } from '../../src/ui/InterfaceSetting';
 import { ApprovalStrip } from '../../src/ui/Approvals';
 import { LaneViewSwitch } from '../../src/ui/LaneViewSwitch';
 import '../../src/styles.css';
+import '../../src/workspace.css';
 
 const project = '/workspace/keel';
 let conv = { turns: [] } as ReturnType<typeof applyFrames>;

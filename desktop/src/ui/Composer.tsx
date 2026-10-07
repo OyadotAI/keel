@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { get, url } from "../api";
 import { useStore, type Lane } from "../store";
 import { ApprovalStrip } from "./Approvals";
+import { Icon } from "./icons";
 
 export function patchLane(lane: string, patch: Partial<Lane>) {
   useStore.setState((s) => s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], ...patch } } } : s);
@@ -103,11 +104,11 @@ export function Composer({ lane }: { lane: string }) {
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
         }} />
       <div className="composer-tools"><input ref={picker} type="file" multiple hidden onChange={(e) => { void upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-        <button className="ghost" disabled={uploading} onClick={() => picker.current?.click()} aria-label="Attach files">＋</button>
+        <button className="ghost composer-attach" disabled={uploading} onClick={() => picker.current?.click()} aria-label="Attach files"><Icon name="plus" size={16} /></button>
         <select aria-label="Execution mode" value={mode} disabled={busy || submitting} onChange={(e) => patchLane(lane, { mode: e.target.value as Lane["mode"] })}><option value="plan">Plan</option><option value="acceptEdits">Build</option></select>
         <input list="chat-models" className="composer-model" aria-label="Model override" placeholder="Default model" value={model} disabled={busy || submitting} onChange={(e) => patchLane(lane, { model: e.target.value })} />
         <datalist id="chat-models">{models?.map((m) => <option key={m.value ?? m.id} value={m.value ?? m.id}>{m.displayName ?? m.display_name ?? m.name}</option>)}</datalist>
-        <span className="spacer" /><button className="primary" disabled={!hasMessage || unavailable} onClick={send}>{busy ? "Queue" : "Send"} ↑</button>
+        <span className="spacer" /><button className="primary composer-send" disabled={!hasMessage || unavailable} onClick={send}>{busy ? "Queue" : "Send"}<span aria-hidden="true">↑</span></button>
       </div>
     </div>
     <div className="composer-hint">Enter to {busy ? "queue" : "send"} · Shift+Enter for a new line</div>

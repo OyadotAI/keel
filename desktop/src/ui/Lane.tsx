@@ -72,6 +72,10 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
 
   return (
     <aside className="side-panel" aria-label="Side panel">
+      <header className="inspector-heading"><span>Workspace</span><div>
+        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the conversation" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}><Icon name="maximize" size={14} /></button>
+        <button className="ghost" onClick={close} aria-label="Close the panel" title={`Close the panel (${label({ key: "i", alt: true })})`}><Icon name="x" size={14} /></button>
+      </div></header>
       <Tabs tabs={TABS.map((id, i) => ({ id, label: (
             <>
               {names[id]} {badge[id]}
@@ -79,13 +83,6 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
           ),
           title: `${names[id]} (${label({ key: String(i + 1), alt: true })})`,
         }))} value={tab} onChange={setTab}>
-        <span className="spacer" />
-        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the conversation" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}>
-          <Icon name="maximize" size={14} />
-        </button>
-        <button className="ghost" onClick={close} aria-label="Close the panel" title={`Close the panel (${label({ key: "i", alt: true })})`}>
-          <Icon name="x" size={14} />
-        </button>
       </Tabs>
       <div className="tab-body" onKeyDown={walkFiles}>
         {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : <Readiness lane={lane} />}

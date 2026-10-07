@@ -207,7 +207,7 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
           {p.project.map((r) => (
             <li key={r}>
               <code>{r}</code>
-              <button className="ghost" aria-label={`Remove ${r}`} onClick={() => change(() => post(ep, "/api/permissions/remove", { rule: r, scope: "project" }))}>
+              <button className="link" aria-label={`Remove ${r}`} onClick={() => change(() => post(ep, "/api/permissions/remove", { rule: r, scope: "project" }))}>
                 Remove
               </button>
             </li>

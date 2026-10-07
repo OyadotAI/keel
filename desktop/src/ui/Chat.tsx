@@ -1,12 +1,14 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import { useStore } from "../store";
 import { Markdown, Copy } from "./Markdown";
 import { Icon } from "./icons";
+import { BrandMark } from "./BrandMark";
 
 type Row = { turn: number; step: string; key: string };
 const scrolls = new Map<string, StateSnapshot>();
 const expanded = new Set<string>();
+const following = new Map<string, boolean>();
 
 export function Chat({ lane }: { lane: string }) {
   // Only the shape of the conversation subscribes here. Tokens update their own block.
@@ -20,18 +22,58 @@ export function Chat({ lane }: { lane: string }) {
   const list = useRef<VirtuosoHandle>(null);
   const [bottom, setBottom] = useState(true);
   const saved = useRef(scrolls.get(lane));
+  const follow = useRef(following.get(lane) ?? true);
+  const frame = useRef(0);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const scrollerRef = useCallback((node: HTMLElement | Window | null) => setScroller(node instanceof HTMLElement ? node : null), []);
+  const stick = useCallback(() => {
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      if (follow.current) list.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+    });
+  }, []);
+  useEffect(() => {
+    if (!scroller) return;
+    // Content growth is not a user scroll. Only user input can detach the tail;
+    // reaching the bottom (or Jump to latest) attaches it again.
+    const pause = () => { follow.current = false; following.set(lane, false); };
+    const wheel = (e: WheelEvent) => { if (e.deltaY < 0) pause(); };
+    const key = (e: KeyboardEvent) => { if (["ArrowUp", "PageUp", "Home"].includes(e.key)) pause(); };
+    const pointer = (e: PointerEvent) => { if (e.target === scroller) pause(); };
+    const scroll = () => {
+      if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 4) {
+        follow.current = true; following.set(lane, true);
+      }
+    };
+    scroller.addEventListener("wheel", wheel, { passive: true });
+    scroller.addEventListener("touchmove", pause, { passive: true });
+    scroller.addEventListener("keydown", key);
+    scroller.addEventListener("pointerdown", pointer);
+    scroller.addEventListener("scroll", scroll, { passive: true });
+    const resize = new ResizeObserver(stick);
+    resize.observe(scroller);
+    stick();
+    return () => {
+      resize.disconnect(); cancelAnimationFrame(frame.current);
+      scroller.removeEventListener("wheel", wheel);
+      scroller.removeEventListener("touchmove", pause);
+      scroller.removeEventListener("keydown", key);
+      scroller.removeEventListener("pointerdown", pointer);
+      scroller.removeEventListener("scroll", scroll);
+    };
+  }, [lane, scroller, stick]);
   const remember = () => list.current?.getState((state) => scrolls.set(lane, state));
   if (!rows.length) return <div className="chat-empty"><div className="chat-empty-mark"><Icon name="chat" size={24} /></div>
     <h2>{!loaded ? "Opening your conversation…" : running ? "Starting your agent…" : "What are we building?"}</h2>
     <p>{loaded && !running ? `Work with ${agent === "codex" ? "Codex" : "Claude"} in this lane. Ask a question, attach context, or start a task.` : "Your conversation and workspace stay together."}</p>
     {loaded && !running && <span className="small faint">@ for files · / for commands · Shift+Enter for a new line</span>}</div>;
   return <div className="chat-transcript" aria-label="Conversation">
-    <Virtuoso ref={list} data={rows} computeItemKey={(_, row) => row.key}
+    <Virtuoso ref={list} scrollerRef={scrollerRef} data={rows} computeItemKey={(_, row) => row.key}
       {...(saved.current ? { restoreStateFrom: saved.current } : { initialTopMostItemIndex: rows.length - 1 })}
       rangeChanged={remember} isScrolling={(scrolling) => { if (!scrolling) remember(); }}
-      followOutput={(atBottom) => atBottom ? "auto" : false} atBottomStateChange={setBottom} atBottomThreshold={64}
+      followOutput={() => follow.current ? "auto" : false} totalListHeightChanged={stick} atBottomStateChange={setBottom} atBottomThreshold={4}
       increaseViewportBy={300} itemContent={(_, row) => <ChatRow lane={lane} row={row} />} />
-    {!bottom && <button className="chat-jump" onClick={() => list.current?.scrollToIndex({ index: rows.length - 1, align: "end", behavior: "auto" })}>Jump to latest ↓</button>}
+    {!bottom && <button className="chat-jump" onClick={() => { follow.current = true; following.set(lane, true); stick(); }}>Jump to latest ↓</button>}
   </div>;
 }
 
@@ -49,9 +91,11 @@ function Prompt({ lane, index }: { lane: string; index: number }) {
 
 function Block({ lane, index, step }: { lane: string; index: number; step: string }) {
   const block = useStore((s) => s.lanes[lane]?.conv.turns[index]?.blocks[step]);
+  const first = useStore((s) => s.lanes[lane]?.conv.turns[index]?.steps.find((key) => key.startsWith("b:") && s.lanes[lane]?.conv.turns[index]?.blocks[key.slice(2)]?.kind === "say") === `b:${step}`);
+  const agent = useStore((s) => s.lanes[lane]?.agent);
   const key = `${lane}:${index}:${step}`;
   if (!block) return null;
-  return <div className="chat-row">{block.kind === "think" ? <details className="chat-thinking" open={expanded.has(key)} onToggle={(e) => e.currentTarget.open ? expanded.add(key) : expanded.delete(key)}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
+  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{agent === "codex" ? "Codex" : "Claude"}</div>}{block.kind === "think" ? <details className="chat-thinking" open={expanded.has(key)} onToggle={(e) => e.currentTarget.open ? expanded.add(key) : expanded.delete(key)}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
 }
 
 function Activity({ lane, index, id }: { lane: string; index: number; id: string }) {

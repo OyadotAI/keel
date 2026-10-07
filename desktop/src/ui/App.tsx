@@ -88,7 +88,7 @@ export function App() {
   const setAsking = (a: Asking) => useStore.setState({ asking: a });
 
   useEffect(() => {
-    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 420]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
+    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
     // The lane on screen at launch is opened like a clicked one: its terminal, its transcript.
     const a = useStore.getState().active;
     if (a && useStore.getState().lanes[a]) useStore.getState().load(a);
@@ -176,7 +176,10 @@ export function App() {
           {lane && shell && <Shell key={`shell:${lane}`} lane={lane} close={() => setShell(false)} />}
           {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
         </section>
-        {showPanel && <Handle name="--panel-w" min={320} max={720} fallback={420} from="right" />}
+        {showPanel && <>
+          <button className="panel-backdrop" aria-label="Close workspace panel" onClick={togglePanel} />
+          <Handle name="--panel-w" min={320} max={720} fallback={380} from="right" />
+        </>}
         {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={togglePanel} ask={(what) => setAsking(what)} />}
         {overlay}
       </main>

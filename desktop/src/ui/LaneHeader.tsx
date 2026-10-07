@@ -34,8 +34,7 @@ function Rename({ lane, title }: { lane: string; title: string }) {
       ref={field}
       autoFocus
       defaultValue={title}
-      className="field"
-      style={{ margin: 0, height: 28, minWidth: 260 }}
+      className="field lane-rename"
       aria-label="Lane name"
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => finish(e.target.value)}
@@ -63,8 +62,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
             {title}
           </span>
         )}
-        {isolated ? <span className="lane-branch">{wt ? `keel/${wt}` : "own branch"}</span> : <span className="small faint">shares the project's tree</span>}
-        {agent === "codex" && <span className="small faint">codex</span>}
+        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span>{agent === "codex" ? "Codex" : "Claude"}</span>
       </div>
       <UpdateButton />
       <LaneViewSwitch lane={lane} />

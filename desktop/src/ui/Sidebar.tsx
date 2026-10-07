@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import { label } from "../keys";
 import { cycle } from "./App";
 import { activity } from "./StatusBar";
+import { BrandMark } from "./BrandMark";
 import type { Lane } from "../store";
 import type { Turn } from "../reduce";
 
@@ -48,18 +49,13 @@ export function Sidebar() {
   const order = useStore((s) => s.order);
   return (
     <nav className="sidebar" aria-label="Projects">
+      <div className="workspace-brand"><span className="brand-symbol"><BrandMark /></span><strong>Keel</strong><span className="workspace-edition">Workspace</span></div>
       <div className="sidebar-actions">
         <button className="open" onClick={pickProject} title={`Open a project folder (${label({ key: "o" })})`}>
           <Icon name="folder" size={17} /> Open project…
         </button>
         <button className="ghost" onClick={() => useStore.setState({ creating: true, settings: false })} aria-label="New project" title="New project from a template, or clone from GitHub">
           <Icon name="plus" size={17} />
-        </button>
-        <button className="ghost" onClick={() => useStore.setState((s) => ({ extensions: !s.extensions, settings: false, creating: false }))} aria-label="Extensions" title="Extensions — skills, subagents, MCP servers, plugins">
-          <Icon name="puzzle" size={17} />
-        </button>
-        <button className="ghost" onClick={() => useStore.setState((s) => ({ settings: !s.settings }))} aria-label="Settings" title={`Settings (${label({ key: "," })})`}>
-          <Icon name="gear" size={17} />
         </button>
       </div>
       <div className="sidebar-head eyebrow">Projects</div>
@@ -68,6 +64,10 @@ export function Sidebar() {
           <ProjectRow key={p} path={p} />
         ))}
         {order.length === 0 && <div className="small faint" style={{ padding: "4px 8px" }}>No projects open.</div>}
+      </div>
+      <div className="sidebar-footer">
+        <button onClick={() => useStore.setState((s) => ({ extensions: !s.extensions, settings: false, creating: false }))}><Icon name="puzzle" size={16} />Extensions</button>
+        <button onClick={() => useStore.setState((s) => ({ settings: !s.settings }))} title={`Settings (${label({ key: "," })})`}><Icon name="gear" size={16} />Settings</button>
       </div>
     </nav>
   );
@@ -93,20 +93,22 @@ function ProjectRow({ path }: { path: string }) {
           <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} />
         </button>
         <span className="project-name">{p.name}</span>
-        <SetupBadge project={path} />
-        {needs > 0 && <span className="small" style={{ color: "var(--warn)" }}>· {needs} needs you</span>}
-        {busy > 0 && (
-          <span className="busy-label" title={`${busy} lane${busy === 1 ? "" : "s"} running a turn`}>
-            <span className="busy-dot" /> {busy} running
-          </span>
-        )}
-        {p.starting && <span className="small faint">starting…</span>}
         <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code or Codex">
           <Icon name="plus" size={14} />
         </button>
         <button className="ghost hover-only" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "more" })} aria-label={`${p.name} actions`}>
           <Icon name="more" size={14} />
         </button>
+      </div>
+      <div className="project-status">
+        <SetupBadge project={path} />
+        {needs > 0 && <span className="small" style={{ color: "var(--warn)" }}>{needs} needs you</span>}
+        {busy > 0 && (
+          <span className="busy-label" title={`${busy} lane${busy === 1 ? "" : "s"} running a turn`}>
+            <span className="busy-dot" /> {busy} running
+          </span>
+        )}
+        {p.starting && <span className="small faint">starting…</span>}
       </div>
       {p.error && (
         <div className="small error" style={{ padding: "0 8px 4px 28px" }}>

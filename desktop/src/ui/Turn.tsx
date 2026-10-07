@@ -87,6 +87,7 @@ const pick = <T,>(lane: string, index: number, f: (t: Turn) => T) => (s: ReturnT
 export const TurnView = memo(function TurnView({ lane, index }: { lane: string; index: number }) {
   const t = useStore(pick(lane, index, (t) => t));
   const waiting = useStore((s) => (s.lanes[lane]?.pending.length ?? 0) > 0);
+  const chat = useStore((s) => s.lanes[lane]?.interface !== "terminal");
   const number = index + 1;
   if (!t) return null;
   const state = stateOf(t, waiting);
@@ -127,7 +128,7 @@ export const TurnView = memo(function TurnView({ lane, index }: { lane: string; 
             </div>
           ))}
         {t.files.length > 0 && <Files lane={lane} id={t.id} files={t.files} commit={t.commit} />}
-        {calls.length > 0 && <Commands lane={lane} index={index} all={t.calls} open={!t.closed} />}
+        {calls.length > 0 && <Commands lane={lane} index={index} all={t.calls} open={!chat && !t.closed} />}
       </div>
     </article>
   );
