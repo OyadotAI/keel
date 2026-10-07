@@ -21,7 +21,7 @@ unsigned build is for your own machine and nothing else.
 ## Updates
 
 The app checks `releases/latest/download/latest.json` at launch and every six hours, downloads in
-the background, and installs only when the person clicks **Restart to update**. A restart stops
+the background, and installs only when the person clicks **Update now** in the header. A restart stops
 every agent the app is running, so Keel never makes that choice for them, and it says how many
 lanes are mid-turn before it restarts. Development builds never check.
 

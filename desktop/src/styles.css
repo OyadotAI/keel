@@ -250,6 +250,8 @@ button.link {
   display: none;
 }
 .main {
+  grid-column: 3;
+  grid-row: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
@@ -1096,6 +1098,7 @@ pre.code {
 /* Status bar */
 .statusbar {
   grid-column: 1 / -1;
+  grid-row: 2;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1236,6 +1239,7 @@ pre.code {
 }
 .statusbar .sb-icon {
   width: 28px;
+  flex: none;
   padding: 0;
   justify-content: center;
 }
@@ -2162,7 +2166,9 @@ h3 {
   gap: 16px;
   padding: 3px 0;
 }
-.statusbar button.update {
+.lane-header button.update {
+  flex: none;
+  white-space: nowrap;
   color: var(--on-accent);
   background: var(--accent);
   font-weight: 600;
@@ -2392,6 +2398,13 @@ h3 {
   .app > .handle { display: none; }
   .chat-row { padding-left: 20px; padding-right: 20px; }
   .chat-dock { padding-left: 16px; padding-right: 16px; }
+  .statusbar .sb-usage, .statusbar .sb-shortcuts kbd { display: none; }
+  .statusbar .sb-branch { max-width: 150px; }
+  .statusbar .sb-branch .sb-mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
+.sidebar-backdrop { display: none; }
+@media (max-width: 900px) {
+  .app:not(.no-sidebar) > .sidebar-backdrop { display: block; position: fixed; inset: 0 0 32px; width: 100%; height: auto; z-index: 11; border: 0; border-radius: 0; }
 }
 .interface-setting { text-align: left; width: 100%; max-width: 600px; }
 .interface-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }

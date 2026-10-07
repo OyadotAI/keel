@@ -1,3 +1,4 @@
+import { UpdateButton } from "./UpdateButton";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { Floating } from "./Menu";
@@ -65,6 +66,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
         {isolated ? <span className="lane-branch">{wt ? `keel/${wt}` : "own branch"}</span> : <span className="small faint">shares the project's tree</span>}
         {agent === "codex" && <span className="small faint">codex</span>}
       </div>
+      <UpdateButton />
       <LaneViewSwitch lane={lane} />
       <button className="ghost" aria-label="Lane actions" title="Lane actions" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}>
         <Icon name="more" />

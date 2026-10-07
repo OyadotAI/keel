@@ -1,3 +1,4 @@
+import { UpdateButton } from "./UpdateButton";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { check, useUpdate } from "../update";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -38,6 +39,7 @@ export function Settings() {
           <span className="lane-name">Settings</span>
           <span className="muted small">{name ? `for ${name} and for Claude Code` : "Open a project to change its settings"}</span>
         </div>
+        <UpdateButton />
         <button onClick={close}>Done</button>
       </header>
       <div className="settings-body">
@@ -249,7 +251,9 @@ function UpdatesSection() {
         : u.state === "downloading"
           ? `Downloading ${u.version}…`
           : u.state === "ready"
-            ? `Keel ${u.version} is downloaded — restart from the status bar to install it.`
+            ? `Keel ${u.version} is downloaded — choose Update now in the header to install it.`
+            : u.state === "installing"
+              ? `Installing Keel ${u.version}…`
             : u.state === "failed"
               ? `Could not check: ${u.why}`
               : import.meta.env.DEV
@@ -262,7 +266,7 @@ function UpdatesSection() {
         Keel {version ?? "…"} · checks for a new version at launch and every six hours, downloads it in the background, and installs it when you restart.
       </p>
       <div className="form-row">
-        <button onClick={() => void check()} disabled={u.state === "checking" || u.state === "downloading"}>
+        <button onClick={() => void check()} disabled={u.state === "checking" || u.state === "downloading" || u.state === "ready" || u.state === "installing"}>
           Check for updates
         </button>
         {said && <span className="small faint">{said}</span>}

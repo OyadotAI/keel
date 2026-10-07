@@ -1,3 +1,4 @@
+import { UpdateButton } from "./UpdateButton";
 import { useCallback, useEffect, useState } from "react";
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
@@ -163,22 +164,23 @@ export function App() {
   return (
     <div className={`app ${sidebar ? "" : "no-sidebar"}`}>
       <Sidebar />
+      <button className="sidebar-backdrop" style={{ background: "transparent" }} aria-label="Close projects" onClick={toggleSidebar} />
       <Handle name="--sidebar-w" min={200} max={360} fallback={240} from="left" />
       <main className={`main ${showPanel ? "with-panel" : ""} ${showPanel && expanded ? "expanded" : ""}`}>
         <section className="agent-pane" style={overlay ? { display: "none" } : undefined}>
-          {lane && <LaneHeader key={lane} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
+          {lane && <LaneHeader key={`header:${lane}`} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
           {lane && <LaneError lane={lane} />}
           <div className="agents">
             <Agents />
           </div>
-          {lane && shell && <Shell key={lane} lane={lane} close={() => setShell(false)} />}
-          {lane && <LaneComposer key={lane} lane={lane} />}
+          {lane && shell && <Shell key={`shell:${lane}`} lane={lane} close={() => setShell(false)} />}
+          {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
         </section>
         {showPanel && <Handle name="--panel-w" min={320} max={720} fallback={420} from="right" />}
         {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={togglePanel} ask={(what) => setAsking(what)} />}
         {overlay}
       </main>
-      <StatusBar openTab={showTab} panel={showPanel} togglePanel={togglePanel} />
+      <StatusBar openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
       <Drop />
       {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
       <Shortcuts />
@@ -293,7 +295,9 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
 function Welcome() {
   const none = useStore((s) => s.order.length === 0);
   return (
-    <div className="empty">
+    <div className="settings">
+      <header className="lane-header"><span className="lane-heading">Keel</span><UpdateButton /></header>
+      <div className="empty">
       <h1>{none ? "Open a project to start" : "Pick a lane"}</h1>
       {none && (
         <div className="actions" style={{ justifyContent: "center" }}>
@@ -310,6 +314,7 @@ function Welcome() {
       </p>
       {none && <InterfaceSetting />}
       <p className="small faint">{label({ key: "k" })} opens the command palette.</p>
+      </div>
     </div>
   );
 }

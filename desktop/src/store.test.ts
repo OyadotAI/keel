@@ -26,6 +26,59 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("chat delivery", () => {
+  it("never drains queued work on historical idle records before replay catches up", async () => {
+    const store = await fixture();
+    const queued = [{ id: "queued", text: "Next turn", attachments: [] }];
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, managed: true, queued } } }));
+    mocks.post.mockResolvedValue({ accepted: true, running: true });
+    store.getState().load("test"); await Promise.resolve();
+    const stream = mocks.open.mock.calls.find(([url]) => url.includes("/api/chat/events"))!;
+    stream[2]([{ event: "record", data: { seq: 1, event: "idle", data: null } }]);
+    await Promise.resolve();
+    expect(mocks.post).not.toHaveBeenCalled();
+    stream[2]([{ event: "record", data: { seq: 2, event: "accepted", data: { id: "running" } } }, { event: "caught-up", data: { running: true } }]);
+    expect(store.getState().lanes.test.queued).toEqual(queued);
+    expect(mocks.post).not.toHaveBeenCalled();
+    stream[2]([{ event: "record", data: { seq: 3, event: "idle", data: null } }]);
+    await Promise.resolve(); await Promise.resolve();
+    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(store.getState().lanes.test.draft).toBe("Hello");
+  });
+
+  it("background and queued sends preserve an unrelated composer draft and attachments", async () => {
+    const store = await fixture();
+    const attachments = [{ path: "draft.txt", name: "draft.txt" }];
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, attachments } } }));
+    mocks.post.mockResolvedValue({ accepted: true, running: true });
+    await store.getState().send("test", "Queued earlier");
+    expect(store.getState().lanes.test).toMatchObject({ draft: "Hello", attachments });
+  });
+
+  it("editing queued work never overwrites an unsent draft", async () => {
+    const store = await fixture();
+    const queued = [{ id: "q1", text: "Queued earlier", attachments: [] }];
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, queued } } }));
+    store.getState().editQueued("test", "q1");
+    expect(store.getState().lanes.test).toMatchObject({ draft: "Hello", queued });
+    expect(store.getState().lanes.test.error).toContain("unsent draft");
+    store.getState().draft("test", "");
+    store.getState().editQueued("test", "q1");
+    expect(store.getState().lanes.test).toMatchObject({ draft: "Queued earlier", queued: [], error: undefined });
+  });
+
+  it("persists queued messages across reload and persists their removal", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, running: true } } }));
+    await store.getState().send("test", "Hello");
+    const saved = JSON.parse(localStorage.getItem("keel.layout.v1")!);
+    expect(saved.lanes[0].queued[0].text).toBe("Hello");
+    vi.resetModules();
+    const { useStore: restored } = await import("./store");
+    expect(restored.getState().lanes.test.queued[0].text).toBe("Hello");
+    restored.getState().removeQueued("test", saved.lanes[0].queued[0].id);
+    expect(JSON.parse(localStorage.getItem("keel.layout.v1")!).lanes[0].queued).toEqual([]);
+  });
+
   it("a deduplicated retry of a completed turn does not leave the lane busy", async () => {
     const store = await fixture();
     const receipt = { id: "original", prompt: "Hello", mode: "plan" };

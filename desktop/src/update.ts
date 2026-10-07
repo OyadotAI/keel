@@ -10,6 +10,7 @@ export type Update =
   | { state: "current" }
   | { state: "downloading"; version: string }
   | { state: "ready"; version: string; notes?: string }
+  | { state: "installing"; version: string }
   | { state: "failed"; why: string };
 
 let now: Update = { state: "idle" };
@@ -30,7 +31,7 @@ let started = false;
 /// Look for an update and fetch it. Quiet on the way: only a finished download is shown, and a
 /// failed check is kept for Settings rather than raised — being offline is not news.
 export async function check(): Promise<void> {
-  if (now.state === "checking" || now.state === "downloading" || now.state === "ready") return;
+  if (now.state === "checking" || now.state === "downloading" || now.state === "ready" || now.state === "installing") return;
   put({ state: "checking" });
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
@@ -49,13 +50,15 @@ let pending: { install(): Promise<void> } | undefined;
 
 /// Install what was downloaded and start again on it.
 export async function restart(): Promise<void> {
-  if (!pending) return;
+  if (!pending || now.state !== "ready") return;
+  const update = pending;
+  put({ state: "installing", version: now.version });
   try {
     // The daemons first: the installer replaces `keel` beside the app, and Windows will not
     // write a file a process is running. They come back on their own if the install fails.
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("stop_all");
-    await pending.install();
+    await update.install();
     const { relaunch } = await import("@tauri-apps/plugin-process");
     await relaunch();
   } catch (e) {

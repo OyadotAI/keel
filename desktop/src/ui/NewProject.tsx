@@ -1,3 +1,4 @@
+import { UpdateButton } from "./UpdateButton";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -88,6 +89,7 @@ export function NewProject() {
           <span className="lane-name">New project</span>
           <span className="muted small">Start one from a template, or clone one of yours from GitHub</span>
         </div>
+        <UpdateButton />
         <button onClick={close}>Cancel</button>
       </header>
       <div className="settings-body">

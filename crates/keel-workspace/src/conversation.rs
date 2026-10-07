@@ -345,8 +345,18 @@ impl Decoder {
             self.codex(&record, &mut out, now);
         } else {
             if self.source == Source::Transcript
-                && let Some((uuid, prompt, at)) = crate::sessions::opener(&record)
+                && let Some((uuid, _, at)) = crate::sessions::opener(&record)
             {
+                // Session-list summaries are capped at 200 characters. The conversation must
+                // retain the complete prompt, including after a terminal/chat handoff.
+                let prompt = flat_text(&record["message"]["content"]);
+                if matches!(
+                    prompt.trim(),
+                    "[Request interrupted by user]" | "[Request interrupted by user for tool use]"
+                ) {
+                    out.extend(self.close(Ending::Stopped));
+                    return out;
+                }
                 out.extend(self.open(Some(prompt), Some(uuid), Some(at), offset));
                 self.raw(&mut out, line, Stream::Out, false, None);
                 return out;

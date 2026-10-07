@@ -86,6 +86,14 @@ export type Agent = "claude" | "codex";
 export interface Attachment { path: string; name: string; mime?: string; preview?: string }
 export interface QueuedMessage { id: string; text: string; attachments: Attachment[] }
 
+function makeReceipt(lane: Lane, prompt: string, attachments: Attachment[], wt?: string): NonNullable<Lane["receipt"]> {
+  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, wt, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+}
+
+function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachment[]): boolean {
+  return prompt === lane.draft || (!lane.draft?.trim() && attachments.length > 0 && attachments === lane.attachments);
+}
+
 export interface Lane {
   id: string;
   project: string;
@@ -190,8 +198,10 @@ interface State {
   select(lane: string): void;
   /// Read a lane's conversation back if it has one and it is not on screen yet.
   load(lane: string): void;
-  send(lane: string, prompt: string, attachments?: Attachment[]): Promise<void>;
+  send(lane: string, prompt: string, attachments?: Attachment[]): Promise<boolean>;
   stop(lane: string): Promise<void>;
+  editQueued(lane: string, id: string): void;
+  removeQueued(lane: string, id: string): void;
   draft(lane: string, text: string): void;
   /// `scope`: "once" lets this call through; "session" and "project" also remember `p.rules`.
   answer(lane: string, p: Pending, decision: "allow" | "deny", answer?: string, scope?: "once" | "session" | "project"): Promise<void>;
@@ -204,7 +214,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; attachments?: Attachment[]; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
+  lanes: { id: string; project: string; title: string; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
   active?: string;
 }
 
@@ -217,7 +227,7 @@ function load(): Pick<State, "order" | "projects" | "lanes" | "active"> {
     const lanes: Record<string, Lane> = {};
     for (const l of s.lanes) {
       // A lane saved before lanes were the CLI has no session of its own yet; it gets one.
-      lanes[l.id] = { ...l, interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: [], conv: empty, running: false, loaded: !l.session, pending: [] };
+      lanes[l.id] = { ...l, interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: l.queued ?? [], conv: empty, running: false, loaded: !l.session, pending: [] };
     }
     return { order: s.order.filter((p) => projects[p]), projects, lanes, active: s.active };
   } catch {
@@ -229,7 +239,7 @@ function save(s: State) {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments, draft, model, mode, managed, receipt }) => ({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), draft, model, mode, managed, receipt })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments, queued, draft, model, mode, managed, receipt }) => ({ id, project, title, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), draft, model, mode, managed, receipt })),
     active: s.active,
   };
   try {
@@ -539,6 +549,7 @@ export const useStore = create<State>()((set, getState) => {
     try {
       const ep = await endpoint(l.project);
       if (!getState().lanes[lid] || getState().lanes[lid].interface === "terminal") return;
+      let caughtUp = false;
       const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
         let idle = false;
         lane(lid, (current) => {
@@ -547,10 +558,12 @@ export const useStore = create<State>()((set, getState) => {
           let cursor = current.cursor ?? 0;
           for (const incoming of events) {
             if (incoming.event === "caught-up") {
+              caughtUp = true;
               patch.loaded = true;
               patch.disconnected = false;
               clearConnectionError(current, patch);
               if (current.managed || cursor) patch.running = !!(incoming.data as { running?: boolean }).running;
+              if (!patch.running) idle = true;
               continue;
             }
             if (incoming.event !== "record") continue;
@@ -592,7 +605,7 @@ export const useStore = create<State>()((set, getState) => {
         const now = getState().lanes[lid];
         if (now?.managed) { follows.get(lid)?.close(); follows.delete(lid); }
         if (idle || events.some((e) => e.event === "record" && ["accepted", "capabilities"].includes((e.data as { event: string }).event))) save(getState());
-        if (idle) { gitSoon(lid); drain(lid); }
+        if (idle && caughtUp) { gitSoon(lid); drain(lid); }
       }, (error) => {
         if (chats.get(lid) !== stream) return;
         chats.delete(lid);
@@ -914,7 +927,7 @@ export const useStore = create<State>()((set, getState) => {
     load(lid) {
       // Whatever put the lane on screen: its daemon, its conversation, its checkout's state.
       const l = getState().lanes[lid];
-      if (l) void endpoint(l.project).then(() => gitSoon(lid), () => undefined);
+      if (l) void endpoint(l.project).then(() => { gitSoon(lid); void getState().refreshDev(lid); }, () => undefined);
       set((s) => (s.opened.includes(lid) ? s : { opened: [...s.opened, lid] }));
       void follow(lid);
       void listen(lid);
@@ -922,48 +935,72 @@ export const useStore = create<State>()((set, getState) => {
 
     draft(lid, text) { lane(lid, { draft: text }); save(getState()); },
 
+    editQueued(lid, messageId) {
+      const l = getState().lanes[lid];
+      const message = l?.queued.find((q) => q.id === messageId);
+      if (!l || !message) return;
+      if (l.draft?.trim() || l.attachments?.length) {
+        lane(lid, { error: "Your composer has an unsent draft. Send or clear it before editing a queued message." });
+        return;
+      }
+      lane(lid, { draft: message.text, attachments: message.attachments, queued: l.queued.filter((q) => q.id !== messageId), error: undefined });
+      save(getState());
+    },
+    removeQueued(lid, messageId) {
+      lane(lid, (l) => ({ queued: l.queued.filter((q) => q.id !== messageId) }));
+      save(getState());
+    },
+
     async stop(lid) {
       const l = getState().lanes[lid];
       if (l?.interface === "terminal") { interruptTerminal(lid); return; }
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
       lane(lid, { queued: [] });
+      save(getState());
       try { await post(ep, "/api/chat/stop", {}, { lane: lid }); }
       catch (error) { lane(lid, { error: `Could not stop the turn: ${error}` }); }
     },
 
     async send(lid, prompt, attachments = []) {
       const l = getState().lanes[lid];
-      if (!l || !prompt.trim()) return;
+      if (!l || !prompt.trim()) return false;
       if (l.interface === "terminal") {
         if (!typeInto(lid, prompt)) lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }] });
-        return;
+        return true;
       }
-      if (l.elsewhere) { lane(lid, { error: "This session is running outside Keel. Stop it there before resuming here." }); return; }
-      if (l.receipt && l.receipt.prompt !== prompt) { lane(lid, { error: "The previous submission has not been confirmed. Retry it before sending another message." }); return; }
-      if (l.running || l.submitting) { lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }], draft: "", attachments: [] }); return; }
+      if (l.elsewhere) { lane(lid, { error: "This session is running outside Keel. Stop it there before resuming here." }); return false; }
+      if (l.receipt && l.receipt.prompt !== prompt) { lane(lid, { error: "The previous submission has not been confirmed. Retry it before sending another message." }); return false; }
+      const ownsDraft = isComposerSubmission(l, prompt, attachments);
+      if (l.running || l.submitting) {
+        lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }], ...(ownsDraft ? { draft: "", attachments: [] } : {}) });
+        save(getState());
+        return true;
+      }
       lane(lid, { submitting: true, running: true, error: undefined });
       let submission: string | undefined;
       try {
         const ready = await getState().prepare(lid);
-        if (!getState().lanes[lid]) return;
+        if (!getState().lanes[lid]) return false;
         if (!ready) throw new Error("The lane could not be prepared.");
-        const receipt = l.receipt ?? { id: id(), prompt, session: l.known ? l.session : undefined, mode: l.mode ?? "plan", model: l.model, wt: ready.wt, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+        const receipt = l.receipt ?? makeReceipt(l, prompt, attachments, ready.wt);
         submission = receipt.id;
         lane(lid, { receipt });
         save(getState());
         const delivery = await post<{ accepted: boolean; running: boolean }>(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: false });
-        lane(lid, (now) => ({ managed: true, receipt: undefined, running: (now.cursor ?? 0) > (l.cursor ?? 0) ? now.running : delivery.running, draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
+        lane(lid, (now) => ({ managed: true, receipt: undefined, running: (now.cursor ?? 0) > (l.cursor ?? 0) ? now.running : delivery.running, draft: ownsDraft && now.draft === l.draft ? "" : now.draft, attachments: ownsDraft && now.attachments === l.attachments ? [] : now.attachments }));
         follows.get(lid)?.close();
         follows.delete(lid);
         void listen(lid);
+        return true;
       } catch (error) {
         // A receipt delivered over SSE is authoritative even if the POST response was lost.
         if (submission && getState().lanes[lid]?.receipt?.id !== submission) {
-          lane(lid, (now) => ({ draft: now.draft === l.draft ? "" : now.draft, attachments: now.attachments === l.attachments ? [] : now.attachments }));
-          return;
+          lane(lid, (now) => ({ draft: ownsDraft && now.draft === l.draft ? "" : now.draft, attachments: ownsDraft && now.attachments === l.attachments ? [] : now.attachments }));
+          return true;
         }
-        lane(lid, { running: false, error: `Message not confirmed: ${error}. Retry uses the same submission id.`, draft: l.draft || prompt });
+        lane(lid, { running: false, error: `Message not confirmed: ${error}. Retry uses the same submission id.`, draft: getState().lanes[lid]?.draft || (ownsDraft ? prompt : "") });
+        return false;
       } finally { lane(lid, { submitting: false }); save(getState()); drain(lid); }
     },
 

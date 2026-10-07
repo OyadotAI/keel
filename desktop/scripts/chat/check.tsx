@@ -26,6 +26,7 @@ useStore.setState({ projects: { [project]: { path: project, name: 'Keel', lanes:
   const l = useStore.getState().lanes[lane];
   const next = applyFrames(l.conv, [{ op: 'open', turn: `new-${Date.now()}`, prompt }]);
   useStore.setState({ lanes: { ...useStore.getState().lanes, [lane]: { ...l, conv: next, draft: '', running: true } } });
+  return true;
 } });
 function Fixture() {
   const active = useStore((s) => s.active)!;

@@ -332,6 +332,19 @@ fn a_transcript_splits_on_prompts_and_ends_on_turn_duration() {
     assert_eq!(f.turns[0].closed, Some(Ending::Done));
 }
 
+#[test]
+fn chat_handoff_retains_long_prompts_and_stop_markers_do_not_invent_turns() {
+    let prompt = "Long prompt line\n".repeat(40);
+    let f = transcript(&[
+        opener("u-1", &prompt),
+        said("m1", "partial reply"),
+        opener("stop", "[Request interrupted by user]"),
+    ]);
+    assert_eq!(f.turns.len(), 1);
+    assert_eq!(f.turns[0].prompt.as_deref(), Some(prompt.as_str()));
+    assert_eq!(f.turns[0].closed, Some(Ending::Stopped));
+}
+
 /// The head of a long replay is cut off. What is left opens a turn with no prompt, and a result
 /// for a call that was cut off is not drawn as a call.
 #[test]

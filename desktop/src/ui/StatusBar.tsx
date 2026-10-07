@@ -1,5 +1,3 @@
-import { restart, useUpdate } from "../update";
-import { Dialog } from "./kit";
 import { useEffect, useState } from "react";
 import { useStore, type Lane } from "../store";
 import { count } from "./Turn";
@@ -42,7 +40,7 @@ function useNow(lane?: string): { label: string; since?: string; tone: "idle" | 
   return { ...a, label: `${l.agent} · ${a.label}` };
 }
 
-export function StatusBar({ openTab, panel, togglePanel }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void }) {
+export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void }) {
   const lane = useStore((s) => s.active);
   const l = useStore((s) => (s.active ? s.lanes[s.active] : undefined));
   const project = useStore((s) => (l ? s.projects[l.project] : undefined));
@@ -86,6 +84,7 @@ export function StatusBar({ openTab, panel, togglePanel }: { openTab: (tab: Tab)
   const elapsed = now.since ? Math.floor((Date.now() - Date.parse(now.since)) / 1000) : undefined;
   return (
     <footer className="statusbar">
+      <button className="sb-icon" onClick={toggleSidebar} aria-label={sidebar ? "Hide projects" : "Show projects"} aria-pressed={sidebar} title={`Toggle projects (${label({ key: "e", shift: true })})`}><Icon name="folder" size={15} /></button>
       {l && (
         <button className="sb-branch" onClick={() => openTab("git")} title="Open Git">
           <Icon name="branch" size={14} />
@@ -130,7 +129,6 @@ export function StatusBar({ openTab, panel, togglePanel }: { openTab: (tab: Tab)
             <Icon name="shield" size={14} /> Trust this project…
           </button>
         ))}
-      <UpdateButton />
       {project?.error ? (
         <button className="bad" onClick={() => l && useStore.getState().load(l.id)}>
           Keel stopped for this project — Restart
@@ -148,40 +146,5 @@ export function StatusBar({ openTab, panel, togglePanel }: { openTab: (tab: Tab)
         </button>
       )}
     </footer>
-  );
-}
-
-/// The one line an update gets: present when it is downloaded and ready, absent otherwise. A
-/// restart ends every agent the app runs, so it says how many before it does it.
-function UpdateButton() {
-  const u = useUpdate();
-  const running = useStore((s) => Object.values(s.lanes).filter((l) => l.running).length);
-  const [asking, setAsking] = useState(false);
-  if (u.state === "failed" && u.why.startsWith("The update could not install"))
-    return (
-      <button className="bad" onClick={() => useStore.setState({ settings: true })} title={u.why}>
-        Update failed — see Settings
-      </button>
-    );
-  if (u.state !== "ready") return null;
-  return (
-    <>
-      <button className="update" onClick={() => (running ? setAsking(true) : void restart())} title={`Keel ${u.version} is downloaded`}>
-        Restart to update
-      </button>
-      {asking && (
-        <Dialog title={`Restart to install Keel ${u.version}?`} onClose={() => setAsking(false)}>
-          <p>
-            {running} lane{running === 1 ? " is" : "s are"} running a turn, and restarting stops {running === 1 ? "it" : "them"}. The conversations stay in History and resume after the restart.
-          </p>
-          <div className="actions">
-            <button className="primary" onClick={() => void restart()}>
-              Restart now
-            </button>
-            <button onClick={() => setAsking(false)}>Later</button>
-          </div>
-        </Dialog>
-      )}
-    </>
   );
 }

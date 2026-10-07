@@ -241,7 +241,7 @@ jobs:
           - **Windows**: [Keel-setup.exe]($base/Keel-setup.exe)
 
           Keel needs [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in.
-          Installed copies update themselves — **Restart to update** appears in the status bar.
+          Installed copies download updates automatically — choose **Update now** in the header to install.
 
           Windows is not code-signed yet: on first run SmartScreen asks, and **More info → Run anyway** opens it.
           NOTES

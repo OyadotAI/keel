@@ -5,6 +5,8 @@ import { ApprovalStrip } from "./Approvals";
 
 export function patchLane(lane: string, patch: Partial<Lane>) {
   useStore.setState((s) => s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], ...patch } } } : s);
+  const current = useStore.getState().lanes[lane];
+  if (current) useStore.getState().draft(lane, current.draft ?? "");
 }
 
 export function Composer({ lane }: { lane: string }) {
@@ -83,7 +85,7 @@ export function Composer({ lane }: { lane: string }) {
   }
   return <div className="chat-dock">
     <ApprovalStrip lane={lane} />
-    {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">Queued</span><span>{message.text}</span><button onClick={() => { write(message.text); patchLane(lane, { attachments: message.attachments, queued: queued.filter((_, i) => i !== index) }); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => patchLane(lane, { queued: queued.filter((_, i) => i !== index) })}>×</button></div>)}</div>}
+    {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">Queued</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
     {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt)}>Retry same message</button></div>}
     <div className="chat-composer">
@@ -121,7 +123,7 @@ function suggestions(token: string | undefined, files: string[], commands: strin
 function Attachments({ lane }: { lane: string }) {
   const attachments = useStore((s) => s.lanes[lane]?.attachments);
   if (!attachments?.length) return null;
-  return <div className="composer-attachments">{attachments.map((a, i) => <div key={a.path}>
+  return <div className="composer-attachments">{attachments.map((a, i) => <div key={`${a.path}:${i}`}>
     {a.preview && <img src={a.preview} alt={a.name} />}<span>{a.name}</span>
     <button aria-label={`Remove ${a.name}`} onClick={() => { if (a.preview) URL.revokeObjectURL(a.preview); patchLane(lane, { attachments: attachments.filter((_, at) => at !== i) }); }}>×</button>
   </div>)}</div>;

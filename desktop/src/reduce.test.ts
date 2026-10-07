@@ -84,6 +84,11 @@ describe("folding a turn", () => {
 });
 
 describe("terminal history handoff", () => {
+  it("keeps a confirmed completion when provider history omits its end marker", () => {
+    const previous = applyFrames(empty, [f("open", { prompt: "first" }), f("close", { reason: "done" })]);
+    const restored = restoreTranscript(previous, [f("open", { prompt: "first" }), f("close", { reason: "superseded" })]);
+    expect(restored.turns[0].closed).toBe("done");
+  });
   it("imports terminal messages without duplicating prior chat and preserves checkpoint metadata", () => {
     let previous = applyFrames(empty, [f("open", { prompt: "first" }, "chat-first"), f("text", { step: "a", kind: "say", append: "old" }), f("close", { reason: "done" })]);
     previous = { turns: previous.turns.map((t) => ({ ...t, snapshot: "tree-before", files: ["a.ts"] })) };

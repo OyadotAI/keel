@@ -1,3 +1,4 @@
+import { UpdateButton } from "./UpdateButton";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { EVENTS, groupHooks, tilde } from "../hooks";
 import { useEffect, useState } from "react";
@@ -131,6 +132,7 @@ export function Extensions() {
           <span className="lane-name">Extensions</span>
           <span className="muted small">{name ? `what Claude Code loads in ${name}` : "Open a project first"}</span>
         </div>
+        <UpdateButton />
         <button onClick={close}>Done</button>
       </header>
       <Tabs

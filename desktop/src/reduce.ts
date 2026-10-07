@@ -295,7 +295,7 @@ export function restoreTranscript(previous: Conversation, frames: Frame[]): Conv
   return { turns: restored.turns.map((turn, index) => {
     const old = previous.turns[index];
     if (!old || old.prompt !== turn.prompt) return turn;
-    return { ...turn, id: old.id, files: old.files, gate: old.gate, commit: old.commit,
+    return { ...turn, id: old.id, closed: turn.closed === "superseded" && old.closed ? old.closed : turn.closed, files: old.files, gate: old.gate, commit: old.commit,
       snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended };
   }) };
 }

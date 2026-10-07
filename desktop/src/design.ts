@@ -57,11 +57,14 @@ export function clearPins(lane: string) {
   void send({ clear: true });
 }
 
-/// Send the unsent pins into the lane's agent. Typed into its terminal like anything else.
-export function sendPins(lane: string): boolean {
+/// Send unsent pins through the active lane interface.
+export async function sendPins(lane: string): Promise<boolean> {
   const unsent = get(lane).pins.filter((p) => !p.sent);
   if (!unsent.length) return false;
-  if (!typeInto(lane, prompt(unsent))) return false;
+  const l = useStore.getState().lanes[lane];
+  if (!l) return false;
+  const delivered = l.interface === "terminal" ? typeInto(lane, prompt(unsent)) : await useStore.getState().send(lane, prompt(unsent));
+  if (!delivered) return false;
   put(lane, (d) => ({ ...d, armed: false, waiting: true, pins: d.pins.map((p) => (p.sent ? p : { ...p, sent: true, verdict: undefined })) }));
   void send({ disarm: true });
   if (showing === lane) {

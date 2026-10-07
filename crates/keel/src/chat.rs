@@ -58,7 +58,7 @@ impl History {
             return Err("The original conversation could not be found. Open it from History before resuming.".into());
         };
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let fingerprint = format!("{:x}", Sha256::digest(&bytes));
+        let fingerprint = format!("transcript-v2:{:x}", Sha256::digest(&bytes));
         if self
             .records
             .iter()

@@ -29,7 +29,17 @@ Oya Browser (`@oya-ai/cli` and `@oya-ai/browser`) exercised the deterministic fi
 
 Store regression tests also cover idle chat-to-terminal handoff preserving session identity and drafts, and refusing a Codex terminal handoff when its session ID is unavailable.
 
-## Limits
+## Resumed exploratory QA — 2026-10-07
+
+Reproduced the interrupted session's UI crash in Oya Browser: opening the command palette and pressing Arrow Down emptied the React root with `TypeError: destroy is not a function`. In this browser, `scrollIntoView()` returns a Promise. The palette's expression-bodied effect returned that Promise as its cleanup. The effect now explicitly discards the scrolling result.
+
+Oya Browser verified the fix across three cycles of arrow navigation, an empty search, searching for Settings and pressing Enter, and closing with Escape. The resumed pass also verified interface preference persistence after reload; updater installation progress, failure, Settings navigation and retry; and cancellation of the active-turn update warning. Update operations were intercepted by the native-shell fixture, and the active turn was simulated: no real installation or agent termination occurred. The narrow and desktop layouts were checked at 720px and 1280px.
+
+The final `make check` passed outside the filesystem/process sandbox: 586 Rust tests including the Tauri test, 40 frontend tests, seven runtime tests, formatting, Clippy, TypeScript, lint, production build, and bundle budget. Lint has 12 warnings and zero errors; initial JS is 205 KB gzip against the 400 KB budget. The first sandboxed run failed three OS watcher/process-tree tests; all passed in the unrestricted run. `git diff --check` also passed.
+
+Palette regression recipe: open the palette, press Down twice and Up once, search for a nonexistent command, press Down, search for Settings, press Enter, close Settings, then reopen the palette and press Escape. The app must remain rendered throughout.
+
+## Native integration limits
 
 This is a local macOS development QA pass, not a guarantee of zero defects. Windows/Linux runtime behavior, signed/notarized installers, update delivery and every external MCP server require separate platform/integration testing. The fixture does not launch a native terminal; native PTY behavior has backend coverage but was not exhaustively exercised through the browser fixture.
 

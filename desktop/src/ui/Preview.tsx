@@ -82,7 +82,7 @@ function NotRunning({ lane, dev, start }: { lane: string; dev: NonNullable<Retur
         The agent can start it — installing dependencies first if they are missing — and Keel shows the page here once it says where it is listening.
       </p>
       <div className="actions" style={{ justifyContent: "center" }}>
-        <button className="primary" onClick={() => void askToRun(lane).then((ok) => setSaid(ok ? "Asked the agent — watch the terminal." : "The agent's terminal is not running. Start it first."))}>
+        <button className="primary" onClick={() => void askToRun(lane).then((ok) => setSaid(ok ? "Asked the agent — follow its progress in this lane." : "Could not send the request. Check the lane’s connection and try again."))}>
           Ask the agent to run it
         </button>
         {dev.detected && (
@@ -107,12 +107,9 @@ async function askToRun(lane: string): Promise<boolean> {
     const names = [...(state?.workspace?.skills ?? []), ...(state?.workspace?.commands ?? [])].map((n) => n.name);
     skill = names.includes("run");
   }
-  return typeInto(
-    lane,
-    skill
-      ? "/run"
-      : "Start this project's dev server so I can preview it: install dependencies first if they are missing, run it in the background, and tell me the local URL it is listening on.",
-  );
+  if (!l) return false;
+  const message = skill ? "/run" : "Start this project's dev server so I can preview it: install dependencies first if they are missing, run it in the background, and tell me the local URL it is listening on.";
+  return l.interface === "terminal" ? typeInto(lane, message) : useStore.getState().send(lane, message);
 }
 
 function PickButton({ lane }: { lane: string }) {
@@ -182,6 +179,7 @@ const VERDICT: Record<NonNullable<Pin["verdict"]>, { word: string; tone: string;
 function Pins({ lane }: { lane: string }) {
   const { pins, waiting } = useDesign(lane);
   const [note, setSaid] = useState<string>();
+  const [sending, setSending] = useState(false);
   if (!pins.length) return null;
   const unsent = pins.filter((p) => !p.sent).length;
   return (
@@ -196,8 +194,18 @@ function Pins({ lane }: { lane: string }) {
         </button>
         <button
           className="primary"
-          disabled={!unsent}
-          onClick={() => setSaid(sendPins(lane) ? undefined : "The agent's terminal is not running — start it first.")}
+          disabled={!unsent || sending}
+          onClick={async () => {
+            setSending(true);
+            try {
+              const ok = await sendPins(lane);
+              setSaid(ok ? undefined : "Could not send the changes. Check the lane’s connection and try again.");
+            } catch {
+              setSaid("Could not send the changes. Check the lane’s connection and try again.");
+            } finally {
+              setSending(false);
+            }
+          }}
           title="Type these into the agent as one prompt"
         >
           Send {unsent || ""} to agent

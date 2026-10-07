@@ -63,7 +63,10 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
     [commands, query],
   );
   useEffect(() => setIndex(0), [query]);
-  useEffect(() => list.current?.children[index]?.scrollIntoView({ block: "nearest" }), [index]);
+  useEffect(() => {
+    // Some browsers return a Promise from scrolling; it is not an effect cleanup.
+    void list.current?.children[index]?.scrollIntoView({ block: "nearest" });
+  }, [index]);
   function key(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") close();
     else if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) {
