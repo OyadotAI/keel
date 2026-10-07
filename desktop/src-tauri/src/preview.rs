@@ -27,6 +27,15 @@ pub struct Bounds {
     height: f64,
 }
 
+impl Bounds {
+    fn rect(&self) -> tauri::Rect {
+        tauri::Rect {
+            position: LogicalPosition::new(self.x, self.y).into(),
+            size: LogicalSize::new(self.width.max(1.0), self.height.max(1.0)).into(),
+        }
+    }
+}
+
 /// Only the dev server on this machine: the child webview may reach `preview_msg`, and nothing
 /// that is not a local address should be loaded with even that.
 fn local(url: &str) -> Result<Url, String> {
@@ -42,7 +51,7 @@ fn local(url: &str) -> Result<Url, String> {
 #[tauri::command]
 pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) -> Result<(), String> {
     let url = local(&url)?;
-    let (pos, size) = (LogicalPosition::new(bounds.x, bounds.y), LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0)));
+    let rect = bounds.rect();
     // Held for the whole call: two shows at once both found no webview and both created one.
     let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(view) = app.get_webview(LABEL) {
@@ -52,24 +61,24 @@ pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) ->
             view.navigate(url.clone()).map_err(|e| e.to_string())?;
             *shown = Some(url);
         }
-        view.set_position(pos).map_err(|e| e.to_string())?;
-        view.set_size(size).map_err(|e| e.to_string())?;
+        view.set_bounds(rect).map_err(|e| e.to_string())?;
         return view.show().map_err(|e| e.to_string());
     }
     let window = app.get_window("main").ok_or("The main window is gone.")?;
     *shown = Some(url.clone());
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url)).initialization_script_for_all_frames(PICKER);
-    window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
+    window.add_child(builder, rect.position, rect.size).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Move the preview with the panel: a resize, a drag of the divider.
 #[tauri::command]
 pub fn preview_bounds(app: tauri::AppHandle, bounds: Bounds) -> Result<(), String> {
-    // no work beyond two window-server calls; cheap enough for a ResizeObserver
+    // Set the complete rectangle in one operation. Separate position/size calls
+    // read native bounds back between updates; on macOS that can reflect the Y
+    // coordinate and move the child over the toolbar.
     let Some(view) = app.get_webview(LABEL) else { return Ok(()) };
-    view.set_position(LogicalPosition::new(bounds.x, bounds.y)).map_err(|e| e.to_string())?;
-    view.set_size(LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0))).map_err(|e| e.to_string())
+    view.set_bounds(bounds.rect()).map_err(|e| e.to_string())
 }
 
 /// Out of the way: the tab was left, or a menu or dialog is open over it. A native webview draws

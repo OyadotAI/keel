@@ -14,6 +14,9 @@ import '../../src/workspace.css';
 
 const project = '/workspace/keel';
 const workspace = new URLSearchParams(location.search).has('workspace');
+const preview = new URLSearchParams(location.search).has('preview');
+const previewCalls: { command: string; args: unknown }[] = [];
+Object.assign(window, { previewCalls });
 let conv = { turns: [] } as ReturnType<typeof applyFrames>;
 for (let i = 0; i < 300; i++) {
   conv = applyFrames(conv, [
@@ -49,13 +52,18 @@ if (workspace) {
     metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
     transformCallback: () => 1,
     unregisterCallback: () => {},
-    invoke: async () => 1,
+    invoke: async (command: string, args: unknown) => {
+      if (command.startsWith('preview_')) previewCalls.push({ command, args });
+      return 1;
+    },
   }, __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} } });
   const state = useStore.getState();
   useStore.setState({ opened: ['chat-a'], trusted: { [project]: true }, lanes: {
     ...state.lanes,
-    'chat-a': { ...state.lanes['chat-a'], conv: { ...conv, turns: conv.turns.slice(-1) } },
-  } });
+    'chat-a': { ...state.lanes['chat-a'], conv: { ...conv, turns: conv.turns.slice(-1) },
+      ...(preview ? { dev: { running: true, url: 'http://localhost:3000', command: 'make dev', elsewhere: false, owner: '', log: [] } } : {}),
+    },
+  }, ...(preview ? { panelTab: 'preview' } : {}) });
 }
 createRoot(document.getElementById('root')!).render(workspace ? <App /> : <Fixture />);
 Object.assign(window, { chatFixture: { useStore, applyFrames } });

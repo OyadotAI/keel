@@ -108,7 +108,7 @@ async function askToRun(lane: string): Promise<boolean> {
     skill = names.includes("run");
   }
   if (!l) return false;
-  const message = skill ? "/run" : "Start this project's dev server so I can preview it: install dependencies first if they are missing, run it in the background, and tell me the local URL it is listening on.";
+  const message = skill ? "/run" : "Start this project's full development environment so I can preview it. Use its root dev command, including any backend or other required services, rather than starting only the frontend. Install missing dependencies, run it in the background, verify the frontend can reach its API, and tell me the local URL.";
   return l.interface === "terminal" ? typeInto(lane, message) : useStore.getState().send(lane, message);
 }
 
@@ -141,22 +141,27 @@ function Page({ lane, url }: { lane: string; url: string }) {
       const r = el.getBoundingClientRect();
       return { x: r.left, y: r.top, width: r.width, height: r.height };
     };
-    invoke("preview_show", { url, bounds: bounds() }).then(
-      () => setError(undefined),
-      (e) => setError(String(e)),
-    );
+    let disposed = false;
     let frame = 0;
     const move = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => void invoke("preview_bounds", { bounds: bounds() }).catch(() => undefined));
     };
+    invoke("preview_show", { url, bounds: bounds() }).then(
+      () => { if (!disposed) { setError(undefined); move(); } },
+      (e) => { if (!disposed) setError(String(e)); },
+    );
     const ro = new ResizeObserver(move);
     ro.observe(el);
     ro.observe(document.body);
+    if (el.parentElement) ro.observe(el.parentElement);
     window.addEventListener("resize", move);
+    document.addEventListener("scroll", move, true);
     return () => {
+      disposed = true;
       ro.disconnect();
       window.removeEventListener("resize", move);
+      document.removeEventListener("scroll", move, true);
       cancelAnimationFrame(frame);
       void invoke("preview_hide").catch(() => undefined);
     };

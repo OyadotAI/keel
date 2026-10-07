@@ -130,6 +130,11 @@ fn detect_in(dir: &Utf8Path, rel: &str) -> Option<Dev> {
         let bun = dir.join("bun.lock").exists() || dir.join("bun.lockb").exists();
         return here(if bun { "bun run dev" } else { "npm run dev" });
     }
+    // A root orchestration target can start both the API and the UI. Do not skip
+    // it in favour of a nested frontend's dev script.
+    if make_dev(dir) {
+        return here("make dev");
+    }
     if dir.join("wrangler.jsonc").exists()
         || dir.join("wrangler.json").exists()
         || dir.join("wrangler.toml").exists()
@@ -137,6 +142,26 @@ fn detect_in(dir: &Utf8Path, rel: &str) -> Option<Dev> {
         return here("wrangler dev");
     }
     None
+}
+
+/// Inspect the makefile make itself would choose, without executing repository code.
+fn make_dev(dir: &Utf8Path) -> bool {
+    ["GNUmakefile", "makefile", "Makefile"]
+        .iter()
+        .find_map(|name| std::fs::read_to_string(dir.join(name)).ok())
+        .is_some_and(|text| {
+            text.lines()
+                .filter(|line| !line.starts_with('\t'))
+                .any(|line| {
+                    let line = line.split('#').next().unwrap_or_default();
+                    let Some((targets, rest)) = line.split_once(':') else {
+                        return false;
+                    };
+                    !targets.contains('=')
+                        && !rest.starts_with('=')
+                        && targets.split_whitespace().any(|target| target == "dev")
+                })
+        })
 }
 
 /// Whether this package is the one that draws pages, rather than the API beside it.
@@ -334,7 +359,7 @@ pub async fn start(
                     .flatten()
             }
             .ok_or_else(|| {
-                bad("No dev command found. Add a `dev` script to package.json.".into())
+                bad("No dev command found. Add a `dev` script to package.json or a `dev` target to Makefile.".into())
             })?;
             let dir = if found.dir.is_empty() {
                 repo.clone()
@@ -602,6 +627,54 @@ mod tests {
             ),
         ]);
         assert_eq!(detect(&root).unwrap().dir, "");
+    }
+
+    #[test]
+    fn the_root_stack_target_beats_starting_only_the_frontend() {
+        let (_d, root) = nested(&[
+            (
+                "Makefile",
+                ".PHONY: dev\ndev: ## Start both services\n\t$(MAKE) -j2 backend ui\n",
+            ),
+            ("package.json", r#"{"workspaces":["backend","ui"]}"#),
+            (
+                "ui/package.json",
+                r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15"}}"#,
+            ),
+        ]);
+        assert_eq!(
+            detect(&root),
+            Some(Dev {
+                command: "make dev".into(),
+                dir: String::new()
+            })
+        );
+    }
+
+    #[test]
+    fn a_root_package_script_still_wins_over_make() {
+        let (_d, root) = repo(&[
+            ("package.json", r#"{"scripts":{"dev":"turbo dev"}}"#),
+            ("Makefile", "dev:\n\techo fallback\n"),
+        ]);
+        assert_eq!(detect(&root).unwrap().command, "npm run dev");
+    }
+
+    #[test]
+    fn make_detection_ignores_mentions_that_are_not_targets() {
+        let (_d, root) = repo(&[(
+            "Makefile",
+            "# dev: not a target\n.PHONY: dev\ndev := value\nOTHER = dev: value\nbuild:\n\techo dev: ready\n",
+        )]);
+        assert!(detect(&root).is_none());
+    }
+
+    #[test]
+    fn make_detection_uses_makefile_precedence_and_multiple_targets() {
+        let (_d, root) = repo(&[("GNUmakefile", "build:\n"), ("Makefile", "dev:\n")]);
+        assert!(detect(&root).is_none());
+        std::fs::write(root.join("GNUmakefile"), "serve dev::\n\techo ready\n").unwrap();
+        assert_eq!(detect(&root).unwrap().command, "make dev");
     }
 
     /// Dependencies are not packages of this repository.

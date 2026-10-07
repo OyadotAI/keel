@@ -1051,7 +1051,10 @@ pre.code {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
+.preview > .panel-head { flex: none; }
 .preview-frame {
   flex: 1;
   border: none;
@@ -2175,7 +2178,7 @@ h3 {
 }
 .preview-host {
   flex: 1;
-  min-height: 120px;
+  min-height: 0;
   position: relative;
 }
 .pins {
