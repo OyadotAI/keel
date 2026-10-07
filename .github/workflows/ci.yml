@@ -78,6 +78,9 @@ jobs:
           pnpm exec tsc --noEmit
           pnpm lint
           pnpm test
+          pnpm test:runtime
+          pnpm runtime:build
+          pnpm runtime:stage x86_64-pc-windows-msvc
           pnpm build
           pnpm budget
       - name: Desktop shell
