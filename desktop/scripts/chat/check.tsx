@@ -8,10 +8,12 @@ import { Composer } from '../../src/ui/Composer';
 import { InterfaceSetting } from '../../src/ui/InterfaceSetting';
 import { ApprovalStrip } from '../../src/ui/Approvals';
 import { LaneViewSwitch } from '../../src/ui/LaneViewSwitch';
+import { App } from '../../src/ui/App';
 import '../../src/styles.css';
 import '../../src/workspace.css';
 
 const project = '/workspace/keel';
+const workspace = new URLSearchParams(location.search).has('workspace');
 let conv = { turns: [] } as ReturnType<typeof applyFrames>;
 for (let i = 0; i < 300; i++) {
   conv = applyFrames(conv, [
@@ -40,5 +42,20 @@ function Fixture() {
     {setup ? <div className="settings-body"><InterfaceSetting /></div> : <><div className="agents"><Chat key={active} lane={active} /></div><ApprovalStrip lane={active} /><Composer key={`composer-${active}`} lane={active} /></>}
   </section></main></div>;
 }
-createRoot(document.getElementById('root')!).render(<Fixture />);
+if (workspace) {
+  // The full workspace subscribes to native drag/drop events. No native actions
+  // run in this fixture; the rest is the application's actual layout and styles.
+  Object.assign(window, { __TAURI_INTERNALS__: {
+    metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
+    transformCallback: () => 1,
+    unregisterCallback: () => {},
+    invoke: async () => 1,
+  }, __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} } });
+  const state = useStore.getState();
+  useStore.setState({ opened: ['chat-a'], trusted: { [project]: true }, lanes: {
+    ...state.lanes,
+    'chat-a': { ...state.lanes['chat-a'], conv: { ...conv, turns: conv.turns.slice(-1) } },
+  } });
+}
+createRoot(document.getElementById('root')!).render(workspace ? <App /> : <Fixture />);
 Object.assign(window, { chatFixture: { useStore, applyFrames } });

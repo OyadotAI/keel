@@ -46,6 +46,7 @@
     "shortDescription": "An agentic development environment",
     "macOS": {
       "minimumSystemVersion": "13.0",
+      "entitlements": "Entitlements.plist",
       "hardenedRuntime": true
     },
     "windows": {

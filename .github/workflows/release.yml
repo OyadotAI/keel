@@ -111,6 +111,9 @@ jobs:
           pnpm runtime:stage universal-apple-darwin
           pnpm tauri build --target universal-apple-darwin --bundles app,dmg
 
+      - name: The signed agent runtime starts and handles commands
+        run: node desktop/scripts/runtime-smoke.mjs desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Keel.app
+
       # Sparkle in an installed Swift build rejects an update that carries no EdDSA key, after
       # downloading it; generate_appcast only warns. So the release fails here instead.
       - name: The app carries the Sparkle key installed Swift builds require

@@ -18,6 +18,12 @@ refuses to build at all, and that includes `tauri dev`, which is why `make dev` 
 A build is only signed if `APPLE_SIGNING_IDENTITY` names a Developer ID in the keychain. An
 unsigned build is for your own machine and nothing else.
 
+The macOS signing entitlements include `com.apple.security.cs.allow-jit` for the bundled
+Node runtime. Without it, hardened-runtime builds can crash in V8 initialization before the
+agent helper starts. After signing, run `node desktop/scripts/runtime-smoke.mjs /path/to/Keel.app`.
+This starts the shipped runtime and checks that the helper processes a command; `--version`
+alone does not exercise V8. The release workflow runs this check before publishing.
+
 ## Updates
 
 The app checks `releases/latest/download/latest.json` at launch and every six hours, downloads in
