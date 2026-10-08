@@ -1,6 +1,6 @@
 [package]
 name = "keel-desktop"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2024"
 
 # Its own workspace: Tauri and the webview bindings are a long compile, and `make check` on the
