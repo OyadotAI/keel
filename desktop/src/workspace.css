@@ -21,6 +21,7 @@
   --r-md: 10px;
   --r-lg: 16px;
   --panel-w: 380px;
+  --statusbar-h: 44px;
   --t-body: 14px;
   --t-small: 13px;
   --workspace-bg: #edeef0;
@@ -183,7 +184,7 @@ button.primary:focus-visible { box-shadow: var(--ring); }
 .finding-title { font-size: 13px; line-height: 1.6; }
 .change { height: 34px; padding: 0 18px; }
 .change-path { font-size: 12px; }
-.statusbar { height: 32px; background: transparent; border: 0; font-size: 12px; padding: 0 10px; }
+.statusbar { height: var(--statusbar-h); background: transparent; border: 0; font-size: 12px; padding: 0 10px; }
 .statusbar button { font-size: 12px; height: 23px; }
 .statusbar .num { font-size: 12px; }
 .statusbar .sb-usage { opacity: .75; }
@@ -246,3 +247,14 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 @media (max-height: 650px) {
   .chat-dock .strip:has(.runtime-approval), .runtime-approval { max-height: 48dvh; }
 }
+
+/* A persistent, named entry point: closing the workspace never removes its opener. */
+.statusbar .workspace-toggle { flex: none; height: 34px; padding: 0 12px; gap: 8px; font-size: 13px; font-weight: 600; white-space: nowrap; color: var(--text); background: var(--raised); border: 1px solid var(--line-strong); border-radius: 8px; }
+.statusbar .workspace-toggle[aria-expanded=true] { background: var(--well); }
+.inspector-heading .workspace-close { height: 32px; padding: 0 8px; gap: 5px; font-size: 12px; }
+@media (max-width: 720px) {
+  .statusbar .sb-shortcuts { display: none; }
+}
+
+.statusbar-details { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; height: 100%; overflow-x: auto; scrollbar-width: none; }
+.statusbar-details > * { flex-shrink: 0; }

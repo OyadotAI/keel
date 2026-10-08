@@ -84,6 +84,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
   const elapsed = now.since ? Math.floor((Date.now() - Date.parse(now.since)) / 1000) : undefined;
   return (
     <footer className="statusbar">
+      <div className="statusbar-details">
       <button className="sb-icon" onClick={toggleSidebar} aria-label={sidebar ? "Hide projects" : "Show projects"} aria-pressed={sidebar} title={`Toggle projects (${label({ key: "e", shift: true })})`}><Icon name="folder" size={15} /></button>
       {l && (
         <button className="sb-branch" onClick={() => openTab("git")} title="Open Git">
@@ -140,9 +141,11 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
       <button className="sb-shortcuts" onClick={() => useStore.setState({ shortcuts: true })} title="Every keyboard shortcut">
         Shortcuts <kbd>{label({ key: "/" })}</kbd>
       </button>
+      </div>
       {l && (
-        <button className={`sb-icon ${panel ? "on" : ""}`} onClick={togglePanel} aria-pressed={panel} aria-label={panel ? "Hide panel" : "Show panel"} title={`${panel ? "Hide" : "Show"} the panel — changes, git, preview (${label({ key: "i", alt: true })})`}>
-          <Icon name="panel" size={15} />
+        <button className="workspace-toggle" onClick={togglePanel} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>
+          <Icon name="panel" size={18} />
+          <span>{panel ? "Close workspace" : "Open workspace"}</span>
         </button>
       )}
     </footer>

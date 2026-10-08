@@ -72,15 +72,36 @@ function Handle({ name, min, max, fallback, from }: { name: string; min: number;
   );
 }
 
+/** Closing retains a visible entry point and returns keyboard focus to it. */
+function useWorkspacePanel() {
+  const [panel, setPanel] = useState(() => window.innerWidth >= 1200 && remembered("keel.panel", "1") !== "0");
+  const [expanded, setExpanded] = useState(false);
+  const closePanel = useCallback(() => {
+    setPanel(false);
+    setExpanded(false);
+    remember("keel.panel", "0");
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".workspace-toggle")?.focus());
+  }, []);
+  const togglePanel = useCallback(() => {
+    const s = useStore.getState();
+    if (s.settings || s.extensions || s.creating) {
+      useStore.setState({ settings: false, extensions: false, creating: false });
+      setPanel(true);
+      remember("keel.panel", "1");
+    } else if (panel) closePanel();
+    else { setPanel(true); remember("keel.panel", "1"); }
+  }, [panel, closePanel]);
+  return { panel, setPanel, expanded, setExpanded, togglePanel, closePanel };
+}
+
 export function App() {
   const active = useStore((s) => s.active);
   const exists = useStore((s) => (s.active ? !!s.lanes[s.active] : false));
   const settings = useStore((s) => s.settings);
   const creating = useStore((s) => s.creating);
   const extensions = useStore((s) => s.extensions);
-  const [panel, setPanel] = useState(() => window.innerWidth >= 1200 && remembered("keel.panel", "1") !== "0");
+  const { panel, setPanel, expanded, setExpanded, togglePanel, closePanel } = useWorkspacePanel();
   const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900 && remembered("keel.sidebar", "1") !== "0");
-  const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<Tab>("turns");
   const [shell, setShell] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -95,14 +116,13 @@ export function App() {
   }, []);
 
   const lane = active && exists ? active : undefined;
-  const togglePanel = useCallback(() => setPanel((p) => (remember("keel.panel", p ? "0" : "1"), !p)), []);
   const toggleSidebar = useCallback(() => setSidebar((p) => (remember("keel.sidebar", p ? "0" : "1"), !p)), []);
-  const showTab = (t: Tab) => {
+  const showTab = useCallback((t: Tab) => {
     setPanel(true);
     setTab(t);
     // Into the tab, so ↑↓ and Enter work at once; two frames so the list has rendered.
     requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector<HTMLElement>(".side-panel .tab-body [data-file]:not(:disabled), .side-panel .tab-body button:not(:disabled)")?.focus()));
-  };
+  }, [setPanel]);
   // A tab asked for from outside — the sidebar's setup list has no window state to reach.
   const asked = useStore((s) => s.panelTab);
   useEffect(() => {
@@ -110,7 +130,7 @@ export function App() {
     setPanel(true);
     setTab(asked);
     useStore.setState({ panelTab: undefined });
-  }, [asked]);
+  }, [asked, setPanel]);
 
 
   useEffect(() => {
@@ -157,7 +177,7 @@ export function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [togglePanel, toggleSidebar]);
+  }, [togglePanel, toggleSidebar, showTab]);
 
   const overlay = creating ? <NewProject /> : extensions ? <Extensions /> : settings ? <Settings /> : !lane ? <Welcome /> : null;
   const showPanel = panel && !!lane && !overlay;
@@ -177,10 +197,10 @@ export function App() {
           {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
         </section>
         {showPanel && <>
-          <button className="panel-backdrop" aria-label="Close workspace panel" onClick={togglePanel} />
+          <button className="panel-backdrop" aria-label="Close workspace panel" onClick={closePanel} />
           <Handle name="--panel-w" min={320} max={720} fallback={380} from="right" />
         </>}
-        {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={togglePanel} ask={(what) => setAsking(what)} />}
+        {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} />}
         {overlay}
       </main>
       <StatusBar openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />

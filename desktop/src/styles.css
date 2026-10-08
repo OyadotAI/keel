@@ -238,7 +238,7 @@ button.link {
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 6px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) 32px;
+  grid-template-rows: minmax(0, 1fr) var(--statusbar-h, 32px);
   height: 100%;
 }
 .app.no-sidebar {
@@ -2399,7 +2399,7 @@ h3 {
 }
 @media (max-width: 900px) {
   .app { grid-template-columns: 0 0 minmax(0, 1fr); }
-  .app:not(.no-sidebar) .sidebar { position: absolute; top: 0; bottom: 32px; left: 0; width: var(--sidebar-w); z-index: 12; box-shadow: var(--shadow-lg); }
+  .app:not(.no-sidebar) .sidebar { position: absolute; top: 0; bottom: var(--statusbar-h, 32px); left: 0; width: var(--sidebar-w); z-index: 12; box-shadow: var(--shadow-lg); }
   .app > .handle { display: none; }
   .chat-row { padding-left: 20px; padding-right: 20px; }
   .chat-dock { padding-left: 16px; padding-right: 16px; }
@@ -2409,7 +2409,7 @@ h3 {
 }
 .sidebar-backdrop { display: none; }
 @media (max-width: 900px) {
-  .app:not(.no-sidebar) > .sidebar-backdrop { display: block; position: fixed; inset: 0 0 32px; width: 100%; height: auto; z-index: 11; border: 0; border-radius: 0; }
+  .app:not(.no-sidebar) > .sidebar-backdrop { display: block; position: fixed; inset: 0 0 var(--statusbar-h, 32px); width: 100%; height: auto; z-index: 11; border: 0; border-radius: 0; }
 }
 .interface-setting { text-align: left; width: 100%; max-width: 600px; }
 .interface-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }

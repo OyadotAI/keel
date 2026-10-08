@@ -71,10 +71,10 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
   };
 
   return (
-    <aside className="side-panel" aria-label="Side panel">
+    <aside id="workspace-panel" className="side-panel" aria-label="Workspace panel">
       <header className="inspector-heading"><span>Workspace</span><div>
         <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the conversation" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}><Icon name="maximize" size={14} /></button>
-        <button className="ghost" onClick={close} aria-label="Close the panel" title={`Close the panel (${label({ key: "i", alt: true })})`}><Icon name="x" size={14} /></button>
+        <button className="ghost workspace-close" onClick={close} aria-label="Close workspace panel" title={`Close workspace (${label({ key: "i", alt: true })})`}><Icon name="x" size={16} /><span>Close</span></button>
       </div></header>
       <Tabs tabs={TABS.map((id, i) => ({ id, label: (
             <>
