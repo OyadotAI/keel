@@ -199,12 +199,14 @@ function RuntimeRequest({ lane, p }: { lane: string; p: Pending }) {
     await runtimeAnswer(lane, p, { decision, content: value });
     setSending(false);
   }
-  return <div className="strip-row"><div className="strip-title"><Icon name="hand" />{p.tool}</div>
+  return <div className="strip-row runtime-approval"><div className="strip-title"><Icon name="hand" />{p.tool}</div>
+    <div className="approval-context">
     {p.command && <pre className="code">{p.command}</pre>}
     {typeof p.input.reason === "string" && <p>{p.input.reason}</p>}
     {typeof p.input.url === "string" && /^https?:\/\//.test(p.input.url) && <button onClick={() => void openUrl(String(p.input.url))}>Open verification page</button>}
     <details><summary>Request details</summary><pre className="code">{JSON.stringify(p.input, null, 2)}</pre></details>
     {!!schema && <><pre className="code">{JSON.stringify(schema, null, 2)}</pre><textarea aria-label="Requested fields as JSON" value={content} onChange={(e) => setContent(e.target.value)} /></>}
+    </div>
     {error && <p role="alert">{error}</p>}
     <div className="actions">{p.choices?.map((choice, i) => <button key={i} disabled={sending} className={i === 0 ? "primary" : undefined} onClick={() => void answer(choice.value)}>{choice.label}</button>)}</div>
   </div>;

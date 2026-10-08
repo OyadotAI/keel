@@ -89,10 +89,10 @@ function ProjectRow({ path }: { path: string }) {
   return (
     <section className="project">
       <div className="project-head" title={path} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))}>
-        <button className="ghost" onClick={toggle} aria-expanded={!p.collapsed} aria-label={`${p.collapsed ? "Expand" : "Collapse"} ${p.name}`}>
+        <button className="ghost project-toggle" onClick={toggle} aria-expanded={!p.collapsed} aria-label={`${p.collapsed ? "Expand" : "Collapse"} ${p.name}`}>
           <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} />
+          <span className="project-name">{p.name}</span>
         </button>
-        <span className="project-name">{p.name}</span>
         <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code or Codex">
           <Icon name="plus" size={14} />
         </button>
@@ -102,8 +102,8 @@ function ProjectRow({ path }: { path: string }) {
       </div>
       <div className="project-status">
         <SetupBadge project={path} />
-        {needs > 0 && <span className="small" style={{ color: "var(--warn)" }}>{needs} needs you</span>}
-        {busy > 0 && (
+        {p.collapsed && needs > 0 && <span className="small" style={{ color: "var(--warn)" }}>{needs} needs you</span>}
+        {p.collapsed && busy > 0 && (
           <span className="busy-label" title={`${busy} lane${busy === 1 ? "" : "s"} running a turn`}>
             <span className="busy-dot" /> {busy} running
           </span>
@@ -169,8 +169,11 @@ function ProjectRow({ path }: { path: string }) {
           </button>
         </Floating>
       )}
-      {!p.collapsed && p.lanes.map((l) => <LaneRow key={l} id={l} />)}
-      {!p.collapsed && <History path={path} sessions={p.sessions} />}
+      {!p.collapsed && <div className="project-lanes">
+        {p.lanes.map((l) => <LaneRow key={l} id={l} />)}
+        {!p.lanes.length && <button className="lane lane-create" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })}><Icon name="plus" size={14} />New lane</button>}
+        <History path={path} sessions={p.sessions} />
+      </div>}
     </section>
   );
 }
@@ -218,14 +221,15 @@ function LaneRow({ id }: { id: string }) {
     <div className="lane-row">
     <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => startRename(id)} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), startRename(id)) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
-        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : null}
+        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
       <span className="lane-text">
         <span className="lane-title">{l.title}</span>
-        {subText && <span className={`lane-sub ${subTone}`}>{subText}</span>}
+        <span className="lane-meta">
+          <span className="lane-agent">{l.agent === "codex" ? "Codex" : "Claude"}</span>
+          {subText && <><span className="lane-meta-dot" aria-hidden="true">·</span><span className={`lane-sub ${subTone}`}>{subText}</span></>}
+        </span>
       </span>
-      {l.isolated && <Icon name="branch" size={11} style={{ color: "var(--faint)" }} />}
-      {l.agent === "codex" && <span className="faint" style={{ fontSize: 10 }}>codex</span>}
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
     <button className="ghost lane-close" aria-label={`Close ${l.title}`} title={`Close lane (${label({ key: "w" })})`} onClick={() => ask("close")}>
@@ -283,9 +287,10 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
   const shown = all ? list : list.slice(0, 5);
   return (
     <div className="history">
-      <button className="lane history-head" style={{ paddingLeft: 20 }} onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="eyebrow">History · {list.length}</span>
-        <Icon name={open ? "chevron-down" : "chevron-right"} size={11} style={{ color: "var(--faint)" }} />
+      <button className="lane history-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
+        <span>History</span>
+        <span className="history-count">{list.length}</span>
       </button>
       {open &&
         shown.map((s) => (

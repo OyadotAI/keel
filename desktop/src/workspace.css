@@ -66,16 +66,29 @@ body { background: var(--workspace-bg); }
 .sidebar-actions .open { background: color-mix(in srgb, var(--raised) 65%, transparent); height: 36px; font-size: 13px; box-shadow: var(--shadow-xs); }
 .sidebar-head { padding: 0 24px; height: 30px; font-size: 12px; letter-spacing: .1em; }
 .sidebar-list { padding: 4px 12px 12px; }
-.project { margin-bottom: 20px; }
-.project-head { height: 32px; }
-.project-name { font-size: 13px; font-weight: 650; }
-.project-status { padding-bottom: 8px; opacity: .9; }
+.project { margin-bottom: 18px; }
+.project-head { height: 36px; padding: 0; gap: 2px; }
+.project-head .project-toggle { flex: 1; min-width: 0; justify-content: flex-start; gap: 8px; height: 32px; padding: 0 8px; }
+.project-name { text-align: left; font-size: 13px; font-weight: 650; }
+.project-head > .ghost:not(.project-toggle) { width: 26px; min-width: 26px; height: 26px; padding: 0; }
+.project-status { padding: 2px 8px 6px 28px; }
 .project-status .setup-badge { font-size: 12px; }
-.lane-row .lane { min-height: 42px; padding-top: 8px; padding-bottom: 8px; }
-.lane { font-size: 14px; border-radius: 8px; color: var(--dim); }
-.lane.active { color: var(--text); font-size: 14px; background: var(--raised); box-shadow: var(--shadow-xs); }
-.lane-sub { font-size: 12px; margin-top: 3px; }
+.project-lanes { margin: 2px 0 0 13px; padding-left: 7px; border-left: 1px solid var(--hairline); }
+.lane { font-size: 13px; border-radius: 7px; color: var(--dim); }
 .lane-row { margin: 2px 0; }
+.project-lanes .lane-row .lane { min-height: 54px; padding: 8px 28px 8px 9px; gap: 9px; }
+.project-lanes .marker { width: 16px; min-width: 16px; color: var(--faint); display: flex; align-items: center; justify-content: center; }
+.lane.active { color: var(--text); font-size: 13px; background: var(--raised); box-shadow: var(--shadow-xs); }
+.lane.active .lane-title { font-weight: 600; }
+.lane-meta { display: flex; align-items: baseline; gap: 5px; min-width: 0; margin-top: 3px; font-size: 11px; line-height: 16px; color: var(--faint); }
+.lane-agent, .lane-meta-dot { flex: none; }
+.lane-meta .lane-sub { margin: 0; min-width: 0; font-size: inherit; line-height: inherit; }
+.project-lanes .history { margin-top: 9px; padding-top: 6px; border-top: 1px solid var(--hairline); }
+.project-lanes .history .history-head { height: 32px; padding: 0 9px; gap: 9px; font-size: 12px; color: var(--faint); }
+.history-count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.project-lanes .history > .lane:not(.history-head) { min-height: 34px; padding-left: 9px; gap: 9px; }
+.project-lanes .lane-create { padding-left: 9px; gap: 9px; font-size: 12px; }
+.lane-row:focus-within .lane-close { opacity: 1; }
 .sidebar-footer { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 12px 16px 14px; box-shadow: 0 -1px 0 var(--hairline); }
 .sidebar-footer button { background: none; box-shadow: none; justify-content: flex-start; height: 34px; padding: 0 10px; gap: 10px; color: var(--dim); font-weight: 500; }
 .sidebar-footer button:hover { background: var(--hover); }
@@ -219,4 +232,17 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
   .chat-dock { max-height: calc(100% - 110px); padding-top: 8px; padding-bottom: 8px; }
   .chat-dock .strip { max-height: 24dvh; }
   .composer-hint { padding-top: 6px; }
+}
+
+/* Keep the decision visible; only its context scrolls, never the buttons. */
+.chat-dock:has(.runtime-approval) { max-height: 85%; overflow: visible; }
+.chat-dock .strip:has(.runtime-approval) { max-height: min(58dvh, 620px); }
+.strip:has(> .runtime-approval:only-child) { overflow: hidden; }
+.runtime-approval { display: flex; flex-direction: column; max-height: min(58dvh, 620px); min-height: 0; }
+.runtime-approval .strip-title, .runtime-approval > .actions { flex: none; }
+.runtime-approval .approval-context { min-height: 0; overflow-y: auto; }
+.runtime-approval .approval-context pre.code { max-height: none; overflow: visible; font-size: 14px; line-height: 1.6; }
+.runtime-approval > .actions { padding-top: 10px; border-top: 1px solid var(--line); }
+@media (max-height: 650px) {
+  .chat-dock .strip:has(.runtime-approval), .runtime-approval { max-height: 48dvh; }
 }

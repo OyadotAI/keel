@@ -56,3 +56,13 @@ export function clear(key: string) {
 
 /// Lines of output, the common shape: kept to the last `max`.
 export const lines = (max: number) => (s: string[], e: Arrived) => (e.event === "line" || e.event === "fatal" ? [...s, String(e.data)].slice(-max) : s);
+
+/** Multi-step actions share the same persistent progress and duplicate-click guard as streams. */
+export async function task<T>(key: string, initial: T, work: (put: (state: T) => void) => Promise<void>, failure: (error: unknown) => T): Promise<void> {
+  if (runs.get(key)?.running) return;
+  const put = (state: T) => { runs.set(key, { state, running: true }); changed(); };
+  put(initial);
+  try { await work(put); }
+  catch (error) { put(failure(error)); }
+  finally { runs.set(key, { ...runs.get(key)!, running: false }); changed(); }
+}
