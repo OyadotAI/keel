@@ -1,12 +1,13 @@
 <h1 align="center">Keel</h1>
 
 <p align="center">
-  <b>Love Claude Code. Hate the CLI and VS Code extension experience?<br>This is for you.</b>
+  <b>A full software factory, with the team ready to go.</b>
 </p>
 
 <p align="center">
-  <b>A software factory for product engineers: an agent team that comes with every project, inside a desktop ADE for macOS and Windows.</b><br>
-  Your Claude Code or Codex account. Several projects in one window. Isolated Git worktrees. Live stacked diffs. Zero terminal scrollback.
+  Open a repository and you have a PM, a designer, a principal engineer, a reviewer, security, reliability and QA.<br>
+  Every request runs through them, on your own Claude Code or Codex, and you review one result.<br>
+  Desktop app for macOS and Windows. Parallel lanes on their own branches. Your checks after every turn.
 </p>
 
 <p align="center">
@@ -40,35 +41,36 @@ Used daily by engineers at Oya.ai and Jumpermedia.co.</p>
 
 ---
 
-### Keep the agent you love. Change the experience around it.
+### A coding agent is one engineer. Shipping takes a team.
 
-Claude Code is one of the most capable coding agents ever built. But driving it through a raw terminal or VS Code extension feels like driving a sports car through a keyhole:
+Claude Code writes excellent code. But one agent in a terminal is one engineer with nobody around them:
 
-- **Walls of terminal scrollback.** A 90-second run buries what the agent actually changed under thousands of lines of output.
-- **Single-branch collisions.** Trying to run two agents at once wrecks your working tree.
-- **Background servers that die.** Start `pnpm dev` or `gh run watch` in the agent shell? It gets killed 8 seconds after the turn ends.
-- **Blind approvals.** Terminal approval prompts roll past or tempt you into running `--dangerously-skip-permissions`.
-- **Reinventing verification.** The agent *says* tests passed. Did they?
+- **Nobody asks whether it's worth building**, or what the smallest version is.
+- **Nobody designs it first**, so the plan is whatever the agent typed first.
+- **Nobody reviews it.** The agent grades its own work and *says* the tests passed.
+- **Nobody tries to break it** before you do.
+- **And you can't see any of it**: the changes are buried in scrollback, two agents at once wreck one working tree, and approvals roll past.
 
-**Keel is a software factory, and the team is already in it.** Every project gets a PM, a designer, a principal engineer, a reviewer, security, reliability, and QA, and each request runs through them in order.
+**Keel is the whole factory, staffed.** Every project comes with seven agents and the lifecycle that runs them: **pm** decides build, change, cut or not yet; **designer** owns what people see; **principal** designs the change; the main agent builds it; **reviewer**, **security** and **reliability** read the diff; **qa** runs the real thing. Nothing to hire, configure or prompt. Open a repository, add the team in one click, and ask for a feature.
 
-**Keel makes the turn the unit.** Every file touched, every command run with its output, your project's real verification gate, duration, and cost—rendered into one clean, reviewable artifact.
+**And the factory floor is built in.** Each request is a lane on its own branch and worktree. Every turn becomes one reviewable record: the files, the commands with their output, your project's real gate, the duration and the cost. Commands that need permission stop and ask in the conversation.
 
-Your existing Claude sessions come with you. Running one in your terminal right now? Follow its activity live in Keel.
+Your existing Claude sessions come with you. Running one in your terminal right now? Follow it live in Keel.
 
 ---
 
 ## Why engineers switch from CLI & VS Code
 
-| Experience | Raw CLI / VS Code Extension | Keel Native ADE |
+| Experience | Raw CLI / VS Code Extension | Keel |
 | :--- | :--- | :--- |
+| **The team** | One agent that plans, builds and grades its own work | **Seven agents, ready to go**: pm, designer, principal, reviewer, security, reliability and qa on every request |
 | **Reviewing code** | `git diff` after the turn, scrolling through terminal logs | **Live stacked diffs** with syntax highlighting as files are written |
 | **Multi-agent concurrency** | One shared branch; simultaneous tasks collide and clobber files | **Isolated Git worktrees** (`.keel/worktrees/`) on dedicated task branches |
 | **Background jobs** | Dev servers (`pnpm dev`) killed on turn exit | **Monitors**: daemon supervises background jobs with streaming logs & Stop button |
 | **Command approvals** | Prompts lost in scrollback; all-or-nothing permission flags | **Inline approval cards**: Allow Once, Allow Session, or 1-click **Trust this project** |
 | **Verification** | Trusting the agent's prose or running checks by hand | **Automatic gates**: Keel runs your real `make check`, `cargo test`, or `pnpm test` |
 | **Existing history** | Locked inside terminal history; no unified view | **Replay & Follow**: browse past sessions and watch external runs in real time |
-| **UI verification** | Guessing files, accidental component duplication | **Visual canvas & pixel check**: inspect DOM elements and verify pixels before/after |
+| **UI verification** | Guessing files, accidental component duplication | **Preview & change check**: pick elements, send them to the agent, and see whether they actually changed |
 | **Speed & ergonomics** | One terminal pane per agent, one project per window | **Light desktop shell**: Tauri + React over a local Rust daemon. No Electron, no bundled Chromium |
 
 ---
@@ -81,18 +83,9 @@ Watch three tasks progress concurrently across isolated Git branches, with live 
 
 ---
 
-## Core Superpowers
+## Inside the factory
 
-### 1. The turn is the reviewable artifact
-An agent reporting "done" is an assertion. Keel collects every file written, every command with its raw output, the repository's real gate verdict, commit hash, duration, tokens, and cost into one inspectable packet.
-
-<p align="center"><img src="docs/media/turn.gif" width="900" alt="A real turn: the agent edits a test, asks to run make check, and the turn passes with its changed files, time and cost."></p>
-
-- **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Keep several projects open in one window, each with its own lanes.
-- **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
-- **Rewind with safe undo.** Restore a pre-turn snapshot without blowing away your staged changes. Conflicting ignored files halt the operation safely.
-
-### 2. A team in every project
+### 1. A team that's ready on day one
 An agent alone writes code. A team decides what's worth building, designs it, reviews it, and tries to break it. Keel ships seven subagents and the lifecycle that runs them, written into `.claude/agents/` and `CLAUDE.md`, so they work in Claude Code anywhere and not just in Keel:
 
 | Stage | Agent | Returns |
@@ -106,7 +99,18 @@ An agent alone writes code. A team decides what's worth building, designs it, re
 
 <p align="center"><img src="docs/media/team.png" width="900" alt="One request run by the team: pm chose build, principal designed it, the gate passed, reviewer found a real bug and it was fixed, security found nothing, and qa is running."></p>
 
+That screenshot is a real run on one request, "add discount codes". The **pm** chose build and skipped the designer because nothing visible changed. The **principal** designed it, and the gate passed with 11 tests. The **reviewer** then found a real bug the main agent had missed: a non-string code made the error itself throw. It was fixed and the gate re-run before **qa** tried to break it. QA came back with three open edge cases and one decision for the person.
+
 New projects start with the team. For an existing repository, **Add the team** in Readiness writes it in, and never over a file you already have.
+
+### 2. The turn is the reviewable artifact
+An agent reporting "done" is an assertion. Keel collects every file written, every command with its raw output, the repository's real gate verdict, commit hash, duration, tokens, and cost into one inspectable packet.
+
+<p align="center"><img src="docs/media/turn.gif" width="900" alt="A real turn: the agent edits a test, asks to run make check, and the turn passes with its changed files, time and cost."></p>
+
+- **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Keep several projects open in one window, each with its own lanes.
+- **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
+- **Rewind with safe undo.** Restore a pre-turn snapshot without blowing away your staged changes. Conflicting ignored files halt the operation safely.
 
 ### 3. Approve commands in the flow
 When the agent needs permission to run a command, it **stops** right above your composer with the exact command line and intent.
