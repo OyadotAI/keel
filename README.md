@@ -34,7 +34,7 @@ Used daily by engineers at Oya.ai and Jumpermedia.co.</p>
 
 <p align="center">
   <a href="#see-it-in-action">
-    <img src="docs/media/workspace.png" width="1200" alt="Keel's native workspace: three task tabs, session history, the agent conversation, changed files, and the project's check result side by side.">
+    <img src="docs/media/workspace.png" width="1200" alt="Keel's workspace: a project with three lanes in the sidebar, a lane on its own branch with its finished turn, and the Turns panel showing it passed with its changed files and cost.">
   </a>
 </p>
 
@@ -77,7 +77,7 @@ Your existing Claude sessions come with you. Running one in your terminal right 
 
 Watch three tasks progress concurrently across isolated Git branches, with live diffs and gate verification:
 
-<p align="center"><img src="docs/media/workflow.gif" width="1200" alt="Ten-second scripted demo of a task progressing inside the complete Keel workspace, with two other task tabs visible."></p>
+<p align="center"><img src="docs/media/workflow.gif" width="1200" alt="A real run, sped up: prompts sent to three lanes on their own branches, approvals answered, and each turn passing its make check."></p>
 
 ---
 
@@ -86,7 +86,7 @@ Watch three tasks progress concurrently across isolated Git branches, with live 
 ### 1. The turn is the reviewable artifact
 An agent reporting "done" is an assertion. Keel collects every file written, every command with its raw output, the repository's real gate verdict, commit hash, duration, tokens, and cost into one inspectable packet.
 
-<p align="center"><img src="docs/media/turn.gif" width="900" alt="The review record assembles: three changed files, command activity, a passing make check result, commit, time, tokens, and cost."></p>
+<p align="center"><img src="docs/media/turn.gif" width="900" alt="A real turn: the agent edits a test, asks to run make check, and the turn passes with its changed files, time and cost."></p>
 
 - **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Keep several projects open in one window, each with its own lanes.
 - **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
@@ -104,12 +104,14 @@ An agent alone writes code. A team decides what's worth building, designs it, re
 | 5 | **reviewer**, **security**, **reliability** | Only what is actually wrong with the diff |
 | 6 | **qa** | Runs the real thing and reports what broke, with steps to reproduce it |
 
+<p align="center"><img src="docs/media/team.png" width="900" alt="One request run by the team: pm chose build, principal designed it, the gate passed, reviewer found a real bug and it was fixed, security found nothing, and qa is running."></p>
+
 New projects start with the team. For an existing repository, **Add the team** in Readiness writes it in, and never over a file you already have.
 
 ### 3. Approve commands in the flow
 When the agent needs permission to run a command, it **stops** right above your composer with the exact command line and intent.
 
-<p align="center"><img src="docs/media/approve.gif" width="900" alt="An agent pauses for permission to run docker compose. Keel shows Allow once, More options, and Deny before the command proceeds."></p>
+<p align="center"><img src="docs/media/approve.gif" width="900" alt="The agent pauses to run make check. Keel shows Allow once, Allow for this session, and Deny, and the turn continues once allowed."></p>
 
 - **Allow once** runs the single invocation and remembers nothing.
 - **Session & project rules** grant scoped patterns under More options.
@@ -140,7 +142,7 @@ Building frontends with agents often results in edited-the-wrong-file or duplica
 ### 7. Built for keyboard speed
 Never take your hands off the keyboard. Press `⌘K` to search actions, files, and conversations, and `⌘/` to see every shortcut. On Windows, `⌘` is `Ctrl`.
 
-<p align="center"><img src="docs/media/commands.png" width="1100" alt="The command palette searches actions, files, and sessions, with keyboard shortcuts and navigation hints alongside results."></p>
+<p align="center"><img src="docs/media/commands.png" width="1100" alt="The command palette: go to a lane, start a lane on its own branch, merge, discard or rename, each with its shortcut."></p>
 
 | Shortcut | Action | Shortcut | Action |
 | :--- | :--- | :--- | :--- |
@@ -175,20 +177,14 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 ## Get started in 60 seconds
 
 1. **Download Keel** for [macOS](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg) or [Windows](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe), or build from source below. It updates itself after that.
-2. **Connect Claude.** Already signed in? Keel detects your setup instantly. Otherwise, click **Install Claude Code** and **Sign in with Claude** via Anthropic's official browser flow.
-3. **Open any repository.** Start a new feature lane, inspect past sessions, or follow an active terminal agent.
+2. **Connect Claude.** Already signed in? Keel detects your setup instantly. Otherwise, **Install Claude Code** and **Log in** from Settings (`⌘,`), via Anthropic's official installer and browser flow.
+3. **Open any repository.** Readiness offers **Add the team**, then start a lane, inspect past sessions, or follow an active terminal agent.
 
-<p align="center"><img src="docs/media/setup.png" width="800" alt="Built-in Claude Code setup: Install, Sign in, Build. The official native installer command is visible before the Install button."></p>
+<p align="center"><img src="docs/media/readiness.png" width="900" alt="Readiness on a new project: the agent team is incomplete, with an Add the team button, followed by findings the agent can fix."></p>
 
 Requires **macOS 13+** or **Windows**, and an [account with Claude Code access](https://code.claude.com/docs/en/setup#authenticate).  
 No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's official native installer and CLI browser-login flow. No separate Keel account or proxy.
 
-**Need dev tools?** Open **Tools & settings** (`⌘,`) for one-click setup of GitHub CLI, Cloudflare Wrangler, Docker, Kubernetes, Google Cloud, AWS, and Tailscale.
-
-<details>
-<summary><b>Inspect developer tool installers</b></summary>
-<p><img src="docs/media/installers.png" width="900" alt="Settings with Claude browser sign-in and explicit Install actions for optional developer tools."></p>
-</details>
 
 
 ---

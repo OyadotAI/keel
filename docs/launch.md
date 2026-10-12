@@ -32,9 +32,9 @@ current plan restrictions. “10× better” is an ambition, not a measured resu
 
 ## Assets
 
-All assets are generated from the current SwiftUI implementation using a fictional payments
-project. They contain no real repository or account data. The ten-second demos compress scripted
-states; their displayed costs, times, and test results are fixture values, not benchmark evidence.
+All assets are captured from a real run of the desktop app (0.3.13) against a small demo
+repository, `storefront`. The turns, approvals, test results, durations and costs on screen are what
+that run actually produced. The demos are sped up; nothing in them is scripted.
 
 | Asset | Use |
 | --- | --- |
@@ -43,20 +43,20 @@ states; their displayed costs, times, and test results are fixture values, not b
 | [Turn evidence demo](media/turn.mp4) · [GIF](media/turn.gif) | Explain what Keel adds around the agent |
 | [Approval demo](media/approve.mp4) · [GIF](media/approve.gif) | Show exact commands and permission scope |
 | [Command palette](media/commands.png) | Keyboard-first workflow |
-| [First-run setup](media/setup.png) | Install Claude Code without terminal setup |
-| [Settings installers](media/installers.png) | Browser sign-in and optional developer tools |
+| [Agent team](media/team.png) | pm, principal, reviewer, security and qa running one request |
+| [Add the team](media/readiness.png) | Readiness offering the agent team for an existing repository |
 
-Use MP4 for social uploads and GIF for Markdown. Each video is ten seconds long, silent,
-H.264-encoded, and web-playback optimized. Stills retain Retina resolution.
+Use MP4 for social uploads and GIF for Markdown. Videos are silent, H.264-encoded and
+web-playback optimized.
 
-Regenerate everything after UI changes:
+To recapture after UI changes, run the installed app with its own WebKit profile so your real
+projects stay out of frame, open a demo repository, and record the window with ffmpeg:
 
 ```sh
-make media
+CFFIXED_USER_HOME=/tmp/keel-demo-home /Applications/Keel.app/Contents/MacOS/keel-desktop
 ```
 
-Requires the Swift toolchain and ffmpeg. The renderer uses a temporary directory; generated
-outputs are copied into `docs/media`. It runs no provider turns, installers, or browser logins.
+Keep the window at 1600×1000. GIFs are 1200px wide at 10 fps with a 128-colour palette.
 
 ## Short launch post
 
@@ -66,7 +66,7 @@ outputs are copied into `docs/media`. It runs no provider turns, installers, or 
 >
 > Bring your old Claude sessions. Watch running agents live—even when they started elsewhere.
 >
-> Guided tool setup. Your Claude account.
+> An agent team in every project. Your Claude account.
 >
 > Native macOS. Free and open source, always.
 
@@ -99,7 +99,7 @@ Suggested opening:
 > details, and follows running sessions in real time. That includes compatible local Claude Code
 > sessions launched from the CLI, VS Code, Orca, or another front-end—not just Keel's own tasks.
 >
-> The frontend is SwiftUI/AppKit; a local Rust daemon owns agent processes, Git, and terminals.
+> The app is Tauri and React; a local Rust daemon owns agent processes, Git, and terminals.
 > It drives the installed provider CLI. It is not a new model or an Anthropic product.
 >
 > I'd especially like feedback on first-run setup, keyboard navigation, and reviewing several
