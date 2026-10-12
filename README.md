@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <b>The native macOS ADE (Agentic Development Environment) for product engineers.</b><br>
-  Your Claude account. Isolated Git worktrees. Live stacked diffs. Zero terminal scrollback.
+  <b>The desktop ADE (Agentic Development Environment) for product engineers, on macOS and Windows.</b><br>
+  Your Claude Code or Codex account. Several projects in one window. Isolated Git worktrees. Live stacked diffs. Zero terminal scrollback.
 </p>
 
 <p align="center">
@@ -67,7 +67,7 @@ Your existing Claude sessions come with you. Running one in your terminal right 
 | **Verification** | Trusting the agent's prose or running checks by hand | **Automatic gates**: Keel runs your real `make check`, `cargo test`, or `pnpm test` |
 | **Existing history** | Locked inside terminal history; no unified view | **Replay & Follow**: browse past sessions and watch external runs in real time |
 | **UI verification** | Guessing files, accidental component duplication | **Visual canvas & pixel check**: inspect DOM elements and verify pixels before/after |
-| **Speed & ergonomics** | Heavy webview wrappers or terminal panes | **100% Native**: Swift & AppKit frontend + local Rust daemon. Zero Electron |
+| **Speed & ergonomics** | One terminal pane per agent, one project per window | **Light desktop shell**: Tauri + React over a local Rust daemon. No Electron, no bundled Chromium |
 
 ---
 
@@ -86,7 +86,7 @@ An agent reporting "done" is an assertion. Keel collects every file written, eve
 
 <p align="center"><img src="docs/media/turn.gif" width="900" alt="The review record assembles: three changed files, command activity, a passing make check result, commit, time, tokens, and cost."></p>
 
-- **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Tear a tab into its own window without losing its checkout.
+- **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Keep several projects open in one window, each with its own lanes.
 - **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
 - **Rewind with safe undo.** Restore a pre-turn snapshot without blowing away your staged changes. Conflicting ignored files halt the operation safely.
 
@@ -98,6 +98,8 @@ When the agent needs permission to run a command, it **stops** right above your 
 - **Allow once** runs the single invocation and remembers nothing.
 - **Session & project rules** grant scoped patterns under More options.
 - **Trust this project** eliminates repetitive permission tolls for repos you own. Visible in the status bar, withdrawable anytime.
+
+- **Chat or terminal, per lane.** Read a lane as formatted chat, or switch it to the agent's own interactive CLI. Lanes run `claude` or `codex`.
 
 ### 3. Your old sessions. Your live agents. One workspace.
 **You don't have to start a session in Keel to see it in Keel.**
@@ -116,24 +118,25 @@ In the Claude Code CLI, background processes (`run_in_background`) get terminate
 ### 5. Visual design turns & pixel verification
 Building frontends with agents often results in edited-the-wrong-file or duplicated-component bugs:
 
-- **Point-and-click inspection:** Click any UI element in the web preview to feed Claude exact CSS selectors, bounding boxes, and computed styles.
-- **Pixel verification:** Re-photographs elements before and after the turn to prove the pixels actually changed where you asked.
+- **Point-and-click inspection:** Pick elements in the Preview tab, pin a note to each, and send them to the agent as one prompt with unique selectors and ranked source candidates.
+- **Change verification:** Each pinned element's markup, computed style, and size are fingerprinted before and after the turn. If nothing changed, Keel says the edit probably went to the wrong file.
 
 ### 6. Built for keyboard speed
-Never take your hands off the keyboard. Press `⌘K` to search actions, files, and conversations.
+Never take your hands off the keyboard. Press `⌘K` to search actions, files, and conversations, and `⌘/` to see every shortcut. On Windows, `⌘` is `Ctrl`.
 
 <p align="center"><img src="docs/media/commands.png" width="1100" alt="The command palette searches actions, files, and sessions, with keyboard shortcuts and navigation hints alongside results."></p>
 
 | Shortcut | Action | Shortcut | Action |
 | :--- | :--- | :--- | :--- |
 | `⌘K` | Command palette | `⌘L` | Focus composer |
-| `⌘Return` | Send turn instruction | `⇧Tab` | Toggle Plan / Auto mode |
-| `⌘.` | Stop active turn | `⌘N` | New task lane |
-| `⌘1`–`⌘9` | Switch task lane 1–9 | `⌘⇧[` / `⌘⇧]` | Previous / next task lane |
-| `⌘⇧A` | Allow oldest command once | `⌘⇧D` | Deny oldest command |
-| `⌘⇧T` | Trust this project | `⌘⇧E` | Toggle side panel (diffs / trace) |
-| `⌘⌥T` | Toggle integrated terminal | `⌘O` | Open repository |
-| `⌘,` | Tools & settings | `@` / `/` | Attach files / Claude slash commands |
+| `⌘N` | New lane | `⌘⇧N` | New lane on its own branch |
+| `⌘1`–`⌘9` | Go to lane 1–9 | `⌥↓` / `⌥↑` | Next / previous lane |
+| `⌘⇧M` | Merge lane | `⌘W` | Close lane |
+| `⌘⇧A` | Allow oldest request once | `⌘⇧S` | Allow it for this session |
+| `⌘⇧D` | Deny oldest request | `1`–`9` | Pick a question's option |
+| `⌘J` | Toggle the shell | `⌘⌥I` | Toggle side panel |
+| `⌘⇧E` | Toggle sidebar | `⌘O` | Open project |
+| `⌘,` | Settings | `⌘/` | All shortcuts |
 
 ---
 
@@ -161,7 +164,7 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 
 <p align="center"><img src="docs/media/setup.png" width="800" alt="Built-in Claude Code setup: Install, Sign in, Build. The official native installer command is visible before the Install button."></p>
 
-Requires **macOS 15+** and an [account with Claude Code access](https://code.claude.com/docs/en/setup#authenticate).  
+Requires **macOS 13+** or **Windows**, and an [account with Claude Code access](https://code.claude.com/docs/en/setup#authenticate).  
 No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's official native installer and CLI browser-login flow. No separate Keel account or proxy.
 
 **Need dev tools?** Open **Tools & settings** (`⌘,`) for one-click setup of GitHub CLI, Cloudflare Wrangler, Docker, Kubernetes, Google Cloud, AWS, and Tailscale.
@@ -176,32 +179,31 @@ No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's of
 
 ## Local & Private by Design
 
-- **Local by default.** The native macOS app connects to its Rust daemon over `127.0.0.1`. Optional paired-device access can expose the daemon over LAN or Tailscale; keep loopback mode unless you need it.
+- **Local by default.** The desktop app starts one daemon per open project and connects to its Rust daemon over `127.0.0.1`. Optional paired-device access can expose the daemon over LAN or Tailscale; keep loopback mode unless you need it.
 - **Your credentials stay yours.** Keel uses your existing Claude authentication. Prompts and code go directly to Anthropic per your account terms—never to third-party intermediate proxies.
 - **Deterministic locks:** File system and checkout locks prevent multiple agents from clobbering your Git state.
-- **Reporting is configurable.** Official builds can send crash reports to Sentry and usage events to PostHog. Both are enabled by default when configured; turn either off in **Settings → Privacy**. Builds without reporting keys leave those SDKs off. See [Privacy](docs/privacy.md) for the data flows and limits.
-- **Trust stays on your Mac.** Project trust and approved commands are saved outside the repository. Cloned permission files are ignored; build and installer commands are suggestions until you approve them.
+- **No reporting yet.** The desktop app sends no crash reports or usage events. See [Privacy](docs/privacy.md).
+- **Trust stays on your machine.** Project trust and approved commands are saved outside the repository. Cloned permission files are ignored; build and installer commands are suggestions until you approve them.
 - Learn more in the [Guardrails & Limits Guide](docs/guardrails.md).
 
 ---
 
 ## Build from Source
 
-Keel is written in **Swift (AppKit + SwiftUI)** for the front end and **Rust** for the daemon. Zero Electron, zero webview wrappers.
+Keel is a **Tauri 2** desktop app (React page, `desktop/`) over a **Rust** daemon (`crates/keel`), one daemon per open project. You need Rust, Node.js and `pnpm`.
 
 ```sh
 # Clone repository
 git clone https://github.com/OyadotAI/keel.git && cd keel
 
-# Run the complete test gate
+# Run the complete test gate (cargo test + desktop type-check, tests, bundle budget)
 make check
 
-# Build & launch the native app
-make app
-open dist/Keel.app
+# Run the app against a daemon built from this tree
+make dev
 ```
 
-The Rust daemon can also run independently:
+The Rust daemon can also run on its own:
 ```sh
 cargo run -- serve .
 ```
@@ -210,7 +212,7 @@ cargo run -- serve .
 
 | Subsystem | Location | Role |
 | :--- | :--- | :--- |
-| **App** | `app/Sources/KeelApp` | Native task tabs, diff view, review cards, SwiftTerm terminal |
+| **App** | `desktop/` | Tauri shell, React UI (lanes, chat, diffs, approvals, preview), xterm.js terminal |
 | **Daemon** | `crates/keel` | HTTP daemon, agent supervisor, Git worktree engine, monitors |
 | **Scanner** | `crates/keel-scanner` | Repository readiness checks (`keel scan`) |
 | **Workspace** | `crates/keel-workspace` | Reads Claude Code sessions, skills, plugins, and hooks |
@@ -224,8 +226,8 @@ cargo run -- serve .
 ## Roadmap
 
 - [ ] **Interactive Designer View** — Live preview window showing agent UI updates in real time, with visual drag-and-drop manipulation and direct UI editing that translates changes back into structured agent instructions.
-- [ ] **Codex Support** — Native integration and workspace support for OpenAI Codex agents alongside Claude Code.
-- [ ] **Windows Support** — Native Windows desktop support and daemon integration for Windows developer workflows.
+- [x] **Codex Support** — Lanes can run OpenAI Codex alongside Claude Code.
+- [x] **Windows Support** — Signed Windows installer with automatic updates.
 - [ ] **Linux Support** — Linux desktop and environment support for engineers running Linux workstations.
 - [ ] **OpenCode Support** — Full compatibility and runtime integration with OpenCode.
 
