@@ -65,7 +65,7 @@ The workflow needs these repository secrets:
 | `MACOS_CERT_P12` | The Developer ID Application certificate and key, `base64 -i cert.p12` |
 | `MACOS_CERT_PASSWORD` | The password set when exporting that `.p12` |
 | `MACOS_SIGN_IDENTITY` | The identity's name, e.g. `Developer ID Application: Oya (TEAMID)` |
-| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | For notarisation |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | For notarisation. `packaging/notary-secrets.sh` checks them with Apple and sets all three |
 | `TAURI_SIGNING_PRIVATE_KEY` | `~/.tauri/keel-updater.key`, from `make updater-keys` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty unless the key was made with one |
 | `SPARKLE_PRIVATE_KEY` | The Swift app's Sparkle key, for the migration appcast above |
