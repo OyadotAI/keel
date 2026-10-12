@@ -12,7 +12,10 @@ const following = new Map<string, boolean>();
 
 export function Chat({ lane }: { lane: string }) {
   // Only the shape of the conversation subscribes here. Tokens update their own block.
-  const shape = useStore((s) => JSON.stringify((s.lanes[lane]?.conv.turns ?? []).map((t) => [t.id, t.steps])));
+  const shape = useStore((s) => JSON.stringify((s.lanes[lane]?.conv.turns ?? []).map((t) => [t.id, t.steps.filter((step) => {
+    const block = step.startsWith("b:") ? t.blocks[step.slice(2)] : undefined;
+    return block?.kind !== "think" || !!block.text.trim();
+  })])));
   const rows = useMemo(() => (JSON.parse(shape) as [string, string[]][]).flatMap(([id, steps], turn) => [
     { turn, step: "prompt", key: `${id}:prompt` }, ...steps.map((step) => ({ turn, step, key: `${id}:${step}` })), { turn, step: "end", key: `${id}:end` },
   ]), [shape]);
@@ -94,8 +97,10 @@ function Block({ lane, index, step }: { lane: string; index: number; step: strin
   const first = useStore((s) => s.lanes[lane]?.conv.turns[index]?.steps.find((key) => key.startsWith("b:") && s.lanes[lane]?.conv.turns[index]?.blocks[key.slice(2)]?.kind === "say") === `b:${step}`);
   const agent = useStore((s) => s.lanes[lane]?.agent);
   const key = `${lane}:${index}:${step}`;
-  if (!block) return null;
-  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{agent === "codex" ? "Codex" : "Claude"}</div>}{block.kind === "think" ? <details className="chat-thinking" open={expanded.has(key)} onToggle={(e) => e.currentTarget.open ? expanded.add(key) : expanded.delete(key)}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
+  const [open, setOpen] = useState(expanded.has(key));
+  // Older saved conversations may contain reasoning items without displayable text.
+  if (!block || (block.kind === "think" && !block.text.trim())) return null;
+  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{agent === "codex" ? "Codex" : "Claude"}</div>}{block.kind === "think" ? <details className="chat-thinking" open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
 }
 
 function Activity({ lane, index, id }: { lane: string; index: number; id: string }) {

@@ -12,7 +12,7 @@ import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact
 import { open as openStream, type Stream } from "./streams";
 import { notify } from "./notify";
 
-import { typeInto, interruptTerminal, terminalConnected } from "./typers";
+import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
 import { prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
 export interface Pending {
@@ -636,7 +636,12 @@ export const useStore = create<State>()((set, getState) => {
         lane(lid, { error: "This Codex terminal does not expose its session ID. Choose Formatted chat in Settings and open a new lane; this terminal and its history will remain available." }); return;
       }
       if (l.interface === "terminal" && l.agent === "codex" && terminalConnected(lid)) {
-        lane(lid, { error: "Exit Codex in this terminal before switching so its current work and history are saved." }); return;
+        lane(lid, { submitting: true, error: undefined });
+        try { await exitTerminal(lid); }
+        catch (error) { lane(lid, { error: String(error) }); return; }
+        finally { lane(lid, { submitting: false }); }
+        const current = getState().lanes[lid];
+        if (!current || current.running || current.receipt || current.interface !== "terminal") return;
       }
       const ep = await endpoint(l.project);
       if (l.interface !== "terminal") {
@@ -1008,6 +1013,33 @@ export const useStore = create<State>()((set, getState) => {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
+      if (p.tool === "ExitPlanMode" && !p.provider && decision === "allow") {
+        // The plan-write hook ends a read-only turn. Its approval sentinel and the
+        // next edit-mode turn are one handoff; a generic allow means rejection to it.
+        // Hold queue draining while the answer is in flight: idle can arrive first.
+        if (l.submitting) return;
+        lane(lid, { submitting: true });
+        try {
+          const result = await post<{ ok: boolean }>(ep, "/api/approve/answer", {
+            id: p.id, decision: "deny", session: p.session_id || l.session,
+            rules: [], scope: "once", answer: "keel:plan-approved",
+          });
+          if (!result.ok) throw new Error("This plan is no longer waiting for approval.");
+          const plan = typeof p.input.plan === "string" ? `\n\n${p.input.plan}` : "";
+          lane(lid, (now) => ({
+            mode: "acceptEdits", error: undefined,
+            pending: now.pending.filter((x) => x.id !== p.id),
+            queued: [{ id: id(), text: `Implement the plan I approved in Keel. Proceed with the changes and verify them.${plan}`, attachments: [] }, ...now.queued],
+          }));
+        } catch (error) {
+          lane(lid, { error: `Could not approve the plan: ${error}` });
+        } finally {
+          lane(lid, { submitting: false });
+          save(getState());
+          drain(lid);
+        }
+        return;
+      }
       if (p.provider) {
         try { await post(ep, "/api/chat/control", { lane: lid, method: "answer", id: p.id, answer: { decision: p.provider === "codex" ? (decision === "allow" ? "accept" : "decline") : decision, reason: text } }); }
         catch (error) { lane(lid, { error: `Could not deliver the answer: ${error}` }); }

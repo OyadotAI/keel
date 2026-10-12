@@ -67,3 +67,39 @@ test('resumed terminal history retains prompt, tools and final reply in order', 
   assert.equal(frames[0].prompt, 'Inspect it');
   assert.ok(frames.every((f) => f.turn === 't1'));
 });
+
+test('empty reasoning does not create a disclosure in live output or history', async () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push({ event, data }), () => {});
+  const item = { id: 'r1', type: 'reasoning', summary: [], content: [], encryptedContent: 'opaque' };
+  await c.message({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r1', delta: '' } });
+  await c.message({ method: 'item/completed', params: { item } });
+  assert.deepEqual(events, []);
+  assert.deepEqual(historyFrames([{ id: 't1', status: 'completed', items: [item] }]).map((f) => f.op), ['open', 'close']);
+});
+
+test('reasoning falls back from an empty summary to available text', () => {
+  const frames = historyFrames([{ id: 't1', status: 'completed', items: [
+    { id: 'r1', type: 'reasoning', summary: [], content: ['Checking the project configuration.'] },
+    { id: 'r2', type: 'reasoning', summary: [{ text: 'Reviewing the result.' }], content: [] },
+  ] }]);
+  assert.deepEqual(frames.filter((f) => f.op === 'text').map((f) => f.append), ['Checking the project configuration.', 'Reviewing the result.']);
+});
+
+test('an empty delta does not suppress the completed reasoning summary', async () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push({ event, data }), () => {});
+  await c.message({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r1', delta: '' } });
+  await c.message({ method: 'item/completed', params: { item: { id: 'r1', type: 'reasoning', summary: ['Checking the files.'] } } });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data[0].append, 'Checking the files.');
+});
+
+test('streamed reasoning stays ordered without duplicating the completed summary', async () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push({ event, data }), () => {});
+  for (const delta of ['Checking ', 'the files.']) await c.message({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r1', delta } });
+  await c.message({ method: 'item/completed', params: { item: { id: 'r1', type: 'reasoning', summary: ['Checking the files.'] } } });
+  assert.equal(events.map((e) => e.data[0].append).join(''), 'Checking the files.');
+  assert.ok(events.every((e) => e.data[0].kind === 'think'));
+});

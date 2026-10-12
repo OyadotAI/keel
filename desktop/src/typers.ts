@@ -6,7 +6,10 @@ const typers = new Map<string, (text: string) => void>();
 export function register(lane: string, type: (text: string) => void): () => void {
   typers.set(lane, type);
   return () => {
-    if (typers.get(lane) === type) typers.delete(lane);
+    if (typers.get(lane) === type) {
+      typers.delete(lane);
+      for (const closed of [...(exits.get(lane) ?? [])]) closed();
+    }
   };
 }
 
@@ -44,3 +47,32 @@ export function interruptTerminal(lane: string): boolean {
 }
 
 export function terminalConnected(lane: string): boolean { return typers.has(lane); }
+
+const exits = new Map<string, Set<() => void>>();
+
+/** Ask the CLI to exit normally (its double Ctrl+C gesture), never kill the socket.
+ * A timeout keeps the terminal mounted and its history intact. */
+export function exitTerminal(lane: string): Promise<void> {
+  const type = typers.get(lane);
+  if (!type) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let second: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timeout); clearTimeout(second);
+      exits.get(lane)?.delete(closed);
+      if (!exits.get(lane)?.size) exits.delete(lane);
+      if (error) reject(error); else resolve();
+    };
+    const closed = () => finish();
+    const timeout = setTimeout(() => finish(new Error("The terminal did not exit. Exit Codex in the terminal, then choose Chat again.")), 10_000);
+    const waiting = exits.get(lane) ?? new Set<() => void>();
+    waiting.add(closed); exits.set(lane, waiting);
+    try {
+      type("\x03");
+      second = setTimeout(() => {
+        if (typers.get(lane) !== type) return;
+        try { type("\x03"); } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      }, 200);
+    } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+  });
+}

@@ -156,3 +156,92 @@ describe("chat delivery", () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });
+
+describe("plan approval handoff", () => {
+  const plan = { id: "plan-write", lane: "test", tool: "ExitPlanMode", command: "", rules: [], input: { plan: "Add the export button" }, session_id: "session" };
+
+  async function planning() {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, mode: "plan", running: true, managed: true, pending: [plan] } } }));
+    store.getState().load("test");
+    await Promise.resolve();
+    const stream = mocks.open.mock.calls.find(([url]) => url.includes("/api/chat/events"))!;
+    stream[2]([{ event: "caught-up", data: { running: true } }]);
+    return { store, idle: () => stream[2]([{ event: "record", data: { seq: 1, event: "idle", data: null } }]) };
+  }
+
+  it("sends the hook sentinel and automatically builds the approved plan after idle", async () => {
+    const { store, idle } = await planning();
+    mocks.post.mockResolvedValue({ ok: true, accepted: true, running: true });
+    await store.getState().answer("test", plan, "allow");
+    expect(mocks.post).toHaveBeenCalledWith(ep, "/api/approve/answer", expect.objectContaining({ answer: "keel:plan-approved", rules: [] }));
+    expect(store.getState().lanes.test).toMatchObject({ mode: "acceptEdits", draft: "Hello", pending: [] });
+    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(JSON.parse(localStorage.getItem("keel.layout.v1")!).lanes[0]).toMatchObject({ mode: "acceptEdits", queued: [{ text: expect.stringContaining("Add the export button") }] });
+    idle();
+    await Promise.resolve(); await Promise.resolve();
+    expect(mocks.post).toHaveBeenLastCalledWith(ep, "/api/chat/send", expect.objectContaining({ mode: "acceptEdits", prompt: expect.stringContaining("Implement the plan I approved") }));
+    expect(store.getState().lanes.test.draft).toBe("Hello");
+  });
+
+  it("holds queued work when idle arrives before the approval response", async () => {
+    const { store, idle } = await planning();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, queued: [{ id: "later", text: "Later task", attachments: [] }] } } }));
+    let accept!: (value: { ok: boolean }) => void;
+    mocks.post.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    mocks.post.mockResolvedValue({ accepted: true, running: true });
+    const answering = store.getState().answer("test", plan, "allow");
+    idle();
+    expect(mocks.post).toHaveBeenCalledOnce();
+    accept({ ok: true });
+    await answering; await Promise.resolve(); await Promise.resolve();
+    expect(mocks.post).toHaveBeenLastCalledWith(ep, "/api/chat/send", expect.objectContaining({ mode: "acceptEdits", prompt: expect.stringContaining("Implement the plan I approved") }));
+    expect(store.getState().lanes.test.queued.map((q) => q.text)).toEqual(["Later task"]);
+  });
+
+  it.each(["failed", "expired"])("does not switch modes or schedule implementation when approval is %s", async (failure) => {
+    const { store } = await planning();
+    if (failure === "failed") mocks.post.mockRejectedValueOnce(new Error("offline"));
+    else mocks.post.mockResolvedValueOnce({ ok: false });
+    await store.getState().answer("test", plan, "allow");
+    expect(store.getState().lanes.test).toMatchObject({ mode: "plan", queued: [], pending: [plan], submitting: false });
+    expect(store.getState().lanes.test.error).toContain("Could not approve the plan");
+  });
+
+  it("stays in plan mode when the plan is declined", async () => {
+    const { store } = await planning();
+    mocks.post.mockResolvedValue({ ok: true });
+    await store.getState().answer("test", plan, "deny");
+    expect(store.getState().lanes.test).toMatchObject({ mode: "plan", queued: [] });
+    expect(mocks.post).toHaveBeenCalledWith(ep, "/api/approve/answer", expect.objectContaining({ decision: "deny", answer: "" }));
+  });
+});
+
+describe("Codex terminal handoff", () => {
+  it("waits for a normal exit before reopening the same session in Chat", async () => {
+    const store = await fixture();
+    const { register } = await import("./typers");
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex", known: true, session: "saved-session" } } }));
+    const load = vi.fn(); store.setState({ load });
+    const write = vi.fn(); const unregister = register("test", write);
+    const switching = store.getState().switchInterface("test", "chat");
+    expect(store.getState().lanes.test).toMatchObject({ interface: "terminal", submitting: true });
+    expect(load).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    unregister(); await switching;
+    expect(store.getState().lanes.test).toMatchObject({ interface: "chat", submitting: false, session: "saved-session", known: true, draft: "Hello", error: undefined });
+    expect(load).toHaveBeenCalledWith("test");
+  });
+  it("keeps the terminal and conversation on an exit timeout", async () => {
+    const store = await fixture();
+    const { register } = await import("./typers");
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex", known: true, session: "saved-session" } } }));
+    const load = vi.fn(); store.setState({ load });
+    const unregister = register("test", vi.fn());
+    const switching = store.getState().switchInterface("test", "chat");
+    await vi.advanceTimersByTimeAsync(10_000); await switching;
+    expect(store.getState().lanes.test).toMatchObject({ interface: "terminal", submitting: false, session: "saved-session", draft: "Hello" });
+    expect(store.getState().lanes.test.error).toContain("did not exit");
+    expect(load).not.toHaveBeenCalled(); unregister();
+  });
+});

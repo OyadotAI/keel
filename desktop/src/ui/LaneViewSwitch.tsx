@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { Dialog } from "./kit";
+import { terminalConnected } from "../typers";
 import { useStore, type ChatInterface } from "../store";
 import { Icon } from "./icons";
 
@@ -7,6 +10,7 @@ export function LaneViewSwitch({ lane, menu = false, onSwitch }: {
   menu?: boolean;
   onSwitch?: () => void;
 }) {
+  const [confirm, setConfirm] = useState(false);
   const surface = useStore((s) => s.lanes[lane]?.interface ?? "chat");
   const busy = useStore((s) => {
     const l = s.lanes[lane];
@@ -14,22 +18,31 @@ export function LaneViewSwitch({ lane, menu = false, onSwitch }: {
   });
   const hint = busy ? "Finish or stop the turn and resolve any unconfirmed message before switching views" : undefined;
   function change(value: ChatInterface) {
+    const l = useStore.getState().lanes[lane];
+    if (value === "chat" && l?.interface === "terminal" && l.agent === "codex" && l.known && terminalConnected(lane)) { setConfirm(true); return; }
     onSwitch?.();
     void useStore.getState().switchInterface(lane, value);
   }
+  const confirmation = confirm && <Dialog title="Switch to Chat?" onClose={() => setConfirm(false)}>
+    <p>Keel will ask Codex to exit the terminal normally, then reopen this same conversation in Chat. Copy any unsent text in the terminal before continuing.</p>
+    <div className="actions">
+      <button onClick={() => setConfirm(false)}>Keep terminal open</button>
+      <button className="primary" disabled={busy} onClick={() => { setConfirm(false); onSwitch?.(); void useStore.getState().switchInterface(lane, "chat"); }}>Exit terminal and switch</button>
+    </div>
+  </Dialog>;
   if (menu) {
     const next = surface === "terminal" ? "chat" : "terminal";
-    return <button disabled={busy} title={hint} onClick={() => change(next)}>
+    return <><button disabled={busy} title={hint} onClick={() => change(next)}>
       <Icon name={next === "chat" ? "chat" : "terminal"} size={14} />
       {next === "chat" ? "Switch to formatted chat" : "Switch to terminal"}
-    </button>;
+    </button>{confirmation}</>;
   }
-  return <div className="segmented lane-view-switch" role="group" aria-label="Lane view" title={hint}>
+  return <><div className="segmented lane-view-switch" role="group" aria-label="Lane view" title={hint}>
     <button aria-pressed={surface === "chat"} disabled={busy} onClick={() => change("chat")} title={hint ?? "Formatted chat view"}>
       <Icon name="chat" size={13} /> Chat
     </button>
     <button aria-pressed={surface === "terminal"} disabled={busy} onClick={() => change("terminal")} title={hint ?? "Agent terminal view"}>
       <Icon name="terminal" size={13} /> Terminal
     </button>
-  </div>;
+  </div>{confirmation}</>;
 }

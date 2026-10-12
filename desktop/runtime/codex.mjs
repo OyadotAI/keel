@@ -77,7 +77,9 @@ export class Codex {
     const method = message.method;
     if (method === 'item/agentMessage/delta' || method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
       const key = `${p.itemId}:${method.includes('reasoning') ? 'think' : 'say'}`;
-      this.text.add(key); this.ops({ op: 'text', step: key, kind: method.includes('reasoning') ? 'think' : 'say', append: p.delta });
+      if (typeof p.delta === 'string' && p.delta.length) {
+        this.text.add(key); this.ops({ op: 'text', step: key, kind: method.includes('reasoning') ? 'think' : 'say', append: p.delta });
+      }
     } else if (method === 'item/started' || method === 'item/completed') this.item(p.item, method === 'item/completed');
     else if (method === 'turn/started') this.turn = p.turn.id;
     else if (method === 'turn/completed') {
@@ -94,7 +96,8 @@ export class Codex {
     const type = item.type;
     if (type === 'agentMessage' || type === 'reasoning') {
       const kind = type === 'reasoning' ? 'think' : 'say';
-      if (complete && !this.text.has(`${item.id}:${kind}`)) this.ops({ op: 'text', step: `${item.id}:${kind}`, kind, append: item.text ?? (item.summary ?? item.content ?? []).join('\n') });
+      const text = itemText(item);
+      if (complete && text.trim() && !this.text.has(`${item.id}:${kind}`)) this.ops({ op: 'text', step: `${item.id}:${kind}`, kind, append: text });
       return;
     }
     if (type === 'userMessage') return;
@@ -118,4 +121,11 @@ export function historyFrames(turns) {
     frames.push({ turn: turn.id, op: 'close', reason: turn.status === 'completed' ? 'done' : turn.status === 'interrupted' ? 'interrupted' : 'failed' });
   }
   return frames;
+}
+
+// Completed reasoning can have an empty summary alongside available display text.
+// Never create expandable blocks from absent text or encrypted provider payloads.
+function itemText(item) {
+  const plain = (value) => typeof value === 'string' ? value : Array.isArray(value) ? value.map((part) => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '').filter(Boolean).join('\n') : '';
+  return [item.text, item.summary, item.content].map(plain).find((text) => text.trim()) ?? '';
 }
