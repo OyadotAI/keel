@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b>The desktop ADE (Agentic Development Environment) for product engineers, on macOS and Windows.</b><br>
+  <b>A software factory for product engineers: an agent team that comes with every project, inside a desktop ADE for macOS and Windows.</b><br>
   Your Claude Code or Codex account. Several projects in one window. Isolated Git worktrees. Live stacked diffs. Zero terminal scrollback.
 </p>
 
@@ -50,6 +50,8 @@ Claude Code is one of the most capable coding agents ever built. But driving it 
 - **Blind approvals.** Terminal approval prompts roll past or tempt you into running `--dangerously-skip-permissions`.
 - **Reinventing verification.** The agent *says* tests passed. Did they?
 
+**Keel is a software factory, and the team is already in it.** Every project gets a PM, a designer, a principal engineer, a reviewer, security, reliability, and QA, and each request runs through them in order.
+
 **Keel makes the turn the unit.** Every file touched, every command run with its output, your project's real verification gate, duration, and cost—rendered into one clean, reviewable artifact.
 
 Your existing Claude sessions come with you. Running one in your terminal right now? Follow its activity live in Keel.
@@ -90,7 +92,21 @@ An agent reporting "done" is an assertion. Keel collects every file written, eve
 - **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
 - **Rewind with safe undo.** Restore a pre-turn snapshot without blowing away your staged changes. Conflicting ignored files halt the operation safely.
 
-### 2. Approve commands in the flow
+### 2. A team in every project
+An agent alone writes code. A team decides what's worth building, designs it, reviews it, and tries to break it. Keel ships seven subagents and the lifecycle that runs them, written into `.claude/agents/` and `CLAUDE.md`, so they work in Claude Code anywhere and not just in Keel:
+
+| Stage | Agent | Returns |
+| :--- | :--- | :--- |
+| 1 | **pm** | Build, change, cut, or not yet, plus the smallest version worth shipping |
+| 2 | **designer** | States, layout, and copy for anything a person will see |
+| 3 | **principal** | The technical design: modules touched, invariants at risk, tests that pin it |
+| 4 | *implementation* | The main agent writes it, in view, until the gate is green |
+| 5 | **reviewer**, **security**, **reliability** | Only what is actually wrong with the diff |
+| 6 | **qa** | Runs the real thing and reports what broke, with steps to reproduce it |
+
+New projects start with the team. For an existing repository, **Add the team** in Readiness writes it in, and never over a file you already have.
+
+### 3. Approve commands in the flow
 When the agent needs permission to run a command, it **stops** right above your composer with the exact command line and intent.
 
 <p align="center"><img src="docs/media/approve.gif" width="900" alt="An agent pauses for permission to run docker compose. Keel shows Allow once, More options, and Deny before the command proceeds."></p>
@@ -101,27 +117,27 @@ When the agent needs permission to run a command, it **stops** right above your 
 
 - **Chat or terminal, per lane.** Read a lane as formatted chat, or switch it to the agent's own interactive CLI. Lanes run `claude` or `codex`.
 
-### 3. Your old sessions. Your live agents. One workspace.
+### 4. Your old sessions. Your live agents. One workspace.
 **You don't have to start a session in Keel to see it in Keel.**
 
 - **Zero-migration history.** Browse and replay past Claude Code conversations directly from `~/.claude/projects/`—no import scripts or cloud accounts needed.
 - **Follow work in real time.** Launch `claude` in your terminal, VS Code, or Orca. Keel's watcher picks up the active transcript and streams messages, tool calls, and diffs live.
 - **Deep write recovery.** Recovers files written not just by `Edit`/`Write`, but by subagents (`Task`) and shell commands (`cat >>`, python heredocs), flagging edits outside the repo.
 
-### 4. Background jobs that don't die
+### 5. Background jobs that don't die
 In the Claude Code CLI, background processes (`run_in_background`) get terminated the moment the turn completes. Keel's daemon takes them over:
 
 - **Monitors panel:** Long-running processes like `pnpm dev` or `gh run watch` run supervised outside turn lifetimes.
 - **Live streaming output:** Inspect stdout/stderr in real time and stop jobs with a single click.
 - **Automatic completion turn:** When a background job finishes, its status arrives back into your conversation as a clean turn report.
 
-### 5. Visual design turns & pixel verification
+### 6. Visual design turns & change verification
 Building frontends with agents often results in edited-the-wrong-file or duplicated-component bugs:
 
 - **Point-and-click inspection:** Pick elements in the Preview tab, pin a note to each, and send them to the agent as one prompt with unique selectors and ranked source candidates.
 - **Change verification:** Each pinned element's markup, computed style, and size are fingerprinted before and after the turn. If nothing changed, Keel says the edit probably went to the wrong file.
 
-### 6. Built for keyboard speed
+### 7. Built for keyboard speed
 Never take your hands off the keyboard. Press `⌘K` to search actions, files, and conversations, and `⌘/` to see every shortcut. On Windows, `⌘` is `Ctrl`.
 
 <p align="center"><img src="docs/media/commands.png" width="1100" alt="The command palette searches actions, files, and sessions, with keyboard shortcuts and navigation hints alongside results."></p>
