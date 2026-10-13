@@ -2324,6 +2324,16 @@ h3 {
 .readiness-group + .readiness-group {
   margin-top: 6px;
 }
+.readiness .panel-head {
+  flex-wrap: wrap;
+}
+.readiness-scope-controls {
+  flex: none;
+  margin-left: auto;
+}
+.readiness-scope-controls button {
+  white-space: nowrap;
+}
 .readiness-empty {
   padding: 2px 2px 8px;
 }

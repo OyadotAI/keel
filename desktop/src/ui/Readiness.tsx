@@ -68,6 +68,7 @@ export function Readiness({ lane }: { lane: string }) {
   const stale = useStore((s) => (project ? s.readiness[project] : undefined));
   const [ep, setEp] = useState<Endpoint>();
   const [report, setReport] = useState<Report>();
+  const [scopeFilter, setScopeFilter] = useState<FindingScope | "all">("all");
   const [error, setError] = useState<string>();
   const [note, setNote] = useState<string>();
   // An action that failed is a line above the list, not the list gone.
@@ -117,6 +118,8 @@ export function Readiness({ lane }: { lane: string }) {
     return "folder";
   };
   const groups: [FindingScope, string][] = [["session", "This session"], ["folder", "This folder"], ["global", "Global"]];
+  const groupCounts = new Map(groups.map(([group]) => [group, findings.filter((finding) => scopeOf(finding) === group).length]));
+  const visibleGroups = scopeFilter === "all" ? groups : groups.filter(([group]) => group === scopeFilter);
 
   async function ignore(f: Finding) {
     setFailed(undefined);
@@ -147,6 +150,16 @@ export function Readiness({ lane }: { lane: string }) {
         <span className="muted small">
           / 100 · {findings.length} to look at{report.ignored.length ? ` · ${report.ignored.length} set aside` : ""}
         </span>
+        <div className="segmented readiness-scope-controls" role="group" aria-label="Filter findings by scope">
+          <button aria-pressed={scopeFilter === "all"} onClick={() => setScopeFilter("all")}>
+            All {findings.length}
+          </button>
+          {groups.map(([group, label]) => (
+            <button key={group} aria-pressed={scopeFilter === group} onClick={() => setScopeFilter(group)}>
+              {label} {groupCounts.get(group)}
+            </button>
+          ))}
+        </div>
         <button className="link small" onClick={() => read(ep)}>
           Check again
         </button>
@@ -154,7 +167,7 @@ export function Readiness({ lane }: { lane: string }) {
       {note && <div className="small panel-note">{note}</div>}
       {failed && <div className="small panel-note error">{failed}</div>}
       <div className="findings">
-        {groups.map(([group, label]) => {
+        {visibleGroups.map(([group, label]) => {
           const items = findings.filter((f) => scopeOf(f) === group);
           return (
             <section key={group} className="readiness-group" aria-label={label}>
