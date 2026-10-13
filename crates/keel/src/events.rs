@@ -164,6 +164,7 @@ pub async fn after_mutation(
             emit("monitors.changed", None, serde_json::Value::Null)
         }
         "/api/session/rename" => poke_sessions(),
+        "/api/license" => emit("state.changed", None, serde_json::Value::Null),
         // A skill or subagent is written to the project root and, for a skill, maybe committed.
         p if p.starts_with("/api/skills") || p.starts_with("/api/agents") => {
             emit("state.changed", None, serde_json::Value::Null);

@@ -916,7 +916,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
-        .route("/api/license", get(crate::license::api_status))
+        .route(
+            "/api/license",
+            get(crate::license::api_status).post(crate::license::api_install),
+        )
         .route("/api/claude/theme", get(api_claude_theme))
         .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/claude/login", get(crate::clitools::login_claude))

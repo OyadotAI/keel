@@ -4,7 +4,7 @@
 // streamed token re-renders the one block it landed in. Updates arrive one batch per frame from
 // the stream worker, never one per event.
 
-import { readSetup, type Readiness, type Warning } from "./setup";
+import { readSetup, type Meter, type Readiness, type Warning } from "./setup";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url } from "./api";
@@ -168,6 +168,8 @@ interface State {
   trusted: Record<string, boolean>;
   /// What is missing from each project's agent setup, for the warning that says so.
   setup: Record<string, Warning[]>;
+  /// The license in force. Machine-wide, so one value whichever project's daemon read it last.
+  license?: Meter;
   /// Open readiness findings per project, for the tab's count.
   readiness: Record<string, Readiness>;
   /// Setup warnings "Install all" handed to a lane's agent, per project, so the popover says they
@@ -315,8 +317,8 @@ export const useStore = create<State>()((set, getState) => {
   const setup = (path: string, ep: Endpoint) =>
     soon(`setup:${path}`, () =>
       readSetup(ep, path).then(
-        ({ warnings, readiness }) =>
-          set((s) => ({ setup: { ...s.setup, [path]: warnings }, readiness: readiness ? { ...s.readiness, [path]: readiness } : s.readiness })),
+        ({ warnings, readiness, license }) =>
+          set((s) => ({ setup: { ...s.setup, [path]: warnings }, readiness: readiness ? { ...s.readiness, [path]: readiness } : s.readiness, license: license ?? s.license })),
         () => undefined,
       ),
     );

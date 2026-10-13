@@ -34,11 +34,13 @@ interface Finding {
   detail: string;
   fix?: { description: string };
 }
-interface Meter {
+export interface Meter {
   steps: number;
   cap: number | null;
   licensee: string | null;
   email: string;
+  /// The key's last valid day (UTC), or null on the free tier.
+  expires: string | null;
 }
 interface Plugin {
   name: string;
@@ -59,7 +61,7 @@ export interface Readiness {
   critical: boolean;
 }
 
-export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings: Warning[]; readiness?: Readiness }> {
+export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings: Warning[]; readiness?: Readiness; license?: Meter }> {
   const [claude, state, plugins, meter] = await Promise.allSettled([
     get<{ installed: boolean; authenticated: boolean }>(ep, "/api/claude"),
     get<{ scan: { findings: Finding[]; ignored: string[] } }>(ep, "/api/state"),
@@ -93,7 +95,7 @@ export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings:
       out.push({ id: "license/daily-limit", severity: "medium", title: `${steps} of ${cap} free agent steps used today`, detail: `The count resets at 00:00 UTC. Teams, companies and more steps: ${email}.`, fix: "settings" });
   }
   const rank = { critical: 0, high: 1, medium: 2 };
-  return { warnings: out.sort((a, b) => rank[a.severity] - rank[b.severity]), readiness };
+  return { warnings: out.sort((a, b) => rank[a.severity] - rank[b.severity]), readiness, license: meter.status === "fulfilled" ? (meter.value ?? undefined) : undefined };
 }
 
 const unread = (id: string, what: string, why: unknown): Warning => ({

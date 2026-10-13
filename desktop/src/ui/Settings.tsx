@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
 import { open as openStream } from "../streams";
 import { useStore } from "../store";
+import type { Meter } from "../setup";
 
 interface Claude {
   installed: boolean;
@@ -53,6 +54,7 @@ export function Settings() {
           <>
             <TrustSection ep={ep} project={project} />
             <ClaudeSection ep={ep} />
+            <LicenseSection ep={ep} />
           </>
         )}
         <UpdatesSection />
@@ -231,6 +233,59 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
           </ul>
         </>
       )}
+    </section>
+  );
+}
+
+/// "expires 2027-01-31", or "no expiry" for a key minted to the end of time.
+export const until = (expires: string | null) => (!expires ? "" : expires >= "9999" ? "no expiry" : `expires ${expires}`);
+
+/// The license key, pasted here rather than into a file. The daemon verifies it before saving,
+/// so a bad paste is refused with the reason and never replaces a key that works.
+function LicenseSection({ ep }: { ep: Endpoint }) {
+  const [meter, setMeter] = useState<Meter | null>();
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => void get<Meter | null>(ep, "/api/license").then(setMeter, () => setMeter(null)), [ep]);
+  async function save() {
+    setBusy(true);
+    try {
+      const saved = await post<Meter>(ep, "/api/license", { key });
+      setMeter(saved);
+      setKey("");
+      setError(undefined);
+      // The key is machine-wide: every project's daily-limit warning is now stale, not just this one's.
+      useStore.setState((s) => ({ license: saved, setup: Object.fromEntries(Object.entries(s.setup).map(([p, w]) => [p, w.filter((x) => !x.id.startsWith("license/"))])) }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="settings-section">
+      <h2>License</h2>
+      {meter === undefined ? (
+        <p className="muted">Reading…</p>
+      ) : meter === null ? (
+        <p className="muted">Could not read the license.</p>
+      ) : meter.licensee ? (
+        <p>
+          Licensed to <strong>{meter.licensee}</strong> · {meter.cap == null ? "unlimited agent steps" : `${meter.steps} of ${meter.cap} agent steps today`} · {until(meter.expires)}
+        </p>
+      ) : (
+        <p>
+          Free tier · {meter.steps} of {meter.cap} agent steps today, reset at 00:00 UTC. Teams, companies and more steps: {meter.email}.
+        </p>
+      )}
+      {error && <div className="error">{error}</div>}
+      <div className="form-row">
+        <input className="field" style={{ margin: 0, flex: 1, maxWidth: "none" }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="keel1.…" aria-label="License key" spellCheck={false} />
+        <button className="primary" disabled={busy || !key.trim()} onClick={() => void save()}>
+          {busy ? "Checking…" : meter?.licensee ? "Replace key" : "Add key"}
+        </button>
+      </div>
     </section>
   );
 }
