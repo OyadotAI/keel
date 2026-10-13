@@ -2,6 +2,12 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.2] - 2026-10-12
+
+### Changed
+- Readiness findings are grouped by session, folder, and global scope, with score-row filters and
+  counts for each scope.
+
 ## [Unreleased]
 
 ### Added
