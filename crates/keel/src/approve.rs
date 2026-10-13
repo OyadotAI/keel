@@ -356,6 +356,16 @@ pub async fn ask(
     // short-circuited, on any project.
     let is_question = is_question(&hook.tool_name);
 
+    // The license meter. Every effectful step passes this hook, so this is the one place it is
+    // counted; a question is not a step. Before trust: trust is about permission, this is not.
+    if !is_question && let Err(reason) = crate::serve::blocking(crate::license::step, Ok(())).await
+    {
+        return Ok(Json(Decision {
+            decision: "deny".into(),
+            reason,
+        }));
+    }
+
     // An edit that leaves the repository is asked about whatever else is true, because every
     // other reason to stay quiet is scoped to *this* project and this is not in it.
     //
@@ -386,19 +396,31 @@ pub async fn ask(
         .await
     };
 
-    if is_edit(&hook.tool_name) && !leaves_the_project {
-        // Inside the repository is what `acceptEdits` already covers; nothing to ask.
-        return Ok(Json(Decision {
-            decision: "defer".into(),
-            reason: String::new(),
-        }));
-    }
-
     // One decision, already made. Nothing is queued and nobody is asked.
+    //
+    // An edit inside a trusted project is `allow`ed: a terminal lane's `claude` runs in its own
+    // default mode and asked about every edit itself, trusted or not. Commands and fetches
+    // `defer` to Claude Code's allowlist, which trust fills (`settings_json`), so the person's
+    // own `deny` rules and Claude Code's shell checks still apply to them. The cost: a terminal
+    // session started before the project was trusted keeps its older allowlist for commands
+    // until it is restarted. A chat turn is a fresh `claude` and always has the current one.
     if !is_question && !leaves_the_project && trusted {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
         }
+        return Ok(Json(Decision {
+            decision: if is_edit(&hook.tool_name) {
+                "allow"
+            } else {
+                "defer"
+            }
+            .into(),
+            reason: String::new(),
+        }));
+    }
+
+    if is_edit(&hook.tool_name) && !leaves_the_project {
+        // Inside the repository is what `acceptEdits` already covers; nothing to ask.
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -1129,6 +1151,73 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn publication_prefix_rules_cannot_bypass_background_authorization() {
         check_background_authorization(true, "deny").await;
+    }
+
+    /// A trusted project allows an edit outright — a terminal lane's `claude` would otherwise ask
+    /// about it itself — and leaves commands and fetches to the allowlist trust fills, so the
+    /// person's own deny rules still hold. Nothing is queued for any of them. A question is still
+    /// a question.
+    #[tokio::test]
+    async fn a_trusted_project_asks_nothing_but_questions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        crate::permissions::set_trusted(&root, true).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let hook = |tool: &str, input: serde_json::Value| HookInput {
+            tool_name: tool.into(),
+            tool_input: input,
+            tool_use_id: format!("trusted-{tool}"),
+            session_id: "trusted".into(),
+            lane: "trusted".into(),
+            cwd: root.to_string(),
+        };
+        for (tool, input, expected) in [
+            (
+                "Bash",
+                serde_json::json!({"command": "cargo test"}),
+                "defer",
+            ),
+            (
+                "Edit",
+                serde_json::json!({"file_path": root.join("a.rs").as_str()}),
+                "allow",
+            ),
+            (
+                "WebFetch",
+                serde_json::json!({"url": "https://example.com"}),
+                "defer",
+            ),
+        ] {
+            let d = ask(State(state.clone()), Json(hook(tool, input)))
+                .await
+                .unwrap();
+            assert_eq!(d.decision, expected, "{tool}");
+        }
+        let allow: serde_json::Value = serde_json::from_str(&crate::permissions::settings_json(
+            &root, 1, None, None, &root,
+        ))
+        .unwrap();
+        for tool in ["Bash", "WebFetch"] {
+            assert!(
+                allow["permissions"]["allow"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r == tool),
+                "trust must put {tool} on the allowlist it defers to"
+            );
+        }
+        let question = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            ask(
+                State(state.clone()),
+                Json(hook("AskUserQuestion", serde_json::json!({}))),
+            ),
+        )
+        .await;
+        assert!(question.is_err(), "a question waits for the person");
+        queue().locked().retain(|p| p.lane != "trusted");
     }
 
     #[tokio::test]

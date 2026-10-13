@@ -41,7 +41,13 @@ impl Workflow<'_> {
         self.lower.contains(s)
     }
     fn deploys(&self) -> bool {
-        self.has("deploy")
+        // A deploy *key* is a git credential — reading a private dependency is not deploying.
+        // `KEEL_LICENSE_DEPLOY_KEY` in this repository's own CI failed `scan --strict` on a
+        // workflow that deploys nothing.
+        let named = ["deploy_key", "deploy-key", "deploy key", "deploykey"]
+            .iter()
+            .fold(self.lower.to_string(), |text, key| text.replace(key, ""));
+        named.contains("deploy")
             || self.has("kubectl")
             || self.has("docker/build-push")
             || self.has("wrangler")
@@ -429,6 +435,20 @@ mod tests {
         assert!(
             !ids(&ctx).contains(&"ci/deploy-not-gated"),
             "a comment reclassified the workflow: {:?}",
+            ids(&ctx)
+        );
+
+        // Nor is a deploy key: it reads a repository.
+        let (_d, ctx) = fixture(&[(
+            ".github/workflows/release.yml",
+            &workflow.replace(
+                "      - run: make dmg\n",
+                "      - env:\n          KEY: ${{ secrets.LICENSE_DEPLOY_KEY }}\n        run: make dmg\n",
+            ),
+        )]);
+        assert!(
+            !ids(&ctx).contains(&"ci/deploy-not-gated"),
+            "a deploy key reclassified the workflow: {:?}",
             ids(&ctx)
         );
 

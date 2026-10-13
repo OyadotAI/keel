@@ -3,6 +3,7 @@ import { get, type Endpoint } from "../api";
 import { useStore } from "../store";
 import { register } from "../typers";
 import { isKeel } from "../keys";
+import { onTerminalFont, terminalFont } from "../zoom";
 
 /// A terminal over the daemon's PTY: the lane's agent itself (`agent`), or a shell in its checkout.
 ///
@@ -138,7 +139,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         // this contrast against its background — Claude Code's dim text included.
         minimumContrastRatio: 4.5,
         fontFamily: css.getPropertyValue("--mono"),
-        fontSize: 13,
+        fontSize: terminalFont(),
         lineHeight: 1.2,
         cursorBlink: true,
         allowProposedApi: true,
@@ -214,7 +215,13 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       ws.addEventListener("close", () => unregister());
       const observer = new ResizeObserver(() => resize());
       observer.observe(host.current);
+      // A new size is a new cell grid: refit, so the CLI is told its new rows and columns.
+      const unfont = onTerminalFont((size) => {
+        term.options.fontSize = size;
+        resize();
+      });
       cleanup = () => {
+        unfont();
         scheme.removeEventListener("change", retheme);
         unregister();
         observer.disconnect();

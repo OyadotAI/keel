@@ -12,8 +12,8 @@
 
 <p align="center">
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows-black?style=flat" alt="macOS and Windows"></a>
-  <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat" alt="MIT License"></a>
-  <a href="https://getoya.ai"><img src="https://img.shields.io/badge/sponsored%20by-getOya.ai-7928CA?style=flat" alt="Sponsored by getOya.ai"></a>
+  <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-source--available-blue.svg?style=flat" alt="Source-available license"></a>
+  <a href="https://oyabrowser.com"><img src="https://img.shields.io/badge/sponsored%20by-OyaBrowser.com-7928CA?style=flat" alt="Sponsored by OyaBrowser.com"></a>
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><img src="https://img.shields.io/badge/download-macOS-007AFF?style=flat" alt="Download Keel for macOS"></a>
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><img src="https://img.shields.io/badge/download-Windows-007AFF?style=flat" alt="Download Keel for Windows"></a>
 </p>
@@ -21,7 +21,7 @@
 <p align="center"><b>Free. Open source. Always.</b><br>
 Used daily by engineers at Oya.ai and Jumpermedia.co.</p>
 
-<p align="center">Sponsored by <a href="https://getoya.ai">getOya.ai</a>, a runtime for accurate agents.</p>
+<p align="center">Sponsored by <a href="https://oyabrowser.com">OyaBrowser.com</a>.</p>
 
 <p align="center">
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><b>Download for macOS</b></a>
@@ -261,8 +261,10 @@ Keel is free and open source, and will always be free to use. Contributions of a
 
 ## Maintainer and Sponsor
 
-Keel is created and maintained by **Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)) and sponsored by **[getOya.ai](https://getoya.ai)**, a runtime for accurate agents.
+Keel is created and maintained by **Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)) and sponsored by **[OyaBrowser.com](https://oyabrowser.com)**.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Source available, free for solo developers: 200 agent steps a day, with an anonymous daily usage report.
+Teams, companies and commercial use need a license — email [sales@getoya.ai](mailto:sales@getoya.ai).
+What Keel generates in your project is yours. See [LICENSE.md](LICENSE.md).

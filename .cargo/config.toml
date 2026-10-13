@@ -1,0 +1,4 @@
+# The system git, so a private dependency is fetched with the same SSH setup `git` already uses
+# (Cargo's built-in git does not read ~/.ssh/config).
+[net]
+git-fetch-with-cli = true

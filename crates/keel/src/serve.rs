@@ -916,6 +916,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
+        .route("/api/license", get(crate::license::api_status))
         .route("/api/claude/theme", get(api_claude_theme))
         .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/claude/login", get(crate::clitools::login_claude))
@@ -959,6 +960,8 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
     // What happens outside Keel — a session started in a terminal, a file saved in an editor —
     // reaches the window through these.
     crate::events::watch(state);
+    // The daily usage report LICENSE.md describes. Fails quietly; nothing waits on it.
+    tokio::spawn(crate::license::report_daily());
 
     let (ip, reach) = bind_address();
     let addr = SocketAddr::from((ip, port));

@@ -37,6 +37,8 @@ const GROUPS: [string, [string, Chord | string][]][] = [
     ["Toggle panel", { key: "i", alt: true }],
     ["Panel tab 1–6", { key: "1", alt: true }],
     ["Open project", { key: "o" }],
+    ["Zoom in / out — the terminal's font when it has focus", `${label({ key: "=" })} ${label({ key: "-" })}`],
+    ["Actual size", { key: "0" }],
     ["Settings", { key: "," }],
     ["This list", { key: "/" }],
   ]],

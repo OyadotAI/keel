@@ -1,4 +1,5 @@
 import { UpdateButton } from "./UpdateButton";
+import { restoreZoom, zoom } from "../zoom";
 import { useCallback, useEffect, useState } from "react";
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
@@ -108,6 +109,7 @@ export function App() {
   const asking = useStore((s) => s.asking);
   const setAsking = (a: Asking) => useStore.setState({ asking: a });
 
+  useEffect(restoreZoom, []);
   useEffect(() => {
     for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
     // The lane on screen at launch is opened like a clicked one: its terminal, its transcript.
@@ -146,6 +148,10 @@ export function App() {
       [{ key: "[", shift: true }, () => cycle(-1)],
       [{ key: "/" }, () => useStore.setState((s) => ({ shortcuts: !s.shortcuts }))],
       [{ key: "ArrowDown", alt: true }, () => cycle(1)],
+      [{ key: "=" }, () => zoom(1)],
+      [{ key: "=", shift: true }, () => zoom(1)],
+      [{ key: "-" }, () => zoom(-1)],
+      [{ key: "0" }, () => zoom(0)],
       [{ key: "ArrowUp", alt: true }, () => cycle(-1)],
       ...TABS.map((t, i): [Chord, () => void] => [{ key: String(i + 1), alt: true }, () => showTab(t)]),
       ...Array.from({ length: 9 }, (_, i): [Chord, () => void] => [{ key: String(i + 1) }, () => nth(i)]),

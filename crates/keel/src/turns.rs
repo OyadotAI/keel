@@ -664,6 +664,9 @@ fn bus() -> &'static Mutex<HashMap<String, broadcast::Sender<Arc<Emitted>>>> {
 /// so an idle daemon holds no channel per session it ever served.
 pub fn subscribe(session: &str) -> broadcast::Receiver<Arc<Emitted>> {
     let mut map = bus().locked();
+    // `publish` only drops a dead sender for a session that emits again; one tailed once and
+    // never again would otherwise keep its channel for the life of the daemon.
+    map.retain(|_, tx| tx.receiver_count() > 0);
     map.entry(session.to_string())
         .or_insert_with(|| broadcast::channel(BUS).0)
         .subscribe()
@@ -1216,6 +1219,11 @@ pub async fn finish(
     )
     .await;
     emit_now(Fact::Ended { ended: now(), ms }).await;
+    // A turn is how setup and readiness findings get fixed (CLAUDE.md, .env.example), and both
+    // are read from `state.changed` only — without this one a fixed finding stayed on screen.
+    if f.writes {
+        crate::events::emit("state.changed", None, serde_json::Value::Null);
+    }
 }
 
 /// Milliseconds since an ISO-8601 stamp this module wrote, or `None` if it will not parse.

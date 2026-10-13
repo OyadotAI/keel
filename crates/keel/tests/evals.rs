@@ -846,8 +846,10 @@ fn eval_20_trust_does_not_cover_an_edit_that_leaves_the_project() {
         "a trusted project let an edit to /tmp through without a question — trust is scoped to one \
          repository and this is not in it: {queued}"
     );
+    // `allow`, not `defer`: trust has to hold in a lane whose `claude` started before it was
+    // granted, and deferring handed the call back to that session's own, older rules.
     assert!(
-        answered.contains("defer"),
+        answered.contains(r#""decision":"allow""#),
         "an edit inside a trusted project was still asked about, which is the toll trust exists to \
          remove: {answered}"
     );

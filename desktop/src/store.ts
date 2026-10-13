@@ -170,6 +170,9 @@ interface State {
   setup: Record<string, Warning[]>;
   /// Open readiness findings per project, for the tab's count.
   readiness: Record<string, Readiness>;
+  /// Setup warnings "Install all" handed to a lane's agent, per project, so the popover says they
+  /// are with the agent rather than missing. Not saved: the next scan is the truth either way.
+  handed: Record<string, { lane: string; ids: string[] }>;
   /// A side-panel tab asked for from outside the window's own state (the sidebar's setup list).
   /// The window shows it and clears the request.
   panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness";
@@ -665,6 +668,7 @@ export const useStore = create<State>()((set, getState) => {
     trusted: {},
     setup: {},
     readiness: {},
+    handed: {},
     opened: [],
 
     connected(lid) {
@@ -719,7 +723,12 @@ export const useStore = create<State>()((set, getState) => {
         const projects = { ...s.projects };
         delete projects[path];
         const gone = new Set(lanes);
+        const drop = <T,>(m: Record<string, T>) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== path));
         return {
+          trusted: drop(s.trusted),
+          setup: drop(s.setup),
+          readiness: drop(s.readiness),
+          handed: drop(s.handed),
           order: s.order.filter((p) => p !== path),
           projects,
           lanes: Object.fromEntries(Object.entries(s.lanes).filter(([k]) => !gone.has(k))),
@@ -839,6 +848,7 @@ export const useStore = create<State>()((set, getState) => {
       chats.delete(lid);
       follows.get(lid)?.close();
       follows.delete(lid);
+      retries.delete(lid);
       set((s) => ({ opened: s.opened.filter((x) => x !== lid) }));
       set((s) => {
         const l = s.lanes[lid];

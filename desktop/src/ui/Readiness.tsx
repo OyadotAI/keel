@@ -4,7 +4,7 @@ import { useStore } from "../store";
 
 interface Finding {
   id: string;
-  severity: "critical" | "high" | "medium" | "low";
+  severity: "critical" | "high" | "medium" | "low" | "info";
   title: string;
   detail: string;
   path?: string | null;
@@ -17,13 +17,18 @@ interface Report {
   ignored: string[];
 }
 
-const ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
 
 /// How ready the project is for agent work and production, and what to do about each gap. Read
 /// when the tab is open: the scan walks the repository, so it never runs behind a glance.
 export function Readiness({ lane }: { lane: string }) {
   const project = useStore((s) => s.lanes[lane]?.project);
+  // Mid-turn the buttons queue rather than grey out: `send` already holds a prompt until the turn
+  // ends, and a disabled button on every card said nothing about why.
   const busy = useStore((s) => !!(s.lanes[lane]?.running));
+  // The setup read (on `state.changed`, which a writing turn's end sends) replaces this object; a
+  // fixed finding then leaves the list without anyone pressing "Check again".
+  const stale = useStore((s) => (project ? s.readiness[project] : undefined));
   const [ep, setEp] = useState<Endpoint>();
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState<string>();
@@ -46,6 +51,10 @@ export function Readiness({ lane }: { lane: string }) {
         void read(e);
       }, (x) => setError(String(x)));
   }, [project]);
+  useEffect(() => {
+    if (ep && stale) void read(ep);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read when the store's copy is replaced
+  }, [stale]);
 
   if (error)
     return (
@@ -93,7 +102,7 @@ export function Readiness({ lane }: { lane: string }) {
       <div className="panel-head">
         <strong>{report.score}</strong>
         <span className="muted small">
-          readiness · {findings.length} to look at{report.ignored.length ? ` · ${report.ignored.length} set aside` : ""}
+          / 100 · {findings.length} to look at{report.ignored.length ? ` · ${report.ignored.length} set aside` : ""}
         </span>
         <button className="link small" onClick={() => read(ep)}>
           Check again
@@ -115,12 +124,12 @@ export function Readiness({ lane }: { lane: string }) {
               <div className="small">{f.fix.description}</div>
               <div className="card-actions">
                 {f.id === "agent/no-reviewers" ? (
-                  <button className="primary" disabled={busy} onClick={adopt} title="Write the agent team and the lifecycle into this project, never over a file">
+                  <button className="primary" onClick={adopt} title="Write the agent team and the lifecycle into this project, never over a file">
                     Add the team
                   </button>
                 ) : f.fix.kind !== "manual" ? (
-                  <button disabled={busy} onClick={() => fix(f)} title="Send this to the lane as a prompt">
-                    Ask the agent to fix it
+                  <button onClick={() => fix(f)} title={busy ? "The lane is mid-turn: this runs when it ends" : "Send this to the lane as a prompt"}>
+                    {busy ? "Queue for the agent" : "Ask the agent to fix it"}
                   </button>
                 ) : null}
                 <button className="link small" onClick={() => ignore(f)}>

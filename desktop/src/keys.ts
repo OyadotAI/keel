@@ -15,7 +15,7 @@ export interface Chord {
   alt?: boolean;
 }
 
-const CODES: Record<string, string> = { ".": "Period", "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", "/": "Slash" };
+const CODES: Record<string, string> = { ".": "Period", "[": "BracketLeft", "]": "BracketRight", ",": "Comma", "'": "Quote", Backspace: "Backspace", "=": "Equal", "-": "Minus", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", "/": "Slash" };
 const GLYPHS: Record<string, string> = { Backspace: "⌫", ArrowUp: "↑", ArrowDown: "↓" };
 
 function code(key: string): string {
@@ -60,6 +60,9 @@ export const KEEL: Chord[] = [
   { key: "ArrowUp", alt: true },
   { key: "/" },
   { key: "ArrowDown", alt: true },
+  // Zoom, taken from the terminal on a Mac only. Elsewhere ⌘− is Ctrl+Shift+Minus, which is how
+  // Ctrl+_ is typed — undo in the CLI — so there the chord zooms only outside a terminal.
+  ...(MAC ? [{ key: "=" }, { key: "=", shift: true }, { key: "-" }, { key: "0" }] : []),
   ...["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((key) => ({ key })),
   ...["1", "2", "3", "4", "5", "6"].map((key) => ({ key, alt: true })),
 ];

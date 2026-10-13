@@ -2315,6 +2315,15 @@ h3 {
 .setup-sev.warn {
   color: var(--warn);
 }
+.setup-sev.info {
+  color: var(--accent);
+}
+.setup-group + .setup-group {
+  margin-top: 6px;
+}
+.setup-group-head {
+  padding: 8px 2px 4px;
+}
 .setup-item .link {
   margin-top: 4px;
   padding: 0;

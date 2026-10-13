@@ -19,6 +19,7 @@ mod git;
 mod gitroots;
 mod ignored;
 mod imports;
+mod license;
 mod lines;
 mod lock;
 mod mcp;
@@ -70,6 +71,30 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum LicenseCommand {
+    /// Make a signing key at PATH (never over an existing file) and print its public half,
+    /// which goes in `keel-license`'s `PUBLIC_KEY`.
+    Keygen { path: std::path::PathBuf },
+    /// Print a license key signed with the key at --signing.
+    Mint {
+        #[arg(long)]
+        signing: std::path::PathBuf,
+        /// Who it is for, as it appears in the app.
+        #[arg(long)]
+        licensee: String,
+        /// Agent steps a day; 0 for unmetered.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+        /// Last valid day, YYYY-MM-DD (UTC).
+        #[arg(long)]
+        expires: String,
+        /// The license's id, as the usage report names it.
+        #[arg(long)]
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Audit a repository for agent- and production-readiness.
     Scan {
@@ -85,6 +110,10 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Make and sign license keys (for the licensor; see LICENSE.md).
+    #[command(subcommand)]
+    License(LicenseCommand),
 
     /// Show everything Claude Code knows about this repository.
     ///
@@ -281,6 +310,30 @@ fn main() -> Result<()> {
     };
 
     match command {
+        Command::License(LicenseCommand::Keygen { path }) => {
+            println!(
+                "{}",
+                keel_license::keygen(&path).map_err(anyhow::Error::msg)?
+            );
+        }
+        Command::License(LicenseCommand::Mint {
+            signing,
+            licensee,
+            steps,
+            expires,
+            id,
+        }) => {
+            let license = keel_license::License {
+                id,
+                licensee,
+                steps,
+                expires,
+            };
+            println!(
+                "{}",
+                keel_license::mint(&signing, &license).map_err(anyhow::Error::msg)?
+            );
+        }
         Command::Scan { path, json, strict } => {
             let ctx = RepoContext::load(&path)
                 .with_context(|| format!("reading repository at {path}"))?;
