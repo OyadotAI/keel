@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { get, post, type Endpoint } from "../api";
 import { useStore } from "../store";
 
@@ -58,10 +58,8 @@ function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
 /// when the tab is open: the scan walks the repository, so it never runs behind a glance.
 export function Readiness({ lane }: { lane: string }) {
   const project = useStore((s) => s.lanes[lane]?.project);
-  const handed = useStore((s) => {
-    const ids = project ? s.handed[project]?.ids : undefined;
-    return new Set(ids ?? []);
-  });
+  const handedIds = useStore((s) => (project ? s.handed[project]?.ids : undefined));
+  const handed = useMemo(() => new Set(handedIds ?? []), [handedIds]);
   // Mid-turn the buttons queue rather than grey out: `send` already holds a prompt until the turn
   // ends, and a disabled button on every card said nothing about why.
   const busy = useStore((s) => !!(s.lanes[lane]?.running));
@@ -155,24 +153,25 @@ export function Readiness({ lane }: { lane: string }) {
       </div>
       {note && <div className="small panel-note">{note}</div>}
       {failed && <div className="small panel-note error">{failed}</div>}
-      {findings.length === 0 ? (
-        <div className="panel-empty muted">Nothing to fix. The project is ready for agent work.</div>
-      ) : (
-        <div className="findings">
-          {groups.map(([group, label]) => {
-            const items = findings.filter((f) => scopeOf(f) === group);
-            if (!items.length) return null;
-            return (
-              <section key={group} className="readiness-group" aria-label={label}>
-                <div className="eyebrow setup-group-head">{label}</div>
-                {items.map((f) => (
+      <div className="findings">
+        {groups.map(([group, label]) => {
+          const items = findings.filter((f) => scopeOf(f) === group);
+          return (
+            <section key={group} className="readiness-group" aria-label={label}>
+              <div className="eyebrow setup-group-head">{label}</div>
+              {items.length ? (
+                items.map((f) => (
                   <FindingCard key={f.id + (f.path ?? "")} finding={f} busy={busy} onAdopt={adopt} onFix={fix} onIgnore={ignore} />
-                ))}
-              </section>
-            );
-          })}
-        </div>
-      )}
+                ))
+              ) : (
+                <div className="small muted readiness-empty">
+                  {findings.length === 0 ? "Nothing to fix in this scope." : "No findings for this scope."}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

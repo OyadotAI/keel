@@ -2324,6 +2324,9 @@ h3 {
 .readiness-group + .readiness-group {
   margin-top: 6px;
 }
+.readiness-empty {
+  padding: 2px 2px 8px;
+}
 .setup-group-head {
   padding: 8px 2px 4px;
 }
