@@ -11,6 +11,8 @@ interface Finding {
   fix: { kind: "automatic" | "assisted" | "manual"; description: string };
 }
 
+type FindingScope = "session" | "folder" | "global";
+
 interface Report {
   score: number;
   findings: Finding[];
@@ -19,10 +21,47 @@ interface Report {
 
 const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
 
+function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
+  finding: Finding;
+  busy: boolean;
+  onAdopt: () => void;
+  onFix: (finding: Finding) => void;
+  onIgnore: (finding: Finding) => void;
+}) {
+  return (
+    <div className={`finding sev-${finding.severity}`}>
+      <div className="finding-title">
+        <span className="sev">{finding.severity}</span> {finding.title}
+      </div>
+      <div className="small muted">{finding.detail}</div>
+      {finding.path && <div className="small"><code>{finding.path}</code></div>}
+      <div className="small">{finding.fix.description}</div>
+      <div className="card-actions">
+        {finding.id === "agent/no-reviewers" ? (
+          <button className="primary" onClick={onAdopt} title="Write the agent team and the lifecycle into this project, never over a file">
+            Add the team
+          </button>
+        ) : finding.fix.kind !== "manual" ? (
+          <button onClick={() => onFix(finding)} title={busy ? "The lane is mid-turn: this runs when it ends" : "Send this to the lane as a prompt"}>
+            {busy ? "Queue for the agent" : "Ask the agent to fix it"}
+          </button>
+        ) : null}
+        <button className="link small" onClick={() => onIgnore(finding)}>
+          Set aside
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /// How ready the project is for agent work and production, and what to do about each gap. Read
 /// when the tab is open: the scan walks the repository, so it never runs behind a glance.
 export function Readiness({ lane }: { lane: string }) {
   const project = useStore((s) => s.lanes[lane]?.project);
+  const handed = useStore((s) => {
+    const ids = project ? s.handed[project]?.ids : undefined;
+    return new Set(ids ?? []);
+  });
   // Mid-turn the buttons queue rather than grey out: `send` already holds a prompt until the turn
   // ends, and a disabled button on every card said nothing about why.
   const busy = useStore((s) => !!(s.lanes[lane]?.running));
@@ -74,6 +113,12 @@ export function Readiness({ lane }: { lane: string }) {
     );
   if (!report || !ep) return <div className="panel-empty muted">Checking the project…</div>;
   const findings = [...report.findings].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+  const scopeOf = (finding: Finding): FindingScope => {
+    if (handed.has(finding.id)) return "session";
+    if (finding.id.startsWith("license/") || finding.id.startsWith("claude/")) return "global";
+    return "folder";
+  };
+  const groups: [FindingScope, string][] = [["session", "This session"], ["folder", "This folder"], ["global", "Global"]];
 
   async function ignore(f: Finding) {
     setFailed(undefined);
@@ -114,30 +159,18 @@ export function Readiness({ lane }: { lane: string }) {
         <div className="panel-empty muted">Nothing to fix. The project is ready for agent work.</div>
       ) : (
         <div className="findings">
-          {findings.map((f) => (
-            <div key={f.id + (f.path ?? "")} className={`finding sev-${f.severity}`}>
-              <div className="finding-title">
-                <span className="sev">{f.severity}</span> {f.title}
-              </div>
-              <div className="small muted">{f.detail}</div>
-              {f.path && <div className="small"><code>{f.path}</code></div>}
-              <div className="small">{f.fix.description}</div>
-              <div className="card-actions">
-                {f.id === "agent/no-reviewers" ? (
-                  <button className="primary" onClick={adopt} title="Write the agent team and the lifecycle into this project, never over a file">
-                    Add the team
-                  </button>
-                ) : f.fix.kind !== "manual" ? (
-                  <button onClick={() => fix(f)} title={busy ? "The lane is mid-turn: this runs when it ends" : "Send this to the lane as a prompt"}>
-                    {busy ? "Queue for the agent" : "Ask the agent to fix it"}
-                  </button>
-                ) : null}
-                <button className="link small" onClick={() => ignore(f)}>
-                  Set aside
-                </button>
-              </div>
-            </div>
-          ))}
+          {groups.map(([group, label]) => {
+            const items = findings.filter((f) => scopeOf(f) === group);
+            if (!items.length) return null;
+            return (
+              <section key={group} className="readiness-group" aria-label={label}>
+                <div className="eyebrow setup-group-head">{label}</div>
+                {items.map((f) => (
+                  <FindingCard key={f.id + (f.path ?? "")} finding={f} busy={busy} onAdopt={adopt} onFix={fix} onIgnore={ignore} />
+                ))}
+              </section>
+            );
+          })}
         </div>
       )}
     </div>
