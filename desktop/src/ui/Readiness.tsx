@@ -54,6 +54,21 @@ function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
   );
 }
 
+function ScopeFilter({ groups, counts, total, value, onChange }: { groups: [FindingScope, string][]; counts: Map<FindingScope, number>; total: number; value: FindingScope | "all"; onChange: (v: FindingScope | "all") => void }) {
+  return (
+    <div className="segmented readiness-scope-controls" role="group" aria-label="Filter findings by scope">
+      <button aria-pressed={value === "all"} onClick={() => onChange("all")}>
+        All {total}
+      </button>
+      {groups.map(([group, label]) => (
+        <button key={group} aria-pressed={value === group} onClick={() => onChange(group)}>
+          {label} {counts.get(group)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /// How ready the project is for agent work and production, and what to do about each gap. Read
 /// when the tab is open: the scan walks the repository, so it never runs behind a glance.
 export function Readiness({ lane }: { lane: string }) {
@@ -150,16 +165,7 @@ export function Readiness({ lane }: { lane: string }) {
         <span className="muted small">
           / 100 · {findings.length} to look at{report.ignored.length ? ` · ${report.ignored.length} set aside` : ""}
         </span>
-        <div className="segmented readiness-scope-controls" role="group" aria-label="Filter findings by scope">
-          <button aria-pressed={scopeFilter === "all"} onClick={() => setScopeFilter("all")}>
-            All {findings.length}
-          </button>
-          {groups.map(([group, label]) => (
-            <button key={group} aria-pressed={scopeFilter === group} onClick={() => setScopeFilter(group)}>
-              {label} {groupCounts.get(group)}
-            </button>
-          ))}
-        </div>
+        <ScopeFilter groups={groups} counts={groupCounts} total={findings.length} value={scopeFilter} onChange={setScopeFilter} />
         <button className="link small" onClick={() => read(ep)}>
           Check again
         </button>
