@@ -23,7 +23,7 @@ keel-scanner = { path = "crates/keel-scanner" }
 keel-workspace = { path = "crates/keel-workspace" }
 # Private (OyadotAI/keel-license): the license meter, keys and usage report. Fetched over SSH;
 # CI reads it with a deploy key. A published source tree patches this to a stub.
-keel-license = { git = "ssh://git@github.com/OyadotAI/keel-license.git", rev = "2c39a1993a99730be72f8a8346f6e4696d2afd5c" }
+keel-license = { git = "ssh://git@github.com/OyadotAI/keel-license.git", rev = "3af073fcc8226759e8538ddfcece053eb6455f55" }
 keel-providers = { path = "crates/keel-providers" }
 keel-generator = { path = "crates/keel-generator" }
 
