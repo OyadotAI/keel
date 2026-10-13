@@ -160,26 +160,17 @@ fn collect(node: &Value, marketplace: &str, out: &mut Vec<Plugin>) {
     }
 }
 
-/// Names of plugins already installed, from Claude Code's own index.
-fn installed() -> Vec<String> {
+/// Names of plugins installed where they load for `repo`: the person's own, and project or local
+/// installs of this repository. The index is machine-wide, and counting a project install of some
+/// other repository said "installed" here for a plugin Claude Code does not load here.
+fn installed(repo: Option<&camino::Utf8Path>) -> Vec<String> {
     let Some(home) = claude_home() else {
         return Vec::new();
     };
-    let path = home.join("plugins").join("installed_plugins.json");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let Ok(root) = serde_json::from_str::<Value>(&text) else {
-        return Vec::new();
-    };
-    root.get("plugins")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.keys()
-                .map(|k| k.split('@').next().unwrap_or(k).to_string())
-                .collect()
-        })
-        .unwrap_or_default()
+    keel_workspace::discover_plugins(repo.unwrap_or(camino::Utf8Path::new("")), &home)
+        .into_iter()
+        .map(|p| p.name)
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -194,15 +185,20 @@ pub struct CatalogQuery {
     pub repo: Option<String>,
 }
 
-pub async fn list(Query(q): Query<CatalogQuery>) -> axum::Json<CatalogResponse> {
+pub async fn list(
+    State(state): State<Arc<crate::serve::AppState>>,
+    Query(q): Query<CatalogQuery>,
+) -> axum::Json<CatalogResponse> {
     crate::serve::in_blocking(move || {
-        let have = installed();
+        let repo = q.repo.map(Utf8PathBuf::from);
+        // Extensions asks without a repo; Keel installs at project scope, so "installed" is about
+        // this daemon's project, or its own installs would read as missing.
+        let have = installed(Some(&repo.clone().unwrap_or_else(|| state.repo())));
         let mut all = catalog();
         for p in &mut all {
             p.installed = have.contains(&p.name);
         }
 
-        let repo = q.repo.map(Utf8PathBuf::from);
         let relevant = |markers: &[&str]| -> bool {
             if markers.is_empty() {
                 return true;

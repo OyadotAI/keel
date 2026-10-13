@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api";
 import { useStore } from "../store";
-import { blocks, readSetup, type Warning } from "../setup";
+import { blocks, readSetup, scope, type Warning } from "../setup";
 import { install } from "../setup-install";
 import { task, useRun } from "../runs";
 import { Floating } from "./Menu";
@@ -10,13 +10,29 @@ import { Icon } from "./icons";
 const FIX: Record<Warning["fix"], string> = { settings: "Open Settings", extensions: "Open Extensions", readiness: "Open Readiness" };
 
 /// The lane in `project` to hand work to: the one on screen if it is this project's, its first
-/// otherwise, a new one if it has none.
+/// otherwise, a new one if it has none. Never one on its own branch: the setup check reads the
+/// project's own tree, so a fix made on `keel/<name>` would leave every item listed as missing.
 function laneIn(project: string): string {
   const s = useStore.getState();
-  if (s.active && s.lanes[s.active]?.project === project) return s.active;
-  const first = s.projects[project]?.lanes[0];
-  return first ?? s.newLane(project);
+  const shared = (lid?: string) => !!lid && s.lanes[lid]?.project === project && !s.lanes[lid]?.isolated;
+  if (shared(s.active)) return s.active!;
+  return s.projects[project]?.lanes.find(shared) ?? s.newLane(project);
 }
+
+/// The lane setup work was handed to, while it still has that work: running, sending, or with
+/// it queued. A second "Install all" then would send the same prompt again behind the first.
+function useHandedBusy(project: string): boolean {
+  return useStore((s) => {
+    const l = s.lanes[s.handed[project]?.lane ?? ""];
+    return !!l && (l.running || !!l.submitting || l.queued.length > 0);
+  });
+}
+
+const GROUPS = [
+  ["session", "This session"],
+  ["folder", "This folder"],
+  ["global", "Global"],
+] as const;
 
 /// The repository's own agent hooks and config: Keel sets them aside before every run, and an
 /// agent asked to "fix" them would delete somebody's hooks. Known about, never auto-fixed.
@@ -26,9 +42,14 @@ const SET_ASIDE = /^security\/untrusted-agent-config$/;
 /// does every part of it Keel can do on its own.
 export function SetupList({ project, close }: { project: string; close: () => void; showTab?: (t: "readiness") => void }) {
   const warnings = useStore((s) => s.setup[project]) ?? [];
+  const handed = useStore((s) => s.handed[project]);
+  const handedLane = useStore((s) => (handed ? s.lanes[handed.lane] : undefined));
+  const handedBusy = useHandedBusy(project);
   const runKey = `setup:${project}`;
   const run = useRun<string>(runKey);
   const doing = run?.state;
+  const withAgent = new Set(handedLane ? handed!.ids : []);
+  const groupOf = (w: Warning) => (withAgent.has(w.id) ? "session" : scope(w));
   const go = (w: Warning) => {
     close();
     if (w.fix === "settings") useStore.setState({ settings: true, extensions: false, creating: false });
@@ -46,6 +67,8 @@ export function SetupList({ project, close }: { project: string; close: () => vo
       if (!ep) throw new Error("Keel is not running for this project yet — try again in a moment.");
       const errors: string[] = [];
       const plugins = warnings.filter((w) => w.id.startsWith("plugin/") && w.marketplace);
+      for (const w of warnings.filter((w) => w.id.startsWith("plugin/") && !w.marketplace))
+        errors.push(`${w.id.slice(7)}: no marketplace is known for it — install it from Extensions.`);
       let installed = 0;
       for (const [i, w] of plugins.entries()) {
         setDoing(`Installing ${w.id.slice(7)} (${i + 1} of ${plugins.length})…`);
@@ -62,17 +85,25 @@ export function SetupList({ project, close }: { project: string; close: () => vo
       useStore.setState((s) => ({ setup: { ...s.setup, [project]: fresh.warnings } }));
       const left = fresh.warnings.filter((w) => w.fix === "readiness" && !SET_ASIDE.test(w.id) && !w.id.startsWith("agent/no-reviewers"));
       let handedOff = false;
+      let handedTo = "";
       if (left.length && !fresh.warnings.some(blocks)) {
         setDoing("Sending the remaining setup work to a lane…");
-        const prompt = ["Set this project up for agent work. Keel's readiness check found:", ...left.map((w) => `- ${w.title}: ${w.detail}`), "", "Fix each one in the repository. Do not touch anything under .claude/hooks or .claude/settings.json."].join("\n");
+        const prompt = [
+          "Set this project up for agent work. Keel's readiness check found:",
+          ...left.map((w) => `- ${w.title}: ${w.detail}${w.recipe ? `\n  What the check looks for: ${w.recipe}` : ""}`),
+          "",
+          "Fix each one in the repository. Do not touch anything under .claude/hooks or .claude/settings.json.",
+        ].join("\n");
         const lane = laneIn(project);
         useStore.getState().select(lane);
         handedOff = await useStore.getState().send(lane, prompt);
-        if (!handedOff) errors.push(useStore.getState().lanes[lane]?.error || "Could not send the remaining setup work to the lane.");
+        if (handedOff) useStore.setState((s) => ({ handed: { ...s.handed, [project]: { lane, ids: left.map((w) => w.id) } } }));
+        else errors.push(useStore.getState().lanes[lane]?.error || "Could not send the remaining setup work to the lane.");
+        if (handedOff) handedTo = `${left.length} item${left.length === 1 ? "" : "s"} handed to the agent in “${useStore.getState().lanes[lane]?.title ?? "the lane"}”. They leave this list when its turn ends and the check passes.`;
       }
       setDoing([
         plugins.length ? `${installed} of ${plugins.length} plugins installed.` : "",
-        handedOff ? "Sent the remaining setup work to the lane (queued if it is busy)." : "",
+        handedTo,
         fresh.warnings.some(blocks) ? "Claude Code needs your attention: open Settings." : "",
         ...errors,
       ].filter(Boolean).join("\n") || "Done.");
@@ -85,8 +116,13 @@ export function SetupList({ project, close }: { project: string; close: () => vo
     <div className="setup-list">
       <div className="setup-head">
         <span className="eyebrow">Setup · {warnings.length} to look at</span>
-        <button className="primary" disabled={!!run?.running} onClick={() => void all()} title="Install the suggested plugins, add Keel's agent team, and ask the agent to fix the rest">
-          Install all
+        <button
+          className="primary"
+          disabled={!!run?.running || handedBusy}
+          onClick={() => void all()}
+          title={handedBusy ? "The agent is still working on what was handed to it" : "Install the suggested plugins, add Keel's agent team, and ask the agent to fix the rest"}
+        >
+          {handedBusy ? "Agent working…" : "Install all"}
         </button>
       </div>
       {doing && <div className="small setup-doing" role="status" style={{ whiteSpace: "pre-wrap" }}>{doing}</div>}
@@ -95,18 +131,29 @@ export function SetupList({ project, close }: { project: string; close: () => vo
           {asideCount} hook script{asideCount === 1 ? "" : "s"} or config file{asideCount === 1 ? "" : "s"} from the repository: Keel sets them aside before every agent run, so nothing runs them. Review them in Readiness.
         </div>
       )}
-      {warnings.map((w) => (
-        <div key={w.id} className="setup-item">
-          <div className="setup-title">
-            <span className={`setup-sev ${blocks(w) ? "bad" : w.severity === "critical" ? "bad" : "warn"}`}>{blocks(w) ? "Blocks lanes" : SET_ASIDE.test(w.id) ? "Set aside" : w.severity === "critical" ? "Critical" : "Missing"}</span>
-            <span>{w.title}</span>
-          </div>
-          <div className="small muted">{w.detail}</div>
-          <button className="link small" onClick={() => go(w)}>
-            {FIX[w.fix]} →
-          </button>
-        </div>
-      ))}
+      {GROUPS.map(([group, label]) => {
+        const items = warnings.filter((w) => groupOf(w) === group);
+        if (!items.length) return null;
+        return (
+          <section key={group} className="setup-group" aria-label={label}>
+            <div className="eyebrow setup-group-head">{label}</div>
+            {items.map((w) => (
+              <div key={w.id} className="setup-item">
+                <div className="setup-title">
+                  <span className={`setup-sev ${group === "session" ? "info" : blocks(w) || w.severity === "critical" ? "bad" : "warn"}`}>
+                    {group === "session" ? (handedBusy ? "With the agent" : "Still open") : blocks(w) ? "Blocks lanes" : SET_ASIDE.test(w.id) ? "Set aside" : w.severity === "critical" ? "Critical" : "Missing"}
+                  </span>
+                  <span>{w.title}</span>
+                </div>
+                <div className="small muted">{w.detail}</div>
+                <button className="link small" onClick={() => go(w)}>
+                  {FIX[w.fix]} →
+                </button>
+              </div>
+            ))}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -114,6 +161,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
 /// The count, where a project is named: quiet when nothing is missing, one click to the list.
 export function SetupBadge({ project, showTab }: { project: string; showTab?: (t: "readiness") => void }) {
   const warnings = useStore((s) => s.setup[project]);
+  const findings = useStore((s) => s.readiness[project]?.open);
   const run = useRun<string>(`setup:${project}`);
   const [at, setAt] = useState<DOMRect | null>(null);
   if (!warnings?.length && !run) return null;
@@ -127,7 +175,9 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
           e.stopPropagation();
           setAt(e.currentTarget.getBoundingClientRect());
         }}
-        title={`${warnings?.length ?? 0} thing${warnings?.length === 1 ? "" : "s"} missing from this project's setup`}
+        // The chip counts setup only; Readiness counts every finding. Saying both stops the two
+        // numbers on screen reading as a disagreement.
+        title={`${warnings?.length ?? 0} setup item${warnings?.length === 1 ? "" : "s"}${findings != null ? ` · ${findings} finding${findings === 1 ? "" : "s"} in Readiness` : ""}`}
         aria-label={`${warnings?.length ?? 0} setup warnings`}
       >
         <Icon name="octagon" size={13} /> {run?.running ? "Setting up…" : warnings?.length ? `${warnings.length} to set up` : "Setup result"}

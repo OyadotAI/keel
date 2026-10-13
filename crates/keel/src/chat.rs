@@ -14,32 +14,53 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     convert::Infallible,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
+    time::SystemTime,
 };
 use tokio_stream::wrappers::ReceiverStream;
 
 type Error = (StatusCode, String);
 type Journal = Arc<Mutex<History>>;
+/// Weak, so a lane nobody is running or watching gives its journal back. Every events stream
+/// and every running turn holds the `Arc`; the journal on disk is the copy that lasts.
 #[derive(Default)]
-pub(crate) struct Chats(Mutex<HashMap<String, Journal>>);
+pub(crate) struct Chats(Mutex<HashMap<String, Weak<Mutex<History>>>>);
 
+/// `data` stays the JSON text it arrived as. Parsed into `Value` a 58 MB journal was ~45k
+/// `BTreeMap` nodes held for the life of the daemon; nothing here reads inside a record except
+/// a receipt's id, which is parsed on demand.
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
     seq: usize,
     event: String,
-    data: Value,
+    data: Box<RawValue>,
 }
 
 struct History {
     file: std::fs::File,
     records: Vec<Record>,
     running: bool,
+    /// The transcript's fingerprint as of the last `snapshot` or `seen` record.
+    fingerprint: Option<String>,
+    /// Length and mtime of the transcript when `fingerprint` was last checked, so a reconnect
+    /// with nothing new does not read and hash the whole transcript again.
+    stamp: Option<(u64, SystemTime)>,
+}
+
+#[derive(Deserialize)]
+struct Fingerprint {
+    fingerprint: String,
+}
+
+fn stamp(path: &std::path::Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 impl History {
@@ -50,22 +71,21 @@ impl History {
         {
             return Ok(());
         }
-        let (Some(session), Some(home)) = (&q.session, keel_workspace::claude_home()) else {
+        match transcript(state, q)? {
+            Some(path) => self.snapshot(&path),
+            None => Ok(()),
+        }
+    }
+    /// Append the transcript as a `snapshot` unless the journal already holds what it says.
+    fn snapshot(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let now = stamp(path);
+        if now.is_some() && now == self.stamp {
             return Ok(());
-        };
-        let cwd = state.checkout(q.wt.as_deref())?;
-        let Some(path) = keel_workspace::transcript_path(&cwd, &home, session) else {
-            return Err("The original conversation could not be found. Open it from History before resuming.".into());
-        };
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let fingerprint = format!("transcript-v2:{:x}", Sha256::digest(&bytes));
-        if self
-            .records
-            .iter()
-            .rev()
-            .find(|r| r.event == "snapshot")
-            .is_some_and(|r| r.data["fingerprint"] == fingerprint)
-        {
+        self.stamp = now;
+        if self.fingerprint.as_deref() == Some(fingerprint.as_str()) {
             return Ok(());
         }
         use keel_workspace::conversation::{Decoder, Ending, Provider, Source};
@@ -90,11 +110,38 @@ impl History {
         self.push("idle", Value::Null)?;
         Ok(())
     }
+    /// After a turn Keel drove, the transcript holds exactly what the journal's `turn` records
+    /// already replay. Recording its fingerprint keeps the next reconnect from appending a whole
+    /// second copy of the conversation as a `snapshot` — which is how one journal reached 58 MB.
+    fn seen(&mut self, state: &AppState, q: &ChatQuery) -> Result<(), String> {
+        if q.provider.as_deref() == Some("codex") {
+            return Ok(());
+        }
+        match transcript(state, q)? {
+            Some(path) => self.mark(&path),
+            None => Ok(()),
+        }
+    }
+    fn mark(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let now = stamp(path);
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let fingerprint = format!("transcript-v2:{:x}", Sha256::digest(&bytes));
+        self.stamp = now;
+        if self.fingerprint.as_deref() != Some(fingerprint.as_str()) {
+            self.push("seen", json!({"fingerprint": fingerprint}))?;
+        }
+        Ok(())
+    }
     fn push(&mut self, event: &str, data: Value) -> Result<(), String> {
+        if let Some(Ok(f)) = matches!(event, "snapshot" | "seen")
+            .then(|| serde_json::from_value::<Fingerprint>(data.clone()))
+        {
+            self.fingerprint = Some(f.fingerprint);
+        }
         let record = Record {
             seq: self.records.len() + 1,
             event: event.into(),
-            data,
+            data: serde_json::value::to_raw_value(&data).map_err(|e| e.to_string())?,
         };
         let mut bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
@@ -113,9 +160,11 @@ impl History {
         if let Some(old) = self
             .records
             .iter()
-            .find(|r| r.event == "accepted" && r.data["id"] == id)
+            .filter(|r| r.event == "accepted")
+            .filter_map(|r| serde_json::from_str::<Value>(r.data.get()).ok())
+            .find(|data| data["id"] == id)
         {
-            return if old.data["fingerprint"] == fingerprint {
+            return if old["fingerprint"] == fingerprint {
                 Ok(false)
             } else {
                 Err((
@@ -137,6 +186,20 @@ impl History {
     }
 }
 
+fn transcript(state: &AppState, q: &ChatQuery) -> Result<Option<std::path::PathBuf>, String> {
+    let (Some(session), Some(home)) = (&q.session, keel_workspace::claude_home()) else {
+        return Ok(None);
+    };
+    let cwd = state.checkout(q.wt.as_deref())?;
+    match keel_workspace::transcript_path(&cwd, &home, session) {
+        Some(path) => Ok(Some(path.into())),
+        None => Err(
+            "The original conversation could not be found. Open it from History before resuming."
+                .into(),
+        ),
+    }
+}
+
 fn internal(e: impl ToString) -> Error {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
@@ -154,9 +217,10 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
     let repo = state.repo();
     let key = format!("{repo}/{lane}");
     let mut all = state.chats.0.locked();
-    if let Some(history) = all.get(&key) {
-        return Ok(history.clone());
+    if let Some(history) = all.get(&key).and_then(Weak::upgrade) {
+        return Ok(history);
     }
+    all.retain(|_, h| h.strong_count() > 0);
     // Outside the checkout: conversation text must never become a changed file or commit.
     let dir = crate::permissions::permissions_dir()
         .map_err(internal)?
@@ -204,10 +268,18 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
             .map_err(internal)?;
     }
     let file = options.open(path).map_err(internal)?;
+    let fingerprint = records
+        .iter()
+        .rev()
+        .filter(|r| r.event == "snapshot" || r.event == "seen")
+        .find_map(|r| serde_json::from_str::<Fingerprint>(r.data.get()).ok())
+        .map(|f| f.fingerprint);
     let mut h = History {
         file,
         records,
         running: false,
+        fingerprint,
+        stamp: None,
     };
     if h.records.last().is_some_and(|r| r.event != "idle") {
         h.push(
@@ -219,7 +291,7 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
         h.push("idle", Value::Null).map_err(internal)?;
     }
     let h = Arc::new(Mutex::new(h));
-    all.insert(key, h.clone());
+    all.insert(key, Arc::downgrade(&h));
     Ok(h)
 }
 
@@ -260,7 +332,10 @@ pub async fn send(
     let owner = state.clone();
     let accepted = tokio::task::spawn_blocking(move || {
         let mut h = held.locked();
-        h.seed(&owner, &seed, false).map_err(internal)?;
+        // Always against the transcript, not only on a lane's first send: `seen` at this turn's
+        // end vouches for the whole transcript, so turns taken in a terminal since must be in the
+        // journal first. Unchanged costs one `stat`.
+        h.seed(&owner, &seed, true).map_err(internal)?;
         h.accept(&receipt, &fingerprint)
     })
     .await
@@ -268,6 +343,8 @@ pub async fn send(
     if accepted {
         let h = h.clone();
         tokio::spawn(async move {
+            let owner = state.clone();
+            let query = request.query.clone();
             // Keep consuming after every subscriber disappears. The existing runner still owns
             // checkout locking, cancellation, checkpoints and verification.
             let response = crate::runtime::chat(state, request.query).await;
@@ -303,6 +380,9 @@ pub async fn send(
                 if let Some(error) = failure {
                     let _ = h.push("fatal", json!(error));
                 }
+                // A new conversation learns its session id during the turn; its first reconnect
+                // takes one snapshot, which is right, since the journal had no transcript yet.
+                let _ = h.seen(&owner, &query);
                 let _ = h.push("idle", Value::Null);
                 h.running = false;
             })
@@ -488,6 +568,71 @@ mod tests {
                 ("done".into(), json!(0))
             ]
         );
+    }
+    fn transcript_file(dir: &std::path::Path, prompts: &[&str]) -> std::path::PathBuf {
+        let path = dir.join("t.jsonl");
+        let lines: String = prompts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                format!(
+                    "{}\n",
+                    json!({"type":"user","uuid":format!("u{i}"),"message":{"role":"user","content":p}})
+                )
+            })
+            .collect();
+        std::fs::write(&path, lines).unwrap();
+        path
+    }
+    #[test]
+    fn a_reconnect_with_nothing_new_appends_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "seed-lane").unwrap();
+        let path = transcript_file(root.path(), &["hello"]);
+        h.locked().snapshot(&path).unwrap();
+        let after_first = h.locked().records.len();
+        assert!(after_first > 0);
+        h.locked().snapshot(&path).unwrap();
+        h.locked().stamp = None;
+        h.locked().snapshot(&path).unwrap();
+        assert_eq!(h.locked().records.len(), after_first);
+    }
+    #[test]
+    fn a_turn_keel_drove_is_not_snapshotted_again_after_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "seen-lane").unwrap();
+        let path = transcript_file(root.path(), &["hello"]);
+        h.locked().snapshot(&path).unwrap();
+        // The turn's own records went to the journal; the transcript grew by the same turn.
+        let path = transcript_file(root.path(), &["hello", "and again"]);
+        h.locked().mark(&path).unwrap();
+        state.chats.0.locked().clear();
+        drop(h);
+        let h = history(&state, "seen-lane").unwrap();
+        let before = h.locked().records.len();
+        h.locked().snapshot(&path).unwrap();
+        assert_eq!(h.locked().records.len(), before);
+        // Something written outside Keel is still picked up.
+        let path = transcript_file(root.path(), &["hello", "and again", "from the terminal"]);
+        h.locked().snapshot(&path).unwrap();
+        assert!(h.locked().records.len() > before);
+    }
+    #[test]
+    fn a_journal_nobody_holds_is_released_and_reloads_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "weak-lane").unwrap();
+        h.locked().accept("send-one", "prompt-a").unwrap();
+        h.locked().push("idle", Value::Null).unwrap();
+        h.locked().running = false;
+        let weak = Arc::downgrade(&h);
+        drop(h);
+        assert!(weak.upgrade().is_none());
+        let h = history(&state, "weak-lane").unwrap();
+        assert_eq!(h.locked().records.len(), 2);
+        assert!(!h.locked().accept("send-one", "prompt-a").unwrap());
     }
     #[test]
     fn lane_ids_cannot_escape_storage() {

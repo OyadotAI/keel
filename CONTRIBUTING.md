@@ -129,7 +129,7 @@ items as not applicable with a short reason; documentation-only changes do not n
 ## Review and maintenance
 
 **Lead maintainer: Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)).
-Keel is sponsored by [getOya.ai](https://getoya.ai), a runtime for accurate agents.
+Keel is sponsored by [OyaBrowser.com](https://oyabrowser.com).
 
 Maintainers decide scope and merge pull requests. A passing test suite is necessary for code
 changes but is not automatic approval. Review favors user-work safety, native UX, understandable
@@ -145,7 +145,7 @@ never belong in a pull request.
 
 ## License and orientation
 
-Submit only code and assets you have the right to contribute under the project's [MIT license](LICENSE).
+Submit only code and assets you have the right to contribute under the project's [license](LICENSE.md).
 Keep applicable copyright notices and identify third-party code or assets and their licenses.
 
 Review [Privacy](docs/privacy.md) before adding telemetry or diagnostics. Never attach prompts,
