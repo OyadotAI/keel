@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::serve::AppState;
 
 const LIMIT: usize = 1_400_000;
+const FILE: &str = ".keel/subagent-profiles.json";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Profile {
@@ -22,10 +23,15 @@ pub struct Profile {
 }
 
 fn path(repo: &camino::Utf8Path) -> Utf8PathBuf {
-    repo.join(".keel").join("subagent-profiles.json")
+    repo.join(FILE)
 }
 
 fn read(repo: &camino::Utf8Path) -> Vec<Profile> {
+    if crate::writes::no_link_under(repo, FILE).is_err()
+        || std::fs::symlink_metadata(path(repo)).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return Vec::new();
+    }
     std::fs::read(path(repo))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -100,20 +106,21 @@ pub async fn save(
     crate::serve::blocking(
         move || {
             let file = path(&repo);
-            let mut profiles = read(&repo);
-            if let Some(old) = profiles.iter_mut().find(|p| p.name == profile.name) {
-                *old = profile;
-            } else {
-                profiles.push(profile);
-            }
-            profiles.sort_by(|a, b| a.name.cmp(&b.name));
-            std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
-            std::fs::write(
-                file,
-                serde_json::to_vec_pretty(&profiles).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok::<_, String>(profiles)
+            crate::writes::no_link_under(&repo, FILE)?;
+            crate::writes::locked(file.as_std_path(), || {
+                let mut profiles = read(&repo);
+                if let Some(old) = profiles.iter_mut().find(|p| p.name == profile.name) {
+                    *old = profile;
+                } else {
+                    profiles.push(profile);
+                }
+                profiles.sort_by(|a, b| a.name.cmp(&b.name));
+                crate::writes::replace(
+                    file.as_std_path(),
+                    &serde_json::to_vec_pretty(&profiles).map_err(|e| e.to_string())?,
+                )?;
+                Ok::<_, String>(profiles)
+            })?
         },
         Err("could not save subagent profile".to_string()),
     )

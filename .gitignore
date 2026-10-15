@@ -8,6 +8,7 @@ dist/
 .gstack/
 .keel/permissions.json
 .keel/subagent-profiles.json
+.keel/subagent-profiles.lock
 .keel/ignored.json
 .keel/worktrees/
 
