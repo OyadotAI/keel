@@ -1586,7 +1586,7 @@ mod tests {
             .filter(|s| s.description.is_some())
             .map(|s| s.name)
             .collect();
-        assert_eq!(skills, ["frontend"]);
+        assert_eq!(skills, ["frontend", "oya-browser", "team-work"]);
         assert_eq!(team_finding(&web), None);
         assert!(
             web.join(keel_generator::team::ESLINT_RULES_PATH).is_file(),
