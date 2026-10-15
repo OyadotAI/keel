@@ -224,6 +224,7 @@ function LaneError({ lane }: { lane: string }) {
   return (
     <div className="banner error" role="alert">
       {error}{" "}
+      {/auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
       <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined } } }))}>
         Dismiss
       </button>

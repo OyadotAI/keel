@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { Markdown, Copy } from "./Markdown";
 import { Icon } from "./icons";
 import { BrandMark } from "./BrandMark";
+import { Working } from "./Working";
 
 type Row = { turn: number; step: string; key: string };
 const scrolls = new Map<string, StateSnapshot>();
@@ -66,7 +67,7 @@ export function Chat({ lane }: { lane: string }) {
     };
   }, [lane, scroller, stick]);
   const remember = () => list.current?.getState((state) => scrolls.set(lane, state));
-  if (!rows.length) return <div className="chat-empty"><div className="chat-empty-mark"><Icon name="chat" size={24} /></div>
+  if (!rows.length) return <div className="chat-empty"><div className="chat-empty-mark">{running ? <Working /> : <Icon name="chat" size={24} />}</div>
     <h2>{!loaded ? "Opening your conversation…" : running ? "Starting your agent…" : "What are we building?"}</h2>
     <p>{loaded && !running ? `Work with ${agent === "codex" ? "Codex" : "Claude"} in this lane. Ask a question, attach context, or start a task.` : "Your conversation and workspace stay together."}</p>
     {loaded && !running && <span className="small faint">@ for files · / for commands · Shift+Enter for a new line</span>}</div>;

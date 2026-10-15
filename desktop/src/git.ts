@@ -8,6 +8,13 @@ export interface Change {
   dir: boolean;
 }
 
+/** Porcelain has independent index and working-tree columns; a file may belong to both. */
+export function inArea(change: Change, staged: boolean): boolean {
+  if (change.status === "??") return !staged;
+  if (staged) return change.staged;
+  return change.status.length > 1 ? change.status[1] !== " " : !change.staged;
+}
+
 export interface GitStatus {
   is_repo: boolean;
   branch: string | null;

@@ -2,6 +2,8 @@ import { Virtuoso } from "react-virtuoso";
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
 import { focusTerminal } from "./kit";
+import { inArea } from "../git";
+import { Icon } from "./icons";
 
 /// What git says moved in this lane's checkout. Read on events, never on a clock.
 export function Changes({ lane }: { lane: string }) {
@@ -37,24 +39,28 @@ export function Changes({ lane }: { lane: string }) {
 
 /// Esc goes back to the list with this file focused; ] and [ step through the changed files, so a
 /// review is read without the mouse.
-function Diff({ lane }: { lane: string }) {
+export function Diff({ lane, embedded = false }: { lane: string; embedded?: boolean }) {
   const viewing = useStore((s) => s.lanes[lane]?.viewing);
   const diff = useStore((s) => s.lanes[lane]?.diff);
+  const error = useStore((s) => s.lanes[lane]?.diffError);
+  const staged = useStore((s) => s.lanes[lane]?.viewingStaged);
+  const changes = useStore((s) => s.lanes[lane]?.git?.changes);
+  const files = (changes ?? []).filter((c) => !c.dir && (staged === undefined || inArea(c, staged))).map((c) => c.path);
+  const position = files.indexOf(viewing ?? "");
   const openDiff = useStore((s) => s.openDiff);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => box.current?.focus({ preventScroll: true }), [viewing]);
   const back = () => {
     openDiff(lane, undefined);
     requestAnimationFrame(() => {
-      const row = viewing && document.querySelector<HTMLElement>(`.side-panel [data-file="${CSS.escape(viewing)}"]`);
+      const row = viewing && document.querySelector<HTMLElement>(`.side-panel [data-file="${CSS.escape(viewing)}"][data-area="${staged ? "staged" : "changes"}"], .side-panel [data-file="${CSS.escape(viewing)}"]`);
       if (row) row.focus();
       else focusTerminal();
     });
   };
   const step = (by: number) => {
-    const files = (useStore.getState().lanes[lane]?.git?.changes ?? []).filter((c) => !c.dir).map((c) => c.path);
     const next = files[files.indexOf(viewing ?? "") + by];
-    if (next) openDiff(lane, next);
+    if (next) openDiff(lane, next, staged);
   };
   function keys(e: React.KeyboardEvent<HTMLDivElement>) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -66,24 +72,26 @@ function Diff({ lane }: { lane: string }) {
     e.stopPropagation();
   }
   return (
-    <div className="changes" ref={box} tabIndex={-1} onKeyDown={keys} style={{ outline: "none" }}>
+    <div className={`changes${embedded ? " scm-diff" : ""}`} ref={box} tabIndex={-1} onKeyDown={keys} style={{ outline: "none" }}>
       <div className="panel-head">
         <button className="link" onClick={back} title="Back to the list (Esc)">
-          ← Changes <kbd>Esc</kbd>
+          {embedded ? "Close diff" : "← Changes"} <kbd>Esc</kbd>
         </button>
         <span className="change-path" title={viewing}>
-          {viewing}
+          {viewing?.split("/").at(-1)}
         </span>
         {diff && (
           <span className="small">
             <span className="add">+{diff.adds}</span> <span className="del">−{diff.dels}</span>
           </span>
         )}
-        <span className="small faint" title="Previous and next changed file">
-          <kbd>[</kbd> <kbd>]</kbd>
-        </span>
+        <div className="scm-diff-navigation">
+          <button className="ghost" aria-label="Previous changed file" title="Previous changed file ([)" disabled={position <= 0} onClick={() => step(-1)}><Icon name="chevron-right" size={13} style={{ transform: "rotate(-90deg)" }} /></button>
+          <button className="ghost" aria-label="Next changed file" title="Next changed file (])" disabled={position < 0 || position >= files.length - 1} onClick={() => step(1)}><Icon name="chevron-down" size={13} /></button>
+        </div>
       </div>
-      {!diff ? (
+      {staged !== undefined && <div className="scm-diff-path" title={viewing}>{staged ? "Staged Changes" : "Changes"}<span> / {viewing}</span></div>}
+      {error ? <div className="panel-empty error" role="alert">{error}<button onClick={() => openDiff(lane, viewing, staged)}>Retry</button></div> : !diff ? (
         <div className="panel-empty muted">Reading the diff…</div>
       ) : diff.rows.length === 0 ? (
         <div className="panel-empty muted">{diff.note ?? "No textual difference."}</div>

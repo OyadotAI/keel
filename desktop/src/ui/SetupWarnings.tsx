@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { post } from "../api";
 import { useStore } from "../store";
 import { blocks, readSetup, scope, type Warning } from "../setup";
-import { install } from "../setup-install";
+import { installSetup } from "../setup-install";
+import { repairLane } from "../repairs";
 import { task, useRun } from "../runs";
 import { Floating } from "./Menu";
 import { Icon } from "./icons";
@@ -50,6 +50,8 @@ export function SetupList({ project, close }: { project: string; close: () => vo
   const doing = run?.state;
   const withAgent = new Set(handedLane ? handed!.ids : []);
   const groupOf = (w: Warning) => (withAgent.has(w.id) ? "session" : scope(w));
+  const installable = warnings.some((w) => w.id.startsWith("plugin/") || w.id.startsWith("agent/") || (w.fix === "readiness" && !SET_ASIDE.test(w.id)));
+  const next = warnings.find(blocks) ?? warnings[0];
   const go = (w: Warning) => {
     close();
     if (w.fix === "settings") useStore.setState({ settings: true, extensions: false, creating: false });
@@ -65,24 +67,24 @@ export function SetupList({ project, close }: { project: string; close: () => vo
     await task(runKey, "Connecting to this project…", async (setDoing) => {
       const ep = await useStore.getState().ensure(project);
       if (!ep) throw new Error("Keel is not running for this project yet — try again in a moment.");
-      const errors: string[] = [];
-      const plugins = warnings.filter((w) => w.id.startsWith("plugin/") && w.marketplace);
-      for (const w of warnings.filter((w) => w.id.startsWith("plugin/") && !w.marketplace))
-        errors.push(`${w.id.slice(7)}: no marketplace is known for it — install it from Extensions.`);
-      let installed = 0;
-      for (const [i, w] of plugins.entries()) {
-        setDoing(`Installing ${w.id.slice(7)} (${i + 1} of ${plugins.length})…`);
-        const error = await install(ep, w.id.slice(7), w.marketplace!);
-        if (error) errors.push(`${w.id.slice(7)}: ${error}`);
-        else installed++;
-      }
-      if (warnings.some((w) => w.id.startsWith("agent/"))) {
-        setDoing("Adding the agent team…");
-        await post(ep, "/api/adopt", undefined, { commit: true }).catch((error) => errors.push(`Agent team: ${error}`));
-      }
+      const refresh = async () => {
+        const fresh = await readSetup(ep, project);
+        useStore.setState((s) => ({
+          setup: { ...s.setup, [project]: fresh.warnings },
+          readiness: fresh.readiness ? { ...s.readiness, [project]: fresh.readiness } : s.readiness,
+          license: fresh.license ?? s.license,
+        }));
+        return fresh;
+      };
+      const { installed, total, team, errors } = await installSetup(ep, warnings, setDoing, async () => {
+        window.dispatchEvent(new Event("keel:subagents-changed"));
+        await refresh();
+      });
       // Re-read after adoption: do not ask an agent to fix findings already resolved.
-      const fresh = await readSetup(ep, project);
-      useStore.setState((s) => ({ setup: { ...s.setup, [project]: fresh.warnings } }));
+      setDoing("Checking what is installed…");
+      const fresh = await refresh();
+      if (team && fresh.warnings.some((w) => w.id === "agent/no-reviewers"))
+        errors.push("The agent team is still incomplete. Review the skipped files above or open Subagents in Extensions.");
       const left = fresh.warnings.filter((w) => w.fix === "readiness" && !SET_ASIDE.test(w.id) && !w.id.startsWith("agent/no-reviewers"));
       let handedOff = false;
       let handedTo = "";
@@ -94,7 +96,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
           "",
           "Fix each one in the repository. Do not touch anything under .claude/hooks or .claude/settings.json.",
         ].join("\n");
-        const lane = laneIn(project);
+        const lane = repairLane(project, "Project setup");
         useStore.getState().select(lane);
         handedOff = await useStore.getState().send(lane, prompt);
         if (handedOff) useStore.setState((s) => ({ handed: { ...s.handed, [project]: { lane, ids: left.map((w) => w.id) } } }));
@@ -102,11 +104,14 @@ export function SetupList({ project, close }: { project: string; close: () => vo
         if (handedOff) handedTo = `${left.length} item${left.length === 1 ? "" : "s"} handed to the agent in “${useStore.getState().lanes[lane]?.title ?? "the lane"}”. They leave this list when its turn ends and the check passes.`;
       }
       setDoing([
-        plugins.length ? `${installed} of ${plugins.length} plugins installed.` : "",
+        team ? (team.written.some((p) => p.startsWith(".claude/agents/")) ? "Agent team added." : "Agent team checked.") : "",
+        team?.note ?? "",
+        total ? `${installed} of ${total} plugins installed.` : "",
         handedTo,
         fresh.warnings.some(blocks) ? "Claude Code needs your attention: open Settings." : "",
         ...errors,
-      ].filter(Boolean).join("\n") || "Done.");
+        fresh.warnings.length ? `${fresh.warnings.length} ${fresh.warnings.length === 1 ? "item still needs" : "items still need"} attention.` : errors.length ? "Review the installer errors before retrying." : "Setup complete.",
+      ].filter(Boolean).join("\n"));
     }, (error) => `Setup failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
@@ -119,10 +124,10 @@ export function SetupList({ project, close }: { project: string; close: () => vo
         <button
           className="primary"
           disabled={!!run?.running || handedBusy}
-          onClick={() => void all()}
-          title={handedBusy ? "The agent is still working on what was handed to it" : "Install the suggested plugins, add Keel's agent team, and ask the agent to fix the rest"}
+          onClick={() => { if (installable || !next) void all(); else go(next); }}
+          title={handedBusy ? "The agent is still working on what was handed to it" : installable ? "Install the suggested plugins, add Keel's agent team, and ask the agent to fix the rest" : "Open the remaining items for review"}
         >
-          {handedBusy ? "Agent working…" : "Install all"}
+          {run?.running ? "Installing…" : handedBusy ? "Agent working…" : installable ? "Install all" : next ? FIX[next.fix] : "Check again"}
         </button>
       </div>
       {doing && <div className="small setup-doing" role="status" style={{ whiteSpace: "pre-wrap" }}>{doing}</div>}
@@ -138,7 +143,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
           <section key={group} className="setup-group" aria-label={label}>
             <div className="eyebrow setup-group-head">{label}</div>
             {items.map((w) => (
-              <div key={w.id} className="setup-item">
+              <div key={`${w.id}:${w.path ?? ""}`} className="setup-item">
                 <div className="setup-title">
                   <span className={`setup-sev ${group === "session" ? "info" : blocks(w) || w.severity === "critical" ? "bad" : "warn"}`}>
                     {group === "session" ? (handedBusy ? "With the agent" : "Still open") : blocks(w) ? "Blocks lanes" : SET_ASIDE.test(w.id) ? "Set aside" : w.severity === "critical" ? "Critical" : "Missing"}
@@ -166,6 +171,7 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
   const [at, setAt] = useState<DOMRect | null>(null);
   if (!warnings?.length && !run) return null;
   const blocking = warnings?.some((w) => w.severity === "critical");
+  const reviewOnly = !!warnings?.length && warnings.every((w) => SET_ASIDE.test(w.id));
   return (
     <>
       <button
@@ -180,7 +186,7 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
         title={`${warnings?.length ?? 0} setup item${warnings?.length === 1 ? "" : "s"}${findings != null ? ` · ${findings} finding${findings === 1 ? "" : "s"} in Readiness` : ""}`}
         aria-label={`${warnings?.length ?? 0} setup warnings`}
       >
-        <Icon name="octagon" size={13} /> {run?.running ? "Setting up…" : warnings?.length ? `${warnings.length} to set up` : "Setup result"}
+        <Icon name="octagon" size={13} /> {run?.running ? "Setting up…" : warnings?.length ? `${warnings.length} ${reviewOnly ? "to review" : "to set up"}` : "Setup result"}
       </button>
       {at && (
         <Floating anchor={at} kind="popover" width={380} onClose={() => setAt(null)}>

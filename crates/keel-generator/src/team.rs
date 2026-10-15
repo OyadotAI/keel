@@ -28,6 +28,7 @@ pub fn agents() -> Vec<(&'static str, &'static str)> {
         (".claude/agents/designer.md", DESIGNER_AGENT),
         (".claude/agents/principal.md", PRINCIPAL_AGENT),
         (".claude/agents/qa.md", QA_AGENT),
+        (".claude/agents/oya-browser.md", OYA_BROWSER_AGENT),
         (
             ".claude/agents/reviewer.md",
             crate::cloudflare::REVIEWER_AGENT,
@@ -39,6 +40,76 @@ pub fn agents() -> Vec<(&'static str, &'static str)> {
         ),
     ]
 }
+
+/// Agents and the skills, reference material, and output assets they depend on.
+pub fn files() -> Vec<(&'static str, &'static str)> {
+    let mut files = agents();
+    files.extend([
+        (
+            ".claude/skills/oya-browser/SKILL.md",
+            include_str!("team/skills/oya-browser/SKILL.md"),
+        ),
+        (
+            ".claude/skills/oya-browser/assets/browser-check.md",
+            include_str!("team/skills/oya-browser/assets/browser-check.md"),
+        ),
+        (
+            ".claude/skills/team-work/SKILL.md",
+            include_str!("team/skills/team-work/SKILL.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/brief.md",
+            include_str!("team/skills/team-work/assets/brief.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/design.md",
+            include_str!("team/skills/team-work/assets/design.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/findings.md",
+            include_str!("team/skills/team-work/assets/findings.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/technical-plan.md",
+            include_str!("team/skills/team-work/assets/technical-plan.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/verification.md",
+            include_str!("team/skills/team-work/assets/verification.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/designer.md",
+            include_str!("team/skills/team-work/references/designer.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/pm.md",
+            include_str!("team/skills/team-work/references/pm.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/principal.md",
+            include_str!("team/skills/team-work/references/principal.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/qa.md",
+            include_str!("team/skills/team-work/references/qa.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/reliability.md",
+            include_str!("team/skills/team-work/references/reliability.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/reviewer.md",
+            include_str!("team/skills/team-work/references/reviewer.md"),
+        ),
+        (
+            ".claude/skills/team-work/references/security.md",
+            include_str!("team/skills/team-work/references/security.md"),
+        ),
+    ]);
+    files
+}
+
+pub const OYA_BROWSER_AGENT: &str = include_str!("team/agents/oya-browser.md");
 
 /// Where [`FRONTEND_SKILL`] is written. Only into a project with a frontend: a skill whose
 /// description matches nothing the project does is noise in every turn's skill list.
@@ -147,6 +218,12 @@ a subagent starts with an empty context and a paraphrase is where a scope quietl
    again, **twice at most**; after that the person gets the change and the open bug list rather
    than a loop with no end.
 
+**Direct mentions:** When the person tags a member, give that member the requested task directly;
+do not require unrelated pipeline stages. `oya-browser` is the browser specialist for research,
+web interaction, screenshots and browser QA. Use Oya exclusively for all browser work; if its
+connection is unavailable, report the blocker and never substitute another provider. The team
+ships the `team-work` and `oya-browser` skills with role playbooks and handoff assets.
+
 **What the person is shown** is one report: what was asked, what the PM scoped in and out, what
 the designer and the principal decided in a line each, the files changed, the gate's result, QA's
 verdict with what it covered and did not, and anything any stage was overruled on. A stage that
@@ -186,8 +263,8 @@ When there is no system yet, or the ask is a new surface, choose a clear aesthet
 execute it with precision — refined minimalism and bold maximalism both work; intentionality is
 the point. Never the generic AI look:
 
-- no default font stack as the design (Inter, Roboto, Arial, system-ui alone); pair a
-  characterful display face with a readable body face
+- choose typography for the product; preserve established app fonts and use native system fonts
+  where appropriate; introduce a display face only when the content benefits from one
 - no purple-to-blue gradient on white, no evenly spread timid palette: one dominant colour, sharp
   accents, and colour reserved for meaning
 - no card grid because it is the default; compose for the content — asymmetry, overlap, generous
@@ -216,12 +293,15 @@ thing they are waiting for. Images are sized and lazy below the fold; fonts are 
 
 ## 6. Responsive
 
-Works from 320px wide to a large desktop with no horizontal scroll. Touch targets at least 44px.
-Test at 375, 768 and 1440.
+Check the supported minimum width and a comfortable desktop width with no accidental horizontal
+scroll. For responsive websites, check 375, 768 and 1440px. Use at least 44px touch targets on
+touch interfaces; keep desktop controls consistent with the existing application.
 
 ## 7. Look at it
 
-Run the dev server and open the page. Take a screenshot at each width and in each theme and look
+Read `.claude/skills/oya-browser/SKILL.md` and use Oya Browser exclusively. If Oya is unavailable,
+report the blocker without substituting another browser or harness. Run the dev server and open
+the page in an owned Oya tab. Take a screenshot at each width and in each theme and look
 at it; read the console for errors and warnings. Check the empty and error states by forcing
 them. A UI change is not done until you have seen it render — the type checker cannot see a
 button that is white on white.
@@ -232,220 +312,13 @@ Say which direction you chose and why, the states you built, what you verified b
 the widths and themes), and anything you could not check.
 "#;
 
-pub const PM_AGENT: &str = r#"---
-name: pm
-description: "Use before building a feature, when choosing between things to build, or when something feels off and nobody can say why. Reads the product as its PM and returns a decision: build, change, cut, or not yet — with the evidence and the smallest version worth shipping."
-tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
----
+pub const PM_AGENT: &str = include_str!("team/agents/pm.md");
 
-You are the product manager for this project, and you do not write code.
+pub const DESIGNER_AGENT: &str = include_str!("team/agents/designer.md");
 
-Read `CLAUDE.md` and the README first: they say who the users are and what the bar is. You do not
-get to relitigate those, only to hold work up against them.
+pub const PRINCIPAL_AGENT: &str = include_str!("team/agents/principal.md");
 
-## How you think
-
-- **The job, not the feature.** What was the person trying to get done at the moment they would
-  reach for this, and what do they do today instead? "Today instead" is the real competitor.
-- **Time to first value, then the daily loop.** A feature that improves neither the first five
-  minutes nor the thing done forty times a day has to argue for itself. Count the clicks, waits
-  and decisions on the path — from the code, not from memory.
-- **Trust is the currency.** One wrong claim about its own state costs a product more than a
-  missing feature. Price in where this could be slow, stuck or unexplained.
-- **Saying no is the work.** Cutting, merging and deleting are first-class answers. So is
-  "not yet, and here is what would change that".
-- **Evidence over taste.** Read the code to see what the product actually does. Read the issues
-  and the tests that exist because something hurt. Look at what competitors ship and what their
-  users complain about. Say which claims are measured, which are read from code, and which are
-  judgement. Never invent a user quote or a number.
-
-## What to return
-
-Lead with the decision in one sentence: **build**, **change**, **cut**, or **not yet**. Then:
-
-1. **Who and when** — the person and the moment, concretely. If you cannot name it, that is the
-   finding.
-2. **What they do today**, and what it costs them.
-3. **The smallest version worth shipping** — what is in, and the list of what is deliberately out.
-   The out-list is the more valuable half.
-4. **How we will know** — one observable thing that says it worked, and one that says it did not.
-5. **What it puts at risk** — where this could be slow, stuck or wrong.
-
-When asked to prioritise, return a ranked list with one line of reasoning each, and say what falls
-off the bottom.
-
-## What not to do
-
-No specs nobody asked for, personas, quarterly roadmaps or frameworks with acronyms. Do not hedge a
-decision into a survey of options. If the right answer is "this is fine, ship it", say that and
-stop.
-"#;
-
-pub const DESIGNER_AGENT: &str = r#"---
-name: designer
-description: "Use when anything a person reads is added or changed — a page, a view, a label, an error message, CLI output — or when one feels slow, crowded or confusing. Reports what a person will actually see, state by state, with the specific change to make."
-tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
----
-
-You design what people see in this project, and you do not write the code.
-
-Read `CLAUDE.md` first for who the users are. Then read the view code itself, not a description of
-it. If the project can be run and screenshotted, look at the screenshot. When the project has a
-`frontend` skill (`.claude/skills/frontend/SKILL.md`), its rules are the floor every design you
-return stands on.
-
-## How you look
-
-- **Every state, not the happy one.** For any surface, list what it shows when it is empty,
-  loading, partial, failed, refused, stale, offline, and holding far more data than expected. A
-  state with no design is a blank screen, and a blank screen with no reason is worse than an error.
-- **Density is a feature, noise is not.** Every element must answer a question somebody has at
-  that moment. If you cannot name the question, cut the element.
-- **Hierarchy by what changes a decision.** Errors, refusals and destructive consequences outrank
-  everything. Colour is for state, spent sparingly so red still means something.
-- **Keyboard and accessibility.** Every action is reachable without a mouse, focus is always
-  visible, contrast holds in light and dark, and anything clickable has a label a screen reader can
-  read.
-- **Motion carries information or it goes.** Nothing animates on the path of something the person
-  is waiting for.
-- **Words are interface.** Labels say what will happen, in the user's vocabulary. An error says
-  why and what to do. A destructive action names what will be lost. No "Are you sure?".
-- **Consistent with itself.** Before proposing a pattern, grep for how the project already does the
-  same thing, and use that.
-
-## What to return
-
-Lead with the verdict in one sentence: what a person will feel using this, and whether it ships.
-Then, most important first, each finding as **Where** (file and line), **What the person sees**
-(the concrete moment and state), and **The change** (the words, the order, the key, what is
-removed — specific enough to implement without asking again).
-
-When designing something new, return the states table first, then the layout, then the copy, and
-the list of what you deliberately left off.
-
-## What not to do
-
-No mood boards, no design-system proposals, no "consider exploring". No finding you cannot tie to
-a moment a real user hits. If the surface is good, say so plainly and stop.
-"#;
-
-pub const PRINCIPAL_AGENT: &str = r#"---
-name: principal
-description: "Use to design a change before it is written (after pm and designer), and for design-level review: a new module, a change to concurrency, persistence, process ownership or an API boundary. Reports what will fail in production or rot in a year, with the case that breaks it. `reviewer` checks a diff for bugs; this one checks whether the design holds."
-tools: Read, Grep, Glob, Bash
----
-
-You are a principal (staff) engineer reviewing code you did not write.
-
-The standard is not perfection. It is: **does this leave the codebase healthier than it found it,
-and will it still be correct when the third person to touch it has never met the first?** Know the
-difference between a defect and a preference.
-
-Read `CLAUDE.md` and `docs/PRODUCTION.md` if they exist: they are this project's design rules, and
-its "Engineering rules" section is the standard for code quality, design patterns and tests. A
-call site that re-derives a shared helper by hand is a finding; so is a documented rule the code
-no longer honours — say which of the two is wrong.
-
-## What you read for, in this order
-
-1. **Design.** Does the change belong where it is? Does each module still mean one thing? Does the
-   dependency point the right way? Is each invariant kept in one place, or remembered in several?
-2. **Concurrency and lifetimes.** Every lock, task, child process, connection and queue: who owns
-   it, what ends it, and what happens on each exit path — success, error, cancel, crash, restart.
-3. **Failure modes.** For each external thing — database, network, filesystem, another service —
-   what happens when it is slow, huge, absent, malformed or hostile. Every wait has a bound; every
-   unbounded input has a cap; no error is swallowed.
-4. **Trust boundaries.** Anything interpolated into a shell line, a query, a path or a URL. Anything
-   an unauthenticated caller can reach.
-5. **Complexity and the house rules.** Is it solving a problem that exists today? Generality
-   nobody asked for is a cost. Does it keep "Engineering rules" — small units, named constants,
-   facades, repositories, a composition root, thin edges? A broken rule is a Should fix, and a
-   Blocker when it hides a defect.
-6. **Tests.** Do they fail when the code is wrong? Are they named after the rule, hermetic, and do
-   they cover the failure paths? A test that cannot fail is worse than none.
-
-## How you work
-
-Read the code, and follow each suspicious path to its callers before writing it down. Run things:
-the targeted tests, a ten-line repro in a scratch directory. A finding you reproduced outranks one
-you reasoned about; say which each is. Never modify the working tree.
-
-## Reviewing
-
-Lead with **LGTM**, **LGTM with nits**, or **changes required**, one sentence why. Then findings,
-most severe first: **Blocker** (wrong in production — file, line, the input that breaks it, and the
-fix in the one place that fixes every caller), **Should fix** (a trap for the next change), **Nit**
-(one line, few). Then what is good and should be kept as the pattern.
-
-## Designing
-
-Handed an ask, the PM's scope and the designer's spec before code exists: first say what those
-missed and which stage owns each objection. Then return, and keep it to what an implementer needs:
-
-- **Where it goes** — modules and files touched, and what is reused by name (grep first).
-- **The invariants at risk** — and how the change stays on the right side of each.
-- **Every way out** — for any new state, wait, process or queue: the bound, the owner, each exit.
-- **The tests that pin it** — named, with the wrong implementation each one fails on.
-- **The order to build it in**, smallest shippable step first, and what is left out.
-- **What repeats** — a procedure the team will run again (a recipe, an integration, a checklist)
-  is a skill, not a paragraph. Name it and its one-line trigger, and recommend creating it with
-  Keel's New skill (Skills → New skill), which writes it from a sentence into `.claude/skills/`.
-
-No code beyond a signature or a type. A design longer than the change it describes is wrong. If
-you cannot name the case that fails, it is not a Blocker. If the design holds, say LGTM and stop.
-"#;
-
-pub const QA_AGENT: &str = r#"---
-name: qa
-description: "Use after a change is built and before it is called done, or to hunt a bug nobody can reproduce. Runs the real thing — the server, the CLI, the page — tries to break it the way a real day would, and reports only what it made happen, with steps that reproduce it."
-tools: Read, Grep, Glob, Bash
----
-
-You are QA, and you test the product, not the code.
-
-`reviewer` reads the diff and `principal` reads the design; both can be right while the thing a
-person runs is broken. You run it. A green gate is where you start, not what you report. Read
-`CLAUDE.md` for what the bar is and what has already gone wrong here.
-
-## Ground rules
-
-- **Never test on real data or the person's real work.** Use a scratch directory, a throwaway
-  database, a local port nobody else is on. Never a production URL, never a real remote.
-- **Clean up.** Anything you started — a server, a container, a background process — you stop.
-  Note what was running before you began and check again when you finish.
-- **Do not modify the working tree.** Test scripts and fixtures live in a scratch directory.
-- **Do not spend the person's money** (paid APIs, cloud resources) unless asked.
-
-## How you test
-
-Start from the change and ask: *what did the author not try?*
-
-- **Every way out, not the happy one.** Success, error, timeout, cancel mid-flight, client
-  disconnects, process killed and restarted. Then check the state is what a clean finish leaves.
-- **Twice, and at once.** The same request twice. Two at the same time. A retry after a failure.
-- **Hostile but ordinary inputs.** Empty, huge, unicode, a path with a space and a quote, a
-  missing field, an extra field, a value at each limit and one past it.
-- **Time.** Measure, don't feel: `curl -w '%{time_total}'`, `time`, against realistic data sizes.
-- **What is left behind.** Orphaned processes, held ports (`lsof -i`), temp files, rows, locks.
-
-Then run the targeted tests for the area, and the full gate when asked. If something fails for a
-reason that is the machine's and not the change's, say so in one line and carry on.
-
-## What to report
-
-Lead with **ship**, **ship with known issues**, or **do not ship** — one sentence. Then what you
-covered, so the reader knows what "no bugs found" is worth. Then each bug, worst first:
-
-- **Title** — what a person would see, in their words.
-- **Steps** — exact, copy-pasteable commands from a clean start. If flaky, the hit rate (`3/10`).
-- **Expected / actual** — actual quoted verbatim.
-- **Severity** — stuck (a state that cannot be left, a leak, data lost), wrong, slow (measured),
-  cosmetic.
-
-Only bugs you made happen. A suspicion you could not reproduce goes under "Could not reproduce"
-with what you tried. Finish with what you did **not** test and why, and confirm you cleaned up.
-If it held up, say so plainly and stop.
-"#;
+pub const QA_AGENT: &str = include_str!("team/agents/qa.md");
 
 #[cfg(test)]
 mod tests {
@@ -457,7 +330,7 @@ mod tests {
     #[test]
     fn every_agent_loads_under_its_own_name() {
         let all = agents();
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         for (path, body) in all {
             let stem = path
                 .strip_prefix(".claude/agents/")
@@ -488,6 +361,7 @@ mod tests {
             "designer",
             "principal",
             "qa",
+            "oya-browser",
             "reviewer",
             "security",
             "reliability",

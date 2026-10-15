@@ -13,7 +13,7 @@ import { open as openStream, type Stream } from "./streams";
 import { notify } from "./notify";
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
-import { prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
+import { inArea, prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
 export interface Pending {
   id: string;
@@ -84,10 +84,10 @@ export type ChatInterface = "chat" | "terminal";
 export type Agent = "claude" | "codex";
 
 export interface Attachment { path: string; name: string; mime?: string; preview?: string }
-export interface QueuedMessage { id: string; text: string; attachments: Attachment[] }
+export interface QueuedMessage { id: string; text: string; attachments: Attachment[]; system?: string }
 
-function makeReceipt(lane: Lane, prompt: string, attachments: Attachment[], wt?: string): NonNullable<Lane["receipt"]> {
-  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, wt, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+function makeReceipt(lane: Lane, prompt: string, attachments: Attachment[], wt?: string, system?: string): NonNullable<Lane["receipt"]> {
+  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, wt, system, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
 }
 
 function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachment[]): boolean {
@@ -116,7 +116,9 @@ export interface Lane {
   git?: GitStatus;
   /// The file whose diff is open, and the diff, prepared once.
   viewing?: string;
+  viewingStaged?: boolean;
   diff?: Prepared;
+  diffError?: string;
   /// A discard refused because it would lose work, with what it would lose.
   confirmDiscard?: string;
   /// The checkout was rewound to before a turn; `undo` puts it back.
@@ -142,7 +144,7 @@ export interface Lane {
   cursor?: number;
   submitting?: boolean;
   disconnected?: boolean;
-  receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; wt?: string; attachments?: Attachment[] };
+  receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; wt?: string; system?: string; attachments?: Attachment[] };
 }
 
 interface State {
@@ -164,6 +166,7 @@ interface State {
   shortcuts: boolean;
   /// The extensions page — skills, subagents, MCP servers, plugins — over the window.
   extensions: boolean;
+  extensionsSection?: "agents";
   /// Whether each project is trusted, for the marker that says so while it holds.
   trusted: Record<string, boolean>;
   /// What is missing from each project's agent setup, for the warning that says so.
@@ -182,7 +185,7 @@ interface State {
   ensure(project: string): Promise<Endpoint>;
   openProject(path: string): Promise<void>;
   closeProject(path: string): Promise<void>;
-  newLane(project: string, isolated?: boolean, agent?: Agent): string;
+  newLane(project: string, isolated?: boolean, agent?: Agent, surface?: ChatInterface): string;
   /// Lanes whose terminal is running this session. Kept mounted when not on screen: closing a
   /// terminal ends the agent in it, and switching lanes must never stop a turn.
   opened: string[];
@@ -192,7 +195,7 @@ interface State {
   connected(lane: string): void;
   closeLane(lane: string): void;
   refreshGit(lane: string): Promise<void>;
-  openDiff(lane: string, path?: string): Promise<void>;
+  openDiff(lane: string, path?: string, staged?: boolean): Promise<void>;
   merge(lane: string): Promise<void>;
   refreshJobs(lane: string): Promise<void>;
   stopJob(lane: string, id: string): Promise<void>;
@@ -203,7 +206,7 @@ interface State {
   select(lane: string): void;
   /// Read a lane's conversation back if it has one and it is not on screen yet.
   load(lane: string): void;
-  send(lane: string, prompt: string, attachments?: Attachment[]): Promise<boolean>;
+  send(lane: string, prompt: string, attachments?: Attachment[], system?: string): Promise<boolean>;
   stop(lane: string): Promise<void>;
   editQueued(lane: string, id: string): void;
   removeQueued(lane: string, id: string): void;
@@ -438,7 +441,7 @@ export const useStore = create<State>()((set, getState) => {
     if (l.running || l.submitting || l.disconnected || l.receipt) return;
     const [next, ...rest] = l.queued;
     lane(lid, { queued: rest });
-    void getState().send(lid, next.text, next.attachments);
+    void getState().send(lid, next.text, next.attachments, next.system);
   }
 
   const gitTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -678,7 +681,7 @@ export const useStore = create<State>()((set, getState) => {
       if (!l?.queued.length) return;
       const [next, ...rest] = l.queued;
       lane(lid, { queued: rest });
-      void getState().send(lid, next.text, next.attachments);
+      void getState().send(lid, next.text, next.attachments, next.system);
       if (rest.length) setTimeout(() => getState().connected(lid), 500);
     },
 
@@ -753,12 +756,12 @@ export const useStore = create<State>()((set, getState) => {
       await invoke("close_project", { path }).catch(() => undefined);
     },
 
-    newLane(project, isolated = false, agent = "claude") {
+    newLane(project, isolated = false, agent = "claude", surface) {
       const lid = id();
       set((s) => ({
         lanes: {
           ...s.lanes,
-          [lid]: { id: lid, project, interface: getState().chatInterface, session: id(), agent, known: false, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
+          [lid]: { id: lid, project, interface: surface ?? getState().chatInterface, session: id(), agent, known: false, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
         },
         projects: { ...s.projects, [project]: { ...s.projects[project], lanes: [...s.projects[project].lanes, lid], collapsed: false } },
       }));
@@ -877,27 +880,29 @@ export const useStore = create<State>()((set, getState) => {
         const git = await get<GitStatus>(ep, "/api/git/status", { wt: l.wt });
         lane(lid, { git });
         // An open diff follows the file: read again, or closed if the file is no longer changed.
-        const viewing = getState().lanes[lid]?.viewing;
-        if (viewing) void getState().openDiff(lid, git.changes.some((c) => c.path === viewing) ? viewing : undefined);
+        const { viewing, viewingStaged } = getState().lanes[lid] ?? {};
+        if (viewing) void getState().openDiff(lid, git.changes.some((c) => c.path === viewing && (viewingStaged === undefined || inArea(c, viewingStaged))) ? viewing : undefined, viewingStaged);
       } catch {
         // The next event reads again.
       }
     },
 
-    async openDiff(lid, path) {
+    async openDiff(lid, path, staged) {
       if (!path) {
-        lane(lid, { viewing: undefined, diff: undefined });
+        lane(lid, { viewing: undefined, viewingStaged: undefined, diff: undefined, diffError: undefined });
         return;
       }
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
-      lane(lid, (l) => ({ viewing: path, diff: l.viewing === path ? l.diff : undefined }));
+      lane(lid, (l) => ({ viewing: path, viewingStaged: staged, diff: l.viewing === path && l.viewingStaged === staged ? l.diff : undefined, diffError: undefined }));
       try {
-        const d = await get<DiffResponse>(ep, "/api/git/diff", { path, wt: l.wt });
-        if (getState().lanes[lid]?.viewing === path) lane(lid, { diff: prepare(d) });
+        const d = await get<DiffResponse>(ep, "/api/git/diff", { path, wt: l.wt, staged });
+        const current = getState().lanes[lid];
+        if (current?.viewing === path && current.viewingStaged === staged) lane(lid, { diff: prepare(d) });
       } catch (e) {
-        lane(lid, { error: `Could not read the diff of ${path}: ${e instanceof Error ? e.message : e}` });
+        const current = getState().lanes[lid];
+        if (current?.viewing === path && current.viewingStaged === staged) lane(lid, { diffError: `Could not read the diff: ${e instanceof Error ? e.message : e}` });
       }
     },
 
@@ -979,18 +984,18 @@ export const useStore = create<State>()((set, getState) => {
       catch (error) { lane(lid, { error: `Could not stop the turn: ${error}` }); }
     },
 
-    async send(lid, prompt, attachments = []) {
+    async send(lid, prompt, attachments = [], system) {
       const l = getState().lanes[lid];
       if (!l || !prompt.trim()) return false;
       if (l.interface === "terminal") {
-        if (!typeInto(lid, prompt)) lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }] });
+        if (!typeInto(lid, prompt)) lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments, system }] });
         return true;
       }
       if (l.elsewhere) { lane(lid, { error: "This session is running outside Keel. Stop it there before resuming here." }); return false; }
       if (l.receipt && l.receipt.prompt !== prompt) { lane(lid, { error: "The previous submission has not been confirmed. Retry it before sending another message." }); return false; }
       const ownsDraft = isComposerSubmission(l, prompt, attachments);
       if (l.running || l.submitting) {
-        lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments }], ...(ownsDraft ? { draft: "", attachments: [] } : {}) });
+        lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments, system }], ...(ownsDraft ? { draft: "", attachments: [] } : {}) });
         save(getState());
         return true;
       }
@@ -1000,7 +1005,7 @@ export const useStore = create<State>()((set, getState) => {
         const ready = await getState().prepare(lid);
         if (!getState().lanes[lid]) return false;
         if (!ready) throw new Error("The lane could not be prepared.");
-        const receipt = l.receipt ?? makeReceipt(l, prompt, attachments, ready.wt);
+        const receipt = l.receipt ?? makeReceipt(l, prompt, attachments, ready.wt, system);
         submission = receipt.id;
         lane(lid, { receipt });
         save(getState());

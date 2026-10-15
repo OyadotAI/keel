@@ -156,9 +156,9 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
       </button>
       </div>
       {l && (
-        <button className="workspace-toggle" onClick={togglePanel} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>
-          <Icon name="panel" size={18} />
-          <span>{panel ? "Close workspace" : "Open workspace"}</span>
+        <button className="workspace-toggle" onClick={togglePanel} aria-label={panel ? "Close workspace" : "Open workspace"} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`${panel ? "Close" : "Open"} workspace · Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>
+          <Icon name="panel" size={14} />
+          <span>Workspace</span>
         </button>
       )}
     </footer>

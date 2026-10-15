@@ -697,7 +697,7 @@ dependency is the point: the daemon knows about them, none of them knows about t
 - `keel-generator` — the templates. `cloudflare` (the three-folder golden path), `stack` (the
   container/kustomize production shape) and `packs` (working code laid over either), plus the
   workload placement rules. `team` is what every project gets whatever its template, and what
-  `/api/adopt` writes into an existing one: the seven agents this file's own pipeline runs,
+  `/api/adopt` writes into an existing one: the eight agents this file's own pipeline runs,
   generalised; the lifecycle and the engineering rules for `CLAUDE.md`; and a `frontend` skill
   where there is a frontend. `agent/no-reviewers` asks for exactly that set, and
   `review::tests::adopting_clears_the_team_finding` fails if the scanner's list drifts from it. Pure functions from a project name to a list of files: no HTTP, no
@@ -809,6 +809,13 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 - **Cloudflare has no OIDC/keyless deploy** as of Aug 2026 — scoped, rotated API tokens instead.
 
 ## How a request becomes a change
+
+Direct `@member` requests go to that member for the assigned task. `oya-browser` is the team's
+browser specialist. Use Oya exclusively for all browser work, and report connection blockers
+without a provider fallback. Members preload their installed skills; role playbooks and report
+assets are under `.claude/skills/team-work/`, and Oya's workflow is under
+`.claude/skills/oya-browser/`.
+
 
 Every request that changes the product runs this pipeline, in this order, and the person sees one
 report at the end of it — not a stream of half-decisions along the way. The stages are the agents

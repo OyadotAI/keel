@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
-import { prepare, type Change, type DiffResponse, type Prepared } from "../git";
+import { prepare, type DiffResponse, type Prepared } from "../git";
 import { start, useRun } from "../runs";
 import { useStore } from "../store";
-import { Changes } from "./Changes";
+import { SourceControl } from "./SourceControl";
 import { InlineDiff } from "./InlineDiff";
 import { Count, Tabs } from "./kit";
 import { Icon } from "./icons";
@@ -45,11 +45,11 @@ function useLane(lane: string) {
 /// branch, and the way out to a pull request. Every action is the daemon's; this only asks.
 export function Git({ lane }: { lane: string }) {
   const { ep, wt } = useLane(lane);
-  const viewing = useStore((s) => s.lanes[lane]?.viewing);
   const git = useStore((s) => s.lanes[lane]?.git);
   const [branches, setBranches] = useState<Branches>();
   const [log, setLog] = useState<Commit[]>();
   const [error, setError] = useState<string>();
+  const [readError, setReadError] = useState<string>();
   const [note, setNote] = useState<string>();
   const [section, setSection] = useState<"changes" | "history" | "branches" | "pr">("changes");
 
@@ -59,7 +59,7 @@ export function Git({ lane }: { lane: string }) {
     if (b.status === "fulfilled") setBranches(b.value);
     if (c.status === "fulfilled") setLog(c.value);
     const failed = [b, c].find((r) => r.status === "rejected");
-    setError(failed ? String((failed as PromiseRejectedResult).reason) : undefined);
+    setReadError(failed ? String((failed as PromiseRejectedResult).reason) : undefined);
   }, [wt]);
   // Read again whenever the daemon says git moved (the store re-reads `git` on those events).
   useEffect(() => {
@@ -81,7 +81,6 @@ export function Git({ lane }: { lane: string }) {
     if (ep) await read(ep);
   }
 
-  if (viewing) return <Changes lane={lane} />;
   if (!ep) return <div className="panel-empty">Starting Keel for this project…</div>;
   if (git && !git.is_repo)
     return (
@@ -95,7 +94,7 @@ export function Git({ lane }: { lane: string }) {
     );
   const current = branches?.local.find((b) => b.current);
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="git-panel">
       <div className="panel-head">
         <Icon name="branch" size={14} />
         <span className="mono" style={{ fontWeight: 500 }}>
@@ -124,10 +123,10 @@ export function Git({ lane }: { lane: string }) {
         value={section}
         onChange={setSection}
       />
-      {error && <div className="panel-note small error">{error}</div>}
-      {note && !error && <div className="panel-note small faint">{note}</div>}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-        {section === "changes" && <Staging lane={lane} ep={ep} wt={wt} act={act} />}
+      {(error || readError) && <div className="panel-note small error" role="alert">{error || readError}</div>}
+      {note && !error && !readError && <div className="panel-note small faint">{note}</div>}
+      <div className={section === "changes" ? "git-body" : "git-scroll"}>
+        {section === "changes" && <SourceControl lane={lane} ep={ep} wt={wt} act={act} />}
         {section === "history" && <History lane={lane} ep={ep} wt={wt} log={log} act={act} />}
         {section === "branches" && <BranchList ep={ep} wt={wt} branches={branches} act={act} />}
         {section === "pr" && <PullRequest ep={ep} wt={wt} />}
@@ -137,147 +136,6 @@ export function Git({ lane }: { lane: string }) {
 }
 
 type Act = (what: string, run: () => Promise<unknown>) => Promise<void>;
-
-function Staging({ lane, ep, wt, act }: { lane: string; ep: Endpoint; wt?: string; act: Act }) {
-  const git = useStore((s) => s.lanes[lane]?.git);
-  const busy = useStore((s) => !!s.lanes[lane]?.running);
-  const [message, setMessage] = useState("");
-  if (!git) return <div className="panel-empty">Reading git…</div>;
-  const staged = git.changes.filter((c) => c.staged);
-  const commit = (all: boolean) =>
-    act(all ? "Committed everything." : "Committed what was staged.", async () => {
-      await post(ep, all ? "/api/git/commit" : "/api/git/commit-staged", { message }, { wt });
-      setMessage("");
-    });
-  return (
-    <div>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)" }}>
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message"
-          rows={2}
-          aria-label="Commit message"
-          style={{ width: "100%", resize: "vertical", font: "inherit", color: "inherit", background: "var(--raised)", border: "1px solid var(--line)", borderRadius: 6, padding: "6px 8px" }}
-        />
-        <div className="actions" style={{ marginTop: 6 }}>
-          <button className="primary" disabled={!message.trim() || !staged.length || busy} onClick={() => commit(false)} title={busy ? "The agent is mid-turn" : undefined}>
-            Commit {staged.length} staged
-          </button>
-          <button disabled={!message.trim() || !git.changes.length || busy} onClick={() => commit(true)}>
-            Commit all
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="link small" disabled={!git.changes.length} onClick={() => act("Staged everything.", () => post(ep, "/api/git/stage-all", { stage: true }, { wt }))}>
-            Stage all
-          </button>
-          <button className="link small" disabled={!staged.length} onClick={() => act("Unstaged everything.", () => post(ep, "/api/git/stage-all", { stage: false }, { wt }))}>
-            Unstage all
-          </button>
-        </div>
-      </div>
-      {git.changes.length === 0 ? (
-        <div className="panel-empty">No changes on {git.branch ?? "this branch"}.</div>
-      ) : (
-        <ChangeList lane={lane} ep={ep} wt={wt} act={act} />
-      )}
-    </div>
-  );
-}
-
-/// Changes grouped by folder. A folder with a handful of files lists them; one with more folds to a
-/// single row with a count, because deleting a directory is one decision and a hundred rows of it
-/// buried everything else that changed. By top-level folder: one rule anyone can predict.
-function groups(changes: Change[]) {
-  const by = new Map<string, Change[]>();
-  for (const c of changes) {
-    const i = c.path.indexOf("/");
-    const top = i < 0 ? "" : c.path.slice(0, i + 1);
-    const list = by.get(top);
-    if (list) list.push(c);
-    else by.set(top, [c]);
-  }
-  return [...by].map(([dir, files]) => ({ dir, files })).sort((a, b) => a.dir.localeCompare(b.dir));
-}
-const FOLD = 8;
-const NONE: Change[] = [];
-
-function ChangeList({ lane, ep, wt, act }: { lane: string; ep: Endpoint; wt?: string; act: Act }) {
-  const changes = useStore((s) => s.lanes[lane]?.git?.changes ?? NONE);
-  const grouped = useMemo(() => groups(changes.slice(0, 2000)), [changes]);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  return (
-    <>
-      {grouped.map((g) =>
-        !g.dir || g.files.length <= FOLD ? (
-          g.files.map((c) => <ChangeRow key={c.path} lane={lane} ep={ep} wt={wt} act={act} c={c} />)
-        ) : (
-          <div key={g.dir}>
-            <div className="change folder" style={{ alignItems: "center" }}>
-              <button data-file="" className="link change-path" style={{ textAlign: "left", justifyContent: "flex-start", gap: 6 }} aria-expanded={!!open[g.dir]} onClick={() => setOpen({ ...open, [g.dir]: !open[g.dir] })}>
-                <Icon name={open[g.dir] ? "chevron-down" : "chevron-right"} size={12} />
-                {g.dir}
-                <span className="faint small">{summary(g.files)}</span>
-              </button>
-              <button className="link small" onClick={() => act(`${g.files.every((c) => c.staged) ? "Unstaged" : "Staged"} ${g.dir}.`, () => post(ep, "/api/git/act", { action: g.files.every((c) => c.staged) ? "unstage" : "stage", path: g.dir }, { wt }))}>
-                {g.files.every((c) => c.staged) ? "Unstage" : "Stage"} {g.files.length}
-              </button>
-            </div>
-            {open[g.dir] && g.files.slice(0, 500).map((c) => <ChangeRow key={c.path} lane={lane} ep={ep} wt={wt} act={act} c={c} indent />)}
-          </div>
-        ),
-      )}
-      {changes.length > 2000 && <div className="panel-note small faint">and {changes.length - 2000} more — git status has them all</div>}
-    </>
-  );
-}
-
-function summary(files: Change[]) {
-  const n: Record<string, number> = {};
-  for (const c of files) {
-    const k = c.status.trim().slice(0, 1) || "M";
-    n[k] = (n[k] ?? 0) + 1;
-  }
-  const word: Record<string, string> = { M: "modified", D: "deleted", A: "added", "?": "new", R: "renamed" };
-  return Object.entries(n)
-    .map(([k, v]) => `${v} ${word[k] ?? k}`)
-    .join(" · ");
-}
-
-function ChangeRow({ lane, ep, wt, act, c, indent }: { lane: string; ep: Endpoint; wt?: string; act: Act; c: Change; indent?: boolean }) {
-  const openDiff = useStore((s) => s.openDiff);
-  const [sure, setSure] = useState(false);
-  const stage = () => act(c.staged ? "Unstaged." : "Staged.", () => post(ep, "/api/git/act", { action: c.staged ? "unstage" : "stage", path: c.path }, { wt }));
-  return (
-    <div className="change" style={{ alignItems: "center", paddingLeft: indent ? 30 : undefined }}>
-      <span className={`status s-${c.status.trim().slice(0, 1).toLowerCase() || "m"}`}>{c.status.trim() || "M"}</span>
-      <button
-        data-file={c.path}
-        className="link change-path"
-        style={{ textAlign: "left", justifyContent: "flex-start" }}
-        disabled={c.dir}
-        onClick={() => openDiff(lane, c.path)}
-        onKeyDown={(e) => e.key === " " && (e.preventDefault(), stage())}
-        title={`${c.label} — Enter opens the diff, Space ${c.staged ? "unstages" : "stages"}`}
-      >
-        {indent ? c.path.slice(c.path.lastIndexOf("/") + 1) : c.path}
-        {indent && <span className="faint small"> {c.path.slice(0, c.path.lastIndexOf("/") + 1)}</span>}
-      </button>
-      <button className="link small" onClick={stage}>
-        {c.staged ? "Unstage" : "Stage"}
-      </button>
-      {sure ? (
-        <button className="link small error" onClick={() => (setSure(false), act(`Discarded the changes to ${c.path}.`, () => post(ep, "/api/git/act", { action: "discard", path: c.path }, { wt })))}>
-          Discard — sure?
-        </button>
-      ) : (
-        <button className="ghost discard" aria-label={`Discard changes to ${c.path}`} title="Discard this file's changes" onClick={() => setSure(true)}>
-          <Icon name="x" size={12} />
-        </button>
-      )}
-    </div>
-  );
-}
 
 function History({ lane, ep, wt, log, act }: { lane: string; ep: Endpoint; wt?: string; log?: Commit[]; act: Act }) {
   const [open, setOpen] = useState<string>();

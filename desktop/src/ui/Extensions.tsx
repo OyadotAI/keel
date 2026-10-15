@@ -1,11 +1,12 @@
 import { UpdateButton } from "./UpdateButton";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { EVENTS, groupHooks, tilde } from "../hooks";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
 import { start, useRun } from "../runs";
 import { useStore } from "../store";
 import { Icon } from "./icons";
+import { MemberAvatar } from "./MemberAvatar";
 import { Count, Tabs } from "./kit";
 
 interface Named {
@@ -43,6 +44,7 @@ interface Workspace {
   mcp_servers: Mcp[];
   plugins: InstalledPlugin[];
 }
+interface AgentProfile { name: string; display_name: string; avatar?: string | null }
 interface CatalogSkill {
   id: string;
   description: string;
@@ -68,6 +70,13 @@ export function Extensions() {
   const [ep, setEp] = useState<Endpoint>();
   const [ws, setWs] = useState<Workspace>();
   const [section, setSection] = useState<Section>("skills");
+  const requestedSection = useStore((s) => s.extensionsSection);
+  useEffect(() => {
+    if (requestedSection) {
+      setSection(requestedSection);
+      useStore.setState({ extensionsSection: undefined });
+    }
+  }, [requestedSection]);
   const [error, setError] = useState<string>();
   // An install is kept outside this page: closing Extensions mid-install, or opening it again,
   // shows the same run rather than an idle button that would start a second one.
@@ -269,15 +278,66 @@ function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
 }
 
 function Agents({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void> }) {
+  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
+  const [installing, setInstalling] = useState(false);
+  const missing = ["pm", "designer", "principal", "qa", "reviewer", "security", "reliability", "oya-browser"].some((name) => !ws.agents.some((agent) => agent.name === name));
+  function installTeam() {
+    setInstalling(true);
+    void call(async () => {
+      await post(ep, "/api/adopt", undefined, { commit: true });
+      window.dispatchEvent(new Event("keel:subagents-changed"));
+    }).finally(() => setInstalling(false));
+  }
+  useEffect(() => { get<AgentProfile[]>(ep, "/api/agents/profiles").then(setProfiles, () => setProfiles([])); }, [ep, ws.agents.length]);
+  async function save(profile: AgentProfile) {
+    await call(() => post(ep, "/api/agents/profiles", profile));
+    const next = await get<AgentProfile[]>(ep, "/api/agents/profiles");
+    setProfiles(next);
+    window.dispatchEvent(new Event("keel:subagents-changed"));
+  }
   return (
     <>
       <section className="settings-section">
         <h2>Subagents</h2>
-        <List items={ws.agents} empty="No subagents. Claude Code hands a task to one when its description matches." />
+        {!ws.agents.length ? <>
+          <p className="muted">Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @.</p>
+          <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>
+          <p className="small muted">Adds eight members including Oya Browser, role playbooks, handoff templates, and a production checklist.</p>
+        </> : <ul className="rules">
+          {ws.agents.map((agent) => {
+            const profile = profiles.find((p) => p.name === agent.name) ?? { name: agent.name, display_name: "", avatar: null };
+            return <AgentProfileRow key={`${agent.scope}:${agent.name}`} agent={agent} profile={profile} save={save} />;
+          })}
+        </ul>}
+        {!!ws.agents.length && missing && <div className="team-install">
+          <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>
+          <p className="small muted">Includes Oya Browser and specialist playbooks. Keeps your existing definitions and images.</p>
+        </div>}
       </section>
       <Create ep={ep} call={call} kind={AGENT} />
     </>
   );
+}
+
+function AgentProfileRow({ agent, profile, save }: { agent: Named; profile: AgentProfile; save: (p: AgentProfile) => Promise<void> }) {
+  const picker = useRef<HTMLInputElement>(null);
+  const [displayName, setDisplayName] = useState(profile.display_name);
+  useEffect(() => setDisplayName(profile.display_name), [profile.display_name]);
+  async function image(file?: File) {
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 1_000_000) return;
+    const avatar = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
+    await save({ ...profile, display_name: displayName, avatar });
+  }
+  return <li style={{ gap: 12, alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+    <button className="ghost" aria-label={`Choose ${agent.name} avatar`} title="Choose avatar image" onClick={() => picker.current?.click()} style={{ padding: 0, borderRadius: 8, overflow: "hidden", width: 42, height: 42, flex: "none" }}>
+      <MemberAvatar name={agent.name} displayName={displayName} avatar={profile.avatar} size={42} />
+    </button>
+    <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { void image(e.target.files?.[0]); e.target.value = ""; }} />
+    <div style={{ flex: 1, minWidth: 130 }}><div style={{ fontWeight: 500 }}>{agent.name}<span className="pill" style={{ marginLeft: 6 }}>{scopeLabel(agent.scope)}</span></div><div className="small muted">@{agent.name} in chat</div></div>
+    <input aria-label={`${agent.name} display name`} value={displayName} placeholder={agent.name} onChange={(e) => setDisplayName(e.target.value)} onBlur={() => { if (displayName !== profile.display_name) void save({ ...profile, display_name: displayName }); }} />
+    <button className="link small" onClick={() => picker.current?.click()}>Image…</button>
+  </li>;
 }
 
 function Commands({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void> }) {
@@ -364,6 +424,7 @@ function Create({ ep, call, kind }: { ep: Endpoint; call: (run: () => Promise<un
               call(async () => {
                 await post(ep, kind.path, { ...form, name: form.name.trim(), commit: true });
                 setForm(blank);
+                if (kind === AGENT) window.dispatchEvent(new Event("keel:subagents-changed"));
               })
             }
           >

@@ -1,5 +1,6 @@
 import { UpdateButton } from "./UpdateButton";
 import { InterfaceSetting } from "./InterfaceSetting";
+import { AppearanceSetting } from "./AppearanceSetting";
 import { check, useUpdate } from "../update";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
@@ -38,16 +39,17 @@ export function Settings() {
       <header className="lane-header">
         <div className="lane-heading">
           <span className="lane-name">Settings</span>
-          <span className="muted small">{name ? `for ${name} and for Claude Code` : "Open a project to change its settings"}</span>
+          <span className="muted small">{name ? `App preferences and settings for ${name}` : "App preferences"}</span>
         </div>
         <UpdateButton />
         <button onClick={close}>Done</button>
       </header>
       <div className="settings-body">
+        <AppearanceSetting />
         <InterfaceSetting applyToLane />
         {error && <div className="error">{error}</div>}
         {!project ? (
-          <p className="muted">Settings belong to a project. Open one first.</p>
+          <p className="muted">Open a project to configure project trust and Claude Code.</p>
         ) : !ep ? (
           <p className="muted">Starting Keel for {name}…</p>
         ) : (

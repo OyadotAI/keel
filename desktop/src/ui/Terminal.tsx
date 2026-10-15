@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { register } from "../typers";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
+import { isDark, onAppearance } from "../appearance";
 
 /// A terminal over the daemon's PTY: the lane's agent itself (`agent`), or a shell in its checkout.
 ///
@@ -129,9 +130,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       await import("@xterm/xterm/css/xterm.css");
       if (disposed || !host.current) return;
       const css = getComputedStyle(document.documentElement);
-      const scheme = window.matchMedia("(prefers-color-scheme: dark)");
       // The agent's terminal is drawn for the CLI's theme; a shell follows the window.
-      const dark = agent && kindRef.current === "claude" ? await cliIsDark(ep) : scheme.matches;
+      const dark = agent && kindRef.current === "claude" ? await cliIsDark(ep) : isDark();
       if (disposed || !host.current) return;
       setBg(theme(dark).background);
       const term = new XTerm({
@@ -155,10 +155,10 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       // A shell follows the system's light and dark; an agent keeps its CLI's.
       const retheme = () => {
         if (agent && kindRef.current === "claude") return;
-        term.options.theme = theme(scheme.matches);
-        setBg(theme(scheme.matches).background);
+        term.options.theme = theme(isDark());
+        setBg(theme(isDark()).background);
       };
-      scheme.addEventListener("change", retheme);
+      const untheme = onAppearance(retheme);
       const current = useStore.getState().lanes[lane];
       const params = new URLSearchParams();
       if (wt) params.set("wt", wt);
@@ -222,7 +222,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       });
       cleanup = () => {
         unfont();
-        scheme.removeEventListener("change", retheme);
+        untheme();
         unregister();
         observer.disconnect();
         input.dispose();

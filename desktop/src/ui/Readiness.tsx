@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { get, post, type Endpoint } from "../api";
 import { useStore } from "../store";
+import { repairLane } from "../repairs";
 
 interface Finding {
   id: string;
@@ -41,11 +42,11 @@ function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
           <button className="primary" onClick={onAdopt} title="Write the agent team and the lifecycle into this project, never over a file">
             Add the team
           </button>
-        ) : finding.fix.kind !== "manual" ? (
-          <button onClick={() => onFix(finding)} title={busy ? "The lane is mid-turn: this runs when it ends" : "Send this to the lane as a prompt"}>
-            {busy ? "Queue for the agent" : "Ask the agent to fix it"}
+        ) : (
+          <button onClick={() => onFix(finding)} title={finding.fix.kind === "manual" ? "Inspect the finding and prepare the next steps with an agent" : "Send the repair to an editing lane"}>
+            {finding.fix.kind === "manual" ? (busy ? "Queue review" : "Review with agent") : (busy ? "Queue fix" : "Fix with agent")}
           </button>
-        ) : null}
+        )}
         <button className="link small" onClick={() => onIgnore(finding)}>
           Set aside
         </button>
@@ -146,16 +147,31 @@ export function Readiness({ lane }: { lane: string }) {
     try {
       const r = await post<{ written: string[]; committed?: string | null }>(ep!, "/api/adopt", undefined, { commit: true });
       setNote(`Added ${r.written.length} files${r.committed ? ` in commit ${r.committed}` : ""}.`);
+      window.dispatchEvent(new Event("keel:subagents-changed"));
     } catch (e) {
       setFailed(`Could not add the team: ${e instanceof Error ? e.message : e}`);
     }
     void read(ep!);
   }
-  function fix(f: Finding) {
+  async function fix(f: Finding) {
+    if (!project) return;
+    setFailed(undefined);
+    setNote(undefined);
     const where = f.path ? ` (${f.path})` : "";
-    void useStore
-      .getState()
-      .send(lane, `Fix the readiness finding \`${f.id}\`${where}: ${f.title}.\n\n${f.detail}\n\nSuggested fix: ${f.fix.description}`);
+    const action = f.fix.kind === "manual" ? "Review and prepare a fix for" : "Fix";
+    const prompt = `${action} the readiness finding \`${f.id}\`${where}: ${f.title}.\n\n${f.detail}\n\nSuggested fix: ${f.fix.description}\n\nVerify the finding against the actual files first. Apply project-local fixes and verify the result. Inspect hook scripts without executing them. If resolution requires credential rotation, changing remote services, or rewriting git history, prepare the exact steps and ask before those actions.`;
+    try {
+      const target = repairLane(project);
+      const store = useStore.getState();
+      const queued = !!(store.lanes[target]?.running || store.lanes[target]?.submitting);
+      store.select(target);
+      const accepted = await store.send(target, prompt);
+      if (!accepted) throw new Error(useStore.getState().lanes[target]?.error ?? "Could not send this finding to the agent.");
+      useStore.setState((s) => ({ handed: { ...s.handed, [project]: { lane: target, ids: [...new Set([...(s.handed[project]?.lane === target ? s.handed[project].ids : []), f.id])] } } }));
+      setNote(`${queued ? "Queued" : "Sent"} ${f.fix.kind === "manual" ? "for review" : "for repair"} in “${useStore.getState().lanes[target]?.title ?? "the lane"}”.`);
+    } catch (error) {
+      setFailed(`Could not start the repair: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return (

@@ -6,6 +6,17 @@ use std::collections::BTreeSet;
 /// Files read before a scan stops walking. Far past any real repository's tracked files.
 const MAX_FILES: usize = 200_000;
 
+/// A Go module download cache contains upstream fixtures and CI files, not this project's code.
+fn go_module_cache(path: &std::path::Path) -> bool {
+    path.ends_with("go/pkg/mod")
+        || (path.file_name().is_some_and(|n| n == "mod")
+            && path
+                .parent()
+                .and_then(std::path::Path::file_name)
+                .is_some_and(|n| n == "pkg")
+            && path.join("cache/download").is_dir())
+}
+
 /// A snapshot of the repository the checks run against.
 ///
 /// Built once and shared by every check, so a scan walks the tree a single time. Paths are stored
@@ -41,7 +52,9 @@ impl RepoContext {
             // — over 90 seconds for a 3.8 GB folder, which the window's own timeout then threw
             // away. The root itself is never pruned; a lane's checkout is under `.keel`.
             .filter_entry(|e| {
-                e.depth() == 0 || !matches!(e.file_name().to_str(), Some(".git" | ".keel"))
+                e.depth() == 0
+                    || (!matches!(e.file_name().to_str(), Some(".git" | ".keel"))
+                        && !go_module_cache(e.path()))
             })
             .build();
 
@@ -134,6 +147,23 @@ mod tests {
         let (_dir, ctx) = fixture(&[(".gitignore", "secret.txt\n"), ("secret.txt", "shh")]);
         assert!(!ctx.has("secret.txt"));
         assert!(ctx.has(".gitignore"));
+    }
+
+    #[test]
+    fn skips_nested_go_downloads_but_keeps_project_files_and_packages_named_mod() {
+        let (_dir, ctx) = fixture(&[
+            (
+                "xproxy/go/pkg/mod/github.com/lib/pq@v1.10.9/certs/server.key",
+                "fixture",
+            ),
+            ("xproxy/deploy/server.key", "project key"),
+            ("service/pkg/mod/main.go", "package mod"),
+            ("xproxy/.claude/hooks/check.sh", "echo check"),
+        ]);
+        assert!(!ctx.has("xproxy/go/pkg/mod/github.com/lib/pq@v1.10.9/certs/server.key"));
+        assert!(ctx.has("xproxy/deploy/server.key"));
+        assert!(ctx.has("service/pkg/mod/main.go"));
+        assert!(ctx.has("xproxy/.claude/hooks/check.sh"));
     }
 
     /// A folder of clones has a `.git` in each; the scan must not count — or walk — their objects.

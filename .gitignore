@@ -7,6 +7,7 @@ dist/
 # Local audit captures and machine-specific project state are never release assets.
 .gstack/
 .keel/permissions.json
+.keel/subagent-profiles.json
 .keel/ignored.json
 .keel/worktrees/
 

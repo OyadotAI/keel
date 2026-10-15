@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { get, url } from "../api";
 import { useStore, type Lane } from "../store";
 import { ApprovalStrip } from "./Approvals";
+import { Working } from "./Working";
+import { activity } from "./StatusBar";
 import { Icon } from "./icons";
 
 export function patchLane(lane: string, patch: Partial<Lane>) {
@@ -25,13 +27,15 @@ export function Composer({ lane }: { lane: string }) {
   const receipt = useStore((s) => s.lanes[lane]?.receipt);
   const [uploading, setUploading] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
+  const [subagents, setSubagents] = useState<{ name: string; display_name: string }[]>([]);
   const [choice, setChoice] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const write = (text: string) => useStore.getState().draft(lane, text);
+  const refreshSubagents = () => void readSubagents(lane).then(setSubagents, () => undefined);
   const token = /(?:^|\s)([@/][^\s]*)$/.exec(draft)?.[1];
-  const candidates = suggestions(token, files, commands, dismissed);
+  const candidates = suggestions(token, files, commands, dismissed, subagents);
   useEffect(() => { setChoice(0); setDismissed(false); }, [token]);
   useEffect(() => {
     const el = input.current;
@@ -43,12 +47,19 @@ export function Composer({ lane }: { lane: string }) {
     let cancelled = false;
     type Node = { path: string; dir: boolean; children?: Node[] };
     const walk = (nodes: Node[]): string[] => nodes.flatMap((n) => n.dir ? walk(n.children ?? []) : [n.path]);
-    void useStore.getState().ensure(l.project).then((ep) => get<Node[]>(ep, "/api/tree", { wt: l.wt })).then((nodes) => { if (!cancelled) setFiles(walk(nodes)); }, () => {});
+    void useStore.getState().ensure(l.project).then(async (ep) => {
+      const [nodes, agents] = await Promise.all([get<Node[]>(ep, "/api/tree", { wt: l.wt }), get<{ name: string; display_name: string }[]>(ep, "/api/agents/profiles")]);
+      if (!cancelled) { setFiles(walk(nodes)); setSubagents(agents); }
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [lane]);
   const unavailable = uploading || submitting || disconnected || elsewhere;
   const hasMessage = Boolean(draft.trim() || attachments?.length);
-  function choose(value: string) { write(draft.slice(0, draft.length - (token?.length ?? 0)) + value + " "); input.current?.focus(); }
+  function choose(value: string) {
+    const tagged = value.startsWith("@agent:");
+    const insertion = tagged ? `@${value.slice(7)}` : value;
+    write(draft.slice(0, draft.length - (token?.length ?? 0)) + insertion + " "); input.current?.focus();
+  }
   function send() {
     if (!hasMessage || unavailable) return;
     const command = draft.trim();
@@ -61,7 +72,11 @@ export function Composer({ lane }: { lane: string }) {
       const next = useStore.getState().newLane(l.project, l.isolated, l.agent);
       useStore.getState().select(next); return;
     }
-    void useStore.getState().send(lane, draft.trim() ? draft : "Please review the attached files.", attachments);
+    const prompt = draft.trim() ? draft : "Please review the attached files.";
+    const mentions = new Set(Array.from(prompt.matchAll(/(?:^|\s)@([a-z0-9-]+)(?=$|\s|[.,!?])/g), (match) => match[1]));
+    const tagged = subagents.filter((agent) => mentions.has(agent.name));
+    const system = tagged.length ? `The user explicitly tagged these Claude Code subagents: ${tagged.map((agent) => `\`${agent.name}\``).join(", ")}. Use the Agent tool (called Task in older versions) to delegate the requested work to each tagged subagent, using its exact name as subagent_type. Pass the request and relevant context, then integrate their results. A direct mention does not require unrelated pipeline stages. If a member cannot run, report the actual blocker. The visible user message is the request; the @name tokens identify the subagents.` : undefined;
+    void useStore.getState().send(lane, prompt, attachments, system);
   }
   async function upload(picked: File[]) {
     const l = useStore.getState().lanes[lane];
@@ -90,11 +105,14 @@ export function Composer({ lane }: { lane: string }) {
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
     {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt)}>Retry same message</button></div>}
     <div className="chat-composer">
-      {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => <button id={`suggestion-${i}`} key={c} role="option" aria-selected={choice === i} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(c)}>{c}</button>)}</div>}
+      {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => {
+        const agent = c.startsWith("@agent:") ? subagents.find((a) => a.name === c.slice(7)) : undefined;
+        return <button id={`suggestion-${i}`} key={c} role="option" aria-selected={choice === i} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(c)}>{agent ? `@${agent.display_name || agent.name} · ${agent.name}` : c}</button>;
+      })}</div>}
       <Attachments lane={lane} />
       <textarea ref={input} value={draft} aria-label="Message the agent" placeholder="Ask, build, or explain…" spellCheck={false}
         aria-controls={candidates.length ? "composer-options" : undefined} aria-activedescendant={candidates.length ? `suggestion-${choice}` : undefined}
-        onChange={(e) => write(e.target.value)}
+        onChange={(e) => { write(e.target.value); if (e.target.value.endsWith("@")) void refreshSubagents(); }}
         onPaste={(e) => { const images = Array.from(e.clipboardData.files); if (images.length) { e.preventDefault(); void upload(images); } }}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -115,10 +133,26 @@ export function Composer({ lane }: { lane: string }) {
   </div>;
 }
 
-function suggestions(token: string | undefined, files: string[], commands: string[] | undefined, dismissed: boolean) {
+async function readSubagents(lane: string) {
+  const current = useStore.getState().lanes[lane];
+  if (!current) return [];
+  const endpoint = await useStore.getState().ensure(current.project);
+  return get<{ name: string; display_name: string }[]>(endpoint, "/api/agents/profiles");
+}
+
+function suggestions(token: string | undefined, files: string[], commands: string[] | undefined, dismissed: boolean, subagents: { name: string; display_name: string }[]) {
   if (!token || dismissed) return [];
-  const all = token[0] === "@" ? files.map((f) => `@${f}`) : [...new Set(["/settings", "/extensions", "/clear", ...(commands ?? []).map((c) => `/${c}`)])];
-  return all.filter((c) => c.toLowerCase().includes(token.toLowerCase())).slice(0, 8);
+  if (token[0] === "@") {
+    const matches = (value: string) => value.toLowerCase().includes(token.toLowerCase());
+    const agents = subagents.map((a) => `@agent:${a.name}`).filter((c) => matches(`@${c.slice(7)}`));
+    const paths = files
+      .filter((f) => !/(^|\/)\.claude\/agents\/[^/]+\.md$/i.test(f))
+      .map((f) => `@${f}`)
+      .filter(matches);
+    return [...agents, ...paths].slice(0, 8);
+  }
+  return [...new Set(["/settings", "/extensions", "/clear", ...(commands ?? []).map((c) => `/${c}`)])]
+    .filter((c) => c.toLowerCase().includes(token.toLowerCase())).slice(0, 8);
 }
 
 function Attachments({ lane }: { lane: string }) {
@@ -133,6 +167,10 @@ function Attachments({ lane }: { lane: string }) {
 function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, busy, mode }: {
   lane: string; disconnected: boolean; elsewhere: boolean; submitting: boolean; uploading: boolean; busy: boolean; mode: Lane["mode"];
 }) {
-  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? "Working in this lane" : mode === "plan" ? "Plan · Explore before making changes" : "Build · Changes stay in this lane’s checkout";
-  return <div className="chat-status" role="status">{text}{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;
+  const waiting = useStore((s) => !!s.lanes[lane]?.pending.length);
+  const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
+  const agent = useStore((s) => s.lanes[lane]?.agent === "codex" ? "Codex" : "Claude");
+  const live = busy && !waiting && !disconnected && !elsewhere;
+  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan · Explore before making changes" : "Build · Changes stay in this lane’s checkout";
+  return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span>{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;
 }

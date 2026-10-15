@@ -5,6 +5,7 @@
 //! credential.
 
 mod agent;
+mod agent_profiles;
 mod agents;
 mod approve;
 mod askmcp;

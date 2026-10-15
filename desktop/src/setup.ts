@@ -15,6 +15,7 @@ export interface Warning {
   /// For a scanner finding: the scanner's own recipe, which is what the check looks for. The
   /// detail says what is wrong; an agent handed only that may fix it without satisfying the check.
   recipe?: string;
+  path?: string;
 }
 
 /// Whether this one actually stops a lane from working: Claude Code missing or logged out. A
@@ -32,6 +33,7 @@ interface Finding {
   severity: "critical" | "high" | "medium" | "low";
   title: string;
   detail: string;
+  path?: string | null;
   fix?: { description: string };
 }
 export interface Meter {
@@ -79,7 +81,7 @@ export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings:
     const open = state.value.scan.findings.filter((f) => !ignored.has(f.id));
     readiness = { open: open.length, critical: open.some((f) => f.severity === "critical") };
     for (const f of state.value.scan.findings)
-      if (CONFIG.test(f.id) && f.severity !== "low" && !ignored.has(f.id)) out.push({ id: f.id, severity: f.severity as Warning["severity"], title: f.title, detail: f.detail, fix: "readiness", recipe: f.fix?.description });
+      if (CONFIG.test(f.id) && f.severity !== "low" && !ignored.has(f.id)) out.push({ id: f.id, severity: f.severity as Warning["severity"], title: f.title, detail: f.detail, path: f.path ?? undefined, fix: "readiness", recipe: f.fix?.description });
   } else out.push(unread("scan", "the project's configuration", state.reason));
   if (plugins.status === "fulfilled") {
     for (const p of plugins.value.suggested)

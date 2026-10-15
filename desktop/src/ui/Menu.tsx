@@ -1,9 +1,30 @@
 import { cover } from "../cover";
-import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /// A small menu or popover anchored under its button. Esc or a click outside closes it.
 export function Floating({ anchor, onClose, children, kind = "menu", width }: { anchor: DOMRect; onClose: () => void; children: ReactNode; kind?: "menu" | "popover"; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 8, top: 8 });
+  const w = Math.min(width ?? (kind === "menu" ? 240 : 340), window.innerWidth - 16);
+  useLayoutEffect(() => {
+    const place = () => {
+      const el = ref.current;
+      if (!el) return;
+      const point = anchor.width === 0 && anchor.height === 0;
+      const left = Math.max(8, Math.min(point ? anchor.left : anchor.right - el.offsetWidth, window.innerWidth - el.offsetWidth - 8));
+      const below = anchor.bottom + (point ? 0 : 4);
+      const above = anchor.top - el.offsetHeight - (point ? 0 : 4);
+      const preferred = below + el.offsetHeight <= window.innerHeight - 8 ? below : above;
+      const top = Math.max(8, Math.min(preferred, window.innerHeight - el.offsetHeight - 8));
+      setPosition((old) => old.left === left && old.top === top ? old : { left, top });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    if (ref.current) observer.observe(ref.current);
+    window.addEventListener("resize", place);
+    return () => { observer.disconnect(); window.removeEventListener("resize", place); };
+  }, [anchor, w]);
   useEffect(() => cover(), []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -11,15 +32,10 @@ export function Floating({ anchor, onClose, children, kind = "menu", width }: { 
     ref.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
     return () => window.removeEventListener("keydown", key);
   }, [onClose]);
-  const w = width ?? (kind === "menu" ? 240 : 340);
-  // A zero-size anchor is a pointer (a right-click): open at it rather than under a button.
-  const point = anchor.width === 0 && anchor.height === 0;
-  const left = Math.max(8, Math.min(point ? anchor.left : anchor.right - w, window.innerWidth - w - 8));
-  const top = Math.min(anchor.bottom + (point ? 0 : 4), window.innerHeight - 260);
-  return (
+  return createPortal(
     <>
       <div className="scrim" onClick={onClose} />
-      <div ref={ref} className={kind} role={kind === "menu" ? "menu" : "dialog"} style={{ top, left, width: w }} onKeyDown={(e) => {
+      <div ref={ref} className={kind} role={kind === "menu" ? "menu" : "dialog"} style={{ ...position, width: w, minWidth: 0, maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100dvh - 16px)", overflowY: "auto" }} onKeyDown={(e) => {
         if (kind !== "menu" || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
         const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled)")];
         const at = items.indexOf(document.activeElement as HTMLElement);
@@ -29,6 +45,6 @@ export function Floating({ anchor, onClose, children, kind = "menu", width }: { 
       }}>
         {children}
       </div>
-    </>
+    </>, document.body,
   );
 }

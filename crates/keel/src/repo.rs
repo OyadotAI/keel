@@ -95,7 +95,19 @@ pub fn git_act(
 
     match action {
         "stage" => git_run(root, &["add", "--", path]).map(|_| ()),
-        "unstage" => git_run(root, &["restore", "--staged", "--", path]).map(|_| ()),
+        "unstage" => {
+            if git(root, &["rev-parse", "--verify", "HEAD"]).is_some() {
+                git_run(root, &["restore", "--staged", "--", path]).map(|_| ())
+            } else {
+                // Before the first commit there is no HEAD to restore. Remove only the index
+                // entry; the working file, including edits made after staging, stays intact.
+                git_run(
+                    root,
+                    &["rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path],
+                )
+                .map(|_| ())
+            }
+        }
         // One hunk, not the file. Reviewing a four-hunk edit and wanting three of them is the
         // ordinary case, and "discard the file and ask again" throws away the three.
         "discard-hunk" => {
@@ -122,7 +134,7 @@ pub fn git_act(
                 Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
             }
         }
-        "discard" => {
+        "discard" | "discard-worktree" => {
             // Outside a repository every file reads as untracked, and "discard" trashed the
             // person's own file there. There is nothing to restore it from, so nothing is done.
             if !crate::gitroots::is_root(root) && git(root, &["rev-parse", "--git-dir"]).is_none() {
@@ -138,7 +150,11 @@ pub fn git_act(
                 ));
             }
             if tracked(root, path) {
-                git_run(root, &["restore", "--staged", "--worktree", "--", path]).map(|_| ())
+                if action == "discard-worktree" {
+                    git_run(root, &["restore", "--worktree", "--", path]).map(|_| ())
+                } else {
+                    git_run(root, &["restore", "--staged", "--worktree", "--", path]).map(|_| ())
+                }
             } else {
                 crate::fsops::trash(target.as_std_path())
             }
@@ -1355,6 +1371,12 @@ pub struct DiffLine {
 
 /// Parse `git diff` for one path into hunks the browser can render side by side with line numbers.
 pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
+    git_diff_area(root, path, None)
+}
+
+/// A source-control selection compares either HEAD to index, or index to working tree.
+/// `None` retains the automatic fallback used by turn cards and other existing clients.
+pub fn git_diff_area(root: &Utf8Path, path: &str, staged: Option<bool>) -> DiffResponse {
     // In a workspace the path carries the repository it came from — `backend/src/api.ts` — and git
     // has to be run inside that repository, under the name it knows the file by.
     let (root, path) = crate::gitroots::resolve(root, path);
@@ -1364,8 +1386,9 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
     // It has to exist for that to mean anything. "git does not know this path" also answers for a
     // path git cannot match at all — one from a stale changes list, or from another checkout —
     // and calling that untracked put a NEW badge on a diff with nothing under it.
-    let untracked =
-        root.join(path).exists() && git(root, &["ls-files", "--error-unmatch", path]).is_none();
+    let untracked = staged != Some(true)
+        && root.join(path).is_file()
+        && git(root, &["ls-files", "--error-unmatch", "--", path]).is_none();
 
     let (raw, note) = if untracked {
         match std::fs::read_to_string(root.join(path)) {
@@ -1384,6 +1407,13 @@ pub fn git_diff(root: &Utf8Path, path: &str) -> DiffResponse {
                 Some("This file is not on disk any more.".to_string()),
             ),
         }
+    } else if let Some(staged) = staged {
+        let mut args = vec!["diff", "--no-color", "-U3"];
+        if staged {
+            args.push("--cached");
+        }
+        args.extend(["--", path]);
+        (git(root, &args).unwrap_or_default(), None)
     } else {
         let unstaged = git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default();
         if !unstaged.trim().is_empty() {

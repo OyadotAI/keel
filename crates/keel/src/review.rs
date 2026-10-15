@@ -1114,7 +1114,7 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
         .as_ref()
         .map(keel_scanner::scan)
         .unwrap_or_else(|| Report::new(Vec::new()));
-    let mut files: Vec<(&str, String)> = keel_generator::team::agents()
+    let mut files: Vec<(&str, String)> = keel_generator::team::files()
         .into_iter()
         .map(|(p, b)| (p, b.to_string()))
         .collect();
@@ -1482,7 +1482,7 @@ mod tests {
         assert_eq!(before.severity, keel_scanner::Severity::Medium);
 
         let first = adopt(&root).unwrap();
-        for (path, _) in keel_generator::team::agents() {
+        for (path, _) in keel_generator::team::files() {
             assert!(
                 first.written.iter().any(|w| w == path),
                 "{path} not written"
@@ -1501,6 +1501,7 @@ mod tests {
             "designer",
             "principal",
             "qa",
+            "oya-browser",
             "reviewer",
             "security",
             "reliability",

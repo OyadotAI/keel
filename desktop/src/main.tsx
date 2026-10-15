@@ -1,3 +1,4 @@
+import "./appearance";
 import { createRoot } from "react-dom/client";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { App } from "./ui/App";

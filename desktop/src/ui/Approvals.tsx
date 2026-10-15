@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore, type Pending } from "../store";
 import { Icon } from "./icons";
 import { label } from "../keys";
-import { focusTerminal } from "./kit";
+import { Dialog, focusTerminal } from "./kit";
 import { post } from "../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Markdown } from "./Markdown";
@@ -82,6 +83,7 @@ function PlanApproval({ lane, p }: { lane: string; p: Pending }) {
     return write?.tool === "Write" && typeof write.input?.content === "string" ? write.input.content : undefined;
   });
   const [sending, setSending] = useState(false);
+  const [reading, setReading] = useState(false);
   const plan = typeof p.input.plan === "string" ? p.input.plan : writtenPlan;
   const permissions = Array.isArray(p.input.allowedPrompts) ? p.input.allowedPrompts : [];
   async function decide(decision: "allow" | "deny") {
@@ -90,16 +92,23 @@ function PlanApproval({ lane, p }: { lane: string; p: Pending }) {
     setSending(false);
     after();
   }
+  const approve = <button className="primary" disabled={sending} onClick={() => void decide("allow")}>Approve plan <kbd>{label({ key: "a", shift: true })}</kbd></button>;
+  const stay = <button disabled={sending} onClick={() => void decide("deny")}>Stay in plan mode <kbd>{label({ key: "d", shift: true })}</kbd></button>;
   return <div className="strip-row plan-approval">
-    <div className="approval-eyebrow">Your approval</div>
-    <div className="strip-title">Ready to implement</div>
-    <p className="approval-description">Review the plan before allowing the agent to leave plan mode and start making changes.</p>
-    {plan && <details className="approval-plan" open><summary>Implementation plan</summary><Markdown text={plan} /></details>}
-    {permissions.length > 0 && <details className="approval-plan"><summary>Requested permissions</summary><ul>{permissions.map((p, i) => <li key={i}>{typeof p?.prompt === "string" ? p.prompt : JSON.stringify(p)}</li>)}</ul></details>}
-    <div className="actions">
-      <button className="primary" disabled={sending} onClick={() => void decide("allow")}>Approve plan <kbd>{label({ key: "a", shift: true })}</kbd></button>
-      <button disabled={sending} onClick={() => void decide("deny")}>Stay in plan mode <kbd>{label({ key: "d", shift: true })}</kbd></button>
+    <header className="plan-approval-header">
+      <div><div className="approval-eyebrow">Your approval</div><div className="strip-title">Ready to implement</div></div>
+      {plan && <button className="link" onClick={() => setReading(true)}><Icon name="maximize" size={14} />Read full plan</button>}
+    </header>
+    <p className="approval-description">Review the plan, then approve to start making changes.</p>
+    <div className="plan-approval-body" tabIndex={0} aria-label="Implementation plan">
+      {plan ? <Markdown text={plan} /> : <p className="muted">No plan text was provided. Review the conversation before approving.</p>}
+      {permissions.length > 0 && <details className="approval-plan"><summary>Requested permissions</summary><ul>{permissions.map((p, i) => <li key={i}>{typeof p?.prompt === "string" ? p.prompt : JSON.stringify(p)}</li>)}</ul></details>}
     </div>
+    <div className="actions plan-approval-actions">{approve}{stay}</div>
+    {reading && plan && createPortal(<Dialog title="Review plan" onClose={() => setReading(false)}>
+      <div className="plan-reader-content" tabIndex={0}><Markdown text={plan} />{permissions.length > 0 && <details><summary>Requested permissions</summary><ul>{permissions.map((p, i) => <li key={i}>{typeof p?.prompt === "string" ? p.prompt : JSON.stringify(p)}</li>)}</ul></details>}</div>
+      <div className="actions plan-reader-actions"><button onClick={() => setReading(false)}>Back to conversation</button><span style={{ flex: 1 }} />{stay}{approve}</div>
+    </Dialog>, document.body)}
   </div>;
 }
 

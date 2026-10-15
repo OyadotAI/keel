@@ -23,6 +23,7 @@ const TEAM: &[&str] = &[
     "designer",
     "principal",
     "qa",
+    "oya-browser",
     "reviewer",
     "security",
     "reliability",
@@ -918,11 +919,12 @@ mod tests {
         all
     }
 
-    const TEAM_FILES: [(&str, &str); 7] = [
+    const TEAM_FILES: [(&str, &str); 8] = [
         (".claude/agents/pm.md", ""),
         (".claude/agents/designer.md", ""),
         (".claude/agents/principal.md", ""),
         (".claude/agents/qa.md", ""),
+        (".claude/agents/oya-browser.md", ""),
         (".claude/agents/reviewer.md", ""),
         (".claude/agents/security.md", ""),
         (".claude/agents/reliability.md", ""),

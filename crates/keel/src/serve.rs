@@ -881,6 +881,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::agents::create),
         )
         .route(
+            "/api/agents/profiles",
+            get(crate::agent_profiles::list).post(crate::agent_profiles::save),
+        )
+        .route(
             "/api/commands/create",
             axum::routing::post(crate::agents::create_command),
         )
@@ -1639,15 +1643,24 @@ async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus
 
 async fn api_git_diff(
     Checkout(repo): Checkout,
-    Query(query): Query<crate::tree::FileQuery>,
+    Query(query): Query<GitDiffQuery>,
 ) -> Json<crate::repo::DiffResponse> {
     Json(
         blocking(
-            move || crate::repo::git_diff(&repo, &query.path),
+            move || match query.staged {
+                Some(staged) => crate::repo::git_diff_area(&repo, &query.path, Some(staged)),
+                None => crate::repo::git_diff(&repo, &query.path),
+            },
             Default::default(),
         )
         .await,
     )
+}
+
+#[derive(serde::Deserialize)]
+struct GitDiffQuery {
+    path: String,
+    staged: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]

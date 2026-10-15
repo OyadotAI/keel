@@ -1,7 +1,8 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore, type Agent, type Session } from "../store";
+import { get, type Endpoint } from "../api";
 import { Floating } from "./Menu";
 import { LaneViewSwitch } from "./LaneViewSwitch";
 import { SetupBadge } from "./SetupWarnings";
@@ -10,6 +11,8 @@ import { label } from "../keys";
 import { cycle } from "./App";
 import { activity } from "./StatusBar";
 import { BrandMark } from "./BrandMark";
+import { MemberAvatar } from "./MemberAvatar";
+import { Working } from "./Working";
 import type { Lane } from "../store";
 import type { Turn } from "../reduce";
 
@@ -30,14 +33,13 @@ function lastLine(t: Turn): string {
   return out;
 }
 
-/// The line under a lane's name: what it is doing while it works, and the last thing it said once
-/// it stops — so the rail answers "where is each of them" without opening any of them.
-function lastWord(l: Lane): { text: string; tone: string } {
+/// Extra activity detail for the conversation's tooltip, keeping sidebar rows to one line.
+function lastWord(l: Lane): string {
   const a = activity(l);
-  if (a.tone !== "idle") return { text: a.label, tone: a.tone };
+  if (a.tone !== "idle") return a.label;
   const t = l.conv.turns.at(-1);
-  if (t?.gate?.status === "failed") return { text: "Checks failed", tone: "bad" };
-  return { text: t ? lastLine(t) : "", tone: "idle" };
+  if (t?.gate?.status === "failed") return "Checks failed";
+  return t ? lastLine(t) : "";
 }
 
 export async function pickProject() {
@@ -47,9 +49,11 @@ export async function pickProject() {
 
 export function Sidebar() {
   const order = useStore((s) => s.order);
+  const project = useStore((s) => (s.active ? s.lanes[s.active]?.project : undefined) ?? s.order[0]);
+  const [conversationsOpen, setConversationsOpen] = useState(true);
   return (
-    <nav className="sidebar" aria-label="Projects">
-      <div className="workspace-brand"><span className="brand-symbol"><BrandMark /></span><strong>Keel</strong><span className="workspace-edition">Workspace</span></div>
+    <nav className="sidebar" aria-label="Workspace">
+      <div className="workspace-brand"><span className="brand-symbol"><BrandMark /></span><strong>Keel</strong></div>
       <div className="sidebar-actions">
         <button className="open" onClick={pickProject} title={`Open a project folder (${label({ key: "o" })})`}>
           <Icon name="folder" size={17} /> Open project…
@@ -58,12 +62,17 @@ export function Sidebar() {
           <Icon name="plus" size={17} />
         </button>
       </div>
-      <div className="sidebar-head eyebrow">Projects</div>
       <div className="sidebar-list">
-        {order.map((p) => (
-          <ProjectRow key={p} path={p} />
-        ))}
-        {order.length === 0 && <div className="small faint" style={{ padding: "4px 8px" }}>No projects open.</div>}
+        <section className="sidebar-section" aria-label="Conversations">
+          <button className="sidebar-section-toggle" onClick={() => setConversationsOpen((open) => !open)} aria-expanded={conversationsOpen} aria-controls="sidebar-conversations">
+            <Icon name={conversationsOpen ? "chevron-down" : "chevron-right"} size={12} />Conversations
+          </button>
+          <div id="sidebar-conversations" hidden={!conversationsOpen}>
+            {order.map((p) => <ProjectRow key={p} path={p} />)}
+            {order.length === 0 && <p className="sidebar-empty">Open a project to get started.</p>}
+          </div>
+        </section>
+        {project && <Members key={project} project={project} />}
       </div>
       <div className="sidebar-footer">
         <button onClick={() => useStore.setState((s) => ({ extensions: !s.extensions, settings: false, creating: false }))}><Icon name="puzzle" size={16} />Extensions</button>
@@ -71,6 +80,84 @@ export function Sidebar() {
       </div>
     </nav>
   );
+}
+
+interface Member { name: string; display_name: string; avatar?: string | null }
+const MEMBERS_VISIBLE = 10;
+
+function Members({ project }: { project: string }) {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  const projectName = useStore((s) => s.projects[project]?.name);
+  const workingNames = useStore((s) => {
+    const names = new Set<string>();
+    for (const id of s.projects[project]?.lanes ?? []) {
+      const lane = s.lanes[id];
+      if (!lane?.running || lane.pending.length) continue;
+      const turn = lane.conv.turns.at(-1);
+      for (const call of Object.values(turn?.calls ?? {})) {
+        if (!/^(Agent|Task)$/.test(call.tool) || typeof call.input?.subagent_type !== "string") continue;
+        if (call.state === "running" || (turn?.children[call.id] ?? []).some((id) => turn?.calls[id]?.state === "running")) names.add(call.input.subagent_type);
+      }
+    }
+    return [...names].sort().join("\n");
+  });
+  const working = new Set(workingNames.split("\n"));
+  useEffect(() => {
+    let live = true;
+    setLoaded(false);
+    const refresh = () => void useStore.getState().ensure(project).then((ep: Endpoint) => get<Member[]>(ep, "/api/agents/profiles")).then((list) => {
+      if (live) { setMembers(list); setLoaded(true); setLoadError(false); }
+    }, () => { if (live) { setMembers([]); setLoaded(true); setLoadError(true); } });
+    window.addEventListener("keel:subagents-changed", refresh);
+    refresh();
+    return () => { live = false; window.removeEventListener("keel:subagents-changed", refresh); };
+  }, [project]);
+
+  function tag(member: Member) {
+    const store = useStore.getState();
+    let lane = store.active ? store.lanes[store.active] : undefined;
+    if (!lane || lane.project !== project || lane.agent !== "claude" || lane.interface === "terminal") {
+      lane = (store.projects[project]?.lanes ?? []).map((id) => store.lanes[id]).find((candidate) => candidate?.agent === "claude" && candidate.interface !== "terminal");
+    }
+    if (!lane) {
+      const id = store.newLane(project, false, "claude", "chat");
+      store.select(id);
+      lane = useStore.getState().lanes[id];
+    } else {
+      store.select(lane.id);
+    }
+    const draft = lane?.draft ?? "";
+    store.draft(lane!.id, `${draft}${draft && !/\s$/.test(draft) ? " " : ""}@${member.name} `);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus());
+  }
+
+  if (!loaded) return null;
+  const shown = showAll ? members : members.slice(0, MEMBERS_VISIBLE);
+  return <section className="sidebar-section member-section" aria-label={`Members in ${projectName ?? project}`}>
+    <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Members in ${projectName ?? project}`}>
+      <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />Members
+    </button>
+    <div id="sidebar-members" hidden={!expanded}>
+      {members.length === 0 && <div className="member-empty">
+        <p>{loadError ? "Couldn’t load your members." : "Install subagents to start tagging your team."}</p>
+        <button onClick={() => {
+          if (loadError) window.dispatchEvent(new Event("keel:subagents-changed"));
+          else useStore.setState({ extensions: true, extensionsSection: "agents", settings: false, creating: false });
+        }}>{loadError ? "Retry" : "Add team"}<Icon name={loadError ? "chevron-right" : "plus"} size={12} /></button>
+      </div>}
+      {shown.map((member) => <button className={`member-row${working.has(member.name) ? " is-working" : ""}`} key={member.name} onClick={() => tag(member)} aria-label={`Tag ${member.display_name || member.name}${working.has(member.name) ? ", working" : ""}`} title={`@${member.name}${working.has(member.name) ? " · Working" : ""} · click to tag`}>
+        <MemberAvatar name={member.name} displayName={member.display_name} avatar={member.avatar} working={working.has(member.name)} />
+        <span className="member-name">{member.display_name || member.name}</span>
+        {working.has(member.name) ? <Working /> : <span className="member-action" aria-hidden="true">@</span>}
+      </button>)}
+      {members.length > MEMBERS_VISIBLE && <button className="member-more" onClick={() => setShowAll((all) => !all)} aria-expanded={showAll}>{showAll ? "Show less" : `Show ${members.length - MEMBERS_VISIBLE} more`}</button>}
+      {members.length > 0 && <p className="member-hint">Type <span>@</span> to mention a member</p>}
+    </div>
+  </section>;
 }
 
 function ProjectRow({ path }: { path: string }) {
@@ -198,13 +285,7 @@ function LaneRow({ id }: { id: string }) {
   const l = useStore((s) => s.lanes[id]);
   const active = useStore((s) => s.active === id);
   const failed = useStore((s) => s.lanes[id]?.conv.turns.at(-1)?.gate?.status === "failed");
-  // Two strings, so a row re-renders when its own line changes and not on every op.
-  const sub = useStore((s) => {
-    const w = s.lanes[id] ? lastWord(s.lanes[id]) : { text: "", tone: "idle" };
-    return `${w.tone}|${w.text}`;
-  });
-  const subTone = sub.slice(0, sub.indexOf("|"));
-  const subText = sub.slice(sub.indexOf("|") + 1);
+  const subText = useStore((s) => s.lanes[id] ? lastWord(s.lanes[id]) : "");
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   const root = useStore((s) => (l ? s.projects[l.project]?.path : undefined));
   if (!l) return null;
@@ -223,13 +304,7 @@ function LaneRow({ id }: { id: string }) {
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
-      <span className="lane-text">
-        <span className="lane-title">{l.title}</span>
-        <span className="lane-meta">
-          <span className="lane-agent">{l.agent === "codex" ? "Codex" : "Claude"}</span>
-          {subText && <><span className="lane-meta-dot" aria-hidden="true">·</span><span className={`lane-sub ${subTone}`}>{subText}</span></>}
-        </span>
-      </span>
+      <span className="lane-title" title={`${l.agent === "codex" ? "Codex" : "Claude"}${subText ? ` · ${subText}` : ""}`}>{l.title}</span>
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
     <button className="ghost lane-close" aria-label={`Close ${l.title}`} title={`Close lane (${label({ key: "w" })})`} onClick={() => ask("close")}>
