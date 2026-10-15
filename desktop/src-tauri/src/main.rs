@@ -269,7 +269,44 @@ fn is_dir(path: String) -> bool {
     std::path::Path::new(&path).is_dir()
 }
 
+/// Where a panic is written down. A panic on the main thread unwinds into AppKit's `sendEvent:`
+/// (an `extern "C"` frame in tao), which aborts — and the crash report then shows only
+/// `panic_cannot_unwind`, with the original frames gone and the message sent to a stderr that a
+/// Finder-launched app points at nothing. 0.4.4 crashed exactly that way with nothing to go on.
+fn panic_log() -> Option<PathBuf> {
+    let dir = if cfg!(target_os = "macos") {
+        PathBuf::from(std::env::var_os("HOME")?).join("Library/Logs/Keel")
+    } else if cfg!(windows) {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Keel")
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".keel")
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("panic.log"))
+}
+
+/// Append every panic's message, place and backtrace to `panic_log()`, then run the default hook.
+fn record_panics() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(path) = panic_log() {
+            use std::io::Write;
+            // Never unbounded: a log past 1 MB starts again rather than growing for ever.
+            let fresh = std::fs::metadata(&path).map(|m| m.len() > 1 << 20).unwrap_or(false);
+            let file = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&path);
+            if let Ok(mut file) = file {
+                let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+                let trace = std::backtrace::Backtrace::force_capture();
+                let _ = writeln!(file, "--- {when} keel-desktop {} thread '{thread}'\n{info}\n{trace}", env!("CARGO_PKG_VERSION"));
+            }
+        }
+        default(info);
+    }));
+}
+
 fn main() {
+    record_panics();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -287,4 +324,21 @@ fn main() {
                 app.state::<Daemons>().lock().clear();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_panic_is_written_down() {
+        let home = tempfile::tempdir().unwrap();
+        // The only test in this binary that touches the environment or the panic hook.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::set_var("LOCALAPPDATA", home.path());
+        }
+        super::record_panics();
+        let _ = std::thread::spawn(|| panic!("the original message")).join();
+        let log = std::fs::read_to_string(super::panic_log().unwrap()).unwrap();
+        assert!(log.contains("the original message") && log.contains("main.rs"), "{log}");
+    }
 }

@@ -24,3 +24,11 @@ ed25519-dalek = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# tao 0.37.1 declares its AppKit overrides `extern "C"`, so an Objective-C exception raised under
+# `-[NSApplication sendEvent:]` cannot unwind to NSApplication's own handler and aborts the app
+# (`panic_cannot_unwind`, no exception in the report). macOS 27 raises one from the Siri affordance
+# over selected text, and 0.4.4 crashed that way. tao#1354 makes them `C-unwind`; drop this once a
+# tao release carries it. Needs `panic = "unwind"`, the default, which this workspace keeps.
+[patch.crates-io]
+tao = { git = "https://github.com/tauri-apps/tao", rev = "8423382b67d0993815caf2c8da0b2899c50556f5" }
