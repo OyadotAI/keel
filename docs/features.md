@@ -28,7 +28,8 @@ when you switch lanes. **Source Control** in the left sidebar provides staging, 
 committing, fetch/pull/push, history, branches, and pull requests. Click a changed file to compare
 it in the center; staged and unstaged comparisons remain distinct. A colored commit graph sits
 below the changes list, with local/remote branch badges, an all/current branch filter, and
-fetch/pull/push controls. Selecting a commit opens its files and diffs in the center. Lane merge/discard actions
+fetch/pull/push controls. Wide graphs scroll horizontally within their own column, keeping commit
+messages and branch labels visible. Selecting a commit opens its files and diffs in the center. Lane merge/discard actions
 use the existing confirmations, and Pull holds the checkout's writer claim while it runs.
 
 Coding Mode navigation follows the common VS Code bindings: **⌘P / Ctrl+P** opens files by fuzzy path

@@ -164,6 +164,7 @@ function GitFeedback({ error, note, retry }: { error?: string; note?: string; re
 function CodingGit({ lane, ep, wt, branches, pending, running, act, section, setSection, feedback, children, onOpenCommit }: Omit<GitContentProps, "log" | "onOpenDiff" | "selection"> & { setSection: (section: GitSection) => void; feedback: ReactNode; children: ReactNode; onOpenCommit?: () => void }) {
   const git = useStore((s) => s.lanes[lane]?.git);
   const current = branches?.local.find((b) => b.current);
+  const selected = useIde((s) => s.lanes[lane]?.commit?.sha);
   const [menu, setMenu] = useState(false);
   const [changesOpen, setChangesOpen] = useState(true);
   return <div className="git-panel coding-git">
@@ -181,7 +182,7 @@ function CodingGit({ lane, ep, wt, branches, pending, running, act, section, set
         {children}
       </div>}
     </section>
-    <CommitGraph ep={ep} wt={wt} revision={git} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />
+    <CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />
     <button className="coding-branch-status" title="Manage branches" onClick={() => { setSection("branches"); setChangesOpen(true); }}><Icon name="branch" size={13} /><span>{branches?.current ?? git?.branch ?? "No commits yet"}</span><small>{current?.behind ?? 0}↓ {current?.ahead ?? 0}↑</small></button>
   </div>;
 }

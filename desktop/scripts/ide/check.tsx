@@ -4,11 +4,27 @@ import { createRoot } from "react-dom/client";
 import { useStore } from "../../src/store";
 import { useIde } from "../../src/ide";
 import { applyFrames } from "../../src/reduce";
+import { setAppearance } from "../../src/appearance";
 import { App } from "../../src/ui/App";
 import "../../src/styles.css";
 import "../../src/workspace.css";
 import "../../src/ide.css";
 
+const params = new URLSearchParams(location.search);
+const wide = params.get("graph") === "wide";
+const theme = params.get("theme");
+if (theme === "light" || theme === "dark") setAppearance(theme);
+if (params.has("sidebar")) localStorage.setItem("--coding-sidebar-w", params.get("sidebar")!);
+if (wide) localStorage.setItem("keel.sidebar", "1");
+function wideHistory() {
+  const base = { author: "Keel", when: 1792100000, refs: [] as string[] };
+  const sha = (n: number) => n.toString(16).padStart(40, "0");
+  return [
+    { ...base, sha: sha(0), parents: Array.from({ length: 23 }, (_, i) => sha(i + 1)), refs: ["HEAD -> refs/heads/main", "refs/remotes/origin/main"], subject: "Merge source control and navigation improvements" },
+    ...Array.from({ length: 23 }, (_, i) => ({ ...base, sha: sha(i + 1), parents: [sha(24)], refs: [`refs/heads/feature/engineer-workspace-${i + 1}`], subject: `Improve workspace navigation ${i + 1}` })),
+    ...Array.from({ length: 76 }, (_, i) => ({ ...base, sha: sha(i + 24), parents: i < 75 ? [sha(i + 25)] : [], subject: `Repository change ${i + 24}` })),
+  ];
+}
 const project = "/workspace/keel";
 const files: Record<string, string> = {
   "README.md": "# Keel\n\nAn agentic development environment.\n",
@@ -46,7 +62,7 @@ window.fetch = async (input, init) => {
   if (target.pathname === "/api/git/commit-staged") committed = true;
   if (target.pathname === "/api/git/status") data = { is_repo: true, branch: wt ? "keel/feature" : "main", changes: committed ? [] : [{ path: "src/main.ts", status: staged ? "M " : " M", label: "Modified", staged, dir: false }] };
   if (target.pathname === "/api/git/branches") data = { current: "main", local: [{ name: "main", current: true, upstream: "origin/main", ahead: 1, behind: 0 }], remotes: ["origin"], staged: 0, unstaged: 1 };
-  if (target.pathname === "/api/git/graph") data = [
+  if (target.pathname === "/api/git/graph") data = wide ? wideHistory() : [
     { sha: "a".repeat(40), parents: ["b".repeat(40), "c".repeat(40)], refs: ["HEAD -> refs/heads/main", "refs/remotes/origin/main"], author: "Keel", when: 1792100000, subject: "Merge navigation improvements" },
     { sha: "c".repeat(40), parents: ["d".repeat(40)], refs: ["refs/heads/feature/navigation"], author: "Keel", when: 1792099900, subject: "Add file and symbol navigation" },
     { sha: "b".repeat(40), parents: ["d".repeat(40)], refs: [], author: "Keel", when: 1792099800, subject: "Improve source control experience" },
@@ -92,6 +108,7 @@ const lanes = Object.fromEntries(["main", "feature"].map((id) => [id, {
 }]));
 useStore.setState({ lanes, order: [project], active: "main", opened: ["main"], projects: { [project]: { path: project, name: "Keel", lanes: Object.keys(lanes), endpoint: { port: 1420, token: "synthetic" } } }, trusted: { [project]: true }, load: () => {}, prepare: async (id) => ({ ep: { port: 1420, token: "synthetic" }, wt: id === "feature" ? "feature" : undefined }), ensure: async () => ({ port: 1420, token: "synthetic" }) });
 useIde.getState().setLayout("ide");
+if (wide) useIde.getState().setSidebar("git");
 function edit() {
   const id = `edit-${++serial}`;
   const lane = useStore.getState().active!;
@@ -102,9 +119,33 @@ function edit() {
     { op: "result", turn: "demo", id, state: "ok" },
   ]) } } }));
 }
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+async function verifyGraph() {
+  const lanes = document.querySelector<HTMLElement>(".graph-lanes")!;
+  const commits = document.querySelector<HTMLElement>(".graph-commits")!;
+  const subject = document.querySelector<HTMLElement>(".graph-subject")!;
+  const viewport = commits.getBoundingClientRect();
+  const label = subject.getBoundingClientRect();
+  if (label.width < 60 || label.left < viewport.left || label.right > viewport.right) throw new Error("Commit subject is clipped");
+  const before = label.left;
+  lanes.scrollLeft = 150;
+  await nextFrame();
+  if (lanes.scrollLeft < 1 || subject.getBoundingClientRect().left !== before) throw new Error("Graph pan displaced commit labels");
+  commits.scrollTop = 250;
+  await nextFrame();
+  if (Math.abs(commits.scrollTop - lanes.scrollTop) > 1) throw new Error("Graph and rows lost vertical alignment");
+  commits.scrollTop = commits.scrollHeight;
+  await nextFrame();
+  if (Math.abs(commits.scrollTop - lanes.scrollTop) > 1) throw new Error("Last commit is misaligned");
+  lanes.scrollLeft = 0; commits.scrollTop = 0;
+  await nextFrame();
+  if (commits.scrollTop !== 0 || lanes.scrollTop !== 0) throw new Error("Scroll reset drifted");
+  return "PASS: commit labels, horizontal graph pan, vertical alignment, and last row";
+}
 function Harness() {
+  const [result, setResult] = React.useState("");
   return <><div style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", fontSize: 11 }}>
-    <strong>Synthetic IDE QA</strong>{([['⌘P', 'KeyP', true, false, false], ['⌃G', 'KeyG', false, true, false], ['⌘F', 'KeyF', true, false, false], ['⇧⌘P', 'KeyP', true, false, true]] as const).map(([label, code, metaKey, ctrlKey, shiftKey]) => <button key={label} onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { code, metaKey, ctrlKey, shiftKey, bubbles: true }))}>{label}</button>)}<button onClick={edit}>Agent edit</button>
+    {wide && <><button onClick={() => void verifyGraph().then(setResult, (e) => setResult(`FAIL: ${String(e)}`))}>Check graph layout</button><output>{result}</output></>}<strong>Synthetic IDE QA</strong>{([['⌘P', 'KeyP', true, false, false], ['⌃G', 'KeyG', false, true, false], ['⌘F', 'KeyF', true, false, false], ['⇧⌘P', 'KeyP', true, false, true]] as const).map(([label, code, metaKey, ctrlKey, shiftKey]) => <button key={label} onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { code, metaKey, ctrlKey, shiftKey, bubbles: true }))}>{label}</button>)}<button onClick={edit}>Agent edit</button>
     <button onClick={() => useStore.setState({ active: useStore.getState().active === "main" ? "feature" : "main" })}>Switch lane</button>
     <button onClick={() => { fail = true; }}>Fail next read</button>
     <button onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [s.active!]: { ...s.lanes[s.active!], pending: [{ id: "q", tool: "AskUserQuestion", command: "", rules: [], input: { questions: [{ question: "Run the checks?", options: [{ label: "Unit tests" }, { label: "All checks" }] }] } }] } } }))}>Question</button>

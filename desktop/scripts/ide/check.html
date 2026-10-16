@@ -2,7 +2,8 @@
 const width = Number(new URLSearchParams(location.search).get('width'));
 if (width > 0) {
   const frame = document.createElement('iframe');
-  frame.src = '/scripts/ide/check.html'; frame.width = String(width); frame.height = '800'; frame.title = 'Responsive IDE workspace';
+  const query = new URLSearchParams(location.search); query.delete('width');
+  frame.src = '/scripts/ide/check.html?' + query; frame.width = String(width); frame.height = '800'; frame.title = 'Responsive IDE workspace';
   document.getElementById('root').append(frame);
 } else { import('./check.tsx'); }
 </script></body></html>

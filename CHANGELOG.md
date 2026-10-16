@@ -2,6 +2,14 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.9] - 2026-10-16
+
+### Fixed
+- Kept commit messages and branch badges visible when a dense Git graph was wider than the
+  sidebar. The branch graph scrolled horizontally within its own column, while commit labels
+  stayed in view and vertical scrolling kept nodes aligned with their commits.
+- Highlighted the selected graph commit and supported keyboard navigation through its rows.
+
 ## [0.4.8] - 2026-10-16
 
 ### Added

@@ -151,11 +151,20 @@
 .graph-toggle { display: flex; align-items: center; flex: 1; padding: 0 4px; min-width: 58px; border: 0; box-shadow: none; background: none; font-size: 12px; font-weight: 600; }
 .graph-heading select { background: transparent; color: var(--dim); border: 0; max-width: 110px; min-width: 0; padding: 2px; font: inherit; font-size: 10px; }
 .graph-heading .ghost { width: 22px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
-.graph-scroll { overflow: auto; min-height: 0; flex: 1; }
-.graph-row { display: flex; align-items: center; width: 100%; min-width: 100%; height: 28px; gap: 6px; padding: 0 8px 0 2px; border: 0; border-radius: 0; box-shadow: none; background: none; text-align: left; font-size: 12px; font-weight: 400; }
-.graph-subject { flex: 1; min-width: 50px; max-width: 200px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.graph-ref { display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 19px; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, var(--graph-purple) 18%, var(--bg)); color: var(--graph-purple); }
-.graph-ref.current { color: var(--graph-blue); background: color-mix(in srgb, var(--graph-blue) 20%, var(--bg)); }
+.graph-history { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.graph-lanes { overflow-x: auto; overflow-y: hidden; min-height: 0; min-width: 0; scrollbar-width: thin; }
+.graph-lanes > svg { display: block; max-width: none; cursor: pointer; }
+.graph-commits { overflow-y: auto; overflow-x: hidden; min-width: 0; min-height: 0; }
+.graph-row { display: flex; align-items: center; width: 100%; min-width: 0; height: 28px; gap: 6px; padding: 0 8px 0 6px; border: 0; border-radius: 0; box-shadow: none; background: none; text-align: left; font-size: 12px; font-weight: 400; }
+.graph-row[aria-pressed=true] { background: var(--tint); }
+.graph-subject { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.graph-labels { display: flex; flex: 0 1 auto; min-width: 0; max-width: 48%; gap: 4px; overflow: hidden; }
+.graph-labels:empty { display: none; }
+.graph-ref { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; max-width: 140px; overflow: hidden; font-size: 10px; line-height: 19px; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, var(--graph-purple) 18%, var(--bg)); color: var(--graph-purple); }
+.graph-ref > svg { flex: none; }
+.graph-ref > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-history-limit { flex: none; padding: 4px 10px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; line-height: 1.5; }
+.graph-ref.current { flex-shrink: 0; max-width: 100%; color: var(--graph-blue); background: color-mix(in srgb, var(--graph-blue) 20%, var(--bg)); }
 .graph-ref.remote { color: var(--graph-orange); background: color-mix(in srgb, var(--graph-orange) 18%, var(--bg)); }
 .graph-message { padding: 12px; color: var(--faint); font-size: 11px; line-height: 1.7; }
 .graph-message button { display: block; margin-top: 6px; }
