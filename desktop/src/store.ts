@@ -95,6 +95,9 @@ function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachmen
 }
 
 export interface Lane {
+  /// Invalidate manual verification when this checkout receives a filesystem or git change.
+  reviewRevision?: number;
+  context?: import("./context").ContextSnapshot;
   id: string;
   project: string;
   interface?: ChatInterface;
@@ -180,7 +183,7 @@ interface State {
   handed: Record<string, { lane: string; ids: string[] }>;
   /// A side-panel tab asked for from outside the window's own state (the sidebar's setup list).
   /// The window shows it and clears the request.
-  panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness";
+  panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context";
   /// The project's daemon, started if it is not running. For views that talk to it directly.
   ensure(project: string): Promise<Endpoint>;
   openProject(path: string): Promise<void>;
@@ -332,6 +335,7 @@ export const useStore = create<State>()((set, getState) => {
     const wt = (data as { wt?: string | null })?.wt ?? undefined;
     for (const lid of lanesOf(path)) {
       const l = getState().lanes[lid];
+      if (l && l.wt === wt) lane(lid, { reviewRevision: (l.reviewRevision ?? 0) + 1 });
       if (l && (!onlyTree || l.wt === wt)) gitSoon(lid);
     }
   };
@@ -365,6 +369,18 @@ export const useStore = create<State>()((set, getState) => {
         return;
       }
       void poll(path, d?.lane);
+    },
+    "context.changed": (path, _ep, data) => {
+      const d = (data as { data?: { lane: string; snapshot: import("./context").ContextSnapshot } })?.data;
+      const current = d && getState().lanes[d.lane];
+      if (d && current?.project === path && current.agent === d.snapshot.provider && current.known && current.session === d.snapshot.session) lane(d.lane, { context: d.snapshot });
+    },
+    "review.changed": (path, _ep, data) => {
+      const wt = (data as { wt?: string | null })?.wt ?? undefined;
+      for (const lid of lanesOf(path)) {
+        const current = getState().lanes[lid];
+        if (current && current.wt === wt) lane(lid, { reviewRevision: (current.reviewRevision ?? 0) + 1 });
+      }
     },
     "permissions.changed": (path, ep) => trust(path, ep),
     "state.changed": (path, ep) => setup(path, ep),

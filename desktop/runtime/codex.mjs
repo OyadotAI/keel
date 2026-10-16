@@ -1,14 +1,19 @@
 import { resolve, extname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { ContextInspector } from './context.mjs';
 
 // App Server owns thread state; this adapter maps its items to Keel's ordered conversation ops.
 export class Codex {
   constructor(emit, ask) { this.emit = emit; this.ask = ask; this.requests = new Map(); this.next = 0; this.text = new Set(); }
   write(value) { this.child.stdin.write(JSON.stringify(value) + '\n'); }
-  rpc(method, params) {
+  rpc(method, params, timeoutMs) {
     const id = ++this.next;
-    return new Promise((resolve, reject) => { this.requests.set(id, { resolve, reject }); this.write({ id, method, params }); });
+    return new Promise((resolve, reject) => {
+      const timer = timeoutMs ? setTimeout(() => { this.requests.delete(id); reject(new Error(`${method} timed out`)); }, timeoutMs) : undefined;
+      this.requests.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+      this.write({ id, method, params });
+    });
   }
   ops(...ops) { this.emit('turn', ops.map((op) => ({ turn: null, ...op }))); }
   async start(q, done) {
@@ -30,12 +35,26 @@ export class Codex {
         baseInstructions: q.system || null,
       });
       this.thread = thread.thread.id;
+      this.inspector = new ContextInspector('codex', q.cwd, this.emit);
+      this.inspector.state.session = this.thread;
+      this.inspector.state.model = thread.model ?? q.model;
+      for (const source of thread.instructionSources ?? thread.thread.instructionSources ?? []) this.inspector.memory(typeof source === 'string' ? source : source.path, { state: 'reported' });
+      await this.inspector.configuredMemory();
+      try {
+        const inventory = await this.rpc('skills/list', { cwds: [q.cwd] }, 3000);
+        for (const cwd of inventory.data ?? []) for (const skill of cwd.skills ?? []) {
+          this.inspector.skill(skill.name, { path: skill.path, description: skill.description, source: skill.scope, available: skill.enabled !== false, user_only: skill.interface?.policy?.allowImplicitInvocation === false });
+        }
+      } catch { this.inspector.limitation('This Codex version did not provide a skill inventory.'); }
+      this.inspector.limitation('Codex does not report a context category breakdown or an explanation of implicit skill selection.');
+      this.inspector.update();
       this.ops({ op: 'session', id: this.thread, commands: [] });
       const models = await this.rpc('model/list', {});
       this.emit('capabilities', { models: models.data, commands: [] });
       if (q.session && thread.thread.turns?.length) this.emit('snapshot', { frames: [...historyFrames(thread.thread.turns), { turn: null, op: 'open', prompt: q.prompt }] });
     }
     this.text.clear();
+    this.inspector.requested(q.prompt);
     const result = await this.rpc('turn/start', {
       threadId: this.thread, input: [{ type: 'text', text: q.prompt }, ...(q.attachments ?? []).map((a) => /\.(png|jpe?g|webp|gif)$/i.test(extname(a.path)) ? { type: 'localImage', path: resolve(q.cwd, a.path) } : { type: 'text', text: `Attached file: ${resolve(q.cwd, a.path)}` })],
       model: q.model || null, approvalPolicy: 'on-request',
@@ -80,16 +99,21 @@ export class Codex {
       if (typeof p.delta === 'string' && p.delta.length) {
         this.text.add(key); this.ops({ op: 'text', step: key, kind: method.includes('reasoning') ? 'think' : 'say', append: p.delta });
       }
-    } else if (method === 'item/started' || method === 'item/completed') this.item(p.item, method === 'item/completed');
-    else if (method === 'turn/started') this.turn = p.turn.id;
+    } else if (method === 'item/started' || method === 'item/completed') {
+      this.item(p.item, method === 'item/completed');
+      this.inspector?.codexItem(p.item, method === 'item/completed'); this.inspector?.update();
+    }
+    else if (method === 'turn/started') { this.turn = p.turn.id; if (this.inspector) this.inspector.turn = p.turn.id; }
     else if (method === 'turn/completed') {
+      this.inspector?.update({}, true);
       if (p.turn.error) this.emit('fatal', p.turn.error.message);
       this.emit('end', { code: p.turn.status === 'completed' ? 0 : p.turn.status === 'interrupted' ? -1 : 1 });
       this.done?.(); this.turn = undefined;
     } else if (method === 'error' && !p.willRetry) this.emit('fatal', p.error?.message ?? 'Codex reported an error');
     else if (method === 'thread/tokenUsage/updated') {
+      this.inspector?.codexUsage(p); this.inspector?.update();
       const usage = p.tokenUsage.last ?? p.tokenUsage.total;
-      this.emit('msg', { type: 'turn.completed', usage: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens, cached_input_tokens: usage.cachedInputTokens } });
+      this.emit('msg', { type: 'turn.completed', usage: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens, cached_input_tokens: usage.cachedInputTokens, context_tokens: this.inspector?.state.used, model_context_window: p.tokenUsage.modelContextWindow } });
     }
   }
   item(item, complete) {

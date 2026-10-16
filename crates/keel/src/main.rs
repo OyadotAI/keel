@@ -13,6 +13,7 @@ mod aws;
 mod chat;
 mod clitools;
 mod connect;
+mod context;
 mod dev;
 mod events;
 mod fsops;

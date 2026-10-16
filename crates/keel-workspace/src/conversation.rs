@@ -679,7 +679,7 @@ impl Decoder {
         // message's usage, and summing them was a turn that cost three times what it did.
         let u = &message["usage"];
         let fresh = id.as_ref().is_none_or(|m| turn.counted.insert(m.clone()));
-        if fresh && u.is_object() {
+        if fresh && u.is_object() && parent.is_none() {
             let n = |k: &str| u[k].as_u64().unwrap_or(0);
             let context =
                 n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
@@ -850,7 +850,7 @@ impl Decoder {
                 let u = &r["usage"];
                 let n = |k: &str| u[k].as_u64().unwrap_or(0);
                 let t = Tokens {
-                    context: 0,
+                    context: n("context_tokens"),
                     input: n("input_tokens"),
                     output: n("output_tokens"),
                     cache_read: n("cached_input_tokens"),

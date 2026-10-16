@@ -3,78 +3,43 @@ import { invoke } from "@tauri-apps/api/core";
 import { url } from "../api";
 import { start, useRun } from "../runs";
 import { useStore } from "../store";
-import type { Turn } from "../reduce";
+import { reviewEvidence, recordedCheck, reviewScope, reviewVerdict, checkStep, checkEnd, commandEvidence, commandMarkdown, verificationSummary, type ReviewCheck } from "../review";
 import { Icon } from "./icons";
 
-interface Problem {
-  file: string;
-  line: number;
-  severity: string;
-  message: string;
-}
-
-/// The merge decision, on one screen: where the work goes, what it touched, what ran, and whether
-/// the project's own checks pass on the tree as it stands — run here, not remembered.
-type Check = { state: "running" | "passed" | "failed" | "none"; command?: string; problems: Problem[]; why?: string };
-
+/// Readiness and exports share a verdict tied to the latest conversation and checkout events.
 export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "discard") => void }) {
   const l = useStore((s) => s.lanes[lane]);
   const ep = useStore((s) => (l ? s.projects[l.project]?.endpoint : undefined));
   const projectName = useStore((s) => (l ? s.projects[l.project]?.name : ""));
   const runKey = `verify:${lane}`;
-  const run = useRun<Check>(runKey)?.state;
+  const run = useRun<ReviewCheck>(runKey)?.state;
   const [note, setNote] = useState<string>();
   // Derived once per change to the turns, not once per render: the lane object changes on every
   // batch of a streaming turn, and this walks every call in the conversation.
   const turns = l?.conv.turns;
-  const { worked, files, commands, failed, last } = useMemo(() => {
-    const worked = (turns ?? []).filter((t) => t.files.length || Object.keys(t.calls).length);
-    const commands = worked.flatMap((t) => Object.values(t.calls)).filter((c) => /^(Bash|Shell|Terminal)$/.test(c.tool));
-    return {
-      worked,
-      files: [...new Set(worked.flatMap((t) => t.files))],
-      commands,
-      failed: commands.filter((c) => c.state === "failed").length,
-      last: [...worked].reverse().find((t) => t.gate),
-    };
-  }, [turns]);
+  const { worked, files, commands, failed, latest } = useMemo(() => reviewEvidence(turns), [turns]);
+  const recorded = recordedCheck(latest);
+  const scope = reviewScope(l?.session, l?.wt, l?.reviewRevision ?? 0, recorded, ep?.port);
+  const verdict = reviewVerdict(!!l?.running, run, scope, recorded, latest?.gate);
+  const blocker = verdict.blocker;
+  const runCurrent = !!run && (run.scope === scope || run.state === "running");
   if (!l) return null;
-  const gate = run?.state === "passed" || run?.state === "failed" ? run.state : last?.gate?.status;
-  const blocker =
-    l.running
-      ? "The agent is mid-turn."
-      : gate === "failed"
-        ? "The project's checks fail on this tree."
-        : !gate || gate === "none"
-          ? "Nothing was checked: this project declares no checks, so 'done' is only a claim."
-          : undefined;
 
   function check() {
-    if (!ep) return;
-    start<Check>(
+    if (!ep || l?.running || run?.state === "running") return;
+    start<ReviewCheck>(
       runKey,
       url(ep, "/api/verify", { wt: l!.wt }),
       ep.token,
-      { state: "running", problems: [] },
-      (next, e) =>
-        e.event === "start"
-          ? { ...next, command: String(e.data) }
-          : e.event === "problem"
-            ? { ...next, problems: [...next.problems, e.data as Problem] }
-            : e.event === "none"
-              ? { ...next, state: "none", why: String(e.data) }
-              : e.event === "fatal"
-                ? { ...next, state: "failed", why: String(e.data) }
-                : e.event === "done"
-                  ? { ...next, state: next.state === "none" ? "none" : String(e.data) === "0" ? "passed" : "failed" }
-                  : next,
-      (r) => (r.state === "running" ? { ...r, state: "failed", why: "The check stopped before it finished." } : r),
+      { state: "running", problems: [], scope, recorded, started_at: new Date().toISOString() },
+      checkStep,
+      checkEnd,
     );
   }
 
   function payload() {
     return {
-      schema: 1,
+      schema: 2,
       taskID: l!.id,
       title: l!.title,
       provider: l!.agent,
@@ -83,8 +48,9 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
       worktree: l!.wt ?? null,
       head: [...worked].reverse().find((t) => t.commit)?.commit ?? null,
       files,
-      commands: commands.map((c) => ({ tool: c.tool, command: String((c.input as { command?: string } | undefined)?.command ?? c.subject), reason: c.reason ?? null, failed: c.state === "failed" })),
-      gates: worked.map((t: Turn) => ({ status: t.gate?.status ?? "none", command: t.gate?.command ?? null })),
+      commands: commands.map(commandEvidence),
+      gates: worked.map((t) => ({ status: t.gate?.status ?? "none", command: t.gate?.command ?? null })),
+      verification: { status: verdict.state, source: verdict.source, command: verdict.command ?? null, ...(runCurrent && run ? { started_at: run.started_at, finished_at: run.finished_at ?? null, problems: run.problems, why: run.why ?? null } : {}) },
       ready: !blocker,
       blocker: blocker ?? null,
     };
@@ -97,13 +63,13 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
       `- Repository: ${p.repository}`,
       `- Branch: ${p.branch ?? "the project's working tree"}${p.head ? ` at ${p.head.slice(0, 7)}` : ""}`,
       `- Agent: ${p.provider}`,
-      `- Checks: ${gate ?? "not run"}${blocker ? ` — ${blocker}` : ""}`,
+      `- Checks: ${verdict.state} (${verdict.source})${blocker ? ` — ${blocker}` : ""}`,
       ``,
       `## Files changed (${files.length})`,
       ...files.map((f) => `- \`${f}\``),
       ``,
       `## Commands (${commands.length}${failed ? `, ${failed} failed` : ""})`,
-      ...p.commands.slice(0, 100).map((c) => `- ${c.failed ? "✗" : "✓"} \`${c.command.split("\n")[0].slice(0, 160)}\``),
+      ...p.commands.slice(0, 100).map(commandMarkdown),
       ``,
     ].join("\n");
   }
@@ -142,7 +108,7 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
       <div className="actions">
         {l.wt && (
           <>
-            <button className="primary" disabled={!!blocker && gate === "failed"} onClick={() => ask("merge")}>
+            <button className="primary" disabled={!!blocker || !ep} onClick={() => ask("merge")}>
               Merge…
             </button>
             <button onClick={() => ask("discard")}>Discard…</button>
@@ -152,30 +118,20 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
 
       <h3 className="eyebrow" style={{ margin: "18px 0 6px" }}>The project's checks</h3>
       <div className="actions" style={{ marginTop: 0 }}>
-        <button onClick={check} disabled={run?.state === "running" || !ep}>
+        <button onClick={check} disabled={l.running || run?.state === "running" || !ep}>
           {run?.state === "running" ? "Running…" : "Run the checks now"}
         </button>
         {run?.command && <code className="small">{run.command}</code>}
       </div>
-      {run && run.state !== "running" && (
-        <p className="small" style={{ color: run.state === "passed" ? "var(--add)" : run.state === "none" ? "var(--warn)" : "var(--del)" }}>
-          {run.state === "passed" ? "Passed on the tree as it stands." : run.state === "none" ? (run.why ?? "No checks declared.") : (run.why ?? `Failed — ${run.problems.length} problem${run.problems.length === 1 ? "" : "s"}.`)}
-        </p>
-      )}
-      {run?.problems.slice(0, 30).map((p, i) => (
-        <div key={i} className="problem">
-          <span className="del">✗</span>
-          <span>{p.message}</span>
-          <span className="where">
-            {p.file}:{p.line}
-          </span>
-        </div>
+      <p className="small" style={{ color: blocker ? "var(--dim)" : "var(--add)" }}>
+        {verificationSummary(verdict, runCurrent ? run : undefined)}
+      </p>
+      {run && !runCurrent && <p className="small muted">The earlier manual result belongs to a previous checkout or conversation state.</p>}
+      {runCurrent && run?.problems.slice(0, 30).map((p, i) => (
+        <div key={i} className="problem"><span className="del">✗</span><span>{p.message}</span><span className="where">{p.file}:{p.line}</span></div>
       ))}
-      {!run && (
-        <p className="small muted">
-          {worked.length} turn{worked.length === 1 ? "" : "s"} did work; the last recorded verdict is <strong>{last?.gate?.status ?? "none"}</strong>.
-        </p>
-      )}
+      {runCurrent && run?.why && <p className="small muted">{run.why}</p>}
+      {!runCurrent && <p className="small muted">{worked.length} turn{worked.length === 1 ? "" : "s"} did work; latest turn checks: <strong>{latest?.gate?.status ?? "not run"}</strong>.</p>}
 
       <h3 className="eyebrow" style={{ margin: "18px 0 6px" }}>
         {files.length} file{files.length === 1 ? "" : "s"} · {commands.length} command{commands.length === 1 ? "" : "s"}
@@ -192,7 +148,7 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
         A summary to hand a reviewer: the files, the commands and the checks — never source code, diffs, prompts or command output.
       </p>
       <div className="actions" style={{ marginTop: 0 }}>
-        <button onClick={() => void navigator.clipboard.writeText(markdown()).then(() => setNote("Copied the summary as Markdown."))}>
+        <button onClick={() => void navigator.clipboard.writeText(markdown()).then(() => setNote("Copied the summary as Markdown."), (error) => setNote(`Could not copy: ${error}`))}>
           <Icon name="copy" size={14} /> Copy as Markdown
         </button>
         <button onClick={exportSigned}>Export signed packet…</button>

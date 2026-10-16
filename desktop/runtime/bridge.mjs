@@ -5,6 +5,7 @@ import { resolve, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { Codex } from './codex.mjs';
+import { ContextInspector } from './context.mjs';
 
 const emit = (event, data) => process.stdout.write(JSON.stringify({ event, data }) + '\n');
 const pending = new Map();
@@ -14,6 +15,17 @@ let codex;
 let session;
 let config;
 let busy = false;
+let inspector;
+let contextRead;
+function contextSummary() {
+  if (contextRead) return contextRead;
+  let timer;
+  contextRead = Promise.race([
+    claude.getContextUsage({ detail: 'summary' }),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Context report timed out')), 4000); }),
+  ]).finally(() => { clearTimeout(timer); contextRead = undefined; });
+  return contextRead;
+}
 const inputs = [];
 let wake;
 async function* messages() {
@@ -30,6 +42,8 @@ function ask(tool, command, input, choices, kind = 'permission') {
 async function startClaude(q) {
   if (!claude) {
     config = q;
+    inspector = new ContextInspector('claude', q.cwd, emit);
+    await inspector.catalog();
     claude = query({ prompt: messages(), options: {
       cwd: q.cwd, pathToClaudeCodeExecutable: q.executable,
       resume: q.session || undefined, model: q.model || undefined,
@@ -53,12 +67,22 @@ async function startClaude(q) {
       try {
         for await (const message of claude) {
           if (message.session_id) session = message.session_id;
+          inspector.claude(message);
+          if (message.type !== 'stream_event') inspector.update({}, message.type === 'result');
           emit('msg', message);
           if (message.type === 'system' && message.subtype === 'init') {
             const [commands, models] = await Promise.all([claude.supportedCommands(), claude.supportedModels()]);
             emit('capabilities', { commands, models });
           }
-          if (message.type === 'result') { busy = false; emit('end', { code: message.is_error ? 1 : 0 }); }
+          if (message.type === 'result') {
+            busy = false; emit('end', { code: message.is_error ? 1 : 0 });
+            const owner = inspector;
+            void contextSummary().then((report) => {
+              if (owner === inspector) { owner.report(report); owner.update({}, true); }
+            }).catch(() => {
+              if (owner === inspector) { owner.limitation('This Claude version could not provide a context breakdown.'); owner.update({}, true); }
+            });
+          }
         }
       } catch (error) { emit('fatal', String(error)); }
       finally { claude = undefined; if (busy) { busy = false; emit('end', { code: 1 }); } }
@@ -67,6 +91,7 @@ async function startClaude(q) {
     await claude.setPermissionMode(q.mode === 'acceptEdits' ? 'acceptEdits' : 'plan');
     await claude.setModel(q.model || undefined);
   }
+  inspector.requested(q.prompt);
   const content = [{ type: 'text', text: q.prompt }];
   for (const a of q.attachments ?? []) {
     const path = resolve(q.cwd, a.path);
@@ -78,6 +103,16 @@ async function startClaude(q) {
   wake?.(); wake = undefined;
 }
 async function command(message) {
+  if (message.method === 'inspect_context') {
+    try {
+      if (claude && inspector) {
+        inspector.report(await contextSummary());
+        emit('inspection', { id: message.id, snapshot: { ...inspector.state, updated_at: new Date().toISOString() } });
+      } else if (codex?.inspector) emit('inspection', { id: message.id, snapshot: codex.inspector.state });
+      else emit('inspection', { id: message.id, error: 'No provider session is attached to this runtime.' });
+    } catch { emit('inspection', { id: message.id, error: 'The provider could not report context usage. Saved observations remain available.' }); }
+    return;
+  }
   if (message.method === 'answer') {
     const resolve = pending.get(message.id);
     if (!resolve) throw new Error('That request is no longer pending');

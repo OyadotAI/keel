@@ -400,6 +400,11 @@ async fn watch_tree(state: Arc<AppState>) {
                 use crate::lock::Locked;
                 dirty.locked().drain().collect()
             };
+            // Porcelain paths/status can stay identical while an already-modified file changes.
+            // Verification must still expire on those observed writes, without hashing file bodies.
+            for wt in &checkouts {
+                emit("review.changed", wt.as_deref(), serde_json::Value::Null);
+            }
             if everything || watching.is_none() {
                 let r = root.clone();
                 let lanes =

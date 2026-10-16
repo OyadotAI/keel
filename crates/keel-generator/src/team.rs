@@ -17,6 +17,9 @@
 //! repositories, a composition root, tests named after rules — offered as defaults a project
 //! edits, never as a second authority over its own linter.
 
+#[path = "team/bundled_skills.rs"]
+mod bundled_skills;
+
 /// The heading [`LIFECYCLE`] opens with. The scanner looks for it (case-insensitively) to decide
 /// whether a `CLAUDE.md` already says how work flows, so it is not reworded lightly.
 pub const LIFECYCLE_HEADING: &str = "## How a request becomes a change";
@@ -106,6 +109,7 @@ pub fn files() -> Vec<(&'static str, &'static str)> {
             include_str!("team/skills/team-work/references/security.md"),
         ),
     ]);
+    files.extend_from_slice(bundled_skills::FILES);
     files
 }
 
@@ -222,7 +226,9 @@ a subagent starts with an empty context and a paraphrase is where a scope quietl
 do not require unrelated pipeline stages. `oya-browser` is the browser specialist for research,
 web interaction, screenshots and browser QA. Use Oya exclusively for all browser work; if its
 connection is unavailable, report the blocker and never substitute another provider. The team
-ships the `team-work` and `oya-browser` skills with role playbooks and handoff assets.
+ships role playbooks, specialist engineering skills, and Oya research with supporting assets.
+Use `/handoff` when a session transfer is requested. Load `writing-for-agents` when editing
+agent instructions or skills; these workflows do not change a member's permissions.
 
 **What the person is shown** is one report: what was asked, what the PM scoped in and out, what
 the designer and the principal decided in a line each, the files changed, the gate's result, QA's

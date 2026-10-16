@@ -10,14 +10,15 @@ import { Preview } from "./Preview";
 import { Readiness } from "./Readiness";
 import { Icon } from "./icons";
 import { Chat } from "./Chat";
+import { Context } from "./Context";
 import { label } from "../keys";
 import { walkFiles } from "./kit";
 import { Tabs } from "./kit";
 
 const Terminal = lazy(() => import("./Terminal").then((m) => ({ default: m.Terminal })));
 
-export type Tab = "turns" | "git" | "review" | "jobs" | "preview" | "readiness";
-export const TABS: Tab[] = ["turns", "git", "review", "jobs", "preview", "readiness"];
+export type Tab = "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context";
+export const TABS: Tab[] = ["turns", "git", "review", "jobs", "preview", "readiness", "context"];
 
 /// Every lane opened this session, its agent running in its own terminal. Only the active one is
 /// shown; the rest stay mounted (hidden, not unmounted), because a terminal that closes ends the
@@ -62,7 +63,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
     const p = s.lanes[lane]?.project;
     return p ? s.readiness[p] : undefined;
   });
-  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Review", jobs: "Jobs", preview: "Preview", readiness: "Readiness" };
+  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Review", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context" };
   // Counts as badges, so a tab says there is something there without being opened.
   const badge: Partial<Record<Tab, ReactNode>> = {
     git: changed ? <span className="tab-count">{changed}</span> : null,
@@ -85,7 +86,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
         }))} value={tab} onChange={setTab}>
       </Tabs>
       <div className="tab-body" onKeyDown={walkFiles}>
-        {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : <Readiness lane={lane} />}
+        {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : tab === "context" ? <Context key={lane} lane={lane} /> : <Readiness lane={lane} />}
       </div>
     </aside>
   );

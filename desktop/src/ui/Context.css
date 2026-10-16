@@ -1,0 +1,72 @@
+/* Context stays an inspector: quiet sections, aligned numbers, and evidence beside its source. */
+.context-panel { height: 100%; overflow-y: auto; padding: 22px 20px 36px; font-size: 13px; line-height: 1.55; scrollbar-gutter: stable; }
+.context-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 26px; }
+.context-heading h2 { margin: 0; font-size: 16px; letter-spacing: -.025em; font-weight: 650; }
+.context-heading p { margin: 3px 0 0; color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
+.context-heading > button { display: flex; align-items: center; gap: 6px; padding: 5px 7px; flex: none; font-size: 11px; }
+.context-total { display: flex; align-items: center; gap: 14px; margin-bottom: 17px; }
+.context-total > strong { font-size: 36px; font-weight: 550; line-height: 1.1; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
+.context-total > div { display: flex; flex-direction: column; gap: 2px; color: var(--dim); font-size: 12px; }
+.context-total-count { font-size: 11px; font-variant-numeric: tabular-nums; }
+.context-meter { height: 7px; width: 100%; display: flex; border-radius: 3px; overflow: hidden; background: var(--line); }
+.context-segment { height: 100%; flex-shrink: 1; background: var(--accent); transition: width .25s ease; }
+.context-meter.near-limit { outline: 1px solid var(--del); outline-offset: 2px; }
+.context-tone-0 { background: var(--accent); }
+.context-tone-1 { background: #bd8645; }
+.context-tone-2 { background: #6b91ac; }
+.context-tone-3 { background: #a1849c; }
+.context-tone-4 { background: #8c9272; }
+.context-tone-5 { background: #8d979d; }
+.context-segment.free, .context-swatch.free { background: var(--line); }
+.context-segment.buffer, .context-swatch.buffer { background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, var(--surface) 2px 4px); }
+.context-swatch.deferred { background: transparent; border: 1px solid var(--line-strong); }
+.context-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; font-size: 10px; color: var(--dim); }
+.context-note { font-size: 12px; color: var(--dim); margin: 10px 0; line-height: 1.6; }
+.context-breakdown { padding-top: 12px; }
+.context-breakdown.stale { opacity: .7; }
+.context-category { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto 42px; align-items: baseline; gap: 8px; padding: 4px 0; font-size: 12px; }
+.context-category > span:nth-child(2) { overflow-wrap: anywhere; }
+.context-category small { font-size: 10px; color: var(--dim); }
+.context-swatch { width: 7px; height: 7px; border-radius: 2px; align-self: center; }
+.context-number, .context-percent { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--dim); white-space: nowrap; text-align: right; }
+.context-section { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 16px; }
+.context-section > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; list-style: none; }
+.context-section > summary::-webkit-details-marker, .context-skill > summary::-webkit-details-marker { display: none; }
+.context-section > summary::before { content: '›'; font-size: 16px; font-weight: 400; color: var(--dim); transform: rotate(0); transition: transform .15s; }
+.context-section[open] > summary::before { transform: rotate(90deg); }
+.context-section-count { margin-left: auto; font-size: 11px; color: var(--dim); font-weight: 400; white-space: nowrap; }
+.context-section-body { padding-top: 8px; }
+.context-source { padding: 8px 0; min-width: 0; }
+.context-source-button { display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 3px 0; border: 0; background: transparent; box-shadow: none; text-align: left; font-size: 12px; }
+.context-source-button > svg { flex: none; margin-top: 2px; color: var(--dim); }
+.context-source-button > .context-number { margin-left: auto; padding-left: 6px; }
+.context-path { overflow-wrap: anywhere; min-width: 0; }
+.context-source-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10px; color: var(--dim); padding-top: 2px; }
+.context-source > .context-source-meta { padding-left: 21px; }
+.context-preview { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.context-preview-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 10px; background: var(--surface); color: var(--dim); font-size: 10px; }
+.context-preview pre { max-height: 300px; overflow: auto; padding: 12px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--mono); background: var(--bg); }
+.context-preview > p { padding: 0 10px; }
+.context-error { color: var(--del); overflow-wrap: anywhere; font-size: 12px; }
+.context-skill { border-bottom: 1px solid var(--line); }
+.context-skill:last-child { border-bottom: 0; }
+.context-skill > summary { display: flex; align-items: baseline; gap: 7px; padding: 10px 0; cursor: pointer; list-style: none; font-size: 12px; }
+.context-skill-name { min-width: 0; overflow-wrap: anywhere; }
+.context-skill-dot { width: 6px; height: 6px; flex: none; background: var(--line-strong); border-radius: 50%; align-self: center; }
+.context-skill-dot.used { background: var(--accent); }
+.context-tag { margin-left: auto; text-align: right; font-size: 10px; color: var(--dim); flex-shrink: 0; }
+.context-skill-body { padding: 0 0 12px 13px; }
+.context-skill-body > p { font-size: 12px; margin: 0 0 10px; }
+.context-evidence { list-style: none; padding: 0; margin: 14px 0 0; }
+.context-evidence li { padding: 9px 0 9px 12px; border-left: 2px solid var(--line); }
+.context-evidence li > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.context-evidence li > div:first-child > span { color: var(--dim); }
+.context-evidence li > p { margin: 4px 0; font-size: 11px; }
+.context-memory-activity { margin-top: 8px; font-size: 11px; }
+.context-memory-activity > summary { cursor: pointer; }
+.context-search { width: 100%; margin: 3px 0 8px; font-size: 12px; padding: 7px 9px; background: var(--bg); }
+.context-show-more { margin: 12px 0 0; font-size: 12px; }
+.context-limits { color: var(--dim); }
+.context-limits ul { font-size: 11px; padding-left: 18px; margin-bottom: 0; }
+.context-limits li + li { margin-top: 7px; }
+@media (prefers-reduced-motion: reduce) { .context-segment, .context-section > summary::before { transition: none; } }

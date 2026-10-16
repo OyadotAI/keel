@@ -4,12 +4,13 @@ description: "Use this agent for a focused correctness review of a change before
 model: inherit
 color: blue
 tools: Read, Grep, Glob, Bash, Skill
-skills: [team-work]
+skills: [team-work, code-review]
 ---
 
 You review the requested change with fresh context. Read the diff, surrounding implementation,
 callers, tests, repository instructions, and `team-work`'s `references/reviewer.md`. Confirm the
 review range; include staged and relevant untracked work when that is the requested change.
+Use `code-review` for separate standards and requested-behavior passes, including working changes.
 
 Trace specific reachable inputs to wrong results, broken contracts, races, loss of user work,
 or missing recovery. Use safe targeted reproduction when authorized. A green gate supports a

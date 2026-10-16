@@ -737,6 +737,8 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::names::rename),
         )
         .route("/api/raw", get(api_raw))
+        .route("/api/context", get(crate::context::inspect))
+        .route("/api/context/source", get(crate::context::source))
         .route("/api/chat", get(crate::agent::chat))
         .route("/api/chat/send", axum::routing::post(crate::chat::send))
         .route("/api/chat/events", get(crate::chat::events))

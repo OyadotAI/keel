@@ -21,7 +21,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, Command},
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 
 fn processes() -> &'static Mutex<HashSet<u32>> {
@@ -39,12 +39,60 @@ pub fn stop_all() {
 type Output = mpsc::Sender<Value>;
 #[derive(Default)]
 pub(crate) struct Runtimes(Mutex<HashMap<String, Arc<Runtime>>>);
+type Inspections = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
+struct InspectionWait {
+    pending: Inspections,
+    id: String,
+}
+impl Drop for InspectionWait {
+    fn drop(&mut self) {
+        self.pending.locked().remove(&self.id);
+    }
+}
 struct Runtime {
     pid: u32,
     input: tokio::sync::Mutex<ChildStdin>,
     output: Arc<Mutex<Option<Output>>>,
     alive: Arc<AtomicBool>,
     pending: Arc<Mutex<HashSet<String>>>,
+    inspections: Inspections,
+    inspection_lock: tokio::sync::Mutex<()>,
+}
+
+/// Read telemetry from an existing runtime, including while no turn owns its output channel.
+pub async fn inspect_context(state: &AppState, lane: &str) -> Result<Value, String> {
+    // no-blocking: reads runtime handles in memory, writes async stdin, and awaits a bounded reply.
+    let runtime = state
+        .runtimes
+        .0
+        .locked()
+        .get(lane)
+        .cloned()
+        .ok_or("No managed runtime is attached")?;
+    let _held = runtime
+        .inspection_lock
+        .try_lock()
+        .map_err(|_| "A context refresh is already pending")?;
+    if !runtime.alive.load(Ordering::Acquire) {
+        return Err("The runtime is disconnected".into());
+    }
+    let id = crate::context::request_id();
+    let (tx, rx) = oneshot::channel();
+    runtime.inspections.locked().insert(id.clone(), tx);
+    let _wait = InspectionWait {
+        pending: runtime.inspections.clone(),
+        id: id.clone(),
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        runtime
+            .send(json!({"method":"inspect_context","id":id}))
+            .await?;
+        rx.await
+            .map_err(|_| "The runtime disconnected".to_string())?
+    })
+    .await
+    .map_err(|_| "Context inspection timed out".to_string())
+    .and_then(|v| v)
 }
 impl Runtime {
     async fn send(&self, value: Value) -> Result<(), String> {
@@ -129,12 +177,18 @@ async fn runtime(
     let alive = Arc::new(AtomicBool::new(true));
     let output: Arc<Mutex<Option<Output>>> = Default::default();
     let pending = Arc::new(Mutex::new(HashSet::new()));
+    let inspections = Arc::new(Mutex::new(HashMap::<
+        String,
+        oneshot::Sender<Result<Value, String>>,
+    >::new()));
     let r = Arc::new(Runtime {
         pid: child.id().unwrap_or(0),
         input: tokio::sync::Mutex::new(input),
         output: output.clone(),
         alive: alive.clone(),
         pending: pending.clone(),
+        inspections: inspections.clone(),
+        inspection_lock: tokio::sync::Mutex::new(()),
     });
     let pid = r.pid;
     processes().locked().insert(pid);
@@ -149,12 +203,32 @@ async fn runtime(
             }
         }
     });
+    let context_repo = cwd.to_owned();
+    let context_lane = lane.to_owned();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let Ok(record) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
+            if record["event"] == "context" {
+                crate::context::receive(&context_repo, &context_lane, record["data"].clone());
+                continue;
+            }
+            if record["event"] == "inspection" {
+                let data = &record["data"];
+                if let Some(id) = data["id"].as_str() {
+                    let pending = inspections.locked().remove(id);
+                    if let Some(tx) = pending {
+                        let _ = tx.send(if let Some(error) = data["error"].as_str() {
+                            Err(error.to_owned())
+                        } else {
+                            Ok(data["snapshot"].clone())
+                        });
+                    }
+                }
+                continue;
+            }
             if let Some(id) = record["data"]["id"].as_str() {
                 match record["event"].as_str() {
                     Some("request") => {
@@ -176,6 +250,7 @@ async fn runtime(
         }
         let status = child.wait().await;
         alive.store(false, Ordering::Release);
+        inspections.locked().clear();
         processes().locked().remove(&pid);
         let tx = output.locked().take();
         if let Some(tx) = tx {
@@ -306,7 +381,12 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     let _held = crate::serve::Held::new(state.clone(), lane.into(), token);
     emit(tx, "starting", json!("Preparing the workspace")).await;
     let checkout = cwd.clone();
+    let previous_session = q.session.clone();
+    let selected_provider = provider.to_owned();
     let (begun, system) = tokio::task::spawn_blocking(move || {
+        if let Some(session) = previous_session {
+            crate::context::prime(&checkout, &selected_provider, &session);
+        }
         let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(&checkout, rel, bytes);
         keel_harness::quarantine_keeping(&checkout, keep).map_err(|e| e.to_string())?;
         Ok::<_, String>((

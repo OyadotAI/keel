@@ -6,6 +6,7 @@ import { label } from "../keys";
 import { SetupBadge } from "./SetupWarnings";
 import { until } from "./Settings";
 import type { Tab } from "./Lane";
+import { contextMatches } from "../context";
 
 const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
 
@@ -52,6 +53,71 @@ function LicenseBadge() {
   );
 }
 
+function usageSummary(l: Lane) {
+  const cost = l?.conv.turns.reduce((sum, t) => sum + (t.usage?.cost ?? 0), 0) ?? 0;
+  // Summed per kind and shown apart: every turn re-reads the cached context, so one total of
+  // everything counted the same conversation once per turn and meant nothing.
+  const sum = { input: 0, output: 0, cache_read: 0, cache_write: 0, turns: 0 };
+  let context: number | undefined;
+  for (const t of l?.conv.turns ?? []) {
+    if (!t.usage) continue;
+    sum.input += t.usage.input;
+    sum.output += t.usage.output;
+    sum.cache_read += t.usage.cache_read;
+    sum.cache_write += t.usage.cache_write;
+    sum.turns += 1;
+    if (t.usage.context) context = t.usage.context;
+  }
+  const tokens = sum.input + sum.output + sum.cache_write;
+  const inspection = contextMatches(l?.context, l?.agent ?? "", l?.known ? l.session : undefined) ? l?.context : undefined;
+  if (inspection?.used != null) context = inspection.used;
+  else if (inspection?.compacted_at) context = undefined;
+  const percentage = context != null && inspection?.capacity ? Math.round(context / inspection.capacity * 100) : undefined;
+  const detail = [
+    `${sum.turns} turns with usage`,
+    `fresh input ${sum.input.toLocaleString()}`,
+    `cache writes ${sum.cache_write.toLocaleString()}`,
+    `cache reads ${sum.cache_read.toLocaleString()}`,
+    `output ${sum.output.toLocaleString()}`,
+    context ? `context at the last turn ${context.toLocaleString()}` : "",
+    cost ? `cost $${cost.toFixed(4)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { context, percentage, tokens, sum, cost, detail };
+}
+
+function SessionUsage({ lane, open }: { lane: Lane; open: () => void }) {
+  const { context, percentage, tokens, sum, cost, detail } = usageSummary(lane);
+  return <button className="sb-usage" title={`${detail}\n\nInspect context, memory, and skills`} onClick={open}>
+          <span><span className="sb-key">Context</span> <span className="sb-mono">{percentage != null ? `${percentage}%` : context != null ? count(context) : "—"}</span></span>
+          {tokens > 0 && (<>
+          <span>
+            <span className="sb-key">In</span> <span className="sb-mono">{count(sum.input + sum.cache_write)}</span>
+          </span>
+          <span>
+            <span className="sb-key">Out</span> <span className="sb-mono">{count(sum.output)}</span>
+          </span>
+          {cost > 0 && <span className="sb-mono">${cost.toFixed(2)}</span>}
+          </>)}
+        </button>;
+}
+
+function CurrentActivity({ now, elsewhere }: { now: ReturnType<typeof useNow>; elsewhere: boolean }) {
+  const elapsed = now.since ? Math.floor((Date.now() - Date.parse(now.since)) / 1000) : undefined;
+  return <button className={`sb-now ${now.tone}`} title="What the agent is doing">
+    {now.tone === "warn" ? <Icon name="hand" size={14} /> : <span className={now.tone === "live" ? "busy-dot" : "sb-dot"} />}
+    <span className="sb-agent">{now.label.startsWith("codex") ? "Codex" : "Claude"}</span>
+    <span className="sb-label">{elsewhere ? "running in another terminal — Keel is following" : now.label.replace(/^\S+ · /, "")}</span>
+    {!elsewhere && elapsed !== undefined && Number.isFinite(elapsed) && <span className="clock">{clock(elapsed)}</span>}
+  </button>;
+}
+
+function branchLabel(lane: Lane): string {
+  if (!lane.git) return lane.wt ? `keel/${lane.wt}` : "…";
+  return lane.git.is_repo ? lane.git.branch ?? "detached" : "not a git repository";
+}
+
 export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void }) {
   const lane = useStore((s) => s.active);
   const l = useStore((s) => (s.active ? s.lanes[s.active] : undefined));
@@ -66,34 +132,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
     const t = setInterval(() => tick((n) => n + 1), 500);
     return () => clearInterval(t);
   }, [now.tone]);
-  const cost = l?.conv.turns.reduce((sum, t) => sum + (t.usage?.cost ?? 0), 0) ?? 0;
-  // Summed per kind and shown apart: every turn re-reads the cached context, so one total of
-  // everything counted the same conversation once per turn and meant nothing.
-  const sum = { input: 0, output: 0, cache_read: 0, cache_write: 0, turns: 0 };
-  let context = 0;
-  for (const t of l?.conv.turns ?? []) {
-    if (!t.usage) continue;
-    sum.input += t.usage.input;
-    sum.output += t.usage.output;
-    sum.cache_read += t.usage.cache_read;
-    sum.cache_write += t.usage.cache_write;
-    sum.turns += 1;
-    if (t.usage.context) context = t.usage.context;
-  }
-  const tokens = sum.input + sum.output + sum.cache_write;
-  const detail = [
-    `${sum.turns} turns with usage`,
-    `fresh input ${sum.input.toLocaleString()}`,
-    `cache writes ${sum.cache_write.toLocaleString()}`,
-    `cache reads ${sum.cache_read.toLocaleString()}`,
-    `output ${sum.output.toLocaleString()}`,
-    context ? `context at the last turn ${context.toLocaleString()}` : "",
-    cost ? `cost $${cost.toFixed(4)}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
   const git = l?.git;
-  const elapsed = now.since ? Math.floor((Date.now() - Date.parse(now.since)) / 1000) : undefined;
   return (
     <footer className="statusbar">
       <div className="statusbar-details">
@@ -101,36 +140,14 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
       {l && (
         <button className="sb-branch" onClick={() => openTab("git")} title="Open Git">
           <Icon name="branch" size={14} />
-          <span className="sb-mono">{git ? (git.is_repo ? (git.branch ?? "detached") : "not a git repository") : l.wt ? `keel/${l.wt}` : "…"}</span>
+          <span className="sb-mono">{branchLabel(l)}</span>
           {git && git.changes.length > 0 && <span className="sb-pill">{git.changes.length} changed</span>}
         </button>
       )}
       {l && now.label && <span className="sb-sep" />}
-      {l && now.label && (
-        <button className={`sb-now ${now.tone}`} title="What the agent is doing">
-          {now.tone === "warn" ? <Icon name="hand" size={14} /> : <span className={now.tone === "live" ? "busy-dot" : "sb-dot"} />}
-          <span className="sb-agent">{l.agent === "codex" ? "Codex" : "Claude"}</span>
-          <span className="sb-label">{elsewhere ? "running in another terminal — Keel is following" : now.label.replace(/^\S+ · /, "")}</span>
-          {!elsewhere && elapsed !== undefined && Number.isFinite(elapsed) && <span className="clock">{clock(elapsed)}</span>}
-        </button>
-      )}
+      {l && now.label && <CurrentActivity now={now} elsewhere={elsewhere} />}
       <span className="spacer" />
-      {tokens > 0 && (
-        <button className="sb-usage" title={`${detail}\n\nClick to copy`} onClick={() => void navigator.clipboard.writeText(detail)}>
-          {context > 0 && (
-            <span>
-              <span className="sb-key">Context</span> <span className="sb-mono">{count(context)}</span>
-            </span>
-          )}
-          <span>
-            <span className="sb-key">In</span> <span className="sb-mono">{count(sum.input + sum.cache_write)}</span>
-          </span>
-          <span>
-            <span className="sb-key">Out</span> <span className="sb-mono">{count(sum.output)}</span>
-          </span>
-          {cost > 0 && <span className="sb-mono">${cost.toFixed(2)}</span>}
-        </button>
-      )}
+      {l && <SessionUsage lane={l} open={() => openTab("context")} />}
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
       {l &&
         (trusted ? (
