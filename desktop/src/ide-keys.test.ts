@@ -9,6 +9,7 @@ it("matches the macOS VS Code navigation keys without taking ordinary terminal i
   expect(ideCommand(event("Backquote", { ctrlKey: true }), true)).toBe("terminal");
   expect(ideCommand(event("KeyE", { metaKey: true, shiftKey: true }), true)).toBe("explorer");
   expect(ideCommand(event("KeyF", { metaKey: true }), true)).toBe("find");
+  expect(ideCommand(event("KeyV", { metaKey: true, shiftKey: true }), true)).toBe("markdownPreview");
   expect(ideCommand(event("KeyC", { ctrlKey: true }), true)).toBeUndefined();
   expect(ideCommand(event("KeyP", { ctrlKey: true }), true)).toBeUndefined();
   expect(ideCommand(event("KeyP", { metaKey: true, altKey: true }), true)).toBeUndefined();
@@ -19,6 +20,7 @@ it("matches Windows/Linux primary shortcuts independently from Keel’s legacy t
   expect(ideCommand(event("KeyB", { ctrlKey: true }), false)).toBe("sidebar");
   expect(ideCommand(event("KeyJ", { ctrlKey: true }), false)).toBe("terminal");
   expect(ideCommand(event("KeyW", { ctrlKey: true }), false)).toBe("closeFile");
+  expect(ideCommand(event("KeyV", { ctrlKey: true, shiftKey: true }), false)).toBe("markdownPreview");
   expect(ideCommand(event("KeyP", { metaKey: true }), false)).toBeUndefined();
 });
 it("parses path/line navigation without confusing colons in file names or allowing zero/negative lines", () => {

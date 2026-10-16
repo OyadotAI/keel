@@ -6,6 +6,8 @@ import { completedEdits, EMPTY_IDE, liveReader, relativeFile, useIde, visibleTre
 import { useStore } from "../store";
 import { SyntaxText } from "./SyntaxText";
 import { CommitReview } from "./Git";
+import { isMarkdown } from "../markdown";
+import { MarkdownPreview } from "./MarkdownPreview";
 import { Icon } from "./icons";
 
 export function LayoutSwitch() {
@@ -168,7 +170,7 @@ export function IdeWorkspace({ lane, enabled, children, showCode, terminalOpen, 
   }, [current, diff]);
   const pause = () => { if (l.follow || l.targetLine) useIde.getState().patch(lane, { follow: false, targetLine: undefined }); };
   const area = l.mode === "diff" ? l.staged : undefined;
-  const changeMode = (mode: "code" | "diff") => { setData(undefined); setError(undefined); useIde.getState().patch(lane, { mode, follow: false }); showCode?.(); };
+  const changeMode = (mode: "code" | "diff") => { if (mode === "code") useIde.getState().markdownView(lane, "source"); if (l.mode !== mode) { setData(undefined); setError(undefined); } useIde.getState().patch(lane, { mode, follow: false }); showCode?.(); };
   return <section className="ide-center" aria-label="Code workspace" hidden={!enabled}>
     <div className="ide-workspace-actions">
       <button onClick={() => useIde.setState({ navigation: "files" })}><Icon name="search" size={13} />Go to File…</button>
@@ -178,7 +180,7 @@ export function IdeWorkspace({ lane, enabled, children, showCode, terminalOpen, 
     </div>
     <FileTabs lane={lane} l={l} showCode={showCode} />
     <header className="ide-toolbar" hidden={!!l.commit}><span className="ide-breadcrumb" title={l.selected}>{l.selected ? `${area === true ? "Staged Changes / " : area === false ? "Changes / " : ""}${l.selected}` : "Browse files or follow the agent"}</span>
-      {l.selected && <div className="segmented" role="group" aria-label="File view"><button aria-pressed={l.mode === "code"} onClick={() => changeMode("code")}>Code</button><button aria-pressed={l.mode === "diff"} onClick={() => changeMode("diff")}>Diff</button></div>}
+      {l.selected && <FileViewSwitch lane={lane} l={l} changeMode={changeMode} showCode={showCode} />}
       <button className={`ide-follow${l.follow ? " active" : ""}`} aria-pressed={l.follow} onClick={() => {
         useIde.getState().patch(lane, { follow: !l.follow });
         if (!l.follow && latest.current) { reveal.current = true; useIde.getState().open(lane, latest.current, "diff", false); }
@@ -187,11 +189,21 @@ export function IdeWorkspace({ lane, enabled, children, showCode, terminalOpen, 
     <div className="ide-preview" onWheel={pause} onPointerDown={pause} onKeyDown={(e) => {
       if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) pause();
     }}>
-      {children ?? (l.commit && ep ? <CommitReview key={l.commit.sha} ep={ep} wt={wt} commit={l.commit} /> : <CodeContent current={current} ready={ready} waiting={waiting} error={error} lane={lane} l={l} list={list} setRetry={setRetry} changeMode={changeMode} />)}
+      {children ?? (l.commit && ep ? <CommitReview key={l.commit.sha} ep={ep} wt={wt} commit={l.commit} /> : <CodeContent current={current} ready={ready} waiting={waiting} error={error} lane={lane} ep={ep} wt={wt} l={l} list={list} setRetry={setRetry} changeMode={changeMode} />)}
     </div>
   </section>;
 }
 
+
+function FileViewSwitch({ lane, l, changeMode, showCode }: { lane: string; l: IdeLane; changeMode: (mode: "code" | "diff") => void; showCode?: () => void }) {
+  const markdown = isMarkdown(l.selected);
+  const view = l.mode === "diff" ? "diff" : markdown ? l.markdown?.[l.selected!] ?? "source" : "source";
+  return <div className="segmented" role="group" aria-label="File view">
+    <button aria-pressed={view === "source"} onClick={() => { useIde.getState().markdownView(lane, "source"); changeMode("code"); }}>Code</button>
+    <button aria-pressed={view === "diff"} onClick={() => changeMode("diff")}>Diff</button>
+    {markdown && <><button aria-pressed={view === "preview"} title="Markdown preview (⌘Shift+V / Ctrl+Shift+V)" onClick={() => { useIde.getState().markdownView(lane, "preview"); showCode?.(); }}>Preview</button><button aria-pressed={view === "split"} onClick={() => { useIde.getState().markdownView(lane, "split"); showCode?.(); }}>Split</button></>}
+  </div>;
+}
 
 function FileTabs({ lane, l, showCode }: { lane: string; l: IdeLane; showCode?: () => void }) {
   return <div className="ide-file-tabs" aria-label="Open files">
@@ -204,13 +216,14 @@ function FileTabs({ lane, l, showCode }: { lane: string; l: IdeLane; showCode?: 
   </div>;
 }
 
-function CodeContent({ current, ready, waiting, error, lane, l, list, setRetry, changeMode }: {
-  current?: PreviewData; ready: boolean; waiting: string; error?: string; lane: string; l: IdeLane;
+function CodeContent({ current, ready, waiting, error, lane, ep, wt, l, list, setRetry, changeMode }: {
+  current?: PreviewData; ready: boolean; waiting: string; error?: string; lane: string; ep?: import("../api").Endpoint; wt?: string; l: IdeLane;
   list: RefObject<VirtuosoHandle | null>; setRetry: (update: (n: number) => number) => void; changeMode: (mode: "code" | "diff") => void;
 }) {
   const lines = useMemo(() => current?.content.text?.split("\n").slice(0, 20_000) ?? [], [current]);
   const diff = l.mode === "diff" ? current?.diff : undefined;
   const scrollKey = `${l.selected}:${l.mode}`;
+  const view = l.mode === "code" && isMarkdown(l.selected) ? l.markdown?.[l.selected!] ?? "source" : "source";
   useEffect(() => {
     if (!current || l.mode !== "code" || !l.targetLine) return;
     const index = Math.max(0, Math.min(lines.length - 1, l.targetLine.line - 1));
@@ -229,13 +242,16 @@ function CodeContent({ current, ready, waiting, error, lane, l, list, setRetry, 
   if (!current) return <div className="panel-empty muted">Reading {l.selected}…</div>;
   return <>
     <PreviewNotes current={current} diff={diff} mode={l.mode} lineCount={lines.length} changeMode={changeMode} />
-    <Virtuoso key={scrollKey} ref={list} tabIndex={0} className={l.mode === "diff" ? "diff ide-code-list" : "ide-code-list"}
+    <div className={`ide-document ${view}`} >
+    {view !== "preview" && <Virtuoso key={scrollKey} ref={list} tabIndex={0} className={l.mode === "diff" ? "diff ide-code-list" : "ide-code-list"}
       initialScrollTop={l.targetLine ? undefined : l.scroll[scrollKey] ?? 0} initialTopMostItemIndex={l.targetLine ? { index: Math.max(0, Math.min(lines.length - 1, l.targetLine.line - 1)), align: "center" } : undefined} totalCount={diff ? diff.rows.length : l.mode === "code" ? lines.length : 0}
       onScroll={(e) => {
         const s = useIde.getState();
         const state = s.lanes[lane] ?? EMPTY_IDE;
         s.patch(lane, { scroll: { ...state.scroll, [scrollKey]: e.currentTarget.scrollTop } });
-      }} itemContent={(i) => <CodeRow diff={diff} lines={lines} path={l.selected ?? ""} index={i} target={l.targetLine?.line} />} />
+      }} itemContent={(i) => <CodeRow diff={diff} lines={lines} path={l.selected ?? ""} index={i} target={l.targetLine?.line} />} />}
+    {view !== "source" && ep && current.content.text !== null && <MarkdownPreview text={current.content.text} path={l.selected} lane={lane} ep={ep} wt={wt} anchor={l.previewAnchor} revision={current} />}
+    </div>
   </>;
 }
 

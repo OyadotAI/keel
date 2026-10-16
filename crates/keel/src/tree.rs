@@ -23,18 +23,7 @@ pub struct FileContent {
 /// A code preview may only read regular files in this checkout, never Claude's config root.
 /// Open first and read through a limit as well: a file can grow after its metadata was checked.
 pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileContent, String> {
-    let root = root.real().map_err(|_| "checkout unavailable")?;
-    let path = root
-        .join(requested)
-        .real()
-        .map_err(|_| "file no longer exists")?;
-    if !path.starts_with(&root) {
-        return Err("path escapes the checkout".into());
-    }
-    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    if !metadata.is_file() {
-        return Err("only regular files can be previewed".into());
-    }
+    let (path, metadata) = preview_path(root, requested)?;
     let limited = || FileContent {
         text: None,
         note: Some("This file exceeds the 1 MiB preview limit.".into()),
@@ -62,6 +51,25 @@ pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileContent, String
             .then(|| "Binary or non-UTF-8 files cannot be previewed as code.".into()),
         text,
     })
+}
+
+fn preview_path(
+    root: &Utf8Path,
+    requested: &str,
+) -> Result<(Utf8PathBuf, std::fs::Metadata), String> {
+    let root = root.real().map_err(|_| "checkout unavailable")?;
+    let path = root
+        .join(requested)
+        .real()
+        .map_err(|_| "file no longer exists")?;
+    if !path.starts_with(&root) {
+        return Err("path escapes the checkout".into());
+    }
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("only regular files can be previewed".into());
+    }
+    Ok((path, metadata))
 }
 
 /// One entry in the repository tree.
@@ -248,18 +256,21 @@ pub fn resolve_dir(repo: &Utf8Path, requested: &str) -> Result<Utf8PathBuf, Stri
 /// Bounded to the repository like [`read_file`]. Loopback is not a substitute for that check: a
 /// traversal bug would let any page in the user's browser read their filesystem.
 pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static str), String> {
-    let canonical = root
-        .join(requested)
-        .real()
-        .map_err(|_| "no such file".to_string())?;
-    let root_canonical = root
-        .real()
-        .map_err(|_| "repository unavailable".to_string())?;
-    if !canonical.starts_with(&root_canonical) {
-        return Err("path escapes the repository".to_string());
+    const LIMIT: u64 = 16 * 1024 * 1024;
+    let (canonical, metadata) = preview_path(root, requested)?;
+    if metadata.len() > LIMIT {
+        return Err("This file exceeds the 16 MiB asset preview limit.".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&canonical)
+        .map_err(|e| e.to_string())?
+        .take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > LIMIT {
+        return Err("This file exceeds the 16 MiB asset preview limit.".into());
     }
 
-    let bytes = std::fs::read(&canonical).map_err(|e| e.to_string())?;
     let mime = match canonical
         .extension()
         .map(str::to_ascii_lowercase)
@@ -283,6 +294,40 @@ pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static s
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn raw_assets_are_regular_bounded_and_svg_keeps_its_download_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        let (bytes, mime) = read_raw(root, "image.png").unwrap();
+        assert_eq!(mime, "image/png");
+        assert_eq!(bytes, b"\x89PNG\r\n\x1a\n");
+        std::fs::write(
+            root.join("image.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        )
+        .unwrap();
+        assert_eq!(
+            read_raw(root, "image.svg").unwrap().1,
+            "application/octet-stream"
+        );
+        assert!(read_raw(root, ".").is_err());
+        let large = std::fs::File::create(root.join("large.png")).unwrap();
+        large.set_len(16 * 1024 * 1024 + 1).unwrap();
+        assert!(read_raw(root, "large.png").unwrap_err().contains("16 MiB"));
+        let other = tempfile::tempdir().unwrap();
+        let outside = Utf8Path::from_path(other.path())
+            .unwrap()
+            .join("secret.png");
+        std::fs::write(&outside, "secret").unwrap();
+        assert!(read_raw(root, outside.as_str()).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("link.png")).unwrap();
+            assert!(read_raw(root, "link.png").is_err());
+        }
+    }
 
     #[test]
     fn preview_reads_only_regular_checkout_files_and_bounds_bytes() {

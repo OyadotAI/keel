@@ -196,3 +196,31 @@
 .syntax-code .hljs-comment, .syntax-code .hljs-quote { color: var(--syntax-comment); font-style: normal; }
 .syntax-code .hljs-tag, .syntax-code .hljs-name { color: var(--syntax-type); }
 .syntax-code .hljs-subst { color: var(--text); }
+
+/* File documents share the editor's bounded, scrollable workspace. */
+.ide-preview { container-type: inline-size; }
+.ide-document { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.ide-document > .ide-code-list { flex: 1; min-width: 0; width: 0; }
+.markdown-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 28px 32px 48px; background: var(--bg); scroll-padding-top: 20px; }
+.markdown-document { max-width: 880px; margin: 0 auto; overflow-wrap: anywhere; }
+.markdown-document h1 { font-size: 30px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.markdown-document h2 { font-size: 24px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.markdown-document h4, .markdown-document h5, .markdown-document h6 { margin: 22px 0 10px; line-height: 1.4; }
+.markdown-document .task-list-item { list-style: none; }
+.markdown-document .task-list-item input { margin-right: 7px; }
+.markdown-image { display: inline-block; max-width: 100%; min-height: 24px; }
+.markdown-image img { display: block; max-width: 100%; height: auto; border-radius: var(--r-sm); }
+.ide-document.split > .markdown-preview { border-left: 1px solid var(--line); padding: 22px; }
+@container (max-width: 560px) {
+  .ide-document.split { flex-direction: column; }
+  .ide-document.split > .ide-code-list { width: 100%; height: 0; }
+  .ide-document.split > .markdown-preview { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/* Source control uses the same rounded surfaces as the rest of the workspace. */
+.ide-git-slot, .coding-git { background: transparent; }
+.coding-git .coding-changes, .coding-git .commit-graph { margin: 0 10px 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); box-shadow: var(--shadow-xs); }
+.coding-git .coding-section-toggle { min-height: 32px; }
+.coding-git .scm-commit textarea, .coding-git .scm-filter, .coding-git .scm-commit-button { border-radius: 8px; }
+.coding-git .coding-branch-status { width: auto; margin: 0 10px 8px; border-radius: 8px; border: 1px solid var(--line); }
+.ide-center, .shell-dock { border-radius: 14px; }

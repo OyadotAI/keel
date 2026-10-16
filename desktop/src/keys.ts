@@ -72,5 +72,7 @@ export const KEEL: Chord[] = [
 ];
 
 export function isKeel(e: KeyboardEvent): boolean {
-  return (useIde.getState().layout === "ide" && !!ideCommand(e, MAC)) || KEEL.some((c) => matches(e, c));
+  const command = ideCommand(e, MAC);
+  const paste = command === "markdownPreview" && !!(e.target as Element | null)?.closest?.("textarea, input, [contenteditable=true], .xterm");
+  return (useIde.getState().layout === "ide" && !!command && !paste) || KEEL.some((c) => matches(e, c));
 }

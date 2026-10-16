@@ -17,6 +17,21 @@ it("keeps the layout preference separate from agent session state and tolerates 
   expect(rememberedLayout()).toBe("chat");
 });
 
+it("keeps Markdown view choices per file and reveals source when navigating to a line", () => {
+  const ide = useIde.getState();
+  ide.open("one", "README.md", "code");
+  expect(ide.markdownView("one", "split")).toBe(true);
+  ide.open("one", "guide.md", "code");
+  ide.markdownView("one", "preview");
+  ide.open("one", "README.md", "code");
+  expect(useIde.getState().lanes.one.markdown?.["README.md"]).toBe("split");
+  ide.navigate("one", "README.md", 42);
+  expect(useIde.getState().lanes.one).toMatchObject({ mode: "code", markdown: { "README.md": "source", "guide.md": "preview" }, targetLine: { line: 42 } });
+  ide.open("two", "main.ts", "code");
+  expect(ide.markdownView("two")).toBe(false);
+  expect(useIde.getState().lanes.two.markdown).toBeUndefined();
+});
+
 it("pauses following on manual selection, restores it explicitly, and retains lane-specific tabs", () => {
   const s = useIde.getState();
   s.open("one", "src/main.ts", "diff", false);

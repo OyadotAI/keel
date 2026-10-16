@@ -54,7 +54,7 @@ function GraphHistory({ rows, onOpen, selected }: { rows: GraphRow[]; onOpen: (c
   function sync(top: number, target: HTMLDivElement | null) {
     if (target && target.scrollTop !== top) target.scrollTop = top;
   }
-  return <div className="graph-history" style={{ gridTemplateColumns: `min(${width}px, 30%) minmax(0, 1fr)` }}>
+  return <div className="graph-history" style={{ gridTemplateColumns: `min(${width}px, 28%) minmax(0, 1fr)` }}>
     <div className="graph-lanes" ref={lanes} role="region" aria-label="Branch graph; scroll horizontally to see more branches" tabIndex={0} onWheel={(e) => {
       if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && commits.current) commits.current.scrollTop += e.deltaY;
     }} onKeyDown={(e) => moveGraph(e, commits.current)}>

@@ -23,6 +23,11 @@ following, and **Resume following** returns to the latest successful agent edit.
 the agent makes the changes. Narrow windows put the explorer in a drawer and the conversation
 in an overlay, which opens when the agent needs an answer.
 
+Markdown files also offer **Preview** and **Split** views. The rendered document supports headings,
+tables, task lists, code fences, relative file links, heading anchors, and local images; it refreshes
+when the agent updates the file. **⇧⌘V / Ctrl+Shift+V** toggles preview from the editor. Paste in
+chat and terminal inputs keeps its usual behavior, and jumping to a source line reveals Code.
+
 The integrated **Terminal** opens below the code and keeps its shell connected when hidden or
 when you switch lanes. **Source Control** in the left sidebar provides staging, unstaging,
 committing, fetch/pull/push, history, branches, and pull requests. Click a changed file to compare

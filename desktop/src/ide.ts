@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import type { GraphCommit } from "./commit-graph";
 import type { Conversation } from "./reduce";
+import { isMarkdown } from "./markdown";
 
 export interface FileNode { name: string; path: string; dir: boolean; children?: FileNode[] | null }
 export type FileMode = "code" | "diff";
@@ -10,6 +11,8 @@ export interface IdeLane {
   selected?: string;
   commit?: GraphCommit;
   mode: FileMode;
+  markdown?: Record<string, "source" | "preview" | "split">;
+  previewAnchor?: string;
   staged?: boolean;
   targetLine?: { line: number; token: number };
   follow: boolean;
@@ -30,6 +33,7 @@ export const useIde = create<{
   navigation?: "files" | "line" | "find";
   setSidebar(sidebar: "explorer" | "git" | "conversations"): void;
   navigate(lane: string, path: string, line?: number): void;
+  markdownView(lane: string, view?: "source" | "preview" | "split"): boolean;
   setLayout(layout: "chat" | "ide"): void;
   patch(lane: string, patch: Partial<IdeLane>): void;
   open(lane: string, path: string, mode: FileMode, manual?: boolean, staged?: boolean): void;
@@ -39,7 +43,15 @@ export const useIde = create<{
   setSidebar(sidebar) { set({ sidebar }); },
   navigate(lane, path, line) {
     useIde.getState().open(lane, path, "code");
+    if (line && isMarkdown(path)) useIde.getState().markdownView(lane, "source");
     useIde.getState().patch(lane, { targetLine: { line: line ?? 1, token: Date.now() } });
+  },
+  markdownView(lane, view) {
+    const l = useIde.getState().lanes[lane];
+    if (!l?.selected || l.commit || !isMarkdown(l.selected)) return false;
+    const next = view ?? (l.markdown?.[l.selected] === "preview" ? "source" : "preview");
+    useIde.getState().patch(lane, { mode: "code", follow: false, markdown: { ...l.markdown, [l.selected]: next } });
+    return true;
   },
   setLayout(layout) {
     try { localStorage.setItem("keel.workspace-layout", layout); } catch { /* Optional preference. */ }
@@ -50,7 +62,7 @@ export const useIde = create<{
     set((s) => {
       const l = s.lanes[lane] ?? empty();
       const parents = path.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"));
-      return { lanes: { ...s.lanes, [lane]: { ...l, selected: path, commit: undefined, mode, staged, targetLine: undefined, follow: manual ? false : l.follow,
+      return { lanes: { ...s.lanes, [lane]: { ...l, selected: path, commit: undefined, previewAnchor: undefined, mode, staged, targetLine: undefined, follow: manual ? false : l.follow,
         tabs: l.tabs.includes(path) ? l.tabs : [...l.tabs, path], expanded: [...new Set([...l.expanded, ...parents])] } } };
     });
   },

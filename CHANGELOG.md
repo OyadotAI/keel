@@ -2,6 +2,21 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.10] - 2026-10-16
+
+### Added
+- Added Markdown Preview and Split views with headings, tables, task lists, highlighted code
+  blocks, relative document links, heading anchors, and local images. Previews refreshed after
+  agent edits, and Cmd/Ctrl+Shift+V toggled the preview while preserving paste in text inputs.
+
+### Changed
+- Matched Source Control, Graph, editor, and terminal panels to Keel's rounded workspace surfaces.
+
+### Fixed
+- Bounded Markdown rendering and local asset reads, preserving checkout boundaries and the
+  existing SVG download policy.
+- Kept Code view available when returning from a Markdown preview or navigating to a source line.
+
 ## [0.4.9] - 2026-10-16
 
 ### Fixed

@@ -27,12 +27,18 @@ function wideHistory() {
 }
 const project = "/workspace/keel";
 const files: Record<string, string> = {
-  "README.md": "# Keel\n\nAn agentic development environment.\n",
+  "README.md": '# Keel\n\nA **Markdown preview** for engineers.\n\n[Installation guide](docs/guide.md#installation) · [Features](#features)\n\n![Keel mark](assets/mark.svg)\n\n## Features\n\n- [x] File explorer\n- [x] Source control\n- [ ] Ship the next feature\n\n| View | Purpose |\n| --- | --- |\n| Code | Read the source |\n| Preview | Read the document |\n\n```ts\nconst mode: string = "preview";\nconsole.log(mode);\n```\n\n> The preview follows your agent’s edits.\n\n[Open source](src/main.ts)\n',
+  "docs/guide.md": '# Guide\n\n[Back to README](../README.md)\n\n## Installation\n\nRun `make dev` to open Keel.\n\n## Installation\n\nDuplicate heading anchor.\n',
+
   "src/main.ts": 'import { createWorkspace } from "./workspace";\n\nconst workspace = createWorkspace();\nworkspace.followChanges(true);\n',
   "src/workspace.ts": Array.from({ length: 700 }, (_, i) => `export const setting${i} = ${i};`).join("\n"),
   "empty.ts": "",
   "large.lock": "large",
 };
+function fileContent(path: string, wt: string | null) {
+  if (path === "large.lock") return { text: null, note: "This file exceeds the 1 MiB preview limit." };
+  return { text: wt ? `// isolated checkout: ${wt}\n${files[path] ?? ""}` : files[path] ?? "", note: null };
+}
 let fail = false;
 let serial = 0;
 let staged = false;
@@ -44,15 +50,16 @@ window.fetch = async (input, init) => {
   if (!target.pathname.startsWith("/api/")) return realFetch(input, init);
   const path = target.searchParams.get("path") ?? "";
   const wt = target.searchParams.get("wt");
+  if (target.pathname === "/api/raw") return new Response('<svg xmlns="http://www.w3.org/2000/svg" width="280" height="100"><rect width="280" height="100" rx="16" fill="#34745a"/><text x="140" y="60" fill="white" text-anchor="middle" font-size="32">Keel</text></svg>', { headers: { "Content-Type": "application/octet-stream" } });
   if (target.pathname === "/api/file" && fail) { fail = false; return new Response("Synthetic read failure. Try again.", { status: 503 }); }
   let data: unknown = [];
   if (target.pathname === "/api/tree") data = [
     { name: "src", path: "src", dir: true, children: ["main.ts", "workspace.ts"].map((name) => ({ name, path: `src/${name}`, dir: false })) },
+    { name: "docs", path: "docs", dir: true, children: [{ name: "guide.md", path: "docs/guide.md", dir: false }] },
     ...["README.md", "empty.ts", "large.lock"].map((name) => ({ name, path: name, dir: false })),
   ];
   if (target.pathname === "/api/file") {
-    if (path === "large.lock") data = { text: null, note: "This file exceeds the 1 MiB preview limit." };
-    else data = { text: wt ? `// isolated checkout: ${wt}\n${files[path] ?? ""}` : files[path] ?? "", note: null };
+    data = fileContent(path, wt);
     // A deliberately late response lets rapid selections verify stale-response handling.
     if (path === "empty.ts") await new Promise((resolve) => setTimeout(resolve, 1200));
   }
@@ -109,11 +116,17 @@ const lanes = Object.fromEntries(["main", "feature"].map((id) => [id, {
 useStore.setState({ lanes, order: [project], active: "main", opened: ["main"], projects: { [project]: { path: project, name: "Keel", lanes: Object.keys(lanes), endpoint: { port: 1420, token: "synthetic" } } }, trusted: { [project]: true }, load: () => {}, prepare: async (id) => ({ ep: { port: 1420, token: "synthetic" }, wt: id === "feature" ? "feature" : undefined }), ensure: async () => ({ port: 1420, token: "synthetic" }) });
 useIde.getState().setLayout("ide");
 if (wide) useIde.getState().setSidebar("git");
+const documentView = params.get("document");
+if (documentView === "preview" || documentView === "split") {
+  useIde.getState().open("main", "README.md", "code");
+  useIde.getState().markdownView("main", documentView);
+}
 function edit() {
   const id = `edit-${++serial}`;
   const lane = useStore.getState().active!;
   const l = useStore.getState().lanes[lane];
-  const path = serial % 2 ? "src/main.ts" : "src/workspace.ts";
+  const path = documentView ? "README.md" : serial % 2 ? "src/main.ts" : "src/workspace.ts";
+  if (documentView) files[path] += `\n\n## Live update ${serial}\n\nWritten by the agent.\n`;
   useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...l, reviewRevision: serial, conv: applyFrames(l.conv, [
     { op: "call", turn: "demo", id, tool: "Edit", subject: path, writes: [path] },
     { op: "result", turn: "demo", id, state: "ok" },
@@ -145,7 +158,7 @@ async function verifyGraph() {
 function Harness() {
   const [result, setResult] = React.useState("");
   return <><div style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", fontSize: 11 }}>
-    {wide && <><button onClick={() => void verifyGraph().then(setResult, (e) => setResult(`FAIL: ${String(e)}`))}>Check graph layout</button><output>{result}</output></>}<strong>Synthetic IDE QA</strong>{([['⌘P', 'KeyP', true, false, false], ['⌃G', 'KeyG', false, true, false], ['⌘F', 'KeyF', true, false, false], ['⇧⌘P', 'KeyP', true, false, true]] as const).map(([label, code, metaKey, ctrlKey, shiftKey]) => <button key={label} onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { code, metaKey, ctrlKey, shiftKey, bubbles: true }))}>{label}</button>)}<button onClick={edit}>Agent edit</button>
+    {wide && <><button onClick={() => void verifyGraph().then(setResult, (e) => setResult(`FAIL: ${String(e)}`))}>Check graph layout</button><output>{result}</output></>}<strong>Synthetic IDE QA</strong>{([['⌘P', 'KeyP', true, false, false], ['⌃G', 'KeyG', false, true, false], ['⌘F', 'KeyF', true, false, false], ['⇧⌘P', 'KeyP', true, false, true], ['⇧⌘V', 'KeyV', true, false, true]] as const).map(([label, code, metaKey, ctrlKey, shiftKey]) => <button key={label} onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { code, metaKey, ctrlKey, shiftKey, bubbles: true }))}>{label}</button>)}<button onClick={edit}>Agent edit</button>
     <button onClick={() => useStore.setState({ active: useStore.getState().active === "main" ? "feature" : "main" })}>Switch lane</button>
     <button onClick={() => { fail = true; }}>Fail next read</button>
     <button onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [s.active!]: { ...s.lanes[s.active!], pending: [{ id: "q", tool: "AskUserQuestion", command: "", rules: [], input: { questions: [{ question: "Run the checks?", options: [{ label: "Unit tests" }, { label: "All checks" }] }] } }] } } }))}>Question</button>

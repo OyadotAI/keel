@@ -45,6 +45,12 @@ export const get = <T>(ep: Endpoint, path: string, params?: Params) => request<T
 export const post = <T>(ep: Endpoint, path: string, body?: unknown, params?: Params) =>
   request<T>(ep, "POST", path, params, body);
 
+export async function getBlob(ep: Endpoint, path: string, params?: Params): Promise<Blob> {
+  const response = await fetch(url(ep, path, params), { headers: { Authorization: `Bearer ${ep.token}` }, signal: AbortSignal.timeout(ORDINARY) });
+  if (!response.ok) throw new Error(await response.text() || `GET ${path}: ${response.status}`);
+  return response.blob();
+}
+
 /// A URL this window may frame (the CSP's `frame-src`), with `0.0.0.0` — "every interface", which
 /// is what a server bound with `--host 0.0.0.0` prints — read as this machine. `null` for anything
 /// else, which is shown as a link rather than as a frame the webview would silently refuse.

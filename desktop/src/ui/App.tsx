@@ -230,6 +230,12 @@ function handleIdeShortcut(e: KeyboardEvent, { setPalette, setShell, toggleSideb
 }): boolean {
   if (useIde.getState().layout !== "ide" || !useStore.getState().active || getOverlay()) return false;
   const command = ideCommand(e, MAC);
+  if (command === "markdownPreview") {
+    if ((e.target as Element | null)?.closest?.("textarea, input, [contenteditable=true], .xterm")) return false;
+    const active = useStore.getState().active;
+    if (!active || !useIde.getState().markdownView(active)) return false;
+    e.preventDefault(); return true;
+  }
   if (command) {
     e.preventDefault();
     if (command === "commands") setPalette((p) => !p);

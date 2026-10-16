@@ -1,5 +1,5 @@
 // VS Code's common navigation bindings. These apply only to the IDE workspace.
-export type IdeCommand = "files" | "commands" | "line" | "find" | "explorer" | "git" | "sidebar" | "terminal" | "closeFile";
+export type IdeCommand = "files" | "commands" | "line" | "find" | "explorer" | "git" | "sidebar" | "terminal" | "closeFile" | "markdownPreview";
 export function ideCommand(e: Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, mac: boolean): IdeCommand | undefined {
   if (e.altKey) return;
   const primary = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
@@ -9,6 +9,7 @@ export function ideCommand(e: Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey"
   if (control && e.shiftKey && e.code === "KeyG") return "git";
   if (!primary) return;
   if (e.code === "KeyP") return e.shiftKey ? "commands" : "files";
+  if (e.shiftKey && e.code === "KeyV") return "markdownPreview";
   if (e.shiftKey && e.code === "KeyE") return "explorer";
   if (e.shiftKey) return;
   const commands: Partial<Record<string, IdeCommand>> = { KeyB: "sidebar", KeyJ: "terminal", KeyF: "find", KeyW: "closeFile" };

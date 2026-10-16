@@ -9,7 +9,7 @@ export function Copy({ text, label = "Copy" }: { text: string; label?: string })
   return <button className="chat-copy" onClick={() => void navigator.clipboard.writeText(text).then(() => setState("Copied"), () => setState("Copy failed"))}>{state}</button>;
 }
 
-function Code({ text, language }: { text: string; language: string }) {
+export function Code({ text, language }: { text: string; language: string }) {
   const [highlighted, setHighlighted] = useState<{ text: string; html: string }>();
   useEffect(() => {
     let cancelled = false;

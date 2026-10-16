@@ -7,6 +7,7 @@ const GROUPS: [string, [string, Chord | string][]][] = [
     ["Go to file (also accepts file.ts:42)", MAC ? "⌘P" : "Ctrl+P"],
     ["Command palette", MAC ? "⇧⌘P" : "Ctrl+Shift+P"],
     ["Go to line", "Ctrl+G"],
+    ["Toggle Markdown preview", MAC ? "⇧⌘V" : "Ctrl+Shift+V"],
     ["Find in file", MAC ? "⌘F" : "Ctrl+F"],
     ["Show Explorer", MAC ? "⇧⌘E" : "Ctrl+Shift+E"],
     ["Show Source Control", "Ctrl+Shift+G"],
