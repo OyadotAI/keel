@@ -1,3 +1,4 @@
+// IDE navigation is explicit in ide-keys.ts; Chat keeps the original terminal convention.
 // Keel's shortcuts, and the one rule that matters about them: the terminal owns every key that
 // is not on this list. Esc, ⌃C, ⇧⇥ are Claude Code's.
 //
@@ -6,6 +7,9 @@
 //
 // Matched on the physical key (`e.code`), not the character: with Shift held `]` arrives as
 // `}`, and with Option held on a Mac a letter arrives as a dead key or an accent.
+
+import { useIde } from "./ide";
+import { ideCommand } from "./ide-keys";
 
 export const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -68,5 +72,5 @@ export const KEEL: Chord[] = [
 ];
 
 export function isKeel(e: KeyboardEvent): boolean {
-  return KEEL.some((c) => matches(e, c));
+  return (useIde.getState().layout === "ide" && !!ideCommand(e, MAC)) || KEEL.some((c) => matches(e, c));
 }

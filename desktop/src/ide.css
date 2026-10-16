@@ -1,0 +1,189 @@
+/* The IDE uses Keel's palette and a quieter, square-edged code surface. */
+:root { --ide-chat-w: 400px; }
+.layout-switch { flex: none; align-self: center; display: flex; margin: 0 10px; }
+.layout-switch button { min-width: 42px; height: 25px; padding: 0 9px; font-size: 12px; }
+.ide-center[hidden], .ide-explorer-slot[hidden] { display: none; }
+.ide-chat-tools, .ide-conversation-toggle, .ide-chat-backdrop { display: none; }
+.ide-layout .main { position: relative; grid-template-columns: minmax(280px, 1fr) 10px min(var(--ide-chat-w), 55%); grid-template-rows: minmax(0, 1fr); }
+.ide-layout .main > .agent-pane { grid-column: 3; grid-row: 1; }
+.ide-layout .main > .handle { grid-column: 2; grid-row: 1; }
+.ide-center { display: flex; flex-direction: column; grid-column: 1; grid-row: 1; min-height: 0; min-width: 0; overflow: hidden; border-radius: 10px; background: var(--bg); box-shadow: var(--shadow-xs); }
+.ide-layout .lane-header { height: auto; min-height: 68px; flex-wrap: wrap; padding: 12px 16px; gap: 8px; }
+.ide-layout .lane-heading { flex: 1 1 140px; }
+.ide-layout .lane-view-switch { order: 2; }
+.ide-layout .chat-row { padding-left: 20px; padding-right: 20px; }
+.ide-layout .chat-dock { padding: 12px 14px; }
+.ide-layout .chat-markdown { font-size: 14px; line-height: 1.65; }
+.ide-layout .chat-composer textarea { font-size: 14px; }
+.ide-layout .main.has-shell .ide-center { padding-bottom: 32vh; }
+.ide-center .side-panel { width: 100%; height: 100%; position: static; box-shadow: none; background: var(--bg); border-radius: 0; }
+.ide-center .inspector-heading > div > button:first-child { display: none; }
+.ide-file-tabs { display: flex; align-items: stretch; flex: none; overflow-x: auto; min-height: 42px; border-bottom: 1px solid var(--line); background: var(--well); }
+.ide-file-tab { display: flex; flex: none; align-items: center; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
+.ide-file-tab.active { border-top-color: var(--accent); background: var(--bg); }
+.ide-file-tab button { border: 0; box-shadow: none; background: transparent; font-size: 12px; height: 38px; border-radius: 0; padding: 0 12px; gap: 7px; }
+.ide-file-tab > button:first-child { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ide-file-tab button.ghost { padding: 0 7px; height: 24px; margin-right: 5px; }
+.ide-tabs-placeholder { align-self: center; padding-left: 16px; font-size: 12px; color: var(--faint); }
+.ide-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 48px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
+.ide-breadcrumb { flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
+.ide-toolbar .segmented { flex: none; display: flex; }
+.ide-toolbar .segmented button { padding: 0 9px; height: 24px; font-size: 11px; }
+.ide-follow { background: transparent; border: 1px solid var(--line); box-shadow: none; height: 28px; padding: 0 9px; gap: 6px; font-size: 11px; flex: none; color: var(--dim); }
+.ide-follow.active { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); }
+.ide-live-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .45; }
+.ide-follow.active .ide-live-dot { opacity: 1; }
+.ide-preview { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.ide-welcome { margin: auto; padding: 32px; color: var(--faint); text-align: center; }
+.ide-welcome > svg { color: var(--accent); margin: 0 auto 18px; }
+.ide-welcome h2 { font-size: 22px; font-weight: 500; letter-spacing: -.04em; color: var(--text); margin: 0 0 12px; }
+.ide-welcome p { font-size: 13px; line-height: 1.8; margin: 0 0 24px; }
+.ide-welcome small { font-size: 11px; }
+.ide-preview .panel-note button { display: block; margin-top: 8px; }
+.ide-code-list { flex: 1; min-height: 0; font-family: var(--mono); font-size: 12px; line-height: 22px; overflow-x: auto; }
+.ide-code-list [data-viewport-type] { min-width: max-content; }
+.ide-code-line { display: flex; white-space: pre; min-width: 100%; width: max-content; padding-right: 24px; }
+.ide-code-line .ln { width: 64px; padding: 0 16px 0 8px; flex: none; text-align: right; color: var(--faint); user-select: none; }
+.ide-code-line code { font: inherit; background: none; padding: 0; }
+.ide-code-list .row { min-height: 22px; }
+.ide-sidebar-tabs { display: flex; gap: 0; padding: 0 12px 8px; border-bottom: 1px solid var(--hairline); flex: none; }
+.ide-sidebar-tabs button { flex: 1; min-width: 0; font-size: 11px; gap: 5px; padding: 0 6px; height: 32px; background: none; box-shadow: none; border: 0; border-radius: 6px; color: var(--faint); }
+.ide-sidebar-tabs button[aria-pressed=true] { color: var(--text); background: var(--hover); }
+.ide-explorer-slot, .ide-explorer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.ide-explorer > header { display: flex; align-items: center; min-height: 44px; padding: 0 16px; gap: 6px; }
+.ide-explorer > header > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.ide-explorer > header small { font-weight: 400; color: var(--faint); }
+.ide-explorer > header button { flex: none; }
+.ide-tree { flex: 1; min-height: 0; }
+.ide-file { height: 28px; display: flex; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; justify-content: flex-start; gap: 7px; font-size: 12px; padding: 0 12px; font-weight: 400; color: var(--dim); }
+.ide-file > svg { flex: none; opacity: .7; }
+.ide-file > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ide-file > small { margin-left: auto; flex: none; font-size: 10px; }
+.ide-file.selected { background: var(--tint); color: var(--text); }
+.ide-file:hover { background: var(--hover); }
+.ide-file:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.ide-note { margin: 16px; font-size: 12px; line-height: 1.7; }
+.ide-note button { display: block; margin-top: 8px; }
+.ide-explorer footer { flex: none; font-size: 10px; line-height: 1.6; color: var(--faint); padding: 12px 16px; border-top: 1px solid var(--hairline); }
+.ide-explorer footer span { display: block; }
+@media (max-width: 1100px) {
+  .ide-layout .main { grid-template-columns: minmax(0, 1fr); padding-bottom: 40px; }
+  .ide-layout .main > .handle { display: none; }
+  .ide-layout .main > .agent-pane { position: absolute; z-index: 10; top: 0; bottom: 40px; right: 0; width: min(92%, var(--ide-chat-w)); visibility: hidden; }
+  .ide-layout.ide-conversation-open .main > .agent-pane { visibility: visible; }
+  .ide-conversation-toggle { display: block; position: absolute; bottom: 0; right: 0; height: 32px; font-size: 12px; }
+  .ide-conversation-open .ide-chat-backdrop { display: block; position: absolute; inset: 0 0 40px; z-index: 9; background: #0002; border: 0; border-radius: 0; width: 100%; height: auto; }
+  .ide-chat-tools { display: flex; flex: none; padding: 4px 12px; justify-content: flex-end; }
+  .ide-chat-tools button { font-size: 11px; }
+}
+@media (max-width: 900px) {
+  .layout-switch { margin: 0 4px; }
+  .ide-toolbar { gap: 6px; }
+}
+
+/* The terminal is a stable sibling of code and chat; hiding it keeps the PTY alive. */
+.main { position: relative; }
+.shell-dock[hidden], .ide-git-slot[hidden] { display: none; }
+.shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: 32vh; z-index: 3; background: var(--bg); border: 1px solid var(--line); border-radius: 0 0 10px 10px; overflow: hidden; }
+.shell-dock .shell { height: 100%; position: static; }
+.main.has-shell .agent-pane { padding-bottom: 32vh; }
+.main.with-panel .shell-dock { right: calc(var(--panel-w) + 10px); }
+.ide-layout .main.has-shell .agent-pane { padding-bottom: 0; }
+.ide-layout .shell-dock { right: calc(min(var(--ide-chat-w), 55%) + 10px); }
+.ide-workspace-actions { display: flex; gap: 4px; flex: none; padding: 6px 10px; min-height: 38px; border-bottom: 1px solid var(--line); background: var(--well); }
+.ide-workspace-actions button { font-size: 11px; gap: 6px; padding: 0 8px; height: 26px; background: transparent; border: 0; box-shadow: none; color: var(--dim); }
+.ide-workspace-actions button[aria-pressed=true] { background: var(--tint); color: var(--accent); }
+.ide-workspace-actions button:hover { background: var(--hover); }
+.ide-sidebar-tabs { flex-wrap: wrap; }
+.ide-sidebar-tabs button { flex: 1 0 auto; }
+.ide-sidebar-tabs small { color: var(--accent); font-size: 10px; }
+.ide-git-slot { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.ide-git-slot .panel-head { min-height: 36px; padding: 8px 12px; }
+.ide-git-slot .tabs-sub { overflow-x: auto; padding: 0 4px; gap: 0; }
+.ide-git-slot .tabs-sub button { flex-shrink: 0; padding: 0 7px; font-size: 11px; }
+.ide-git-slot .scm-file-actions { opacity: 1; }
+.ide-git-slot input.field { min-width: 0; }
+.git-remote-actions { display: flex; flex: none; gap: 5px; padding: 0 12px 10px; }
+.git-remote-actions button { flex: 1; min-width: 0; height: 28px; font-size: 11px; padding: 0 6px; }
+.ide-target-line { background: var(--tint); box-shadow: inset 3px 0 var(--accent); }
+.ide-navigation .field { width: 100%; max-width: none; }
+.ide-navigation-results { max-height: min(440px, 50vh); overflow: auto; margin: 8px 0 12px; }
+.ide-navigation-results > button { display: flex; flex-direction: column; align-items: stretch; width: 100%; height: auto; min-height: 40px; flex-shrink: 0; line-height: 20px; text-align: left; border: 0; box-shadow: none; background: transparent; padding: 9px 12px; gap: 4px; font-size: 13px; }
+.ide-navigation-results > button[aria-selected=true] { background: var(--tint); }
+.ide-navigation-results span, .ide-navigation-results small { display: block; flex: none; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ide-navigation-results small { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+@media (max-width: 1100px) { .ide-layout .shell-dock { right: 0; bottom: 40px; } }
+@media (max-width: 1200px) { .main.with-panel .shell-dock { right: 0; } }
+
+.git-add-remote { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+.git-add-remote .field { width: 100%; max-width: none; margin: 0; }
+.ide-layout .lane-header > button[aria-label="Close lane"] { order: 3; margin-left: auto; }
+
+/* Coding Mode keeps working changes and repository topology visible together. */
+:root { --coding-sidebar-w: 320px; --graph-blue: #397ecb; --graph-purple: #a16bd0; --graph-orange: #bf781d; --graph-green: #349c74; --graph-pink: #d25795; --graph-cyan: #329cab; }
+:root[data-theme=dark] { --graph-blue: #69a7ed; --graph-purple: #b38bdf; --graph-orange: #dca24e; --graph-green: #6ac7a0; --graph-pink: #e17bb2; --graph-cyan: #6bc4d2; }
+.app.ide-layout:not(.no-sidebar) { grid-template-columns: var(--coding-sidebar-w) 6px minmax(0, 1fr); }
+.dialog:has(.ide-navigation) { width: min(600px, 100%); max-height: calc(100dvh - 32px); overflow: auto; }
+.ide-navigation-results { scrollbar-gutter: stable; }
+.coding-git { overflow: hidden; }
+.coding-git-heading { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; height: 38px; flex: none; }
+.coding-git-heading strong { font-size: 12px; font-weight: 600; }
+.coding-git-heading > button { font-size: 18px; }
+.coding-menu-backdrop { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 29; opacity: 0; cursor: default; }
+.coding-git-menu { position: absolute; z-index: 30; top: 34px; right: 8px; width: 220px; padding: 5px; border: 1px solid var(--line); background: var(--raised); box-shadow: var(--shadow); border-radius: 6px; }
+.coding-git-menu button { display: flex; width: 100%; height: 30px; border: 0; box-shadow: none; background: none; text-align: left; border-radius: 3px; }
+.coding-git-notice { flex: none; font-size: 11px; padding: 5px 12px; color: var(--dim); max-height: 56px; overflow: auto; }
+.coding-changes { display: flex; flex-direction: column; flex: 1 1 44%; min-height: 150px; overflow: hidden; }
+.coding-changes.collapsed { flex: none; min-height: 0; }
+.coding-section-toggle { display: flex; flex: none; align-items: center; height: 28px; width: 100%; padding: 0 12px; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--dim); text-align: left; }
+.coding-section-toggle .tab-count { margin-left: auto; }
+.coding-back { margin: 4px 12px 10px; }
+.coding-git .scm-commit { padding: 6px 12px 10px; gap: 8px; }
+.coding-git .scm-commit textarea { min-height: 34px; max-height: 90px; padding: 6px 9px; }
+.coding-git .scm-commit-button { background: var(--accent); color: var(--on-accent); border-color: transparent; height: 30px; }
+.coding-git .scm-group-heading { background: none; }
+.coding-git .scm-group-toggle strong { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.coding-git .scm-file { height: 28px; }
+.scm-file.deleted .scm-filename, .scm-file.deleted .scm-dirname { text-decoration: line-through; opacity: .75; }
+.commit-graph { display: flex; flex-direction: column; flex: 1 1 56%; min-height: 120px; overflow: hidden; border-top: 1px solid var(--line); }
+.commit-graph.collapsed { flex: none; min-height: 0; }
+.graph-heading { display: flex; flex: none; gap: 2px; align-items: center; min-height: 32px; padding: 0 6px; }
+.graph-toggle { display: flex; align-items: center; flex: 1; padding: 0 4px; min-width: 58px; border: 0; box-shadow: none; background: none; font-size: 12px; font-weight: 600; }
+.graph-heading select { background: transparent; color: var(--dim); border: 0; max-width: 110px; min-width: 0; padding: 2px; font: inherit; font-size: 10px; }
+.graph-heading .ghost { width: 22px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.graph-scroll { overflow: auto; min-height: 0; flex: 1; }
+.graph-row { display: flex; align-items: center; width: 100%; min-width: 100%; height: 28px; gap: 6px; padding: 0 8px 0 2px; border: 0; border-radius: 0; box-shadow: none; background: none; text-align: left; font-size: 12px; font-weight: 400; }
+.graph-subject { flex: 1; min-width: 50px; max-width: 200px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.graph-ref { display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 19px; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, var(--graph-purple) 18%, var(--bg)); color: var(--graph-purple); }
+.graph-ref.current { color: var(--graph-blue); background: color-mix(in srgb, var(--graph-blue) 20%, var(--bg)); }
+.graph-ref.remote { color: var(--graph-orange); background: color-mix(in srgb, var(--graph-orange) 18%, var(--bg)); }
+.graph-message { padding: 12px; color: var(--faint); font-size: 11px; line-height: 1.7; }
+.graph-message button { display: block; margin-top: 6px; }
+.coding-branch-status { flex: none; display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 0; background: var(--well); box-shadow: none; border-top: 1px solid var(--line); font-size: 11px; }
+.coding-branch-status span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.coding-branch-status small { margin-left: auto; color: var(--faint); flex: none; }
+.ide-toolbar[hidden] { display: none; }
+.commit-review { flex: 1; min-height: 0; overflow: auto; }
+.commit-review > header { padding: 20px; border-bottom: 1px solid var(--line); }
+.commit-review h2 { font-size: 19px; margin: 0 0 10px; font-weight: 600; overflow-wrap: anywhere; }
+.commit-review p { color: var(--dim); font-size: 12px; margin: 6px 0; }
+.commit-review code { font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+.commit-files { padding: 8px 12px; }
+.commit-files details { border-bottom: 1px solid var(--line); }
+.commit-files summary { padding: 9px 4px; cursor: pointer; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .app.ide-layout:not(.no-sidebar) { grid-template-columns: 0 0 minmax(0, 1fr); } .app.ide-layout:not(.no-sidebar) .sidebar { width: min(var(--coding-sidebar-w), 90vw); } }
+@media (max-height: 600px) { .coding-changes { min-height: 110px; } .commit-graph { min-height: 90px; } }
+
+/* Familiar editor token colors, independent from the green/red Git line backgrounds. */
+:root { --syntax-keyword: #0000b8; --syntax-string: #a31515; --syntax-number: #096b42; --syntax-function: #795e26; --syntax-type: #267f99; --syntax-variable: #174781; --syntax-comment: #5c7657; }
+:root[data-theme=dark] { --syntax-keyword: #c586c0; --syntax-string: #ce9178; --syntax-number: #b5cea8; --syntax-function: #dcdcaa; --syntax-type: #4ec9b0; --syntax-variable: #9cdcfe; --syntax-comment: #79a767; }
+.syntax-code { color: var(--text); }
+.syntax-code .hljs-keyword, .syntax-code .hljs-selector-tag, .syntax-code .hljs-meta { color: var(--syntax-keyword); }
+.syntax-code .hljs-string, .syntax-code .hljs-regexp, .syntax-code .hljs-template-tag { color: var(--syntax-string); }
+.syntax-code .hljs-number, .syntax-code .hljs-literal { color: var(--syntax-number); }
+.syntax-code .hljs-title, .syntax-code .hljs-section { color: var(--syntax-function); }
+.syntax-code .hljs-type, .syntax-code .hljs-built_in, .syntax-code .hljs-title.class_ { color: var(--syntax-type); }
+.syntax-code .hljs-attr, .syntax-code .hljs-attribute, .syntax-code .hljs-variable, .syntax-code .hljs-params, .syntax-code .hljs-property { color: var(--syntax-variable); }
+.syntax-code .hljs-comment, .syntax-code .hljs-quote { color: var(--syntax-comment); font-style: normal; }
+.syntax-code .hljs-tag, .syntax-code .hljs-name { color: var(--syntax-type); }
+.syntax-code .hljs-subst { color: var(--text); }

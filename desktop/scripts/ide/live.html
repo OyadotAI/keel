@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Keel live IDE test setup</title><style>body{font:15px system-ui;max-width:640px;margin:60px auto}label{display:block;margin:16px 0}input{display:block;width:100%;padding:8px}button{padding:10px}</style></head><body><h1>Temporary checkout test</h1><p>Connect only a disposable local project and daemon. This opens the actual app components and a real shell.</p><form><label>Project path<input id="project" required></label><label>Daemon port<input id="port" type="number" required></label><label>Temporary app token<input id="token" type="password" required></label><button>Open live workspace</button></form><script>
+document.querySelector('form').onsubmit = (event) => {
+  event.preventDefault();
+  sessionStorage.setItem('keel.e2e', JSON.stringify({project:document.querySelector('#project').value,endpoint:{port:Number(document.querySelector('#port').value),token:document.querySelector('#token').value}}));
+  localStorage.setItem('keel.workspace-layout', 'ide');
+  location.href='/scripts/e2e/check.html';
+};
+</script></body></html>

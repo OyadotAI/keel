@@ -7,16 +7,17 @@ import { Icon } from "./icons";
 import { MAC } from "../keys";
 
 type Act = (message: string, run: () => Promise<unknown>) => Promise<void>;
-interface Actions { lane: string; ep: Endpoint; wt?: string; act: Act; disabled: boolean }
+interface Actions { lane: string; ep: Endpoint; wt?: string; act: Act; disabled: boolean; onOpenDiff?: (path: string, staged: boolean) => void; selection?: { path?: string; staged?: boolean } }
 const NONE: Change[] = [];
+const commitDrafts = new Map<string, string>();
 const LIMIT = 2000;
 const STATUS_LABELS: Record<string, string> = { U: "Untracked", M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied" };
 
-export function SourceControl({ lane, ep, wt, act }: Omit<Actions, "disabled">) {
+export function SourceControl({ lane, ep, wt, act, onOpenDiff, selection }: Omit<Actions, "disabled">) {
   const git = useStore((s) => s.lanes[lane]?.git);
   const running = useStore((s) => !!s.lanes[lane]?.running);
   const viewing = useStore((s) => s.lanes[lane]?.viewing);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => commitDrafts.get(lane) ?? "");
   const [filter, setFilter] = useState("");
   const [tree, setTree] = useState(false);
   const [pending, setPending] = useState(false);
@@ -31,21 +32,22 @@ export function SourceControl({ lane, ep, wt, act }: Omit<Actions, "disabled">) 
   const changes = git?.changes ?? NONE;
   const staged = useMemo(() => changes.filter((c) => inArea(c, true)), [changes]);
   const unstaged = useMemo(() => changes.filter((c) => inArea(c, false)), [changes]);
-  const actions = { lane, ep, wt, act: action, disabled: pending };
+  const actions = { lane, ep, wt, act: action, disabled: pending, onOpenDiff, selection };
   const canCommit = !!message.trim() && !!staged.length && !pending && !running;
   const commit = () => {
     if (!canCommit) return;
     void action("Committed staged changes.", async () => {
       await post(ep, "/api/git/commit-staged", { message }, { wt });
       setMessage("");
+      commitDrafts.delete(lane);
     });
   };
   if (!git) return <div className="panel-empty">Reading git…</div>;
   return <div className="scm" aria-label="Source control">
-    <div className={`scm-layout${viewing ? " has-diff" : ""}`}>
+    <div className={`scm-layout${viewing && !onOpenDiff ? " has-diff" : ""}`}>
       <div className="scm-sidebar">
         <div className="scm-commit">
-          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={2} aria-label="Commit message" placeholder={`Message (${MAC ? "⌘Enter" : "Ctrl+Enter"} to commit)`} onKeyDown={(e) => {
+          <textarea value={message} onChange={(e) => { setMessage(e.target.value); commitDrafts.set(lane, e.target.value); }} rows={onOpenDiff ? 1 : 2} aria-label="Commit message" placeholder={`Message (${MAC ? "⌘Enter" : "Ctrl+Enter"} to commit)`} onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
           }} />
           <button className="primary scm-commit-button" disabled={!canCommit} onClick={commit} title={running ? "Wait for the agent to finish its turn" : !staged.length ? "Stage changes to commit them" : "Commit staged changes (⌘Enter / Ctrl+Enter)"}>
@@ -59,13 +61,13 @@ export function SourceControl({ lane, ep, wt, act }: Omit<Actions, "disabled">) 
         </div>
         <div className="scm-files" onKeyDown={walk}>
           {changes.length === 0 ? <div className="scm-clean"><Icon name="check-circle" size={22} /><strong>No changes</strong><span>Your working tree is clean.</span></div> : <>
-            <ChangeGroup key={`${lane}:staged`} title="Staged Changes" staged changes={staged} filter={filter} tree={tree} actions={actions} />
+            {(!onOpenDiff || staged.length > 0) && <ChangeGroup key={`${lane}:staged`} title="Staged Changes" staged changes={staged} filter={filter} tree={tree} actions={actions} />}
             <ChangeGroup key={`${lane}:changes`} title="Changes" staged={false} changes={unstaged} filter={filter} tree={tree} actions={actions} />
           </>}
           {git.collapsed && <p className="scm-hint">Git has collapsed large folders. Use the terminal to inspect every file.</p>}
         </div>
       </div>
-      {viewing && <div className="scm-editor"><Diff lane={lane} embedded /></div>}
+      {viewing && !onOpenDiff && <div className="scm-editor"><Diff lane={lane} embedded /></div>}
     </div>
   </div>;
 }
@@ -132,19 +134,20 @@ function FileTree({ files, filter, tree, staged, actions }: { files: Change[]; f
   return <div className="scm-tree">{tree ? render(root, 0) : [...files].sort((a, b) => a.path.localeCompare(b.path)).map((c) => <FileRow key={c.path} change={c} staged={staged} depth={0} list actions={actions} />)}</div>;
 }
 
-function FileRow({ change: c, staged, depth, list, actions: { lane, ep, wt, act, disabled } }: { change: Change; staged: boolean; depth: number; list: boolean; actions: Actions }) {
-  const selected = useStore((s) => s.lanes[lane]?.viewing === c.path && s.lanes[lane]?.viewingStaged === staged);
+function FileRow({ change: c, staged, depth, list, actions: { lane, ep, wt, act, disabled, onOpenDiff, selection } }: { change: Change; staged: boolean; depth: number; list: boolean; actions: Actions }) {
+  const viewing = useStore((s) => s.lanes[lane]?.viewing === c.path && s.lanes[lane]?.viewingStaged === staged);
+  const selected = onOpenDiff ? selection?.path === c.path && selection.staged === staged : viewing;
   const row = useRef<HTMLDivElement>(null);
   useEffect(() => { if (selected) row.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [selected]);
   const [discard, setDiscard] = useState(false);
   const path = c.path.replace(/\/$/, "");
   const name = path.split("/").at(-1);
   const dir = path.slice(0, Math.max(0, path.lastIndexOf("/")));
-  const status = c.status === "??" ? "U" : (c.status[staged ? 0 : 1]?.trim() || c.status.trim()[0] || "M");
+  const status = fileStatus(c, staged);
   const label = STATUS_LABELS[status] ?? c.label;
   const stage = () => act(`${staged ? "Unstaged" : "Staged"} ${c.path}.`, () => post(ep, "/api/git/act", { action: staged ? "unstage" : "stage", path: c.path }, { wt }));
-  return <div ref={row} className={`scm-file${selected ? " selected" : ""}`} style={{ paddingLeft: 10 + depth * 14 }}>
-    <button data-scm-node data-file={c.path} data-area={staged ? "staged" : "changes"} className="scm-file-label" disabled={c.dir} aria-current={selected ? "true" : undefined} title={`${c.path} · ${label}${staged ? " · Staged" : ""}\nEnter: open diff · Space: ${staged ? "unstage" : "stage"}`} onClick={() => void useStore.getState().openDiff(lane, c.path, staged)} onKeyDown={(e) => {
+  return <div ref={row} className={`scm-file${status === "D" ? " deleted" : ""}${selected ? " selected" : ""}`} style={{ paddingLeft: 10 + depth * 14 }}>
+    <button data-scm-node data-file={c.path} data-area={staged ? "staged" : "changes"} className="scm-file-label" disabled={c.dir} aria-current={selected ? "true" : undefined} title={`${c.path} · ${label}${staged ? " · Staged" : ""}\nEnter: open diff · Space: ${staged ? "unstage" : "stage"}`} onClick={() => onOpenDiff ? onOpenDiff(c.path, staged) : void useStore.getState().openDiff(lane, c.path, staged)} onKeyDown={(e) => {
       if (e.key === " ") { e.preventDefault(); if (!disabled) void stage(); }
     }}><Icon name={c.dir ? "folder" : "file"} size={14} /><span className="scm-filename">{name}</span>{list && dir && <span className="scm-dirname">{dir}</span>}</button>
     {discard ? <div className="scm-confirm"><button disabled={disabled} onClick={() => { setDiscard(false); void act(`Discarded unstaged changes to ${c.path}.`, () => post(ep, "/api/git/act", { action: "discard-worktree", path: c.path }, { wt })); }}>{c.status === "??" ? "Trash file?" : "Discard edits?"}</button><button className="ghost" aria-label="Cancel discard" onClick={() => setDiscard(false)}><Icon name="x" size={12} /></button></div> : <div className="scm-file-actions">
@@ -163,4 +166,9 @@ function walk(e: React.KeyboardEvent<HTMLDivElement>) {
   e.preventDefault(); e.stopPropagation();
   const next = e.key === "Home" ? 0 : e.key === "End" ? nodes.length - 1 : at + (e.key === "ArrowDown" ? 1 : -1);
   nodes[Math.max(0, Math.min(nodes.length - 1, next))]?.focus();
+}
+
+function fileStatus(change: Change, staged: boolean) {
+  if (change.status === "??") return "U";
+  return change.status[staged ? 0 : 1]?.trim() || change.status.trim()[0] || "M";
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Dialog } from "./kit";
 import { terminalConnected } from "../typers";
 import { useStore, type ChatInterface } from "../store";
+import { useIde } from "../ide";
 import { Icon } from "./icons";
 
 /** Both entry points retain the store's session-handoff guards. */
@@ -10,6 +11,7 @@ export function LaneViewSwitch({ lane, menu = false, onSwitch }: {
   menu?: boolean;
   onSwitch?: () => void;
 }) {
+  const coding = useIde((s) => s.layout === "ide");
   const [confirm, setConfirm] = useState(false);
   const surface = useStore((s) => s.lanes[lane]?.interface ?? "chat");
   const busy = useStore((s) => {
@@ -30,6 +32,7 @@ export function LaneViewSwitch({ lane, menu = false, onSwitch }: {
       <button className="primary" disabled={busy} onClick={() => { setConfirm(false); onSwitch?.(); void useStore.getState().switchInterface(lane, "chat"); }}>Exit terminal and switch</button>
     </div>
   </Dialog>;
+  if (coding) return null;
   if (menu) {
     const next = surface === "terminal" ? "chat" : "terminal";
     return <><button disabled={busy} title={hint} onClick={() => change(next)}>

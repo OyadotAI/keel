@@ -730,6 +730,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/events", get(crate::events::stream))
         .route("/api/sessions", get(api_sessions))
         .route("/api/tree", get(api_tree))
+        .route("/api/file", get(api_file))
         .route("/api/frontend/importers", get(api_importers))
         .route("/api/session/tail", get(api_session_tail))
         .route(
@@ -759,6 +760,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/git/act", axum::routing::post(api_git_act))
         .route("/api/git/init", axum::routing::post(api_git_init))
         .route("/api/git/log", get(api_git_log))
+        .route("/api/git/graph", get(api_git_graph))
         .route("/api/git/commit/diff", get(api_git_commit_diff))
         .route("/api/git/branches", get(api_git_branches))
         .route("/api/git/branch", axum::routing::post(api_git_branch))
@@ -1118,6 +1120,16 @@ fn bind_address() -> (Ipv4Addr, String) {
 /// large tree or running the scanner.
 async fn api_tree(Checkout(repo): Checkout) -> Json<Vec<crate::tree::Node>> {
     Json(blocking(move || crate::tree::tree(&repo), Vec::new()).await)
+}
+
+async fn api_file(
+    Checkout(repo): Checkout,
+    Query(query): Query<crate::tree::FileQuery>,
+) -> Result<Json<crate::tree::FileContent>, (axum::http::StatusCode, String)> {
+    in_blocking(move || crate::tree::read_file(&repo, &query.path))
+        .await
+        .map(Json)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(serde::Deserialize)]
@@ -1697,6 +1709,26 @@ async fn api_git_log(
     )
 }
 
+#[derive(serde::Deserialize)]
+struct GraphQuery {
+    #[serde(default = "twenty")]
+    n: usize,
+    #[serde(default)]
+    all: bool,
+}
+
+async fn api_git_graph(
+    Checkout(repo): Checkout,
+    Query(q): Query<GraphQuery>,
+) -> Result<Json<Vec<crate::repo::GraphCommit>>, (axum::http::StatusCode, String)> {
+    in_blocking(move || {
+        crate::repo::git_graph(&repo, q.n, q.all)
+            .map(Json)
+            .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    })
+    .await
+}
+
 async fn api_git_branches(Checkout(repo): Checkout) -> Json<crate::repo::Branches> {
     Json(
         blocking(
@@ -1745,16 +1777,22 @@ struct RemoteBody {
 }
 
 async fn api_git_remote(
+    State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Json(b): Json<RemoteBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
-    blocking(
-        move || crate::repo::git_remote_act(&repo, &b.action, b.url.as_deref()),
-        Err("timed out".into()),
-    )
+    in_blocking(move || {
+        // A pull changes source files: keep a writer claim until git has finished, across windows.
+        let _held = if b.action == "pull" {
+            Some(crate::writes::hold(&state, &repo, "git pull")?)
+        } else {
+            None
+        };
+        crate::repo::git_remote_act(&repo, &b.action, b.url.as_deref())
+            .map(Json)
+            .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    })
     .await
-    .map(Json)
-    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 /// A commit or a discard while an agent is mid-turn in this tree takes its half-written files with
@@ -2139,6 +2177,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let checkout = Utf8Path::from_path(dir.path()).unwrap().to_owned();
         (dir, checkout)
+    }
+
+    #[tokio::test]
+    async fn pulling_refuses_a_checkout_held_by_an_agent() {
+        let state = Arc::new(AppState::empty());
+        let (_dir, checkout) = temporary_checkout();
+        let token = state.claim("active-agent", &checkout, true).unwrap();
+        let result = api_git_remote(
+            State(state.clone()),
+            Checkout(checkout.clone()),
+            Json(RemoteBody {
+                action: "pull".into(),
+                url: None,
+            }),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().0, axum::http::StatusCode::CONFLICT);
+        assert_eq!(state.writer_of(&checkout).as_deref(), Some("active-agent"));
+        state.release("active-agent", token);
     }
 
     /// A child in its own process group, so `interrupt` has something a signal can reach.

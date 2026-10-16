@@ -1,3 +1,4 @@
+import { SyntaxText } from "./SyntaxText";
 import { Virtuoso } from "react-virtuoso";
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
@@ -109,7 +110,7 @@ export function Diff({ lane, embedded = false }: { lane: string; embedded?: bool
                 <div className={`row ${line.kind}`}>
                   <span className="ln">{line.old ?? ""}</span>
                   <span className="ln">{line.new ?? ""}</span>
-                  <span className="code-text">{line.text}</span>
+                  <span className="code-text"><SyntaxText text={line.text} path={viewing ?? ""} /></span>
                 </div>
               );
             }}

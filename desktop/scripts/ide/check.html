@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Keel IDE verification</title><style>html,body,#root{height:100%;margin:0}body{background:#e9ebee}iframe{display:block;margin:20px auto;border:1px solid #cbd0d7;max-width:100%}</style></head><body><div id="root"></div><script type="module">
+const width = Number(new URLSearchParams(location.search).get('width'));
+if (width > 0) {
+  const frame = document.createElement('iframe');
+  frame.src = '/scripts/ide/check.html'; frame.width = String(width); frame.height = '800'; frame.title = 'Responsive IDE workspace';
+  document.getElementById('root').append(frame);
+} else { import('./check.tsx'); }
+</script></body></html>

@@ -1,6 +1,6 @@
 import { UpdateButton } from "./UpdateButton";
 import { restoreZoom, zoom } from "../zoom";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
@@ -8,7 +8,7 @@ import { useStore } from "../store";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
 import { Extensions } from "./Extensions";
-import { Agents, Shell, SidePanel, TABS, type Tab } from "./Lane";
+import { Agents, ShellDock, SidePanel, TABS, type Tab } from "./Lane";
 import { LaneHeader, Confirm, type Asking } from "./LaneHeader";
 import { ApprovalStrip } from "./Approvals";
 import { InterfaceSetting } from "./InterfaceSetting";
@@ -17,6 +17,11 @@ import { StatusBar } from "./StatusBar";
 import { Drop } from "./Drop";
 import { Palette, type Command } from "./Palette";
 import { label, matches, type Chord } from "../keys";
+import { useIde } from "../ide";
+import { Explorer, IdeWorkspace, LayoutSwitch } from "./Ide";
+import { FileNavigation } from "./FileNavigation";
+import { ideCommand } from "../ide-keys";
+import { MAC } from "../keys";
 
 const remembered = (key: string, fallback: string) => {
   try {
@@ -44,11 +49,14 @@ function Handle({ name, min, max, fallback, from }: { name: string; min: number;
       role="separator"
       tabIndex={0}
       aria-orientation="vertical"
-      aria-label={name === "--panel-w" ? "Resize the side panel" : "Resize the sidebar"}
+      aria-label={name === "--ide-chat-w" ? "Resize the conversation" : name === "--panel-w" ? "Resize the side panel" : "Resize the sidebar"}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={fallback}
       onDoubleClick={() => (set(fallback), remember(name, String(fallback)))}
       onKeyDown={(e) => {
         const step = e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
-        if (step) set(now() + (from === "left" ? step : -step));
+        if (step) { e.preventDefault(); set(now() + (from === "left" ? step : -step)); }
         if (e.key === "Home") set(fallback);
         remember(name, String(now()));
       }}
@@ -75,27 +83,32 @@ function Handle({ name, min, max, fallback, from }: { name: string; min: number;
 
 /** Closing retains a visible entry point and returns keyboard focus to it. */
 function useWorkspacePanel() {
-  const [panel, setPanel] = useState(() => window.innerWidth >= 1200 && remembered("keel.panel", "1") !== "0");
+  const ide = useIde((s) => s.layout === "ide");
+  const [chatPanel, setChatPanel] = useState(() => window.innerWidth >= 1200 && remembered("keel.panel", "1") !== "0");
+  const [idePanel, setIdePanel] = useState(false);
+  const panel = ide ? idePanel : chatPanel;
+  const setPanel = ide ? setIdePanel : setChatPanel;
   const [expanded, setExpanded] = useState(false);
   const closePanel = useCallback(() => {
     setPanel(false);
     setExpanded(false);
-    remember("keel.panel", "0");
+    if (!ide) remember("keel.panel", "0");
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".workspace-toggle")?.focus());
-  }, []);
+  }, [setPanel, ide]);
   const togglePanel = useCallback(() => {
     const s = useStore.getState();
     if (s.settings || s.extensions || s.creating) {
       useStore.setState({ settings: false, extensions: false, creating: false });
       setPanel(true);
-      remember("keel.panel", "1");
+      if (!ide) remember("keel.panel", "1");
     } else if (panel) closePanel();
-    else { setPanel(true); remember("keel.panel", "1"); }
-  }, [panel, closePanel]);
+    else { setPanel(true); if (!ide) remember("keel.panel", "1"); }
+  }, [panel, closePanel, setPanel, ide]);
   return { panel, setPanel, expanded, setExpanded, togglePanel, closePanel };
 }
 
 export function App() {
+  const ide = useIde((s) => s.layout === "ide");
   const active = useStore((s) => s.active);
   const exists = useStore((s) => (s.active ? !!s.lanes[s.active] : false));
   const settings = useStore((s) => s.settings);
@@ -106,12 +119,14 @@ export function App() {
   const [tab, setTab] = useState<Tab>("turns");
   const [shell, setShell] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [conversation, setConversation] = useState(false);
   const asking = useStore((s) => s.asking);
   const setAsking = (a: Asking) => useStore.setState({ asking: a });
 
   useEffect(restoreZoom, []);
+  useEffect(() => { if (ide) setShell(true); }, [ide]);
   useEffect(() => {
-    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
+    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380], ["--ide-chat-w", 400], ["--coding-sidebar-w", 320]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
     // The lane on screen at launch is opened like a clicked one: its terminal, its transcript.
     const a = useStore.getState().active;
     if (a && useStore.getState().lanes[a]) useStore.getState().load(a);
@@ -168,6 +183,7 @@ export function App() {
       [{ key: "." }, (l) => void useStore.getState().stop(l)],
     ];
     const handler = (e: KeyboardEvent) => {
+      if (handleIdeShortcut(e, { setPalette, setShell, toggleSidebar, setSidebar })) return;
       for (const [c, run] of chords)
         if (matches(e, c)) {
           e.preventDefault();
@@ -185,37 +201,95 @@ export function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [togglePanel, toggleSidebar, showTab]);
 
+  const navigation = useIde((s) => s.navigation);
+  const showCode = () => { if (panel) closePanel(); };
+  const showGit = () => { setSidebar(true); useIde.getState().setSidebar("git"); };
   const overlay = creating ? <NewProject /> : extensions ? <Extensions /> : settings ? <Settings /> : !lane ? <Welcome /> : null;
   const showPanel = panel && !!lane && !overlay;
+  const ideActive = ide && !!lane && !overlay;
+  const workspace = showPanel && lane ? <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} /> : null;
   return (
-    <div className={`app ${sidebar ? "" : "no-sidebar"}`}>
-      <Sidebar />
+    <div className={`app ${sidebar ? "" : "no-sidebar"} ${ideActive ? "ide-layout" : ""} ${conversation ? "ide-conversation-open" : ""}`}>
+      <Sidebar showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
       <button className="sidebar-backdrop" style={{ background: "transparent" }} aria-label="Close projects" onClick={toggleSidebar} />
-      <Handle name="--sidebar-w" min={200} max={360} fallback={240} from="left" />
-      <main className={`main ${showPanel ? "with-panel" : ""} ${showPanel && expanded ? "expanded" : ""}`}>
-        <section className="agent-pane" style={overlay ? { display: "none" } : undefined}>
-          {lane && <LaneHeader key={`header:${lane}`} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
-          {lane && <LaneError lane={lane} />}
-          <div className="agents">
-            <Agents />
-          </div>
-          {lane && shell && <Shell key={`shell:${lane}`} lane={lane} close={() => setShell(false)} />}
-          {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
-        </section>
-        {showPanel && <>
-          <button className="panel-backdrop" aria-label="Close workspace panel" onClick={closePanel} />
-          <Handle name="--panel-w" min={320} max={720} fallback={380} from="right" />
-        </>}
-        {showPanel && lane && <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} />}
-        {overlay}
-      </main>
-      <StatusBar openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
+      <Handle name={ideActive ? "--coding-sidebar-w" : "--sidebar-w"} min={240} max={ideActive ? 480 : 360} fallback={ideActive ? 320 : 240} from="left" />
+      <WorkspaceMain lane={lane} overlay={overlay} showPanel={showPanel} expanded={expanded} ideActive={ideActive} shell={shell} setShell={setShell} closePanel={closePanel} workspace={workspace} conversation={conversation} setConversation={setConversation} showGit={showGit} />
+      <StatusBar layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
       <Drop />
       {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
+      {ideActive && navigation && lane && <FileNavigation key={`${lane}:${navigation}`} lane={lane} showCode={showCode} />}
       <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
     </div>
   );
+}
+
+function handleIdeShortcut(e: KeyboardEvent, { setPalette, setShell, toggleSidebar, setSidebar }: {
+  setPalette: Dispatch<SetStateAction<boolean>>; setShell: Dispatch<SetStateAction<boolean>>;
+  toggleSidebar: () => void; setSidebar: Dispatch<SetStateAction<boolean>>;
+}): boolean {
+  if (useIde.getState().layout !== "ide" || !useStore.getState().active || getOverlay()) return false;
+  const command = ideCommand(e, MAC);
+  if (command) {
+    e.preventDefault();
+    if (command === "commands") setPalette((p) => !p);
+    else if (command === "terminal") setShell((p) => !p);
+    else if (command === "sidebar") toggleSidebar();
+    else if (command === "explorer" || command === "git") {
+      setSidebar(true); useIde.getState().setSidebar(command);
+    } else {
+      const active = useStore.getState().active;
+      if (active && command === "closeFile") {
+        const selected = useIde.getState().lanes[active]?.selected;
+        if (useIde.getState().lanes[active]?.commit) useIde.getState().patch(active, { commit: undefined });
+        else if (selected) useIde.getState().close(active, selected);
+      } else useIde.setState({ navigation: command as "files" | "line" | "find" });
+    }
+    return true;
+  }
+  return false;
+}
+
+function getOverlay() {
+  const s = useStore.getState();
+  return s.settings || s.extensions || s.creating || !!document.querySelector('[role="dialog"], [role="menu"]');
+}
+
+function WorkspaceMain({ lane, overlay, showPanel, expanded, ideActive, shell, setShell, closePanel, workspace, conversation, setConversation, showGit }: {
+  lane?: string; overlay: ReactNode; showPanel: boolean; expanded: boolean; ideActive: boolean; shell: boolean;
+  setShell: Dispatch<SetStateAction<boolean>>; closePanel: () => void; workspace: ReactNode;
+  conversation: boolean; setConversation: Dispatch<SetStateAction<boolean>>; showGit: () => void;
+}) {
+  const questions = useStore((s) => lane ? s.lanes[lane]?.pending.length ?? 0 : 0);
+  useEffect(() => {
+    if (ideActive && questions) setConversation(true);
+  }, [ideActive, questions, setConversation]);
+  return (<main className={`main ${showPanel && !ideActive ? "with-panel" : ""} ${showPanel && expanded && !ideActive ? "expanded" : ""} ${shell ? "has-shell" : ""}`}>
+        <AgentPane lane={lane} hidden={!!overlay} shell={shell} setShell={setShell} closeConversation={() => setConversation(false)} />
+        {lane && <IdeWorkspace key={`ide:${lane}`} lane={lane} enabled={ideActive} terminalOpen={shell} toggleTerminal={() => setShell((s) => !s)} showGit={showGit} showCode={showPanel ? closePanel : undefined}>{ideActive ? workspace : null}</IdeWorkspace>}
+        {ideActive && <>
+          <Handle name="--ide-chat-w" min={340} max={720} fallback={400} from="right" />
+          <button className="ide-conversation-toggle" onClick={() => setConversation((x) => !x)} aria-expanded={conversation}>Conversation{questions > 0 && ` · ${questions} waiting`}</button>
+          {conversation && <button className="ide-chat-backdrop" aria-label="Close conversation" onClick={() => setConversation(false)} />}
+        </>}
+        {showPanel && !ideActive && <>
+          <button className="panel-backdrop" aria-label="Close workspace panel" onClick={closePanel} />
+          <Handle name="--panel-w" min={320} max={720} fallback={380} from="right" />
+        </>}
+        <ShellDock lane={lane} open={shell && !overlay} close={() => setShell(false)} />
+        {!ideActive && workspace}
+        {overlay}
+      </main>);
+}
+
+function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?: string; hidden: boolean; shell: boolean; setShell: (value: boolean | ((current: boolean) => boolean)) => void; closeConversation: () => void }) {
+  return <section className="agent-pane" style={hidden ? { display: "none" } : undefined}>
+    {lane && <LaneHeader key={`header:${lane}`} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
+    {lane && <LaneError lane={lane} />}
+    <div className="agents"><Agents /></div>
+    <div className="ide-chat-tools"><button className="ghost" onClick={closeConversation}>Close conversation</button></div>
+    {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
+  </section>;
 }
 
 function LaneError({ lane }: { lane: string }) {
@@ -297,6 +371,10 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
     for (const ses of (p?.sessions ?? []).slice(0, 30)) out.push({ id: `resume-${ses.id}`, title: `Resume: ${ses.title || "Untitled session"}`, detail: p.name, run: () => s.resume(pid, ses) });
   }
   if (l) {
+    if (useIde.getState().layout === "ide") {
+      for (const [id, title] of [["files", "Go to File…"], ["line", "Go to Line…"], ["find", "Find in File…"]] as const) out.push({ id: `ide-${id}`, title, run: () => useIde.setState({ navigation: id }) });
+      out.push({ id: "ide-git", title: "Source Control", run: () => { useIde.getState().setSidebar("git"); showTab("git"); } });
+    }
     out.push({ id: "new", title: "New lane", detail: s.projects[l.project]?.name, keys: label({ key: "n" }), run: () => newIn(lane!, false) });
     out.push({ id: "new-branch", title: "New lane on its own branch", detail: s.projects[l.project]?.name, keys: label({ key: "n", shift: true }), run: () => newIn(lane!, true) });
     if (l.wt) {

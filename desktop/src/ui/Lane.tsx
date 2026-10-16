@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { post } from "../api";
 import { useStore } from "../store";
@@ -37,22 +37,38 @@ export function Agents() {
 }
 
 /// A shell in the lane's checkout, under the agent: for the command you want to run yourself.
-export function Shell({ lane, close }: { lane: string; close: () => void }) {
+export function Shell({ lane, close, hidden = false }: { lane: string; close: () => void; hidden?: boolean }) {
   return (
-    <div className="shell">
+    <div className="shell" style={hidden ? { display: "none" } : undefined}>
       <div className="shell-bar">
         <Icon name="terminal" size={13} />
-        <span>Shell</span>
+        <span>Terminal</span>
         <span className="spacer" />
         <button className="ghost" onClick={close} aria-label="Close the shell" title={`Close the shell (${label({ key: "j" })})`}>
           <Icon name="x" size={14} />
         </button>
       </div>
       <Suspense fallback={null}>
-        <Terminal lane={lane} onExit={close} />
+        <Terminal lane={lane} hidden={hidden} onExit={close} />
       </Suspense>
     </div>
   );
+}
+
+/** Hiding the dock or switching layouts/lanes keeps each opened PTY connected. */
+export function ShellDock({ lane, open, close }: { lane?: string; open: boolean; close: () => void }) {
+  const [opened, setOpened] = useState<string[]>([]);
+  const existing = useStore((s) => Object.keys(s.lanes).sort().join("\n"));
+  useEffect(() => {
+    setOpened((prev) => {
+      const keep = prev.filter((id) => existing.split("\n").includes(id));
+      if (open && lane && !keep.includes(lane)) keep.push(lane);
+      return keep.length === prev.length && keep.every((id, i) => id === prev[i]) ? prev : keep;
+    });
+  }, [lane, open, existing]);
+  return <div className="shell-dock" hidden={!open} aria-label="Integrated terminal">
+    {opened.map((id) => <Shell key={id} lane={id} hidden={!open || lane !== id} close={close} />)}
+  </div>;
 }
 
 /// What Keel shows beside the agent: its turns, read from the transcript, and the machine's side.

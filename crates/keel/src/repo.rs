@@ -244,6 +244,66 @@ pub fn git_log(root: &Utf8Path, n: usize) -> Vec<Commit> {
     out
 }
 
+/// Topology and decorations, without reading patches or per-commit statistics.
+#[derive(Debug, Serialize)]
+pub struct GraphCommit {
+    pub sha: String,
+    pub parents: Vec<String>,
+    pub refs: Vec<String>,
+    pub author: String,
+    pub when: i64,
+    pub subject: String,
+}
+
+pub fn git_graph(root: &Utf8Path, n: usize, all: bool) -> Result<Vec<GraphCommit>, String> {
+    // An unborn branch is a normal, empty graph. Other errors must reach the window.
+    let has_head = git(root, &["rev-parse", "--verify", "HEAD"]).is_some();
+    if !has_head {
+        git_run(root, &["rev-parse", "--git-dir"])?;
+        if !all {
+            return Ok(Vec::new());
+        }
+    }
+    let limit = format!("--max-count={}", n.clamp(1, 200));
+    let mut args = vec![
+        "log",
+        "--topo-order",
+        "--no-color",
+        "--decorate=full",
+        &limit,
+        "--format=%H%x1f%P%x1f%D%x1f%an%x1f%ct%x1f%s",
+    ];
+    if all {
+        args.push("--all");
+    }
+    if has_head {
+        args.push("HEAD");
+    }
+    args.push("--");
+    let raw = git_run(root, &args)?;
+    Ok(raw
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.splitn(6, '\x1f').collect();
+            if fields.len() != 6 {
+                return None;
+            }
+            Some(GraphCommit {
+                sha: fields[0].into(),
+                parents: fields[1].split_whitespace().map(str::to_string).collect(),
+                refs: fields[2]
+                    .split(", ")
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                author: fields[3].into(),
+                when: fields[4].parse().unwrap_or(0),
+                subject: fields[5].into(),
+            })
+        })
+        .collect())
+}
+
 /// One commit's diff, file by file, in the shape the working-tree diff already has — or one
 /// file of it, which is what a turn's file card asks for.
 ///
@@ -257,15 +317,32 @@ pub fn git_commit_diff(
     if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) || sha.len() > 40 {
         return Err("not a commit id".into());
     }
-    let files = git_run(root, &["show", "--format=", "--name-only", sha])?;
-    Ok(files
+    let files = git_run(
+        root,
+        &["show", "--first-parent", "--format=", "--name-only", sha],
+    )?;
+    let paths: Vec<_> = files
         .lines()
         .filter(|f| !f.is_empty())
         .filter(|f| only.is_none_or(|o| o == *f))
+        .collect();
+    let truncated = paths.len() > 30;
+    let mut diffs: Vec<_> = paths
+        .into_iter()
+        .take(30)
         .map(|path| {
             let raw = git(
                 root,
-                &["show", "--format=", "--no-color", "-U3", sha, "--", path],
+                &[
+                    "show",
+                    "--first-parent",
+                    "--format=",
+                    "--no-color",
+                    "-U3",
+                    sha,
+                    "--",
+                    path,
+                ],
             )
             .unwrap_or_default();
             let (hunks, note) = capped(parse_hunks(&raw));
@@ -276,7 +353,17 @@ pub fn git_commit_diff(
                 note,
             }
         })
-        .collect())
+        .collect();
+    if truncated && let Some(last) = diffs.last_mut() {
+        let note = last.note.get_or_insert_default();
+        if !note.is_empty() {
+            note.push(' ');
+        }
+        note.push_str(
+            "Showing the first 30 changed files. Use the terminal to inspect the full commit.",
+        );
+    }
+    Ok(diffs)
 }
 
 /// Send the branch to its remote, setting the upstream on the first push.
@@ -1214,6 +1301,59 @@ mod git_tests {
             "new\n",
             "the work survives"
         );
+    }
+
+    #[test]
+    fn graph_preserves_merge_parents_refs_detached_head_and_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let run = |args: &[&str]| git_run(&root, args).unwrap();
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.name", "Engineer"]);
+        run(&["config", "user.email", "engineer@example.test"]);
+        assert!(git_graph(&root, 100, true).unwrap().is_empty());
+        run(&["commit", "--allow-empty", "-m", "root"]);
+        run(&["checkout", "-b", "feature"]);
+        run(&["commit", "--allow-empty", "-m", "feature work"]);
+        let feature = run(&["rev-parse", "HEAD"]).trim().to_string();
+        run(&["checkout", "main"]);
+        run(&["commit", "--allow-empty", "-m", "main work"]);
+        run(&["merge", "--no-ff", "feature", "-m", "merge feature"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        let graph = git_graph(&root, 100, true).unwrap();
+        assert_eq!(graph.len(), 4);
+        assert_eq!(graph[0].parents.len(), 2);
+        assert!(graph[0].parents.contains(&feature));
+        assert!(graph[0].refs.iter().any(|r| r == "HEAD -> refs/heads/main"));
+        assert!(
+            graph[0]
+                .refs
+                .iter()
+                .any(|r| r == "refs/remotes/origin/main")
+        );
+        assert_eq!(graph[0].author, "Engineer");
+        assert_eq!(git_graph(&root, 1, true).unwrap().len(), 1);
+        run(&["checkout", "--detach"]);
+        run(&["commit", "--allow-empty", "-m", "detached work"]);
+        let graph = git_graph(&root, 100, true).unwrap();
+        assert_eq!(graph[0].subject, "detached work");
+        assert!(graph[0].refs.iter().any(|r| r == "HEAD"));
+        run(&["checkout", "-b", "unmerged", &feature]);
+        run(&["commit", "--allow-empty", "-m", "unmerged work"]);
+        run(&["checkout", "main"]);
+        assert!(
+            !git_graph(&root, 100, false)
+                .unwrap()
+                .iter()
+                .any(|c| c.subject == "unmerged work")
+        );
+        assert!(
+            git_graph(&root, 100, true)
+                .unwrap()
+                .iter()
+                .any(|c| c.subject == "unmerged work")
+        );
+        assert!(git_graph(&root.join("missing"), 100, true).is_err());
     }
 
     /// The header's numbers, not the header's `@@`.

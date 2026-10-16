@@ -6,6 +6,7 @@ import { App } from '../../src/ui/App';
 import { useStore } from '../../src/store';
 import '../../src/styles.css';
 import '../../src/workspace.css';
+import '../../src/ide.css';
 
 const config = JSON.parse(sessionStorage.getItem('keel.e2e') ?? 'null');
 if (!config) throw new Error('Set keel.e2e in sessionStorage to a temporary project and daemon endpoint.');

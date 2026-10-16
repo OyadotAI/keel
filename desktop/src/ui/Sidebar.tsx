@@ -1,5 +1,5 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore, type Agent, type Session } from "../store";
 import { get, type Endpoint } from "../api";
@@ -13,6 +13,8 @@ import { activity } from "./StatusBar";
 import { BrandMark } from "./BrandMark";
 import { MemberAvatar } from "./MemberAvatar";
 import { Working } from "./Working";
+import { Git } from "./Git";
+import { useIde, EMPTY_IDE } from "../ide";
 import type { Lane } from "../store";
 import type { Turn } from "../reduce";
 
@@ -47,10 +49,16 @@ export async function pickProject() {
   if (typeof path === "string") await useStore.getState().openProject(path);
 }
 
-export function Sidebar() {
+export function Sidebar({ explorer, showCode }: { explorer?: ReactNode; showCode?: () => void }) {
   const order = useStore((s) => s.order);
   const project = useStore((s) => (s.active ? s.lanes[s.active]?.project : undefined) ?? s.order[0]);
   const [conversationsOpen, setConversationsOpen] = useState(true);
+  const section = useIde((s) => s.sidebar);
+  const setSection = useIde((s) => s.setSidebar);
+  const lane = useStore((s) => s.active);
+  const preparing = useStore((s) => lane ? !!s.lanes[lane]?.isolated && !s.lanes[lane]?.wt : false);
+  const selected = useIde((s) => lane ? s.lanes[lane] ?? EMPTY_IDE : EMPTY_IDE);
+  const changed = useStore((s) => lane ? s.lanes[lane]?.git?.changes.length ?? 0 : 0);
   return (
     <nav className="sidebar" aria-label="Workspace">
       <div className="workspace-brand"><span className="brand-symbol"><BrandMark /></span><strong>Keel</strong></div>
@@ -62,7 +70,14 @@ export function Sidebar() {
           <Icon name="plus" size={17} />
         </button>
       </div>
-      <div className="sidebar-list">
+      {explorer && <div className="ide-sidebar-tabs" role="group" aria-label="Sidebar view">
+        <button aria-pressed={section === "explorer"} onClick={() => setSection("explorer")}><Icon name="folder" size={13} />Explorer</button>
+        <button title="Source Control" aria-label={`Source Control${changed ? ` (${changed} changed)` : ""}`} aria-pressed={section === "git"} onClick={() => setSection("git")}><Icon name="branch" size={13} />Git{changed > 0 && <small>{changed}</small>}</button>
+        <button aria-pressed={section === "conversations"} onClick={() => setSection("conversations")}><Icon name="chat" size={13} />Conversations</button>
+      </div>}
+      {explorer && <div className="ide-explorer-slot" hidden={section !== "explorer"}>{explorer}</div>}
+      {explorer && lane && <div className="ide-git-slot" hidden={section !== "git"}>{preparing ? <p className="ide-note">Open the terminal to prepare this lane’s checkout.</p> : <Git key={lane} lane={lane} onOpenCommit={showCode} selection={{ path: selected.selected, staged: selected.staged }} onOpenDiff={(path, staged) => { useIde.getState().open(lane, path, "diff", true, staged); showCode?.(); }} />}</div>}
+      <div className="sidebar-list" style={explorer && section !== "conversations" ? { display: "none" } : undefined}>
         <section className="sidebar-section" aria-label="Conversations">
           <button className="sidebar-section-toggle" onClick={() => setConversationsOpen((open) => !open)} aria-expanded={conversationsOpen} aria-controls="sidebar-conversations">
             <Icon name={conversationsOpen ? "chevron-down" : "chevron-right"} size={12} />Conversations
@@ -137,9 +152,9 @@ function Members({ project }: { project: string }) {
 
   if (!loaded) return null;
   const shown = showAll ? members : members.slice(0, MEMBERS_VISIBLE);
-  return <section className="sidebar-section member-section" aria-label={`Members in ${projectName ?? project}`}>
-    <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Members in ${projectName ?? project}`}>
-      <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />Members
+  return <section className="sidebar-section member-section" aria-label={`Keel Agents in ${projectName ?? project}`}>
+    <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Keel Agents in ${projectName ?? project}`}>
+      <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />Keel Agents
     </button>
     <div id="sidebar-members" hidden={!expanded}>
       {members.length === 0 && <div className="member-empty">

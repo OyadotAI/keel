@@ -2,6 +2,27 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.8] - 2026-10-16
+
+### Added
+- Added Coding Mode with a file explorer, code and diff tabs, a conversation pane, and an
+  integrated terminal that retained its session when hidden or when switching lanes.
+- Added VS Code navigation shortcuts for quick file opening, line navigation, file search,
+  commands, the explorer, source control, and terminal visibility.
+- Added a source control commit graph with branch and remote badges, sync controls, and commit
+  review in the center pane so changes and history could be reviewed together.
+- Added syntax highlighting to source previews and Git diffs, including Go, YAML, TOML, SQL,
+  C/C++, Java, C#, Ruby, PHP, and Dockerfiles.
+
+### Changed
+- Renamed the workspace layouts to Agentic Mode and Coding Mode, and Members to Keel Agents.
+- Hid the Chat/Terminal interface switch in Coding Mode and widened its resizable sidebar.
+
+### Fixed
+- Fixed clipped filenames in Go to File and kept navigation dialogs readable in narrow windows.
+- Preserved staged and unstaged diff selection and kept code previews current after agent edits.
+- Bounded file previews and commit history reads, and protected pulls with a checkout writer claim.
+
 ## [0.4.2] - 2026-10-12
 
 ### Changed

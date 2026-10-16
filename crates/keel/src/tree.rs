@@ -9,6 +9,60 @@ use camino::{Utf8Path, Utf8PathBuf};
 use keel_workspace::Real;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read;
+
+pub const MAX_TREE_NODES: usize = 20_000;
+const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+pub struct FileContent {
+    pub text: Option<String>,
+    pub note: Option<String>,
+}
+
+/// A code preview may only read regular files in this checkout, never Claude's config root.
+/// Open first and read through a limit as well: a file can grow after its metadata was checked.
+pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileContent, String> {
+    let root = root.real().map_err(|_| "checkout unavailable")?;
+    let path = root
+        .join(requested)
+        .real()
+        .map_err(|_| "file no longer exists")?;
+    if !path.starts_with(&root) {
+        return Err("path escapes the checkout".into());
+    }
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("only regular files can be previewed".into());
+    }
+    let limited = || FileContent {
+        text: None,
+        note: Some("This file exceeds the 1 MiB preview limit.".into()),
+    };
+    if metadata.len() > MAX_FILE_BYTES {
+        return Ok(limited());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|e| e.to_string())?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Ok(limited());
+    }
+    let text = if bytes.contains(&0) {
+        None
+    } else {
+        String::from_utf8(bytes).ok()
+    };
+    Ok(FileContent {
+        note: text
+            .is_none()
+            .then(|| "Binary or non-UTF-8 files cannot be previewed as code.".into()),
+        text,
+    })
+}
 
 /// One entry in the repository tree.
 #[derive(Debug, Serialize)]
@@ -34,6 +88,13 @@ pub fn tree(root: &Utf8Path) -> Vec<Node> {
         .git_global(true)
         .require_git(false)
         .parents(false)
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !matches!(
+                    entry.file_name().to_str(),
+                    Some(".git" | ".keel" | "target" | "node_modules")
+                )
+        })
         .build();
 
     for entry in walker.flatten() {
@@ -50,6 +111,9 @@ pub fn tree(root: &Utf8Path) -> Vec<Node> {
                 .any(|c| matches!(c.as_str(), ".git" | ".keel" | "target" | "node_modules"))
         {
             paths.push(rel.to_owned());
+            if paths.len() >= MAX_TREE_NODES {
+                break;
+            }
         }
     }
     paths.sort();
@@ -214,4 +278,91 @@ pub fn read_raw(root: &Utf8Path, requested: &str) -> Result<(Vec<u8>, &'static s
         _ => "application/octet-stream",
     };
     Ok((bytes, mime))
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_reads_only_regular_checkout_files_and_bounds_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::write(root.join("source.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(
+            read_file(root, "source.rs").unwrap().text.as_deref(),
+            Some("fn main() {}\n")
+        );
+        assert!(read_file(root, ".").is_err());
+        assert!(read_file(root, "missing.rs").is_err());
+        std::fs::write(root.join("binary"), [0, 1, 2]).unwrap();
+        assert!(read_file(root, "binary").unwrap().text.is_none());
+        std::fs::write(root.join("invalid"), [255, 254]).unwrap();
+        assert!(read_file(root, "invalid").unwrap().text.is_none());
+        let large = std::fs::File::create(root.join("large")).unwrap();
+        large.set_len(MAX_FILE_BYTES + 1).unwrap();
+        assert!(
+            read_file(root, "large")
+                .unwrap()
+                .note
+                .unwrap()
+                .contains("1 MiB")
+        );
+        std::fs::write(root.join("exact"), vec![b'a'; MAX_FILE_BYTES as usize]).unwrap();
+        assert_eq!(
+            read_file(root, "exact").unwrap().text.unwrap().len(),
+            MAX_FILE_BYTES as usize
+        );
+    }
+
+    #[test]
+    fn same_relative_path_reads_the_selected_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let lane = root.join(".keel/worktrees/feature");
+        std::fs::create_dir_all(&lane).unwrap();
+        std::fs::write(root.join("code"), "project").unwrap();
+        std::fs::write(lane.join("code"), "feature").unwrap();
+        assert_eq!(
+            read_file(root, "code").unwrap().text.as_deref(),
+            Some("project")
+        );
+        assert_eq!(
+            read_file(&lane, "code").unwrap().text.as_deref(),
+            Some("feature")
+        );
+        assert!(read_file(&lane, "../../../code").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn traversal_and_symlinks_cannot_escape_the_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(root.join("secret"), "private").unwrap();
+        std::os::unix::fs::symlink(root.join("secret"), repo.join("link")).unwrap();
+        assert!(read_file(&repo, "../secret").is_err());
+        assert!(read_file(&repo, "link").is_err());
+        assert!(read_file(&repo, root.join("secret").as_str()).is_err());
+    }
+
+    #[test]
+    fn tree_skips_generated_subtrees_and_keeps_hidden_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for path in [
+            "node_modules/a/b",
+            "target/debug",
+            ".git/objects",
+            ".github/workflows",
+        ] {
+            std::fs::create_dir_all(root.join(path)).unwrap();
+            std::fs::write(root.join(path).join("file"), "data").unwrap();
+        }
+        let nodes = tree(root);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, ".github");
+    }
 }

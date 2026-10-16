@@ -14,6 +14,30 @@ never stuck, never weird.
 
 ## Seeing what it did
 
+**Coding Mode.** Choose **Coding Mode** in the status bar for a file explorer on the left, code
+and working-tree diffs in the center, and your conversation on the right. Code files and diffs
+use language-aware syntax colors in both light and dark themes. The layout choice and
+pane widths are remembered. **Agentic Mode** returns to the conversation layout. Explorer and Conversations share the left sidebar; open files and
+expanded folders stay with each lane during the app session. Selecting a file pauses automatic
+following, and **Resume following** returns to the latest successful agent edit. Code is read-only;
+the agent makes the changes. Narrow windows put the explorer in a drawer and the conversation
+in an overlay, which opens when the agent needs an answer.
+
+The integrated **Terminal** opens below the code and keeps its shell connected when hidden or
+when you switch lanes. **Source Control** in the left sidebar provides staging, unstaging,
+committing, fetch/pull/push, history, branches, and pull requests. Click a changed file to compare
+it in the center; staged and unstaged comparisons remain distinct. A colored commit graph sits
+below the changes list, with local/remote branch badges, an all/current branch filter, and
+fetch/pull/push controls. Selecting a commit opens its files and diffs in the center. Lane merge/discard actions
+use the existing confirmations, and Pull holds the checkout's writer claim while it runs.
+
+Coding Mode navigation follows the common VS Code bindings: **⌘P / Ctrl+P** opens files by fuzzy path
+(and accepts `file.ts:42`), **Ctrl+G** goes to a line, **⌘F / Ctrl+F** finds text in the current
+file, **⇧⌘P / Ctrl+Shift+P** opens commands, **⇧⌘E / Ctrl+Shift+E** shows Explorer,
+**Ctrl+Shift+G** shows Source Control, **⌘B / Ctrl+B** toggles the sidebar, and **Ctrl+`**
+toggles the terminal. The same bindings work while the terminal has focus; Ctrl+C still reaches
+the shell. **⌘W / Ctrl+W** closes the selected code tab in Coding Mode.
+
 **Diffs, while they happen.** Every file the agent writes during a turn appears as a stacked diff in
 the trace, refreshed as the turn proceeds — one screen for a change across six files, rather than
 six tabs or a `git diff` afterwards. Click a header to fold it. Inside a changed line the changed

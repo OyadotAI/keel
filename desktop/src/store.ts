@@ -391,6 +391,7 @@ export const useStore = create<State>()((set, getState) => {
       void poll(path);
       void get<Session[]>(ep, "/api/sessions").then((sessions) => project(path, { sessions }), () => undefined);
       for (const lid of lanesOf(path)) {
+        lane(lid, (l) => ({ reviewRevision: (l.reviewRevision ?? 0) + 1 }));
         gitSoon(lid);
         soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
       }
@@ -399,6 +400,7 @@ export const useStore = create<State>()((set, getState) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;
       for (const lid of lanesOf(path)) if (!only || only === lid) soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
     },
+    lagged: (path, ep) => on.connected(path, ep, undefined),
     "dev.changed": (path) => {
       const lid = getState().active;
       if (lid && getState().lanes[lid]?.project === path) soon(`dev:${lid}`, () => getState().refreshDev(lid));

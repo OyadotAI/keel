@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useStore, type Lane } from "../store";
 import { count } from "./Turn";
 import { Icon } from "./icons";
@@ -118,7 +118,7 @@ function branchLabel(lane: Lane): string {
   return lane.git.is_repo ? lane.git.branch ?? "detached" : "not a git repository";
 }
 
-export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void }) {
+export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar, layout }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void; layout?: ReactNode }) {
   const lane = useStore((s) => s.active);
   const l = useStore((s) => (s.active ? s.lanes[s.active] : undefined));
   const project = useStore((s) => (l ? s.projects[l.project] : undefined));
@@ -172,6 +172,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar 
         Shortcuts <kbd>{label({ key: "/" })}</kbd>
       </button>
       </div>
+      {layout}
       {l && (
         <button className="workspace-toggle" onClick={togglePanel} aria-label={panel ? "Close workspace" : "Open workspace"} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`${panel ? "Close" : "Open"} workspace · Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>
           <Icon name="panel" size={14} />

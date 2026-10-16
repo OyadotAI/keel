@@ -1,0 +1,122 @@
+// IDE state is independent of the agent interface. A layout switch never hands off a session.
+import { create } from "zustand";
+import type { GraphCommit } from "./commit-graph";
+import type { Conversation } from "./reduce";
+
+export interface FileNode { name: string; path: string; dir: boolean; children?: FileNode[] | null }
+export type FileMode = "code" | "diff";
+export interface IdeLane {
+  tabs: string[];
+  selected?: string;
+  commit?: GraphCommit;
+  mode: FileMode;
+  staged?: boolean;
+  targetLine?: { line: number; token: number };
+  follow: boolean;
+  expanded: string[];
+  scroll: Record<string, number>;
+}
+const empty = (): IdeLane => ({ tabs: [], mode: "code", follow: true, expanded: [], scroll: {} });
+export const EMPTY_IDE: IdeLane = empty();
+export function rememberedLayout(): "chat" | "ide" {
+  try { return localStorage.getItem("keel.workspace-layout") === "ide" ? "ide" : "chat"; }
+  catch { return "chat"; }
+}
+
+export const useIde = create<{
+  layout: "chat" | "ide";
+  lanes: Record<string, IdeLane>;
+  sidebar: "explorer" | "git" | "conversations";
+  navigation?: "files" | "line" | "find";
+  setSidebar(sidebar: "explorer" | "git" | "conversations"): void;
+  navigate(lane: string, path: string, line?: number): void;
+  setLayout(layout: "chat" | "ide"): void;
+  patch(lane: string, patch: Partial<IdeLane>): void;
+  open(lane: string, path: string, mode: FileMode, manual?: boolean, staged?: boolean): void;
+  close(lane: string, path: string): void;
+}>()((set) => ({
+  layout: rememberedLayout(), lanes: {}, sidebar: "explorer",
+  setSidebar(sidebar) { set({ sidebar }); },
+  navigate(lane, path, line) {
+    useIde.getState().open(lane, path, "code");
+    useIde.getState().patch(lane, { targetLine: { line: line ?? 1, token: Date.now() } });
+  },
+  setLayout(layout) {
+    try { localStorage.setItem("keel.workspace-layout", layout); } catch { /* Optional preference. */ }
+    set({ layout });
+  },
+  patch(lane, patch) { set((s) => ({ lanes: { ...s.lanes, [lane]: { ...(s.lanes[lane] ?? empty()), ...patch } } })); },
+  open(lane, path, mode, manual = true, staged) {
+    set((s) => {
+      const l = s.lanes[lane] ?? empty();
+      const parents = path.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+      return { lanes: { ...s.lanes, [lane]: { ...l, selected: path, commit: undefined, mode, staged, targetLine: undefined, follow: manual ? false : l.follow,
+        tabs: l.tabs.includes(path) ? l.tabs : [...l.tabs, path], expanded: [...new Set([...l.expanded, ...parents])] } } };
+    });
+  },
+  close(lane, path) {
+    set((s) => {
+      const l = s.lanes[lane] ?? empty();
+      const tabs = l.tabs.filter((p) => p !== path);
+      const selected = l.selected === path ? tabs[Math.max(0, l.tabs.indexOf(path) - 1)] : l.selected;
+      return { lanes: { ...s.lanes, [lane]: { ...l, tabs, selected, follow: false } } };
+    });
+  },
+}));
+
+/** Only completed successful edits move the reader. Include child calls, for either provider. */
+export function completedEdits(conv: Conversation): { id: string; path: string }[] {
+  const turn = conv.turns.at(-1);
+  return turn ? Object.values(turn.calls).filter((c) => c.state === "ok").flatMap((c) => c.writes.map((path) => ({ id: `${turn.id}:${c.id}:${path}`, path }))) : [];
+}
+
+export function relativeFile(path: string, root: string): string | undefined {
+  path = path.replace(/\\/g, "/");
+  const prefix = root.replace(/\\/g, "/").replace(/\/$/, "") + "/";
+  const windows = /^[a-z]:\//i.test(prefix);
+  const inside = windows ? path.toLowerCase().startsWith(prefix.toLowerCase()) : path.startsWith(prefix);
+  const relative = inside ? path.slice(prefix.length) : path;
+  if (!relative || relative.startsWith("/") || /^[a-z]:[\\/]/i.test(relative) || relative.split(/[\\/]/).includes("..")) return;
+  return relative.replace(/\\/g, "/");
+}
+
+export interface TreeRow { node: FileNode; depth: number; parent?: string }
+export function visibleTree(nodes: FileNode[], expanded: string[], changed: string[] = []): TreeRow[] {
+  // Deleted/ignored changed paths still need to be discoverable without entering the file tree.
+  const paths = new Set<string>();
+  const collect = (list: FileNode[]) => { for (const n of list) { paths.add(n.path); if (n.children) collect(n.children); } };
+  collect(nodes);
+  const extra = changed.filter((p) => !paths.has(p)).map((path) => ({ name: path, path, dir: false }));
+  const open = new Set(expanded);
+  const out: TreeRow[] = [];
+  const visit = (list: FileNode[], depth: number, parent?: string) => {
+    for (const node of list) {
+      out.push({ node, depth, parent });
+      if (node.children && open.has(node.path)) visit(node.children, depth + 1, node.path);
+    }
+  };
+  visit([...nodes, ...extra], 0);
+  return out;
+}
+
+/** Coalesce events without cancelling a useful in-flight read. Closing invalidates old contexts. */
+export function liveReader<T>(read: () => Promise<T>, accept: (value: T) => void, reject: (error: unknown) => void, delay = 150) {
+  let closed = false;
+  let busy = false;
+  let again = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = () => {
+    if (closed) return;
+    if (busy) { again = true; return; }
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      busy = true;
+      void read().then((value) => { if (!closed) accept(value); }, (error) => { if (!closed) reject(error); }).finally(() => {
+        busy = false;
+        if (again) { again = false; refresh(); }
+      });
+    }, delay);
+  };
+  return { refresh, close() { closed = true; clearTimeout(timer); } };
+}

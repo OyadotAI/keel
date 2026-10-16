@@ -1,8 +1,20 @@
-import { label, type Chord } from "../keys";
+import { label, MAC, type Chord } from "../keys";
 import { Dialog } from "./kit";
 import { useStore } from "../store";
 
 const GROUPS: [string, [string, Chord | string][]][] = [
+  ["Coding Mode navigation", [
+    ["Go to file (also accepts file.ts:42)", MAC ? "⌘P" : "Ctrl+P"],
+    ["Command palette", MAC ? "⇧⌘P" : "Ctrl+Shift+P"],
+    ["Go to line", "Ctrl+G"],
+    ["Find in file", MAC ? "⌘F" : "Ctrl+F"],
+    ["Show Explorer", MAC ? "⇧⌘E" : "Ctrl+Shift+E"],
+    ["Show Source Control", "Ctrl+Shift+G"],
+    ["Toggle sidebar", MAC ? "⌘B" : "Ctrl+B"],
+    ["Toggle integrated terminal", "Ctrl+`"],
+    ["Toggle terminal panel", MAC ? "⌘J" : "Ctrl+J"],
+    ["Close selected file", MAC ? "⌘W" : "Ctrl+W"],
+  ]],
   ["Lanes", [
     ["Next lane", { key: "ArrowDown", alt: true }],
     ["Previous lane", { key: "ArrowUp", alt: true }],

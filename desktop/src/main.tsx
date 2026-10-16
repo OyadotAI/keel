@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { App } from "./ui/App";
 import "./styles.css";
 import "./workspace.css";
+import "./ide.css";
 
 // A link in the agent's reply opens in the browser. Followed in place, it replaced the whole app
 // with that page and left no way back but quitting.

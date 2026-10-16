@@ -289,7 +289,7 @@ const FileRow = memo(function FileRow({ lane, id, commit, path }: { lane: string
                 uncommitted — the file as it is now{latest ? "" : "; may include later turns' edits"}
               </div>
             )}
-            <InlineDiff rows={diff.rows} limit={INLINE_ROWS} />
+            <InlineDiff rows={diff.rows} path={diff.path} limit={INLINE_ROWS} />
             {diff.rows.length > INLINE_ROWS && (
               <div className="small faint" style={{ padding: "0 24px 6px" }}>
                 Showing {INLINE_ROWS} of {diff.rows.length.toLocaleString()} lines —{" "}
