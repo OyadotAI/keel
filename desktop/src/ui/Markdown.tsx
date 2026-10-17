@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkCodeLinks } from "../markdown-links";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export function Copy({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -27,7 +28,7 @@ export function Code({ text, language }: { text: string; language: string }) {
 }
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  return <div className="chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+  return <div className="chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkCodeLinks]} components={{
     pre: ({ children }) => <>{children}</>,
     code: ({ children, className, node }) => {
       const value = String(children).replace(/\n$/, "");

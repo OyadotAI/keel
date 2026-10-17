@@ -147,6 +147,10 @@ pub async fn after_mutation(
     }
     let wt = wt.as_deref();
     match path.as_str() {
+        "/api/file" => {
+            emit("git.changed", wt, serde_json::Value::Null);
+            emit("tree.changed", wt, serde_json::Value::Null);
+        }
         p if p.starts_with("/api/git/") => {
             emit("git.changed", wt, serde_json::Value::Null);
             emit("tree.changed", wt, serde_json::Value::Null);

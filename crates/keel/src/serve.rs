@@ -730,7 +730,16 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/events", get(crate::events::stream))
         .route("/api/sessions", get(api_sessions))
         .route("/api/tree", get(api_tree))
-        .route("/api/file", get(api_file))
+        .route(
+            "/api/file",
+            get(api_file)
+                .post(crate::editor::save)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/editor/complete",
+            axum::routing::post(crate::completion::complete),
+        )
         .route("/api/frontend/importers", get(api_importers))
         .route("/api/session/tail", get(api_session_tail))
         .route(

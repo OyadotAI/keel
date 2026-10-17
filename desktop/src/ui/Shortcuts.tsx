@@ -14,6 +14,10 @@ const GROUPS: [string, [string, Chord | string][]][] = [
     ["Toggle sidebar", MAC ? "⌘B" : "Ctrl+B"],
     ["Toggle integrated terminal", "Ctrl+`"],
     ["Toggle terminal panel", MAC ? "⌘J" : "Ctrl+J"],
+    ["Save file", MAC ? "⌘S" : "Ctrl+S"],
+    ["Code completion", "Ctrl+Space"],
+    ["Accept AI suggestion", "Tab"],
+    ["Request AI suggestion", "Alt+\\"],
     ["Close selected file", MAC ? "⌘W" : "Ctrl+W"],
   ]],
   ["Lanes", [

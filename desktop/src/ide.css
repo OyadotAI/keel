@@ -18,12 +18,24 @@
 .ide-layout .main.has-shell .ide-center { padding-bottom: 32vh; }
 .ide-center .side-panel { width: 100%; height: 100%; position: static; box-shadow: none; background: var(--bg); border-radius: 0; }
 .ide-center .inspector-heading > div > button:first-child { display: none; }
-.ide-file-tabs { display: flex; align-items: stretch; flex: none; overflow-x: auto; min-height: 42px; border-bottom: 1px solid var(--line); background: var(--well); }
-.ide-file-tab { display: flex; flex: none; align-items: center; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
+/* Keep overflow controls outside the scrolling strip so they are always reachable. */
+.ide-tab-bar { display: flex; flex: none; min-width: 0; border-bottom: 1px solid var(--line); background: var(--well); }
+.ide-file-tabs { display: flex; align-items: stretch; flex: 1; overflow-x: auto; overflow-y: hidden; min-width: 0; min-height: 36px; scrollbar-width: thin; }
+.ide-file-tab { display: flex; flex: 0 0 auto; min-width: 0; max-width: 180px; align-items: center; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
 .ide-file-tab.active { border-top-color: var(--accent); background: var(--bg); }
-.ide-file-tab button { border: 0; box-shadow: none; background: transparent; font-size: 12px; height: 38px; border-radius: 0; padding: 0 12px; gap: 7px; }
-.ide-file-tab > button:first-child { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ide-file-tab button.ghost { padding: 0 7px; height: 24px; margin-right: 5px; }
+.ide-file-tab button { border: 0; box-shadow: none; background: transparent; font-size: 12px; height: 32px; border-radius: 0; padding: 0 8px; gap: 5px; }
+.ide-file-tab > button:first-child { flex: 1; min-width: 0; white-space: nowrap; }
+.ide-file-tab > button:first-child > svg { flex: none; }
+.ide-file-tab > button:first-child > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ide-file-tab button.ghost { flex: none; width: 24px; padding: 0; height: 24px; margin-right: 3px; }
+.ide-file-tab:hover { background: var(--hover); }
+.ide-tab-actions { display: flex; flex: none; align-items: center; border-left: 1px solid var(--line); padding: 0 3px; }
+.ide-tab-actions .ghost { width: 24px; height: 28px; padding: 0; border: 0; box-shadow: none; }
+.ide-tab-actions .ghost:last-child { width: auto; min-width: 36px; gap: 3px; padding: 0 4px; }
+.ide-tab-actions small { font-variant-numeric: tabular-nums; font-size: 10px; }
+.menu .ide-open-file { justify-content: flex-start; height: auto; min-height: 32px; text-align: left; gap: 8px; }
+.ide-open-file > svg { flex: none; }
+.ide-open-file > span { min-width: 0; overflow-wrap: anywhere; }
 .ide-tabs-placeholder { align-self: center; padding-left: 16px; font-size: 12px; color: var(--faint); }
 .ide-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 48px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
 .ide-breadcrumb { flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
@@ -133,22 +145,24 @@
 .coding-git-menu { position: absolute; z-index: 30; top: 34px; right: 8px; width: 220px; padding: 5px; border: 1px solid var(--line); background: var(--raised); box-shadow: var(--shadow); border-radius: 6px; }
 .coding-git-menu button { display: flex; width: 100%; height: 30px; border: 0; box-shadow: none; background: none; text-align: left; border-radius: 3px; }
 .coding-git-notice { flex: none; font-size: 11px; padding: 5px 12px; color: var(--dim); max-height: 56px; overflow: auto; }
-.coding-changes { display: flex; flex-direction: column; flex: 1 1 44%; min-height: 150px; overflow: hidden; }
+.coding-changes { display: flex; flex-direction: column; flex: 3 1 72%; min-height: 170px; overflow: hidden; }
 .coding-changes.collapsed { flex: none; min-height: 0; }
 .coding-section-toggle { display: flex; flex: none; align-items: center; height: 28px; width: 100%; padding: 0 12px; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--dim); text-align: left; }
 .coding-section-toggle .tab-count { margin-left: auto; }
 .coding-back { margin: 4px 12px 10px; }
-.coding-git .scm-commit { padding: 6px 12px 10px; gap: 8px; }
+.coding-git .scm-commit { grid-template-columns: minmax(0, 1fr) auto; align-items: start; padding: 4px 10px 8px; gap: 6px; }
 .coding-git .scm-commit textarea { min-height: 34px; max-height: 90px; padding: 6px 9px; }
-.coding-git .scm-commit-button { background: var(--accent); color: var(--on-accent); border-color: transparent; height: 30px; }
+.coding-git .scm-commit-button { background: var(--accent); color: var(--on-accent); border-color: transparent; width: auto; height: 34px; padding: 0 9px; font-size: 11px; }
 .coding-git .scm-group-heading { background: none; }
 .coding-git .scm-group-toggle strong { text-transform: none; letter-spacing: 0; font-size: 12px; }
 .coding-git .scm-file { height: 28px; }
 .scm-file.deleted .scm-filename, .scm-file.deleted .scm-dirname { text-decoration: line-through; opacity: .75; }
-.commit-graph { display: flex; flex-direction: column; flex: 1 1 56%; min-height: 120px; overflow: hidden; border-top: 1px solid var(--line); }
+.commit-graph { display: flex; flex-direction: column; flex: 1 1 28%; min-height: 100px; overflow: hidden; border-top: 1px solid var(--line); }
 .commit-graph.collapsed { flex: none; min-height: 0; }
 .graph-heading { display: flex; flex: none; gap: 2px; align-items: center; min-height: 32px; padding: 0 6px; }
-.graph-toggle { display: flex; align-items: center; flex: 1; padding: 0 4px; min-width: 58px; border: 0; box-shadow: none; background: none; font-size: 12px; font-weight: 600; }
+.graph-content { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.graph-content[hidden] { display: none; }
+.graph-toggle { min-height: 32px; display: flex; align-items: center; flex: 1; padding: 0 4px; min-width: 58px; border: 0; box-shadow: none; background: none; font-size: 12px; font-weight: 600; }
 .graph-heading select { background: transparent; color: var(--dim); border: 0; max-width: 110px; min-width: 0; padding: 2px; font: inherit; font-size: 10px; }
 .graph-heading .ghost { width: 22px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
 .graph-history { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
@@ -219,8 +233,26 @@
 
 /* Source control uses the same rounded surfaces as the rest of the workspace. */
 .ide-git-slot, .coding-git { background: transparent; }
-.coding-git .coding-changes, .coding-git .commit-graph { margin: 0 10px 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); box-shadow: var(--shadow-xs); }
+.coding-git .coding-changes, .coding-git .commit-graph { margin: 0 6px 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); box-shadow: var(--shadow-xs); }
 .coding-git .coding-section-toggle { min-height: 32px; }
 .coding-git .scm-commit textarea, .coding-git .scm-filter, .coding-git .scm-commit-button { border-radius: 8px; }
-.coding-git .coding-branch-status { width: auto; margin: 0 10px 8px; border-radius: 8px; border: 1px solid var(--line); }
+.coding-git .coding-branch-status { width: auto; margin: 0 6px 6px; border-radius: 8px; border: 1px solid var(--line); }
 .ide-center, .shell-dock { border-radius: 14px; }
+
+/* A collapsed card keeps a full-width, keyboard-accessible handle for reopening it. */
+.coding-section-toggle:hover, .graph-toggle:hover { background: var(--hover); }
+.coding-section-toggle:focus-visible, .graph-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+.ide-tab-back { transform: rotate(180deg); }
+
+/* The editor owns scrolling and keeps its controls outside the document viewport. */
+.code-editor { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.code-editor-host { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.code-editor-actions { display: flex; align-items: center; flex: none; flex-wrap: wrap; gap: 6px; padding: 5px 10px; min-height: 34px; border-bottom: 1px solid var(--hairline); font-size: 11px; }
+.code-editor-actions button { height: 25px; font-size: 11px; padding: 0 8px; }
+.code-editor-actions button[aria-pressed=true] { background: var(--tint); color: var(--accent); }
+.code-editor-status { flex: none; padding: 4px 10px; color: var(--faint); font-size: 10px; border-top: 1px solid var(--hairline); max-height: 48px; overflow: auto; }
+.editor-dirty, .ide-tab-dirty { color: var(--warn); }
+.ide-tab-dirty { flex: none; font-size: 8px; }
+.ide-document.split > .code-editor { width: 50%; }
+@container (max-width: 560px) { .ide-document.split > .code-editor { width: 100%; height: 0; } }

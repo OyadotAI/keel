@@ -1,6 +1,7 @@
 import { createElement, memo, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkCodeLinks } from "../markdown-links";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getBlob, type Endpoint } from "../api";
 import { useIde } from "../ide";
@@ -45,7 +46,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({ text, path, lane,
   let images = 0;
   return <section className="markdown-preview" ref={box} tabIndex={0} aria-label={`Markdown preview: ${path}`}>
     {text.length > MAX_MARKDOWN_PREVIEW && <p className="panel-note muted">Preview limited to the first 128,000 characters. Open Code to read the full source.</p>}
-    <div className="markdown-document chat-markdown syntax-code"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+    <div className="markdown-document chat-markdown syntax-code"><ReactMarkdown remarkPlugins={[remarkGfm, remarkCodeLinks]} components={{
       ...headings(),
       pre: ({ children }) => <>{children}</>,
       code: ({ children, className, node }) => {

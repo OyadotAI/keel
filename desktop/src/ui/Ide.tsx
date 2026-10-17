@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode, type RefObject } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { get } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
@@ -9,6 +9,9 @@ import { CommitReview } from "./Git";
 import { isMarkdown } from "../markdown";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { Icon } from "./icons";
+import { FileTabs } from "./FileTabs";
+import { editorFileKey, useEditorFiles } from "../editor-files";
+const CodeEditor = lazy(() => import("./CodeEditor"));
 
 export function LayoutSwitch() {
   const layout = useIde((s) => s.layout);
@@ -95,13 +98,13 @@ export function Explorer({ lane, enabled, showCode }: { lane: string; enabled: b
         data-path={n.path} title={n.path + (status ? ` · ${status}` : "")} className={`ide-file${l.selected === n.path ? " selected" : ""}`} style={{ paddingLeft: 12 + depth * 14 }}
         onClick={() => {
           if (n.dir) toggle(n.path);
-          else { useIde.getState().open(lane, n.path, status ? "diff" : "code"); showCode?.(); }
+          else { useIde.getState().open(lane, n.path, "code"); showCode?.(); }
         }}>
         <Icon name={n.dir ? l.expanded.includes(n.path) ? "chevron-down" : "chevron-right" : "file"} size={13} />
         <span>{n.name}</span>{(status || descendant) && <small className={status?.includes("D") ? "del" : "add"}>{status ?? "•"}</small>}
       </button>;
     }} /></div>}
-    <footer>Read-only · Agent edits appear live{treeSize >= 20_000 && <span>File list limited to 20,000 entries.</span>}</footer>
+    <footer>Agent edits appear live{treeSize >= 20_000 && <span>File list limited to 20,000 entries.</span>}</footer>
   </section>;
 }
 
@@ -205,16 +208,6 @@ function FileViewSwitch({ lane, l, changeMode, showCode }: { lane: string; l: Id
   </div>;
 }
 
-function FileTabs({ lane, l, showCode }: { lane: string; l: IdeLane; showCode?: () => void }) {
-  return <div className="ide-file-tabs" aria-label="Open files">
-    {l.tabs.map((path) => <div className={`ide-file-tab${!l.commit && path === l.selected ? " active" : ""}`} key={path}>
-      <button title={path} aria-pressed={!l.commit && path === l.selected} onClick={() => { useIde.getState().open(lane, path, "code"); showCode?.(); }}><Icon name="file" size={13} />{path.split("/").at(-1)}</button>
-      <button className="ghost" aria-label={`Close ${path}`} onClick={() => useIde.getState().close(lane, path)}><Icon name="x" size={12} /></button>
-    </div>)}
-    {l.commit && <div className="ide-file-tab active"><button title={l.commit.subject} aria-pressed="true"><Icon name="branch" size={13} />{l.commit.sha.slice(0, 7)} · {l.commit.subject}</button><button className="ghost" aria-label="Close commit details" onClick={() => useIde.getState().patch(lane, { commit: undefined })}><Icon name="x" size={12} /></button></div>}
-    {!l.tabs.length && !l.commit && <span className="ide-tabs-placeholder">Code workspace</span>}
-  </div>;
-}
 
 function CodeContent({ current, ready, waiting, error, lane, ep, wt, l, list, setRetry, changeMode }: {
   current?: PreviewData; ready: boolean; waiting: string; error?: string; lane: string; ep?: import("../api").Endpoint; wt?: string; l: IdeLane;
@@ -224,35 +217,33 @@ function CodeContent({ current, ready, waiting, error, lane, ep, wt, l, list, se
   const diff = l.mode === "diff" ? current?.diff : undefined;
   const scrollKey = `${l.selected}:${l.mode}`;
   const view = l.mode === "code" && isMarkdown(l.selected) ? l.markdown?.[l.selected!] ?? "source" : "source";
-  useEffect(() => {
-    if (!current || l.mode !== "code" || !l.targetLine) return;
-    const index = Math.max(0, Math.min(lines.length - 1, l.targetLine.line - 1));
-    const frame = requestAnimationFrame(() => {
-      list.current?.scrollToIndex({ index, align: "center" });
-      document.querySelector<HTMLElement>(".ide-code-list")?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [current, l.mode, l.targetLine, lines.length, list]);
+  const project = useStore((s) => s.lanes[lane]?.project ?? lane);
+  const draft = useEditorFiles((s) => s.files[editorFileKey(project, wt, l.selected ?? "")]?.text);
   if (!ready) return <div className="panel-empty muted">{waiting}</div>;
   if (!l.selected) return <div className="ide-welcome">
     <Icon name="file" size={28} /><h2>Your code, in view.</h2>
-    <p>Choose a file on the left, or send a message on the right.<br />The files your agent changes will appear here.</p><small>Read-only workspace</small>
+    <p>Choose a file on the left, or send a message on the right.<br />The files your agent changes will appear here.</p><small>Edit files, save with ⌘S / Ctrl+S, and accept AI suggestions with Tab.</small>
   </div>;
   if (error) return <div className="panel-empty error" role="alert">{error}<button onClick={() => setRetry((n) => n + 1)}>Retry</button></div>;
   if (!current) return <div className="panel-empty muted">Reading {l.selected}…</div>;
   return <>
-    <PreviewNotes current={current} diff={diff} mode={l.mode} lineCount={lines.length} changeMode={changeMode} />
+    <PreviewNotes current={current} diff={diff} mode={l.mode} changeMode={changeMode} />
     <div className={`ide-document ${view}`} >
-    {view !== "preview" && <Virtuoso key={scrollKey} ref={list} tabIndex={0} className={l.mode === "diff" ? "diff ide-code-list" : "ide-code-list"}
-      initialScrollTop={l.targetLine ? undefined : l.scroll[scrollKey] ?? 0} initialTopMostItemIndex={l.targetLine ? { index: Math.max(0, Math.min(lines.length - 1, l.targetLine.line - 1)), align: "center" } : undefined} totalCount={diff ? diff.rows.length : l.mode === "code" ? lines.length : 0}
+    {view !== "preview" && l.mode === "code" && current.content.text !== null && ep ? <Suspense fallback={<div className="panel-empty muted">Opening editor…</div>}><CodeEditor key={`${lane}:${l.selected}`} lane={lane} ep={ep} wt={wt} path={l.selected} text={current.content.text} targetLine={l.targetLine} /></Suspense> : view !== "preview" && <Virtuoso key={scrollKey} ref={list} tabIndex={0} className={l.mode === "diff" ? "diff ide-code-list" : "ide-code-list"}
+      {...initialPosition(l, lines.length, scrollKey)} totalCount={diff ? diff.rows.length : l.mode === "code" ? lines.length : 0}
       onScroll={(e) => {
         const s = useIde.getState();
         const state = s.lanes[lane] ?? EMPTY_IDE;
         s.patch(lane, { scroll: { ...state.scroll, [scrollKey]: e.currentTarget.scrollTop } });
       }} itemContent={(i) => <CodeRow diff={diff} lines={lines} path={l.selected ?? ""} index={i} target={l.targetLine?.line} />} />}
-    {view !== "source" && ep && current.content.text !== null && <MarkdownPreview text={current.content.text} path={l.selected} lane={lane} ep={ep} wt={wt} anchor={l.previewAnchor} revision={current} />}
+    {view !== "source" && ep && current.content.text !== null && <MarkdownPreview text={draft ?? current.content.text} path={l.selected} lane={lane} ep={ep} wt={wt} anchor={l.previewAnchor} revision={current} />}
     </div>
   </>;
+}
+
+/** Restore the read-only diff viewport independently from the editable source buffer. */
+function initialPosition(l: IdeLane, count: number, key: string) {
+  return l.targetLine ? { initialTopMostItemIndex: { index: Math.max(0, Math.min(count - 1, l.targetLine.line - 1)), align: "center" as const } } : { initialScrollTop: l.scroll[key] ?? 0 };
 }
 
 function CodeRow({ diff, lines, path, index: i, target }: { diff?: Prepared; lines: string[]; path: string; index: number; target?: number }) {
@@ -265,12 +256,10 @@ function CodeRow({ diff, lines, path, index: i, target }: { diff?: Prepared; lin
   return <div className={`ide-code-line${target === i + 1 ? " ide-target-line" : ""}`}><span className="ln">{i + 1}</span><code><SyntaxText text={lines[i]} path={path} /></code></div>;
 }
 
-function PreviewNotes({ current, diff, mode, lineCount, changeMode }: { current: PreviewData; diff?: Prepared; mode: string; lineCount: number; changeMode: (mode: "code" | "diff") => void }) {
+function PreviewNotes({ current, diff, changeMode }: { current: PreviewData; diff?: Prepared; mode: string; changeMode: (mode: "code" | "diff") => void }) {
   return <>
     {current.content.note && !diff?.rows.length && <div className="panel-note muted">{current.content.note}</div>}
     {diff && !diff.rows.length && <div className="panel-note muted">{diff.note ?? "No working-tree differences. The agent may have checkpointed this file."}<button className="link" onClick={() => changeMode("code")}>View code</button></div>}
     {diff?.note && !!diff.rows.length && <div className="panel-note muted">{diff.note}</div>}
-    {mode === "code" && lineCount >= 20_000 && <div className="panel-note muted">Showing the first 20,000 lines.</div>}
-    {mode === "code" && current.content.text === "" && <div className="panel-note muted">This file is empty.</div>}
   </>;
 }

@@ -12,9 +12,11 @@ mod askmcp;
 mod aws;
 mod chat;
 mod clitools;
+mod completion;
 mod connect;
 mod context;
 mod dev;
+mod editor;
 mod events;
 mod fsops;
 mod git;
@@ -484,6 +486,7 @@ fn watch_parent(stdin: bool) {
     // this list.
     let gone = || {
         runtime::stop_all();
+        completion::stop_all();
         monitor::stop_all();
         dev::stop_now();
         verify::stop_all();
@@ -549,6 +552,7 @@ mod shutdown_tests {
             .expect("watch_parent is where a dying parent is noticed");
 
         for (module, call) in [
+            ("completion", "completion::stop_all()"),
             ("monitor", "monitor::stop_all()"),
             ("dev", "dev::stop_now()"),
             ("verify", "verify::stop_all()"),

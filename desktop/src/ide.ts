@@ -6,6 +6,7 @@ import { isMarkdown } from "./markdown";
 
 export interface FileNode { name: string; path: string; dir: boolean; children?: FileNode[] | null }
 export type FileMode = "code" | "diff";
+export type TabClose = "current" | "left" | "right" | "others";
 export interface IdeLane {
   tabs: string[];
   selected?: string;
@@ -37,7 +38,7 @@ export const useIde = create<{
   setLayout(layout: "chat" | "ide"): void;
   patch(lane: string, patch: Partial<IdeLane>): void;
   open(lane: string, path: string, mode: FileMode, manual?: boolean, staged?: boolean): void;
-  close(lane: string, path: string): void;
+  close(lane: string, path: string | null, side?: TabClose): void;
 }>()((set) => ({
   layout: rememberedLayout(), lanes: {}, sidebar: "explorer",
   setSidebar(sidebar) { set({ sidebar }); },
@@ -66,15 +67,27 @@ export const useIde = create<{
         tabs: l.tabs.includes(path) ? l.tabs : [...l.tabs, path], expanded: [...new Set([...l.expanded, ...parents])] } } };
     });
   },
-  close(lane, path) {
-    set((s) => {
-      const l = s.lanes[lane] ?? empty();
-      const tabs = l.tabs.filter((p) => p !== path);
-      const selected = l.selected === path ? tabs[Math.max(0, l.tabs.indexOf(path) - 1)] : l.selected;
-      return { lanes: { ...s.lanes, [lane]: { ...l, tabs, selected, follow: false } } };
-    });
+  close(lane, path, side = "current") {
+    set((s) => ({ lanes: { ...s.lanes, [lane]: remainingTabs(s.lanes[lane] ?? empty(), path, side) } }));
   },
 }));
+
+/** Include the commit-details tab in the same visual left/right order as file tabs. */
+const keepTab: Record<TabClose, (index: number, target: number) => boolean> = {
+  current: (i, at) => i !== at,
+  left: (i, at) => i >= at,
+  right: (i, at) => i <= at,
+  others: (i, at) => i === at,
+};
+function remainingTabs(l: IdeLane, path: string | null, side: TabClose): IdeLane {
+  const at = path === null ? l.commit ? l.tabs.length : -1 : l.tabs.indexOf(path);
+  if (at < 0) return l;
+  const keep = keepTab[side];
+  const tabs = l.tabs.filter((_, i) => keep(i, at));
+  const selected = l.selected && tabs.includes(l.selected) ? l.selected : path && tabs.includes(path) ? path : tabs[Math.max(0, l.tabs.indexOf(l.selected ?? "") - 1)];
+  const commit = l.commit && keep(l.tabs.length, at) ? l.commit : undefined;
+  return { ...l, tabs, selected, commit, follow: false, targetLine: selected === l.selected ? l.targetLine : undefined, previewAnchor: undefined };
+}
 
 /** Only completed successful edits move the reader. Include child calls, for either provider. */
 export function completedEdits(conv: Conversation): { id: string; path: string }[] {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, url, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
 import { start, useRun } from "../runs";
@@ -8,6 +8,7 @@ import { InlineDiff } from "./InlineDiff";
 import { type GraphCommit } from "../commit-graph";
 import { CommitGraph } from "./CommitGraph";
 import { useIde } from "../ide";
+import { useGitCards } from "../git-cards";
 import { Count, Tabs } from "./kit";
 import { Icon } from "./icons";
 
@@ -166,7 +167,10 @@ function CodingGit({ lane, ep, wt, branches, pending, running, act, section, set
   const current = branches?.local.find((b) => b.current);
   const selected = useIde((s) => s.lanes[lane]?.commit?.sha);
   const [menu, setMenu] = useState(false);
-  const [changesOpen, setChangesOpen] = useState(true);
+  const changesOpen = useGitCards((s) => s.changes);
+  const setChangesOpen = (open: boolean) => useGitCards.getState().setOpen("changes", open);
+  const changesId = useId();
+  const sectionTitle = section === "changes" ? "Changes" : section === "pr" ? "Pull request" : section[0].toUpperCase() + section.slice(1);
   return <div className="git-panel coding-git">
     <header className="coding-git-heading" onKeyDown={(e) => { if (e.key === "Escape") setMenu(false); }}><strong>Source Control</strong>
       <button className="ghost" aria-label="More source control actions" aria-expanded={menu} onClick={() => setMenu(!menu)}>···</button>
@@ -176,11 +180,11 @@ function CodingGit({ lane, ep, wt, branches, pending, running, act, section, set
     </header>
     {feedback}
     <section className={`coding-changes${changesOpen ? "" : " collapsed"}`} aria-label="Working changes">
-      <button className="coding-section-toggle" aria-expanded={changesOpen} onClick={() => setChangesOpen(!changesOpen)}><Icon name={changesOpen ? "chevron-down" : "chevron-right"} size={12} />{section === "changes" ? "Changes" : section === "pr" ? "Pull request" : section[0].toUpperCase() + section.slice(1)}<Count n={git?.changes.length} /></button>
-      {changesOpen && <div className={section === "changes" ? "git-body" : "git-scroll"}>
+      <button className="coding-section-toggle" title={`${changesOpen ? "Collapse" : "Expand"} ${sectionTitle}`} aria-controls={changesId} aria-expanded={changesOpen} onClick={() => setChangesOpen(!changesOpen)}><Icon name={changesOpen ? "chevron-down" : "chevron-right"} size={12} />{sectionTitle}<Count n={git?.changes.length} /></button>
+      <div id={changesId} hidden={!changesOpen} className={section === "changes" ? "git-body" : "git-scroll"}>
         {section !== "changes" && <button className="link coding-back" onClick={() => setSection("changes")}>← Back to changes</button>}
         {children}
-      </div>}
+      </div>
     </section>
     <CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />
     <button className="coding-branch-status" title="Manage branches" onClick={() => { setSection("branches"); setChangesOpen(true); }}><Icon name="branch" size={13} /><span>{branches?.current ?? git?.branch ?? "No commits yet"}</span><small>{current?.behind ?? 0}↓ {current?.ahead ?? 0}↑</small></button>

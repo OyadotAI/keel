@@ -134,3 +134,40 @@ it("hands IDE shortcuts out of xterm while preserving Ctrl+C and legacy Chat beh
   expect(isKeel(key("KeyG", { ctrlKey: true }))).toBe(false);
   expect(isKeel(key("KeyK", { metaKey: true }))).toBe(true);
 });
+
+for (const [side, expected] of [["left", ["b.ts", "c.ts"]], ["right", ["a.ts", "b.ts"]], ["others", ["b.ts"]]] as const) {
+  it(`closes tabs to the ${side} of the clicked tab and keeps another lane intact`, () => {
+    const ide = useIde.getState();
+    ["a.ts", "b.ts", "c.ts"].forEach((path) => ide.open("one", path, "code"));
+    ide.open("two", "other.ts", "code");
+    ide.close("one", "b.ts", side);
+    expect(useIde.getState().lanes.one.tabs).toEqual(expected);
+    expect(useIde.getState().lanes.one.selected).toBe(expected.includes("c.ts" as never) ? "c.ts" : "b.ts");
+    expect(useIde.getState().lanes.two.tabs).toEqual(["other.ts"]);
+  });
+}
+it("ignores stale context targets and keeps valid selection when closing an inactive tab", () => {
+  const ide = useIde.getState();
+  ide.open("one", "a.ts", "code"); ide.open("one", "b.ts", "code");
+  const before = useIde.getState().lanes.one;
+  ide.close("one", "gone.ts", "others");
+  expect(useIde.getState().lanes.one).toBe(before);
+  ide.close("one", "a.ts");
+  expect(useIde.getState().lanes.one).toMatchObject({ tabs: ["b.ts"], selected: "b.ts" });
+});
+it("treats commit details as the last tab for close-left, close-right and close-others", () => {
+  const ide = useIde.getState();
+  const commit = { sha: "commit", subject: "Details", parents: [], refs: [], author: "Test", when: 0 };
+  ide.open("one", "a.ts", "code"); ide.open("one", "b.ts", "code");
+  ide.patch("one", { commit });
+  ide.close("one", "a.ts", "right");
+  expect(useIde.getState().lanes.one).toMatchObject({ tabs: ["a.ts"], commit: undefined });
+  ide.patch("one", { commit });
+  ide.close("one", null, "left");
+  expect(useIde.getState().lanes.one).toMatchObject({ tabs: [], commit });
+  ide.open("one", "a.ts", "code"); ide.patch("one", { commit });
+  ide.close("one", null, "others");
+  expect(useIde.getState().lanes.one).toMatchObject({ tabs: [], commit });
+  ide.close("one", null);
+  expect(useIde.getState().lanes.one.commit).toBeUndefined();
+});

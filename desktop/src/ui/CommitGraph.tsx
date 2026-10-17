@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { get, type Endpoint } from "../api";
 import { commitGraph, type GraphCommit, type GraphRow } from "../commit-graph";
 import { Icon } from "./icons";
+import { useGitCards } from "../git-cards";
 
 const COLORS = ["var(--graph-blue)", "var(--graph-purple)", "var(--graph-orange)", "var(--graph-green)", "var(--graph-pink)", "var(--graph-cyan)"];
 const x = (column: number) => 12 + column * 13;
@@ -10,7 +11,9 @@ export function CommitGraph({ ep, wt, revision, onOpen, tools, selected }: { ep:
   const [commits, setCommits] = useState<GraphCommit[]>();
   const [error, setError] = useState<string>();
   const [all, setAll] = useState(true);
-  const [open, setOpen] = useState(true);
+  const open = useGitCards((s) => s.graph);
+  const setOpen = (value: boolean) => useGitCards.getState().setOpen("graph", value);
+  const contentId = useId();
   const [limit, setLimit] = useState(100);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -24,15 +27,15 @@ export function CommitGraph({ ep, wt, revision, onOpen, tools, selected }: { ep:
   const rows = useMemo(() => commitGraph(commits ?? []), [commits]);
   return <section className={`commit-graph${open ? "" : " collapsed"}`} aria-label="Commit graph">
     <div className="graph-heading">
-      <button className="graph-toggle" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name={open ? "chevron-down" : "chevron-right"} size={12} />Graph</button>
-      <select aria-label="Graph branches" value={all ? "all" : "current"} onChange={(e) => setAll(e.target.value === "all")}><option value="all">All branches</option><option value="current">Current branch</option></select>
+      <button className="graph-toggle" title={open ? "Collapse Graph" : "Expand Graph"} aria-controls={contentId} aria-expanded={open} onClick={() => setOpen(!open)}><Icon name={open ? "chevron-down" : "chevron-right"} size={12} />Graph</button>
+      {open && <><select aria-label="Graph branches" value={all ? "all" : "current"} onChange={(e) => setAll(e.target.value === "all")}><option value="all">All branches</option><option value="current">Current branch</option></select>
       {tools}
-      <button className="ghost" title="Refresh graph" aria-label="Refresh commit graph" onClick={() => setRetry((n) => n + 1)}><Icon name="rewind" size={13} /></button>
+      <button className="ghost" title="Refresh graph" aria-label="Refresh commit graph" onClick={() => setRetry((n) => n + 1)}><Icon name="rewind" size={13} /></button></>}
     </div>
-    {open && <>
+    <div id={contentId} className="graph-content" hidden={!open}>
       {error ? <div className="graph-message" role="alert">{error}<button onClick={() => setRetry((n) => n + 1)}>Retry</button></div> : !commits ? <div className="graph-message">Reading commit history…</div> : !rows.length ? <div className="graph-message">No commits yet. Stage changes and create your first commit.</div> : <GraphHistory rows={rows} onOpen={onOpen} selected={selected} />}
       {commits && commits.length >= limit && <div className="graph-history-limit">{limit < 200 ? <button className="link" onClick={() => setLimit(200)}>Load older commits</button> : "Showing the latest 200 commits. Lines continue to older parents."}</div>}
-    </>}
+    </div>
   </section>;
 }
 

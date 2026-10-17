@@ -9,7 +9,17 @@
     "core:default",
     "core:webview:allow-set-webview-zoom",
     "dialog:allow-open",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "https://*"
+        }
+      ]
+    },
     "opener:allow-reveal-item-in-dir",
     "notification:default",
     "updater:default",

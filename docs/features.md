@@ -19,9 +19,23 @@ and working-tree diffs in the center, and your conversation on the right. Code f
 use language-aware syntax colors in both light and dark themes. The layout choice and
 pane widths are remembered. **Agentic Mode** returns to the conversation layout. Explorer and Conversations share the left sidebar; open files and
 expanded folders stay with each lane during the app session. Selecting a file pauses automatic
-following, and **Resume following** returns to the latest successful agent edit. Code is read-only;
-the agent makes the changes. Narrow windows put the explorer in a drawer and the conversation
+following, and **Resume following** returns to the latest successful agent edit. Open a file in
+**Code** to edit it, with syntax highlighting, undo/redo, indentation and **Ctrl+Space** completion.
+**Save** or **⌘S / Ctrl+S** writes the file; unsaved drafts survive tab switches, tab closes and
+app restarts. Saving preserves file permissions and refuses to overwrite a file changed on disk
+or a checkout an agent is actively writing. **Reload file** lets you discard a draft explicitly.
+Saving is limited to regular UTF-8 files up to 1 MiB; symlinks are not overwritten. Narrow windows put the explorer in a drawer and the conversation
 in an overlay, which opens when the agent needs an answer.
+
+**AI autocomplete** uses the existing Claude Code sign-in and the fast Haiku model. After a pause
+in typing, a small amount of code around the cursor is sent for an inline suggestion. **Tab**
+accepts it and **Esc** dismisses it; **Suggest** or **Alt+\** requests one explicitly. The toggle
+turns AI suggestions off while local code completion stays available. Completion requests have
+no tools, project settings, MCP servers or saved chat session, and have a finite timeout.
+
+Right-click an editor tab to **Close**, **Close tabs to the left**, **Close tabs to the right**,
+or **Close other tabs**. Tab arrows and the all-files menu keep overflow reachable; selecting a
+file scrolls its complete tab into view. Unsaved files show a dot.
 
 Markdown files also offer **Preview** and **Split** views. The rendered document supports headings,
 tables, task lists, code fences, relative file links, heading anchors, and local images; it refreshes
@@ -32,7 +46,8 @@ The integrated **Terminal** opens below the code and keeps its shell connected w
 when you switch lanes. **Source Control** in the left sidebar provides staging, unstaging,
 committing, fetch/pull/push, history, branches, and pull requests. Click a changed file to compare
 it in the center; staged and unstaged comparisons remain distinct. A colored commit graph sits
-below the changes list, with local/remote branch badges, an all/current branch filter, and
+below the changes list. Changes gets most of the sidebar height; both cards collapse from their
+headers and remember their open state. The graph includes local/remote branch badges, an all/current branch filter, and
 fetch/pull/push controls. Wide graphs scroll horizontally within their own column, keeping commit
 messages and branch labels visible. Selecting a commit opens its files and diffs in the center. Lane merge/discard actions
 use the existing confirmations, and Pull holds the checkout's writer claim while it runs.
