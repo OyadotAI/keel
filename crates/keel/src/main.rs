@@ -16,6 +16,7 @@ mod clitools;
 mod completion;
 mod connect;
 mod context;
+mod denies;
 mod dev;
 mod editor;
 mod events;

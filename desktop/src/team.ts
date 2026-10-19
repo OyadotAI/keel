@@ -47,6 +47,11 @@ export function absent(p?: TeamPlan): string {
   return off.length ? `${joined(off)} ${off.length === 1 ? "isn't" : "aren't"} on this machine.` : "";
 }
 
+/** The other coding agents on this machine, by name: what a user-scope MCP server is copied to. */
+export function others(p?: TeamPlan): string {
+  return joined(NAMES.filter(([k]) => k !== "claude" && !!p?.agents[k]).map(([, n]) => n));
+}
+
 /** Which agents a list of written paths installed the team for. */
 export function agentsIn(paths: string[]): string {
   const has = (prefix: string) => paths.some((p) => p.startsWith(prefix));

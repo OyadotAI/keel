@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
 import { start, useRun } from "../runs";
 import { TeamUpdate, useTeamPlan } from "./TeamUpdate";
-import { absent, forAgents } from "../team";
+import { absent, forAgents, others } from "../team";
 import { useStore } from "../store";
 import { Icon } from "./icons";
 import { MemberAvatar } from "./MemberAvatar";
@@ -167,7 +167,7 @@ export function Extensions() {
         ) : section === "agents" ? (
           <Agents ep={ep} ws={ws} call={call} project={project ?? ""} />
         ) : section === "mcp" ? (
-          <McpServers ws={ws} stream={stream} running={running} />
+          <McpServers ep={ep} ws={ws} stream={stream} running={running} />
         ) : section === "plugins" ? (
           <Plugins ep={ep} ws={ws} stream={stream} running={running} />
         ) : section === "hooks" ? (
@@ -441,7 +441,16 @@ function Create({ ep, call, kind }: { ep: Endpoint; call: (run: () => Promise<un
   );
 }
 
-function McpServers({ ws, stream, running }: { ws: Workspace; stream: (what: string, path: string, p: Record<string, string | boolean | undefined>) => void; running?: string }) {
+/** Which coding agents a new server reaches, said before the click: only "All my projects" is
+ *  copied to Antigravity and Codex, because their own MCP config is machine-wide. */
+function ScopeHint({ ep, scope }: { ep: Endpoint; scope: string }) {
+  const [plan] = useTeamPlan(ep);
+  const to = others(plan);
+  if (!to) return null;
+  return <p className="small muted">{scope === "user" ? `Also added to ${to}, unless it carries secrets.` : "Claude Code only."}</p>;
+}
+
+function McpServers({ ep, ws, stream, running }: { ep: Endpoint; ws: Workspace; stream: (what: string, path: string, p: Record<string, string | boolean | undefined>) => void; running?: string }) {
   const [form, setForm] = useState({ name: "", transport: "http", target: "", scope: "project" });
   return (
     <>
@@ -491,6 +500,7 @@ function McpServers({ ws, stream, running }: { ws: Workspace; stream: (what: str
             </button>
           ))}
         </div>
+        <ScopeHint ep={ep} scope={form.scope} />
         <button style={{ marginTop: 10 }} className="primary" disabled={!form.name.trim() || !form.target.trim() || !!running} onClick={() => stream(`Adding ${form.name}`, "/api/mcp/add", { ...form, commit: form.scope === "project" })}>
           Add server
         </button>

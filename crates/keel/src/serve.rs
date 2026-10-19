@@ -332,6 +332,16 @@ impl AppState {
         }
     }
 
+    /// The conversation the lane's running turn is in, if it has said. A call from a different
+    /// conversation in the same lane is a subagent the turn started.
+    pub fn lane_session(&self, lane: &str) -> Option<String> {
+        self.running
+            .locked()
+            .get(lane)
+            .filter(|t| !t.finished)
+            .and_then(|t| t.session.clone())
+    }
+
     /// The turn has a key: the `uuid` of the transcript record that opened it. Returns the facts
     /// that arrived before there was one, for the caller to write down.
     pub fn keyed(

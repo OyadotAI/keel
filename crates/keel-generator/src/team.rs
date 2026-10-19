@@ -368,6 +368,12 @@ subagents (`.claude/agents/`, `.agents/agents/`, `.codex/agents/` — one per co
 what the last one returned; and what a stage returned is handed to the next **verbatim**, because
 a subagent starts with an empty context and a paraphrase is where a scope quietly grows.
 
+**In Codex**, run a stage with `spawn_agent`: `task_name` is the stage's name (`pm`, `designer`,
+…) and the message says to follow the `developer_instructions` in `.codex/agents/<stage>.toml`,
+followed by the brief: the person's ask in their own words and what the previous stage returned,
+verbatim. Wait for it to finish before starting the next stage. Do not do a stage's work yourself
+instead of spawning it.
+
 1. **`pm`** — given the ask in the person's own words. Returns build / change / cut / not yet,
    and the smallest version worth shipping with its out-list. *Build* and *change* carry on, to
    the scope the PM set. **`cut` and `not yet` stop the pipeline and go back to the person**, with

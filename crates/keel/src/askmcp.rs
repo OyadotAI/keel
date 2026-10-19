@@ -101,6 +101,8 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
         rules: Vec::new(),
         input: json!({ "questions": questions }),
         session_id: lane.map(|l| format!("lane:{l}")).unwrap_or_default(),
+        reason: String::new(),
+        subagent: false,
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     waiters()

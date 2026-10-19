@@ -22,7 +22,7 @@ mod sessions;
 mod skills;
 
 pub use agents::{Agent, Command, discover_agents, discover_commands};
-pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers};
+pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers, user_mcp_entry};
 pub use plugins::{Plugin, discover_plugins};
 pub use sessions::{
     Kind, MAX_READ, Session, Status, discover_sessions, kind_of, opener_of, opening_turn,

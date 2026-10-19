@@ -7,6 +7,7 @@ import { get, post, url, type Endpoint } from "../api";
 import { open as openStream } from "../streams";
 import { useStore } from "../store";
 import type { Meter } from "../setup";
+import { useTeamPlan } from "./TeamUpdate";
 
 interface Claude {
   installed: boolean;
@@ -160,6 +161,7 @@ function Log({ lines }: { lines: string[] }) {
 
 function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
   const [p, setP] = useState<Permissions>();
+  const [plan] = useTeamPlan(ep);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string>();
   const read = useCallback(() => get<Permissions>(ep, "/api/permissions").then(setP, (e) => setError(String(e))), [ep]);
@@ -175,13 +177,14 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
     await read();
   }
   if (!p) return <section className="settings-section"><h2>This project</h2><p className="muted">Reading…</p></section>;
+  const agy = !!plan?.agents.antigravity;
   return (
     <section className="settings-section">
       <h2>This project</h2>
       {error && <div className="error">{error}</div>}
       {p.trusted ? (
         <p>
-          <strong>Trusted.</strong> The agent runs commands here without asking. Rules you approved are kept if you withdraw it.{" "}
+          <strong>Trusted.</strong> The agent runs commands here without asking. Rules you approved are kept if you withdraw it.{agy && " Antigravity lanes don't apply your Read/Edit/Write path deny rules."}{" "}
           <button onClick={() => change(() => post(ep, "/api/permissions/trust", { trusted: false }))}>Stop trusting</button>
         </p>
       ) : asking ? (
@@ -190,6 +193,7 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
             Trusting <code>{project}</code> lets the agent run <strong>any command in this project without asking you</strong> — installs,
             deletes, network calls — for as long as it is trusted. It applies to this project only, is shown while it holds, and you can withdraw it here.
           </p>
+          {agy && <p className="small muted">In Antigravity lanes, deny rules from ~/.claude/settings.json still apply to commands, MCP tools and web fetches. Path rules (Read, Edit, Write with a path) do not.</p>}
           <div className="card-actions">
             <button className="primary" onClick={() => change(() => post(ep, "/api/permissions/trust", { trusted: true })).then(() => setAsking(false))}>
               Trust this project

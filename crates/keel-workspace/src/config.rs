@@ -111,6 +111,14 @@ fn config_file(claude_home: &Utf8Path) -> Utf8PathBuf {
     claude_home.join(".claude.json")
 }
 
+/// A user-scope MCP server's own entry in `~/.claude.json`, whole: `{command, args}` or `{url}`.
+/// The listing above keeps only what a row shows, and two `npx` servers differ in their args.
+pub fn user_mcp_entry(claude_home: &Utf8Path, name: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(config_file(claude_home)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v["mcpServers"].get(name).cloned()
+}
+
 /// Every MCP server configured for this repository.
 pub fn discover_mcp_servers(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<McpServer> {
     let sources = [

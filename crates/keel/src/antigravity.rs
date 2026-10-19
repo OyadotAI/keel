@@ -18,8 +18,9 @@ use serde_json::Value;
 
 use crate::approve::{Decision, HookInput};
 
-/// Reads anywhere, the same default agy has, and the same reason Claude's `Read` is not hooked:
-/// asking about every one turns the loop into clicking. Nothing here can change the machine.
+/// Allowed without asking. Reads anywhere — the same default agy has, and the same reason Claude's
+/// `Read` is not hooked: asking about every one turns the loop into clicking — and the two
+/// subagent tools, whose effects all arrive here on their own. Nothing here changes the machine.
 pub const LOCAL_ALLOW: &[&str] = &[
     "view_file",
     "list_dir",
@@ -30,6 +31,10 @@ pub const LOCAL_ALLOW: &[&str] = &[
     "wait_5_seconds",
     "finish",
     "list_permissions",
+    // A subagent changes nothing itself: every tool it calls passes this same hook, under its own
+    // conversation (measured: its `run_command` was refused here). `send_message` is how it
+    // reports back to the turn that started it.
+    "send_message",
 ];
 
 pub const UNREACHABLE: &str = "Keel's approval service is not reachable, so this call was refused \
@@ -55,6 +60,16 @@ pub const BACKGROUND: &str = "Keel does not run background commands for Antigrav
 pub const CONFIG: &str = "This file is configuration that other tools run (git, an agent's \
     settings, an editor's tasks), so Keel does not let Antigravity write it. Do not write it another \
     way. Tell the person what you wanted to change and they can make the edit themselves.";
+pub const DEFINE_SUBAGENT: &str = "Keel does not let Antigravity lanes define new subagents, \
+    because a definition is a prompt that runs later without anyone reviewing it. Do not create one \
+    another way, including by writing an agent file. Use invoke_subagent with one of the \
+    project's existing agents, or do the work yourself in this conversation.";
+pub const WORKSPACE: &str = "Keel only runs Antigravity subagents in this turn's own workspace \
+    (Workspace: inherit), because that is where its approvals reach them. Call invoke_subagent \
+    again without a branch or shared workspace.";
+pub const MCP_ARGS: &str = "This MCP call's arguments are too large, or not a JSON object, for the \
+    person to read on an approval card, so Keel refused it. Call the tool with smaller, structured \
+    arguments.";
 pub const SED: &str = "Keel does not run sed scripts for Antigravity lanes, because a script can \
     write other files or run commands. Make the same change with replace_file_content.";
 pub const LINK: &str = "This path goes through a symbolic link, so Keel does not let Antigravity \
@@ -114,6 +129,14 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
         }
         "run_command" | "search_web" | "read_url_content" => Route::Ask(claude, input),
         "ask_question" => Route::Deny(QUESTION),
+        "define_subagent" => Route::Deny(DEFINE_SUBAGENT),
+        // Measured only in the inherited workspace: its tools came back through this hook. A
+        // `branch` or `share` workspace is another checkout, where nothing says the hook loads.
+        "invoke_subagent" if inherits(args) => Route::Allow,
+        "invoke_subagent" => Route::Deny(WORKSPACE),
+        // An MCP tool's effects are unknown, so a planning lane does not call one.
+        "call_mcp_tool" if plan => Route::Deny(PLANNING),
+        "call_mcp_tool" => mcp_call(args),
         // A sed script is a program: `w` writes any file, `e` runs a command. Nothing here can
         // read one safely, and replace_file_content does the same edit as data.
         "sed_file" => Route::Deny(SED),
@@ -173,6 +196,53 @@ fn resolved(path: &std::path::Path) -> Option<String> {
         rest.push(at.file_name()?);
         at = at.parent()?;
     }
+}
+
+/// An MCP call as Claude names it, `mcp__<server>__<tool>`, so the allowlist, the person's deny
+/// rules and the card treat it exactly as they treat Claude's. A name holding `__` could forge a
+/// different split — `a__b` + `c` reading as server `a`, tool `b__c` — and slip past a rule.
+fn mcp_call(args: &Value) -> Route {
+    let part = |k: &str| {
+        args[k].as_str().filter(|s| {
+            !s.is_empty()
+                && !s.contains("__")
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        })
+    };
+    match (part("ServerName"), part("ToolName")) {
+        (Some(server), Some(tool)) => match args.get("Arguments") {
+            None | Some(Value::Null) => {
+                Route::Ask(format!("mcp__{server}__{tool}"), serde_json::json!({}))
+            }
+            Some(a) if a.is_object() && a.to_string().len() <= MCP_ARGS_CAP => {
+                Route::Ask(format!("mcp__{server}__{tool}"), a.clone())
+            }
+            Some(_) => Route::Deny(MCP_ARGS),
+        },
+        _ => Route::Deny(UNREADABLE),
+    }
+}
+
+/// Whether every subagent asked for runs in this turn's own workspace.
+fn inherits(args: &Value) -> bool {
+    args["Subagents"].as_array().is_some_and(|a| {
+        a.iter()
+            .all(|s| s["Workspace"].as_str().is_none_or(|w| w == "inherit"))
+    })
+}
+
+/// Arguments larger than a card can honestly show, or not an object at all, are refused: the
+/// person would be approving what they cannot read.
+const MCP_ARGS_CAP: usize = 16 * 1024;
+
+/// The refusal for a call one of the person's own Claude deny rules covers.
+pub fn denied(rule: &str) -> String {
+    format!(
+        "The person's Claude Code settings deny this call (`{rule}` in ~/.claude/settings.json), so \
+         Keel refused it without asking. Do not run it another way or with another tool. Say what \
+         you needed it for; only the person can change that rule."
+    )
 }
 
 /// `keel antigravity-hook`: read the call on stdin, print one decision, exit 0.
@@ -328,7 +398,9 @@ pub fn note_asked(id: &str) {
 /// call the hook denied ends in ERROR, so only a step that *ran* is asked about.
 pub fn gated(conversation: &str, step: u64, tool: &str) -> bool {
     use crate::lock::Locked;
+    // `invoke_subagent` is allowed by the hook itself, without asking, when it inherits.
     LOCAL_ALLOW.contains(&tool)
+        || tool == "invoke_subagent"
         || asked()
             .locked()
             .iter()
@@ -459,6 +531,48 @@ mod tests {
         assert_eq!(
             route("sed_file", &json!({"TargetFile": "/r/a.rs"}), false),
             Route::Deny(SED)
+        );
+    }
+
+    /// The X2 shapes: an MCP call is asked about under Claude's name for it; a subagent runs, and
+    /// its own calls come back through this hook; defining one stays refused.
+    #[test]
+    fn subagents_and_mcp_calls_route_as_measured() {
+        let call = json!({"Arguments": {"text": "hello"}, "ServerName": "qa", "ToolName": "echo"});
+        assert_eq!(
+            route("call_mcp_tool", &call, false),
+            Route::Ask("mcp__qa__echo".into(), json!({"text": "hello"}))
+        );
+        assert_eq!(route("call_mcp_tool", &call, true), Route::Deny(PLANNING));
+        let forged = json!({"ServerName": "a__b", "ToolName": "c"});
+        assert_eq!(
+            route("call_mcp_tool", &forged, false),
+            Route::Deny(UNREADABLE)
+        );
+        assert_eq!(
+            route("call_mcp_tool", &json!({"ServerName": "qa"}), false),
+            Route::Deny(UNREADABLE)
+        );
+        let sub = json!({"Subagents": [{"Model": "inherit", "Prompt": "x", "Role": "r"}]});
+        assert_eq!(route("invoke_subagent", &sub, false), Route::Allow);
+        let branch = json!({"Subagents": [{"Prompt": "x", "Workspace": "branch"}]});
+        assert_eq!(
+            route("invoke_subagent", &branch, false),
+            Route::Deny(WORKSPACE)
+        );
+        let big =
+            json!({"ServerName": "qa", "ToolName": "echo", "Arguments": {"a": "x".repeat(20_000)}});
+        assert_eq!(route("call_mcp_tool", &big, false), Route::Deny(MCP_ARGS));
+        let text = json!({"ServerName": "qa", "ToolName": "echo", "Arguments": "{\"a\":1}"});
+        assert_eq!(route("call_mcp_tool", &text, false), Route::Deny(MCP_ARGS));
+        assert_eq!(
+            route("send_message", &json!({"Message": "done"}), true),
+            Route::Allow
+        );
+        assert!(gated("p1", 6, "send_message"));
+        assert_eq!(
+            route("define_subagent", &json!({}), false),
+            Route::Deny(DEFINE_SUBAGENT)
         );
     }
 

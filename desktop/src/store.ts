@@ -23,6 +23,10 @@ export interface Pending {
   rules: string[];
   input: Record<string, unknown>;
   session_id: string;
+  /// Why Keel is asking, when it is not the usual reason.
+  reason?: string;
+  /// Asked by a subagent the lane's turn started; its own steps are not in the turn.
+  subagent?: boolean;
   provider?: Agent;
   kind?: "permission" | "question" | "elicitation";
   choices?: { label: string; value: unknown }[];

@@ -33,6 +33,18 @@ export function ApprovalStrip({ lane }: { lane: string }) {
   );
 }
 
+/** A subagent's call is labelled as one: its steps never appear in the turn it came from. */
+const who = (p: Pending) => (p.subagent ? "A subagent of this turn" : "The agent");
+
+/** What a non-command call carries — an MCP tool's arguments, a fetch's URL — at a length a card can draw. */
+function Arguments({ input }: { input: Record<string, unknown> }) {
+  if (!input || !Object.keys(input).length) return null;
+  const text = JSON.stringify(input, null, 2);
+  // Whole, in a scrolling box: a card that cut the arguments short would ask for approval of
+  // something the person cannot read. The daemon refuses calls too large to show.
+  return <pre className="code" style={{ maxHeight: 200, overflow: "auto" }}>{text}</pre>;
+}
+
 function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const answer = useStore((s) => s.answer);
   const [all, setAll] = useState(false);
@@ -44,9 +56,11 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
     <div className="strip-row">
       <div className="strip-title">
         <Icon name="hand" className="hand" />
-        <span style={{ flex: 1 }}>The agent wants to run {p.tool === "Bash" ? "a command" : p.tool}</span>
+        <span style={{ flex: 1 }}>{who(p)} wants to run {p.tool === "Bash" ? "a command" : p.tool}</span>
         {count > 1 && <span className="small faint">{count} waiting</span>}
       </div>
+      {p.reason && <p className="small muted">{p.reason}</p>}
+      {!p.command && <Arguments input={p.input} />}
       {p.command && (
         <pre className="code" style={{ maxHeight: all ? 320 : undefined }}>
           $ {all ? p.command : lines.slice(0, 6).join("\n")}
@@ -62,7 +76,8 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
         <button className="primary" onClick={() => (void answer(lane, p, "allow"), after())}>
           Allow once <kbd>{label({ key: "a", shift: true })}</kbd>
         </button>
-        {p.rules.length > 0 && (
+        {/* A card asked because a deny rule can't be checked asks every time: a session rule would do nothing. */}
+        {p.rules.length > 0 && !p.reason && (
           <button onClick={() => (void answer(lane, p, "allow", undefined, "session"), after())} title="Remembered for this conversation only. The palette has “Always allow” for the whole project.">
             Allow <code>{p.rules.join(", ")}</code> this session <kbd>{label({ key: "s", shift: true })}</kbd>
           </button>

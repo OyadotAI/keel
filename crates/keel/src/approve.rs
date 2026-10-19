@@ -86,6 +86,12 @@ pub struct Pending {
     /// or it surfaces in the wrong one. Empty when the hook did not say, and an empty one is shown
     /// to whoever asks — the same failing-open this whole module does.
     pub session_id: String,
+    /// Why Keel is asking, when it is not the usual "this is not allowed yet".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// Asked by a subagent the lane's turn started, whose own steps the turn never shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subagent: bool,
 }
 
 #[derive(Deserialize)]
@@ -155,7 +161,7 @@ pub fn queue() -> &'static Mutex<Vec<Pending>> {
 /// A command that stands in front of the real one and would launch it.
 ///
 /// Never the rule itself: approving `sudo` approves everything it can start.
-const WRAPPERS: &[&str] = &[
+pub(crate) const WRAPPERS: &[&str] = &[
     "sudo", "doas", "env", "nohup", "time", "xargs", "command", "exec", "nice",
 ];
 
@@ -391,8 +397,20 @@ pub async fn ask(
     // question; the trust check above it meant they never were.
     // Canonical paths and machine-local permission records are read on every
     // hooked tool call. Off the executor together, once.
+    // An agy subagent asks under its own conversation, which the window never sees: its card is
+    // filed under the lane's turn, and "this session" rules are the turn's — or it would be
+    // asked again on every call, for ever.
+    let parent = strict
+        .then(|| state.lane_session(&hook.lane))
+        .flatten()
+        .filter(|s| !hook.session_id.is_empty() && *s != hook.session_id);
+    let subagent = parent.is_some();
+    let mut hook = hook;
+    if let Some(parent) = parent {
+        hook.session_id = parent;
+    }
     let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
-    let (leaves_the_project, trusted, effective) = {
+    let (leaves_the_project, trusted, effective, denies) = {
         let (repo, tool, input, session) = (
             repo.clone(),
             hook.tool_name.clone(),
@@ -405,11 +423,30 @@ pub async fn ask(
                     is_edit(&tool) && !edit_is_inside(&repo, &input),
                     crate::permissions::trusted(&repo),
                     crate::permissions::effective(&repo, session.as_deref()),
+                    // For agy only: Claude Code reads its own deny rules after a `defer`.
+                    if strict {
+                        keel_workspace::claude_home()
+                            .map(|h| crate::denies::read(&h))
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
                 )
             },
-            (false, false, Default::default()),
+            (false, false, Default::default(), Vec::new()),
         )
         .await
+    };
+    // A deny rule beats trust, the allowlist and a card, as it does in Claude Code.
+    let unsure = match crate::denies::check(&denies, &hook.tool_name, &hook.tool_input) {
+        crate::denies::Verdict::Denied(rule) => {
+            return Ok(Json(Decision {
+                decision: "deny".into(),
+                reason: crate::antigravity::denied(&rule),
+            }));
+        }
+        crate::denies::Verdict::Unsure => true,
+        crate::denies::Verdict::Clear => false,
     };
 
     // One decision, already made. Nothing is queued and nobody is asked.
@@ -420,7 +457,7 @@ pub async fn ask(
     // own `deny` rules and Claude Code's shell checks still apply to them. The cost: a terminal
     // session started before the project was trusted keeps its older allowlist for commands
     // until it is restarted. A chat turn is a fresh `claude` and always has the current one.
-    if !is_question && !leaves_the_project && trusted {
+    if !is_question && !leaves_the_project && trusted && !unsure {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
         }
@@ -435,7 +472,7 @@ pub async fn ask(
         }));
     }
 
-    if is_edit(&hook.tool_name) && !leaves_the_project {
+    if is_edit(&hook.tool_name) && !leaves_the_project && !unsure {
         // Inside the repository is what `acceptEdits` already covers; nothing to ask.
         return Ok(Json(Decision {
             decision: "defer".into(),
@@ -454,7 +491,9 @@ pub async fn ask(
     // command with no syntax it cannot see into: `ls $(rm -rf ~)` reads as `Bash(ls *)`.
     // An empty rule list means `rules_for` saw only builtins (`source`, `.`, `export`), which
     // need no rule for Claude because Claude's checker reads them; for agy that is a card.
+    // Only a command has syntax to see past; an MCP call or a fetch is its name.
     let parsed_whole = !strict
+        || hook.tool_name != "Bash"
         || !rules.is_empty()
             && plain_shell(
                 hook.tool_input
@@ -465,6 +504,7 @@ pub async fn ask(
     if !background
         && !is_question
         && !leaves_the_project
+        && !unsure
         && parsed_whole
         && already_allowed(&rules, &effective)
     {
@@ -491,8 +531,20 @@ pub async fn ask(
                 .unwrap_or_default(),
         ),
         rules,
-        input: hook.tool_input.clone(),
+        input: if hook.tool_name.starts_with("mcp__") {
+            crate::turns::bounded_input(&hook.tool_input)
+        } else {
+            hook.tool_input.clone()
+        },
         session_id: hook.session_id.clone(),
+        reason: if unsure {
+            "Asked because ~/.claude/settings.json denies some commands, and Keel can't check \
+             this one against them."
+                .into()
+        } else {
+            String::new()
+        },
+        subagent,
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -827,6 +879,8 @@ async fn plan_request(hook: &HookInput, plan: String) -> Decision {
         rules: Vec::new(),
         input: serde_json::json!({ "plan": plan }),
         session_id: hook.session_id.clone(),
+        reason: String::new(),
+        subagent: false,
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1231,6 +1285,8 @@ pub(crate) mod tests {
             rules: Vec::new(),
             input: serde_json::json!({}),
             session_id: "K2".into(),
+            reason: String::new(),
+            subagent: false,
         });
         drop(Withdraw(id.clone()));
         assert!(
@@ -1257,6 +1313,69 @@ pub(crate) mod tests {
     /// about it itself — and leaves commands and fetches to the allowlist trust fills, so the
     /// person's own deny rules still hold. Nothing is queued for any of them. A question is still
     /// a question.
+    #[tokio::test]
+    async fn an_antigravity_subagent_asks_as_its_turn() {
+        let _serial = lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let token = state.claim("agy-lane", &root, true).unwrap();
+        state.bound("agy-lane", token, "parent");
+        let hook = |tool: &str, input: serde_json::Value, id: &str| HookInput {
+            tool_name: tool.into(),
+            tool_input: input,
+            tool_use_id: id.into(),
+            session_id: "child".into(),
+            lane: "agy-lane".into(),
+            cwd: root.to_string(),
+            provider: "antigravity".into(),
+        };
+        // A session rule the window granted the turn covers its subagent, and an MCP call is
+        // matched by its name like Claude's — neither is asked about again.
+        crate::permissions::remember(&root, "mcp__qa__echo", "session", Some("parent")).unwrap();
+        let d = ask(
+            State(state.clone()),
+            Json(hook(
+                "mcp__qa__echo",
+                serde_json::json!({"text": "hi"}),
+                "agy-sub-1",
+            )),
+        )
+        .await
+        .unwrap();
+        assert_eq!(d.decision, "defer");
+        // Anything else it asks is filed under the turn's session and says it is a subagent's.
+        let pending = tokio::spawn(ask(
+            State(state.clone()),
+            Json(hook(
+                "Bash",
+                serde_json::json!({"command": "cargo build"}),
+                "agy-sub-2",
+            )),
+        ));
+        let card = loop {
+            if let Some(p) = queue()
+                .locked()
+                .iter()
+                .find(|p| p.id == "agy-sub-2")
+                .cloned()
+            {
+                break p;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(card.session_id, "parent");
+        assert!(card.subagent);
+        let (tx, _) = waiters().locked().remove("agy-sub-2").unwrap();
+        let _ = tx.send(Decision {
+            decision: "deny".into(),
+            reason: "no".into(),
+        });
+        assert_eq!(pending.await.unwrap().unwrap().decision, "deny");
+        queue().locked().retain(|p| p.id != "agy-sub-2");
+    }
+
     #[tokio::test]
     async fn a_trusted_project_asks_nothing_but_questions() {
         let dir = tempfile::tempdir().unwrap();
@@ -1625,6 +1744,8 @@ pub(crate) mod tests {
             rules: vec![],
             input: serde_json::json!({}),
             session_id: "s-new".into(),
+            reason: String::new(),
+            subagent: false,
         });
         let other = poll(Query(PollQuery {
             session: None,
@@ -1659,6 +1780,8 @@ pub(crate) mod tests {
             rules: vec![],
             input: serde_json::json!({}),
             session_id: "s-other".into(),
+            reason: String::new(),
+            subagent: false,
         });
         q.lock().unwrap().push(Pending {
             id: "2".into(),
@@ -1668,6 +1791,8 @@ pub(crate) mod tests {
             rules: vec![],
             input: serde_json::json!({}),
             session_id: String::new(),
+            reason: String::new(),
+            subagent: false,
         });
         let got = poll(Query(PollQuery {
             session: None,
@@ -1701,6 +1826,8 @@ pub(crate) mod tests {
             rules: vec!["Bash(ls *)".into()],
             input: serde_json::Value::Null,
             session_id: session.into(),
+            reason: String::new(),
+            subagent: false,
         }
     }
 
