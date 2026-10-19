@@ -593,83 +593,35 @@ mod tests {
         assert!(!root.join(tmpl::ESLINT_RULES_PATH).exists());
     }
 
+    /// An older shipped `principal.md` and lifecycle section, kept as fixtures: CI checks out
+    /// without history, so they cannot be read from git. Each must still be in the shipped list.
     fn old_version(rel: &str) -> String {
-        let id = tmpl::id(rel).unwrap();
-        let current = sha(tmpl::files_for(&[Agent::Claude], false)
-            .into_iter()
-            .find(|(r, _)| r == rel)
-            .unwrap()
-            .1
-            .as_bytes());
-        let old = tmpl::SHIPPED
-            .lines()
-            .filter_map(|l| l.split_once(' '))
-            .find(|(d, i)| *i == id && *d != current)
-            .expect("an older version is listed")
-            .0;
-        from_history(old, |b| sha(b) == old)
+        assert_eq!(rel, ".claude/agents/principal.md");
+        let old = include_str!("../tests/fixtures/team-old-principal.md").replace("\r\n", "\n");
+        assert!(
+            shipped(rel, old.as_bytes()),
+            "the fixture is a shipped version"
+        );
+        assert_ne!(
+            old,
+            tmpl::PRINCIPAL_AGENT,
+            "the fixture is an older version"
+        );
+        old
     }
 
     fn old_section(id: &str) -> String {
-        let (_, _, current) = SECTIONS.iter().find(|(i, ..)| *i == id).unwrap();
-        let current = sha(normal(current).as_bytes());
-        let old = tmpl::SHIPPED
-            .lines()
-            .filter_map(|l| l.split_once(' '))
-            .find(|(d, i)| *i == id && *d != current)
-            .expect("an older section is listed")
-            .0;
-        from_history(old, |b| {
-            sha(normal(&String::from_utf8_lossy(b)).as_bytes()) == old
-        })
-    }
-
-    /// The old text itself, from this repository's history: the list holds digests, not bodies.
-    fn from_history(digest: &str, matches: impl Fn(&[u8]) -> bool) -> String {
-        let here = camino::Utf8Path::new(env!("CARGO_MANIFEST_DIR"));
-        let raw = regex_lite_consts();
-        for c in crate::git::run(here, &["rev-list", "--all"])
-            .unwrap()
-            .lines()
-        {
-            for f in [
-                "crates/keel-generator/src/team.rs",
-                "crates/keel-generator/src/team/agents/principal.md",
-                "crates/keel-generator/src/cloudflare.rs",
-                "crates/keel/src/project.rs",
-            ] {
-                let Ok(src) = crate::git::run(here, &["show", &format!("{c}:{f}")]) else {
-                    continue;
-                };
-                if matches(src.as_bytes()) {
-                    return src;
-                }
-                for body in raw(&src) {
-                    if matches(body.as_bytes()) {
-                        return body;
-                    }
-                }
-            }
-        }
-        panic!("no version in history hashes to {digest}")
-    }
-
-    /// Raw-string constant bodies, `r#"…"#` and `r##"…"##`.
-    fn regex_lite_consts() -> impl Fn(&str) -> Vec<String> {
-        |src: &str| {
-            let mut out = Vec::new();
-            for hashes in ["#", "##"] {
-                let open = format!("r{hashes}\"");
-                let close = format!("\"{hashes};");
-                let mut rest = src;
-                while let Some(i) = rest.find(&open) {
-                    let body = &rest[i + open.len()..];
-                    let Some(j) = body.find(&close) else { break };
-                    out.push(body[..j].to_string());
-                    rest = &body[j..];
-                }
-            }
-            out
-        }
+        assert_eq!(id, "section:lifecycle");
+        let old = normal(include_str!("../tests/fixtures/team-old-lifecycle.md"));
+        assert!(
+            listed(id, &sha(old.as_bytes())),
+            "the fixture is a shipped section"
+        );
+        assert_ne!(
+            old,
+            normal(tmpl::LIFECYCLE),
+            "the fixture is an older section"
+        );
+        old
     }
 }

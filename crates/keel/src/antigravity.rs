@@ -684,19 +684,24 @@ mod tests {
         let read = || -> Value {
             serde_json::from_slice(&std::fs::read(dir.join(".agents/hooks.json")).unwrap()).unwrap()
         };
+        // `sh -c` quoting on Unix; `cmd /c` takes double quotes on Windows.
+        let quoted = |p: &str| {
+            if cfg!(windows) {
+                format!("\"{p}\" antigravity-hook")
+            } else {
+                format!("'{p}' antigravity-hook")
+            }
+        };
         let hook = &read()["keel"]["PreToolUse"][0];
         assert_eq!(hook["matcher"], "*");
-        assert_eq!(
-            hook["hooks"][0]["command"],
-            "'/opt/my keel/keel' antigravity-hook"
-        );
+        assert_eq!(hook["hooks"][0]["command"], quoted("/opt/my keel/keel"));
         assert!(
             hook["hooks"][0]["timeout"].as_u64().unwrap() > crate::approve::WAIT.as_secs() + 20
         );
         write_hooks(&dir, std::path::Path::new("/elsewhere/keel")).unwrap();
         assert_eq!(
             read()["keel"]["PreToolUse"][0]["hooks"][0]["command"],
-            "'/elsewhere/keel' antigravity-hook"
+            quoted("/elsewhere/keel")
         );
         #[cfg(unix)]
         {
