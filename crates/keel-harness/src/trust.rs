@@ -118,11 +118,14 @@ pub fn quarantine_keeping(
     let repo = repo.as_ref();
     let mut report = quarantine_in(repo, UNTRUSTED, &keep)?;
     for (above, prefix) in ancestors_to_git_root(repo) {
-        // The Antigravity entries alone: what agy loads from folders above its own.
+        // What agy and Codex load from folders above their own; Claude's stay put.
         let agy: Vec<&str> = UNTRUSTED
             .iter()
             .copied()
-            .filter(|r| r.starts_with(".agent") || r.starts_with("_agent"))
+            // Codex reads its project layer from the git root too.
+            .filter(|r| {
+                r.starts_with(".agent") || r.starts_with("_agent") || r.starts_with(".codex/")
+            })
             .collect();
         let up = quarantine_in(&above, &agy, &|_: &str, _: &[u8]| false)?;
         report

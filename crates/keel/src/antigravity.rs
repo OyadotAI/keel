@@ -55,6 +55,10 @@ pub const BACKGROUND: &str = "Keel does not run background commands for Antigrav
 pub const CONFIG: &str = "This file is configuration that other tools run (git, an agent's \
     settings, an editor's tasks), so Keel does not let Antigravity write it. Do not write it another \
     way. Tell the person what you wanted to change and they can make the edit themselves.";
+pub const SED: &str = "Keel does not run sed scripts for Antigravity lanes, because a script can \
+    write other files or run commands. Make the same change with replace_file_content.";
+pub const LINK: &str = "This path goes through a symbolic link, so Keel does not let Antigravity \
+    write it. Write the file at its real location instead.";
 const NO_PATH: &str = "This file tool call names no file, so Keel could not ask about it and \
     refused it. Call it again with the file's path.";
 const REFUSED: &str = "The person refused this call. Do not substitute another command for it.";
@@ -89,7 +93,6 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
         "write_to_file"
         | "replace_file_content"
         | "multi_replace_file_content"
-        | "sed_file"
         | "notebook_edit"
             if plan =>
         {
@@ -98,7 +101,6 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
         "write_to_file"
         | "replace_file_content"
         | "multi_replace_file_content"
-        | "sed_file"
         | "notebook_edit" => {
             let path = input["file_path"]
                 .as_str()
@@ -106,11 +108,15 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
             match path {
                 None | Some("") => Route::Deny(NO_PATH),
                 Some(p) if runs_something(p) => Route::Deny(CONFIG),
+                Some(p) if through_a_link(p) => Route::Deny(LINK),
                 Some(_) => Route::Ask(claude, input),
             }
         }
         "run_command" | "search_web" | "read_url_content" => Route::Ask(claude, input),
         "ask_question" => Route::Deny(QUESTION),
+        // A sed script is a program: `w` writes any file, `e` runs a command. Nothing here can
+        // read one safely, and replace_file_content does the same edit as data.
+        "sed_file" => Route::Deny(SED),
         _ => Route::Deny(UNSUPPORTED),
     }
 }
@@ -122,7 +128,7 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
 fn runs_something(path: &str) -> bool {
     const DIRS: &[&str] = &[
         ".git", ".claude", ".codex", ".agents", ".agent", "_agents", "_agent", ".vscode", ".idea",
-        ".husky", ".keel",
+        ".husky", ".keel", ".gemini",
     ];
     const FILES: &[&str] = &[".mcp.json", ".envrc", ".gitmodules"];
     // macOS and Windows fold case, and Windows drops trailing dots and spaces: `.GIT/config` is
@@ -137,6 +143,21 @@ fn runs_something(path: &str) -> bool {
             || parts.last().is_some_and(|f| FILES.contains(&f.as_str()))
     };
     hit(path) || resolved(std::path::Path::new(path)).is_some_and(|r| hit(&r))
+}
+
+/// Whether writing `path` would follow a symbolic link: the file itself is one — a dangling link
+/// to `.git/hooks/pre-commit` resolves to nothing, so no canonical path can catch it — or a
+/// folder on the way is one that points into config. Writing through a link is never needed for
+/// an edit, so it is refused rather than reasoned about.
+fn through_a_link(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    p.ancestors().skip(1).any(|a| {
+        std::fs::symlink_metadata(a).is_ok_and(|m| m.file_type().is_symlink())
+            && std::fs::read_link(a).is_ok_and(|t| runs_something(&t.to_string_lossy()))
+    })
 }
 
 /// The path with its deepest existing ancestor canonicalized and the rest appended.
@@ -418,6 +439,27 @@ mod tests {
         let p = d.path().join("tools/pre-commit");
         assert!(runs_something(p.to_str().unwrap()));
         assert!(!runs_something(d.path().join("src/a.rs").to_str().unwrap()));
+    }
+
+    /// A dangling link into `.git` resolves to nothing, so it is caught as a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_link_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(".git/hooks/pre-commit", d.path().join("notes.md")).unwrap();
+        let p = d.path().join("notes.md");
+        assert_eq!(
+            route(
+                "write_to_file",
+                &json!({"TargetFile": p.to_str().unwrap()}),
+                false
+            ),
+            Route::Deny(LINK)
+        );
+        assert_eq!(
+            route("sed_file", &json!({"TargetFile": "/r/a.rs"}), false),
+            Route::Deny(SED)
+        );
     }
 
     #[test]
