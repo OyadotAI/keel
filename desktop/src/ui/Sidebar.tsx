@@ -1,7 +1,7 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useStore, type Agent, type Session } from "../store";
+import { AGENT_NAME, useStore, type Agent, type Session } from "../store";
 import { get, type Endpoint } from "../api";
 import { Floating } from "./Menu";
 import { LaneViewSwitch } from "./LaneViewSwitch";
@@ -195,7 +195,7 @@ function ProjectRow({ path }: { path: string }) {
           <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} />
           <span className="project-name">{p.name}</span>
         </button>
-        <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code or Codex">
+        <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code, Codex or Antigravity">
           <Icon name="plus" size={14} />
         </button>
         <button className="ghost hover-only" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "more" })} aria-label={`${p.name} actions`}>
@@ -237,6 +237,14 @@ function ProjectRow({ path }: { path: string }) {
           <button onClick={() => make(true, "codex")}>
             <Icon name="branch" size={14} /> On its own branch
           </button>
+          <div className="sep" />
+          <div className="eyebrow" style={{ padding: "4px 8px" }}>Antigravity</div>
+          <button onClick={() => make(false, "antigravity")}>
+            <Icon name="terminal" size={14} /> In the project's tree
+          </button>
+          <button onClick={() => make(true, "antigravity")}>
+            <Icon name="branch" size={14} /> On its own branch
+          </button>
         </Floating>
       )}
       {menu?.kind === "more" && (
@@ -254,6 +262,9 @@ function ProjectRow({ path }: { path: string }) {
           </button>
           <button onClick={() => (setCtx(null), make(false, "codex"))}>
             <Icon name="terminal" size={14} /> New Codex lane
+          </button>
+          <button onClick={() => (setCtx(null), make(false, "antigravity"))}>
+            <Icon name="terminal" size={14} /> New Antigravity lane
           </button>
           <div className="sep" />
           <button onClick={() => (setCtx(null), void revealItemInDir(path))}>
@@ -319,7 +330,7 @@ function LaneRow({ id }: { id: string }) {
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
-      <span className="lane-title" title={`${l.agent === "codex" ? "Codex" : "Claude"}${subText ? ` · ${subText}` : ""}`}>{l.title}</span>
+      <span className="lane-title" title={`${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>{l.title}</span>
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
     <button className="ghost lane-close" aria-label={`Close ${l.title}`} title={`Close lane (${label({ key: "w" })})`} onClick={() => ask("close")}>
@@ -342,9 +353,9 @@ function LaneRow({ id }: { id: string }) {
             <Icon name="branch" size={14} /> Copy branch name
           </button>
         )}
-        <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(`${l.agent === "codex" ? "codex resume" : "claude --resume"} ${l.session}`))}>
+        {l.agent !== "antigravity" && <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(`${l.agent === "codex" ? "codex resume" : "claude --resume"} ${l.session}`))}>
           <Icon name="copy" size={14} /> Copy resume command
-        </button>
+        </button>}
         <div className="sep" />
         {l.wt && <button onClick={() => ask("merge")}>Merge lane…</button>}
         {l.wt && (

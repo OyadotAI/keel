@@ -1075,13 +1075,16 @@ fn adopt_and_commit(
     let _held = crate::writes::hold(state, repo, "adopt")?;
     // Read before writing: an instructions file holding anything of the person's that is not
     // committed is appended to but not committed, or Keel's commit would carry their work.
-    let theirs: Vec<String> = instructions_file(repo)
-        .ok()
-        .map(|(_, rel)| rel)
-        .filter(|rel| !crate::writes::clean_before(repo, rel))
+    // Every file it may append to, as resolved — through a link, an `@AGENTS.md` import, a
+    // lowercase name — or the path written is not the path checked, and their edits ride along.
+    let agents = crate::team::installed();
+    let theirs: Vec<String> = instruction_targets(repo, &agents)
         .into_iter()
+        .filter_map(|(_, t)| t.ok().map(|(_, rel)| rel))
+        .filter(|rel| !crate::writes::clean_before(repo, rel))
         .collect();
-    let mut done = adopt(repo).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let mut done =
+        adopt_for(repo, &agents).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
     if commit {
         let (ours, kept): (Vec<String>, Vec<String>) = done
             .written
@@ -1108,32 +1111,36 @@ fn adopt_and_commit(
 /// a file — is left alone and said so, one path at a time, so one odd path never stops the rest;
 /// `CLAUDE.md` is the one file appended to, and only with what it lacks.
 pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
+    adopt_for(repo, &crate::team::installed())
+}
+
+/// [`adopt`] for the coding agents named: Claude Code's files always, Antigravity's and Codex's
+/// beside them when they are installed, and the rules in `AGENTS.md` for the two that read it.
+pub fn adopt_for(
+    repo: &Utf8Path,
+    agents: &[keel_generator::team::Agent],
+) -> Result<Adopted, String> {
     let name = repo.file_name().unwrap_or("project").to_string();
     let ctx = keel_scanner::RepoContext::load(repo).ok();
     let report = ctx
         .as_ref()
         .map(keel_scanner::scan)
         .unwrap_or_else(|| Report::new(Vec::new()));
-    let mut files: Vec<(&str, String)> = keel_generator::team::files()
-        .into_iter()
-        .map(|(p, b)| (p, b.to_string()))
-        .collect();
-    if ctx.as_ref().is_some_and(keel_scanner::has_frontend) {
-        files.push((
-            keel_generator::team::FRONTEND_SKILL_PATH,
-            keel_generator::team::FRONTEND_SKILL.to_string(),
-        ));
-    }
+    let mut files = keel_generator::team::files_for(
+        agents,
+        ctx.as_ref().is_some_and(keel_scanner::has_frontend),
+    );
     if repo.join("package.json").is_file() {
         files.push((
-            keel_generator::team::ESLINT_RULES_PATH,
+            keel_generator::team::ESLINT_RULES_PATH.into(),
             keel_generator::team::ESLINT_RULES.to_string(),
         ));
     }
-    files.push(("docs/PRODUCTION.md", production_md(&name, &report)));
+    files.push(("docs/PRODUCTION.md".into(), production_md(&name, &report)));
     let mut written = Vec::new();
     let mut skipped = Vec::new();
-    for (rel, body) in files {
+    for (rel, body) in &files {
+        let rel = rel.as_str();
         // Tracked but not on disk is a file the person deleted — `rm`, or a staged `git rm` —
         // and writing the stock one back committed it over their decision.
         if crate::writes::deleted_by_person(repo, rel) {
@@ -1148,10 +1155,12 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
             Err(why) => skipped.push(format!("{rel} ({})", short(repo, &why))),
         }
     }
-    match claude_md(repo, &name) {
-        Ok(Some(rel)) => written.push(rel),
-        Ok(None) => skipped.push("CLAUDE.md (already says it)".into()),
-        Err(why) => skipped.push(format!("CLAUDE.md ({})", short(repo, &why))),
+    for (file, _) in instruction_targets(repo, agents) {
+        match claude_md(repo, &name, file) {
+            Ok(Some(rel)) if !written.contains(&rel) => written.push(rel),
+            Ok(_) => skipped.push(format!("{file} (already says it)")),
+            Err(why) => skipped.push(format!("{file} ({})", short(repo, &why))),
+        }
     }
     Ok(Adopted {
         written,
@@ -1159,6 +1168,46 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
         committed: None,
         note: None,
     })
+}
+
+/// An instructions file found on disk: absolute and repository-relative, or why it is left alone.
+pub(crate) type Resolved = Result<(Utf8PathBuf, String), String>;
+
+/// The instructions files adoption writes the rules into, each with the file it resolves to:
+/// `CLAUDE.md` for Claude Code, `AGENTS.md` for Antigravity and Codex — the same sections in both,
+/// so every agent works to the same rules. A `CLAUDE.md` that imports `@AGENTS.md`, or is a link
+/// to it, gets them once, through the file behind it. The update reads the same list, so what it
+/// offers, writes and commits is what adoption would.
+pub(crate) fn instruction_targets(
+    repo: &Utf8Path,
+    agents: &[keel_generator::team::Agent],
+) -> Vec<(&'static str, Resolved)> {
+    let imports = std::fs::read_to_string(repo.join("CLAUDE.md"))
+        .is_ok_and(|t| t.lines().any(|l| l.trim() == "@AGENTS.md"));
+    let others = agents
+        .iter()
+        .any(|a| *a != keel_generator::team::Agent::Claude);
+    let names: &[&'static str] = match (imports, others) {
+        (true, _) => &["AGENTS.md"],
+        (false, true) => &["CLAUDE.md", "AGENTS.md"],
+        (false, false) => &["CLAUDE.md"],
+    };
+    let mut out: Vec<(&'static str, Resolved)> = Vec::new();
+    for name in names {
+        let target = instructions_named(repo, name);
+        let seen = out
+            .iter()
+            .any(|(_, t)| matches!((t, &target), (Ok((_, a)), Ok((_, b))) if a == b));
+        if !seen {
+            out.push((name, target));
+        }
+    }
+    out
+}
+
+/// Append Keel's sections to one instructions file — [`adopt_for`]'s step, for the update.
+pub(crate) fn append_guidance(repo: &Utf8Path, file: &str) -> Result<Option<String>, String> {
+    claude_md(repo, repo.file_name().unwrap_or("project"), file)
 }
 
 /// A reason without the absolute path in front of it: the person knows where their project is.
@@ -1169,23 +1218,19 @@ fn short(repo: &Utf8Path, why: &str) -> String {
         .to_string()
 }
 
-/// The file `claude_md` edits, absolute and repository-relative: `CLAUDE.md` under the name it
-/// actually has on disk (a case-insensitive Mac opens `claude.md` for it, and git only knows the
-/// real one), or — when it is a link, as `CLAUDE.md -> AGENTS.md` conventionally is — the file
-/// behind it, as long as that is a file inside the repository.
-fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
+/// The file `claude_md` edits, absolute and repository-relative: `file` (`CLAUDE.md` or
+/// `AGENTS.md`) under the name it actually has on disk (a case-insensitive Mac opens `claude.md`
+/// for it, and git only knows the real one), or — when it is a link, as `CLAUDE.md -> AGENTS.md`
+/// conventionally is — the file behind it, as long as that is a file inside the repository.
+fn instructions_named(repo: &Utf8Path, file: &str) -> Result<(Utf8PathBuf, String), String> {
     let name = std::fs::read_dir(repo)
         .ok()
         .and_then(|entries| {
             let names: Vec<String> = entries
                 .filter_map(|e| e.ok()?.file_name().into_string().ok())
-                .filter(|n| n.eq_ignore_ascii_case("CLAUDE.md"))
+                .filter(|n| n.eq_ignore_ascii_case(file))
                 .collect();
-            names
-                .iter()
-                .find(|n| *n == "CLAUDE.md")
-                .or(names.first())
-                .cloned()
+            names.iter().find(|n| *n == file).or(names.first()).cloned()
         })
         .filter(|n| !n.is_empty())
         // Gone from disk: the name git has for it, so a deleted `claude.md` is recognised as the
@@ -1198,11 +1243,11 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
                     crate::git::run(repo, &args)
                         .ok()?
                         .lines()
-                        .find(|l| l.eq_ignore_ascii_case("CLAUDE.md"))
+                        .find(|l| l.eq_ignore_ascii_case(file))
                         .map(str::to_string)
                 })
         })
-        .unwrap_or_else(|| "CLAUDE.md".into());
+        .unwrap_or_else(|| file.into());
     let link = repo.join(&name);
     match std::fs::symlink_metadata(&link) {
         Ok(m) if m.file_type().is_symlink() => {
@@ -1244,8 +1289,8 @@ fn instructions_file(repo: &Utf8Path) -> Result<(Utf8PathBuf, String), String> {
 
 /// Append what the instructions lack, and return the repository-relative path written, or `None`
 /// when they already say it.
-fn claude_md(repo: &Utf8Path, name: &str) -> Result<Option<String>, String> {
-    let (path, rel) = instructions_file(repo)?;
+fn claude_md(repo: &Utf8Path, name: &str, file: &str) -> Result<Option<String>, String> {
+    let (path, rel) = instructions_named(repo, file)?;
     if crate::writes::deleted_by_person(repo, &rel) {
         return Err("you deleted it — left alone".into());
     }
@@ -1927,12 +1972,60 @@ mod tests {
     #[test]
     fn a_team_with_no_lifecycle_is_still_a_finding() {
         let (_d, root) = go_repo();
-        adopt(&root).unwrap();
+        // Claude Code alone: with another agent, `AGENTS.md` carries the lifecycle too.
+        adopt_for(&root, &[keel_generator::team::Agent::Claude]).unwrap();
         std::fs::write(root.join("CLAUDE.md"), "# plain\n").unwrap();
         let f = team_finding(&root).expect("no lifecycle");
         assert_eq!(
             f.title,
             "Agent team incomplete: missing the lifecycle in CLAUDE.md"
+        );
+    }
+
+    /// Every installed agent gets the team in its own folder, and the rules in the file it reads,
+    /// in one adoption; a second writes nothing.
+    #[test]
+    fn adopting_installs_for_every_agent_once() {
+        use keel_generator::team::Agent;
+        let (_d, root) = go_repo();
+        let r = adopt_for(&root, &[Agent::Claude, Agent::Antigravity, Agent::Codex]).unwrap();
+        for rel in [
+            ".claude/agents/pm.md",
+            ".agents/agents/pm.md",
+            ".codex/agents/pm.toml",
+            ".agents/skills/team-work/SKILL.md",
+            "CLAUDE.md",
+            "AGENTS.md",
+        ] {
+            assert!(
+                r.written.iter().any(|w| w == rel),
+                "{rel} not written: {r:?}"
+            );
+        }
+        let agents = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(agents.contains(keel_generator::team::LIFECYCLE_HEADING));
+        let again = adopt_for(&root, &[Agent::Claude, Agent::Antigravity, Agent::Codex]).unwrap();
+        assert!(again.written.is_empty(), "{:?}", again.written);
+        // Keel's own agy agent survives the quarantine every turn runs.
+        let keep = |rel: &str, b: &[u8]| crate::vouched::holds(&root, rel, b);
+        keel_harness::quarantine_keeping(&root, keep).unwrap();
+        assert!(root.join(".agents/agents/pm.md").exists());
+    }
+
+    /// A `CLAUDE.md` that is a link to `AGENTS.md` gets the sections once.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_claude_md_gets_the_rules_once() {
+        use keel_generator::team::Agent;
+        let (_d, root) = go_repo();
+        std::fs::write(root.join("AGENTS.md"), "# rules\n").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+        adopt_for(&root, &[Agent::Claude, Agent::Codex]).unwrap();
+        let text = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert_eq!(
+            text.matches(keel_generator::team::LIFECYCLE_HEADING)
+                .count(),
+            1
         );
     }
 

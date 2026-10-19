@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { get, type Endpoint } from "../api";
 import { contextMatches, evidenceLabel, type ContextSnapshot, type ContextSource, type ContextSkill } from "../context";
-import { useStore } from "../store";
+import { AGENT_NAME, useStore } from "../store";
 import { tilde } from "../hooks";
 import { count } from "./Turn";
 import { Icon } from "./icons";
@@ -86,7 +86,7 @@ function useSessionContext(lane: string) {
     return `${last?.key}:${last?.usage?.context}:${last?.ended}:${Object.keys(last?.calls ?? {}).length}`;
   });
   const refresh = useCallback(async (live = false) => {
-    if (!ep || !provider) return;
+    if (!ep || !provider || provider === "antigravity") return;
     const request = ++sequence.current;
     setBusy(true); setError("");
     try {
@@ -141,8 +141,9 @@ export function Context({ lane }: { lane: string }) {
   const { l, ep, snapshot, wt, busy, error, refresh } = useSessionContext(lane);
   if (!l) return null;
   return <div className="context-panel">
-    <header className="context-heading"><div><h2>Context</h2><p>{l.agent === "codex" ? "Codex" : "Claude"}{snapshot?.model && <> · {snapshot.model}</>}</p></div><button className="ghost" disabled={busy || !ep} onClick={() => void refresh(true)} title="Refresh context without sending a message">{busy ? <span className="busy-dot" /> : <Icon name="rewind" size={15} />}<span>Refresh</span></button></header>
+    <header className="context-heading"><div><h2>Context</h2><p>{AGENT_NAME[l.agent ?? "claude"]}{snapshot?.model && <> · {snapshot.model}</>}</p></div><button className="ghost" disabled={busy || !ep} onClick={() => void refresh(true)} title="Refresh context without sending a message">{busy ? <span className="busy-dot" /> : <Icon name="rewind" size={15} />}<span>Refresh</span></button></header>
     {error && <p className="context-error" role="alert">{error}</p>}
+    {l.agent === "antigravity" && <p className="context-note">Antigravity doesn't report context usage to Keel.</p>}
     <ContextUsage snapshot={snapshot} busy={busy} disconnected={!!l.disconnected} />
     <details className="context-section" open><summary><span>Memory & instructions</span><span className="context-section-count">{snapshot?.memory.length ?? 0}</span></summary><div className="context-section-body">
       {snapshot?.memory.length && ep ? snapshot.memory.map((s) => <ContextSourceView key={s.path} source={s} ep={ep} snapshot={snapshot} wt={wt} />) : <p className="context-note">No memory sources were reported. This does not establish that the session has no memory.</p>}

@@ -7,6 +7,7 @@
 mod agent;
 mod agent_profiles;
 mod agents;
+mod antigravity;
 mod approve;
 mod askmcp;
 mod aws;
@@ -45,6 +46,7 @@ mod serve;
 mod signals;
 mod skills;
 mod snapshot;
+mod team;
 mod term;
 mod tree;
 mod turns;
@@ -114,6 +116,10 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+
+    /// The gate a Keel-driven `agy` runs before every tool. Prints one decision; never nothing.
+    #[command(hide = true)]
+    AntigravityHook,
 
     /// Make and sign license keys (for the licensor; see LICENSE.md).
     #[command(subcommand)]
@@ -264,7 +270,10 @@ fn main() -> Result<()> {
     // Not for `keel approve`: it is the hook, it runs on every Bash and Edit the agent makes, and
     // it spawns nothing — one loopback request. Starting the person's login shell there cost up
     // to a second per tool call with a heavy `.zshrc`.
-    if std::env::args_os().nth(1).is_none_or(|a| a != "approve") {
+    if std::env::args_os()
+        .nth(1)
+        .is_none_or(|a| a != "approve" && a != "antigravity-hook")
+    {
         path::adopt_shell_path();
     }
 
@@ -290,6 +299,11 @@ fn main() -> Result<()> {
     // answer. `--cwd '<path>'` unquoted did exactly that to any project whose path had a space in
     // it, and the report that reached us was a tester saying the agent had no access to a folder.
     // One line on stderr is the difference between an hour and never.
+    // Before clap, so nothing about this binary's arguments can make the gate print nothing.
+    if args.get(1).is_some_and(|a| a == "antigravity-hook") {
+        antigravity::run();
+        return Ok(());
+    }
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(e) => {
@@ -430,6 +444,8 @@ fn main() -> Result<()> {
             }
         }
 
+        Command::AntigravityHook => antigravity::run(),
+
         Command::Workspace { path, json } => {
             let workspace = discover(&path)?;
             if json {
@@ -552,6 +568,7 @@ mod shutdown_tests {
             .expect("watch_parent is where a dying parent is noticed");
 
         for (module, call) in [
+            ("runtime", "runtime::stop_all()"),
             ("completion", "completion::stop_all()"),
             ("monitor", "monitor::stop_all()"),
             ("dev", "dev::stop_now()"),

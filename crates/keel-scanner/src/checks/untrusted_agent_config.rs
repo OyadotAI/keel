@@ -40,6 +40,54 @@ const EXECUTABLE_CONFIG: &[(&str, Severity, &str)] = &[
          `--strict-mcp-config`, so this file is inert within Keel — but a plain `claude` session \
          started in this directory will load it without asking.",
     ),
+    (
+        ".agents/hooks.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands when Antigravity runs in this folder. Nothing but \
+         quarantine prevents that, and no trust dialog is shown first.",
+    ),
+    (
+        ".agents/mcp_config.json",
+        Severity::High,
+        "MCP servers defined here are connected automatically when Antigravity runs in this \
+         folder.",
+    ),
+    (
+        ".agent/hooks.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands when Antigravity runs in this folder. Nothing but \
+         quarantine prevents that, and no trust dialog is shown first.",
+    ),
+    (
+        ".agent/mcp_config.json",
+        Severity::High,
+        "MCP servers defined here are connected automatically when Antigravity runs in this \
+         folder.",
+    ),
+    (
+        "_agents/hooks.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands when Antigravity runs in this folder. Nothing but \
+         quarantine prevents that, and no trust dialog is shown first.",
+    ),
+    (
+        "_agents/mcp_config.json",
+        Severity::High,
+        "MCP servers defined here are connected automatically when Antigravity runs in this \
+         folder.",
+    ),
+    (
+        "_agent/hooks.json",
+        Severity::Critical,
+        "Hooks defined here run shell commands when Antigravity runs in this folder. Nothing but \
+         quarantine prevents that, and no trust dialog is shown first.",
+    ),
+    (
+        "_agent/mcp_config.json",
+        Severity::High,
+        "MCP servers defined here are connected automatically when Antigravity runs in this \
+         folder.",
+    ),
 ];
 
 impl Check for UntrustedAgentConfig {

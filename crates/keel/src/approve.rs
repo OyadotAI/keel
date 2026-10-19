@@ -57,6 +57,11 @@ pub struct HookInput {
     /// where the agent would have run it.
     #[serde(default)]
     pub cwd: String,
+    /// `antigravity` for an `agy` lane, whose hook is the only gate: nothing sits underneath a
+    /// `defer`, so the branches that lean on Claude's own checks are strict for it. Empty from
+    /// Claude's hook, and from any hook older than the field.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -338,10 +343,21 @@ pub async fn ask(
     Json(hook): Json<HookInput>,
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     let repo = state.repo();
+    let strict = hook.provider == "antigravity";
+    if strict {
+        crate::antigravity::note_asked(&hook.tool_use_id);
+    }
 
     // A background lifetime is not authorization to execute. Only hand the command to the
     // monitor after a local trust decision or an explicit approval of this invocation.
     let background = is_background(&hook.tool_name, &hook.tool_input);
+    // The monitor is Claude's. An agy command detached by hand would die with the turn unseen.
+    if strict && background {
+        return Ok(Json(Decision {
+            decision: "deny".into(),
+            reason: crate::antigravity::BACKGROUND.into(),
+        }));
+    }
 
     // A plan is not a permission either, so it sits before
     // the trust check. Trust means "stop asking whether it may run things"; whether to build this
@@ -434,7 +450,24 @@ pub async fn ask(
     }
     // Foreground commands still pass through Claude's own shell permission checker. Monitored
     // commands do not, so our lossy display-rule parser cannot authorize their shell syntax.
-    if !background && !is_question && !leaves_the_project && already_allowed(&rules, &effective) {
+    // For agy nothing checks the shell afterwards, so the lossy parser may only wave through a
+    // command with no syntax it cannot see into: `ls $(rm -rf ~)` reads as `Bash(ls *)`.
+    // An empty rule list means `rules_for` saw only builtins (`source`, `.`, `export`), which
+    // need no rule for Claude because Claude's checker reads them; for agy that is a card.
+    let parsed_whole = !strict
+        || !rules.is_empty()
+            && plain_shell(
+                hook.tool_input
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default(),
+            );
+    if !background
+        && !is_question
+        && !leaves_the_project
+        && parsed_whole
+        && already_allowed(&rules, &effective)
+    {
         return Ok(Json(Decision {
             decision: "defer".into(),
             reason: String::new(),
@@ -517,24 +550,54 @@ pub async fn ask(
                     )
                 },
             );
-            Ok(Json(Decision {
-                decision: if background { "deny" } else { "defer" }.into(),
-                // For a background command the refusal is the agent's next prompt, and "nobody
-                // answered" on its own sent it to detach the command by hand.
-                reason: if background {
-                    unanswered_background(
-                        &state.repo(),
-                        hook.tool_input
-                            .get("command")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or_default(),
-                    )
-                } else {
-                    "nobody answered".into()
-                },
-            }))
+            Ok(Json(unanswered(strict, background).unwrap_or_else(|| {
+                Decision {
+                    decision: if background { "deny" } else { "defer" }.into(),
+                    // For a background command the refusal is the agent's next prompt, and "nobody
+                    // answered" on its own sent it to detach the command by hand.
+                    reason: if background {
+                        unanswered_background(
+                            &state.repo(),
+                            hook.tool_input
+                                .get("command")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or_default(),
+                        )
+                    } else {
+                        "nobody answered".into()
+                    },
+                }
+            })))
         }
     }
+}
+
+/// What an unanswered question becomes when nothing would refuse it afterwards: a refusal that
+/// says nobody answered, where Claude's `defer` hands it to an allowlist that refuses it.
+fn unanswered(strict: bool, background: bool) -> Option<Decision> {
+    (strict && !background).then(|| Decision {
+        decision: "deny".into(),
+        reason: crate::antigravity::UNANSWERED.into(),
+    })
+}
+
+/// A command the allowlist may wave through when nothing checks the shell after it: one program
+/// and its arguments, every one a literal word. `rules_for` reads a command with a heuristic, and
+/// a heuristic is not a parser — quoting, escapes, assignments, globs, operators and expansions
+/// all make what it names differ from what a shell runs. So none of them are allowed here; a
+/// command with any of them is a card, which costs a click and nothing else.
+pub fn plain_shell(command: &str) -> bool {
+    let words: Vec<&str> = command.split(' ').filter(|w| !w.is_empty()).collect();
+    !words.is_empty()
+        && words.iter().all(|w| {
+            w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./:@,+%".contains(c))
+        })
+        && !matches!(
+            words[0],
+            "eval" | "exec" | "env" | "command" | "builtin" | "xargs"
+        )
+        && !BUILTINS.contains(&words[0])
 }
 
 /// A `Bash` call the agent wants to leave running behind it.
@@ -1099,6 +1162,43 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
 pub(crate) mod tests {
     use super::*;
 
+    /// The allowlist's parser cannot see inside substitutions, so for agy it does not get the
+    /// last word on them.
+    #[test]
+    fn only_a_plain_command_is_waved_through_for_antigravity() {
+        assert!(plain_shell("ls -la src/"));
+        assert!(plain_shell("git status"));
+        assert!(!plain_shell("ls -la && git status"));
+        assert!(!plain_shell("ls | sh"));
+        assert!(!plain_shell("FOO=1 rm x"));
+        assert!(!plain_shell("\"rm\" -rf x"));
+        assert!(!plain_shell("\\rm x"));
+        assert!(!plain_shell("ls *"));
+        assert!(!plain_shell("xargs rm"));
+        assert!(!plain_shell("source ./x.sh"));
+        assert!(!plain_shell(". ./x.sh"));
+        assert!(!plain_shell("ls\trm"));
+        assert!(!plain_shell(""));
+        assert!(!plain_shell("ls $(rm -rf ~)"));
+        assert!(!plain_shell("ls `rm x`"));
+        assert!(!plain_shell("echo hi > ~/.zshrc"));
+        assert!(!plain_shell("ls\nrm -rf x"));
+        assert!(!plain_shell("ls; eval \"$X\""));
+        let rules = rules_for("Bash", &serde_json::json!({"command": "ls $(rm -rf x)"}));
+        assert!(
+            already_allowed(&rules, &["Bash(ls *)".to_string()]),
+            "the parser this guards against stopped being lossy; revisit plain_shell"
+        );
+    }
+
+    /// Nobody answering an agy question is a refusal; for Claude it still defers.
+    #[test]
+    fn an_unanswered_antigravity_call_is_refused() {
+        assert_eq!(unanswered(true, false).unwrap().decision, "deny");
+        assert!(unanswered(false, false).is_none());
+        assert!(unanswered(true, true).is_none());
+    }
+
     /// The monitor keeps a job alive; the command's own detaching is what escaped it.
     #[test]
     fn a_monitored_command_is_run_attached() {
@@ -1171,6 +1271,7 @@ pub(crate) mod tests {
             session_id: "trusted".into(),
             lane: "trusted".into(),
             cwd: root.to_string(),
+            provider: String::new(),
         };
         for (tool, input, expected) in [
             (
@@ -1240,6 +1341,7 @@ pub(crate) mod tests {
             session_id: id.clone(),
             lane: id.clone(),
             cwd: root.to_string(),
+            provider: String::new(),
         };
         let task_state = state.clone();
         let task = tokio::spawn(async move { ask(State(task_state), Json(hook)).await });
@@ -1712,6 +1814,7 @@ pub(crate) mod tests {
                 session_id: "s1".into(),
                 lane: "l1".into(),
                 cwd: String::new(),
+                provider: String::new(),
             };
             let asking = tokio::spawn(async move { plan_request(&hook, "# Plan".into()).await });
             let mut found = None;

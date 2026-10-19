@@ -4,7 +4,7 @@ export interface ContextSource { path: string; source?: string; state?: string; 
 export interface ContextSkill { name: string; path?: string; description?: string; source?: string; available?: boolean; advertised?: boolean; tokens?: number; estimate?: number; user_only?: boolean }
 export interface ContextEvidence { key: string; id?: string; kind: string; name?: string; path?: string; at?: string; turn?: string; member?: string; detail?: string }
 export interface ContextSnapshot {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "antigravity";
   session: string;
   updated_at: string;
   origin: string;

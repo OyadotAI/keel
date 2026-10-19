@@ -40,23 +40,24 @@ const remember = (key: string, value: string) => {
 
 /// A divider that resizes by writing a CSS variable while dragging — no React state per pointer
 /// move — and remembers the width when it is let go.
-function Handle({ name, min, max, fallback, from }: { name: string; min: number; max: number; fallback: number; from: "left" | "right" }) {
+function Handle({ name, min, max, fallback, from }: { name: string; min: number; max: number; fallback: number; from: "left" | "right" | "bottom" }) {
   const set = (px: number) => document.documentElement.style.setProperty(name, `${Math.round(Math.min(max, Math.max(min, px)))}px`);
   const now = () => parseInt(getComputedStyle(document.documentElement).getPropertyValue(name)) || fallback;
+  const row = from === "bottom";
   return (
     <div
-      className="handle"
+      className={row ? "handle handle-row" : "handle"}
       role="separator"
       tabIndex={0}
-      aria-orientation="vertical"
-      aria-label={name === "--ide-chat-w" ? "Resize the conversation" : name === "--panel-w" ? "Resize the side panel" : "Resize the sidebar"}
+      aria-orientation={row ? "horizontal" : "vertical"}
+      aria-label={name === "--ide-chat-w" ? "Resize the conversation" : name === "--panel-w" ? "Resize the side panel" : row ? "Resize the terminal" : "Resize the sidebar"}
       aria-valuemin={min}
       aria-valuemax={max}
       aria-valuenow={fallback}
       onDoubleClick={() => (set(fallback), remember(name, String(fallback)))}
       onKeyDown={(e) => {
-        const step = e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
-        if (step) { e.preventDefault(); set(now() + (from === "left" ? step : -step)); }
+        const step = row ? (e.key === "ArrowUp" ? 16 : e.key === "ArrowDown" ? -16 : 0) : e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
+        if (step) { e.preventDefault(); set(now() + (from === "right" ? -step : step)); }
         if (e.key === "Home") set(fallback);
         remember(name, String(now()));
       }}
@@ -64,9 +65,9 @@ function Handle({ name, min, max, fallback, from }: { name: string; min: number;
         const el = e.currentTarget;
         el.setPointerCapture(e.pointerId);
         el.classList.add("dragging");
-        const start = e.clientX;
-        const width = now();
-        const move = (m: PointerEvent) => set(width + (from === "left" ? m.clientX - start : start - m.clientX));
+        const start = row ? e.clientY : e.clientX;
+        const size = now();
+        const move = (m: PointerEvent) => set(size + (row ? start - m.clientY : from === "left" ? m.clientX - start : start - m.clientX));
         const up = () => {
           el.classList.remove("dragging");
           el.removeEventListener("pointermove", move);
@@ -126,7 +127,7 @@ export function App() {
   useEffect(restoreZoom, []);
   useEffect(() => { if (ide) setShell(true); }, [ide]);
   useEffect(() => {
-    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380], ["--ide-chat-w", 400], ["--coding-sidebar-w", 320]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
+    for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380], ["--ide-chat-w", 400], ["--coding-sidebar-w", 320], ["--shell-h", 300]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
     // The lane on screen at launch is opened like a clicked one: its terminal, its transcript.
     const a = useStore.getState().active;
     if (a && useStore.getState().lanes[a]) useStore.getState().load(a);
@@ -282,7 +283,7 @@ function WorkspaceMain({ lane, overlay, showPanel, expanded, ideActive, shell, s
           <button className="panel-backdrop" aria-label="Close workspace panel" onClick={closePanel} />
           <Handle name="--panel-w" min={320} max={720} fallback={380} from="right" />
         </>}
-        <ShellDock lane={lane} open={shell && !overlay} close={() => setShell(false)} />
+        <ShellDock lane={lane} open={shell && !overlay} close={() => setShell(false)} handle={<Handle name="--shell-h" min={120} max={Math.round(window.innerHeight * 0.8)} fallback={300} from="bottom" />} />
         {!ideActive && workspace}
         {overlay}
       </main>);
@@ -300,11 +301,12 @@ function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?
 
 function LaneError({ lane }: { lane: string }) {
   const error = useStore((s) => s.lanes[lane]?.error);
+  const agent = useStore((s) => s.lanes[lane]?.agent);
   if (!error) return null;
   return (
     <div className="banner error" role="alert">
       {error}{" "}
-      {/auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
+      {agent !== "antigravity" && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
       <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined } } }))}>
         Dismiss
       </button>

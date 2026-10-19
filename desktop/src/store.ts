@@ -81,7 +81,9 @@ export interface Project {
 }
 
 export type ChatInterface = "chat" | "terminal";
-export type Agent = "claude" | "codex";
+export type Agent = "claude" | "codex" | "antigravity";
+export const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
+export const agentName = (agent?: Agent) => AGENT_NAME[agent ?? "claude"];
 
 export interface Attachment { path: string; name: string; mime?: string; preview?: string }
 export interface QueuedMessage { id: string; text: string; attachments: Attachment[]; system?: string }
@@ -658,10 +660,11 @@ export const useStore = create<State>()((set, getState) => {
       const l = getState().lanes[lid];
       if (!l || l.interface === value) return;
       if (l.running || l.submitting || l.receipt) { lane(lid, { error: "Stop the active turn and resolve any unconfirmed submission before switching interfaces." }); return; }
-      if (l.interface === "terminal" && l.agent === "codex" && !l.known) {
-        lane(lid, { error: "This Codex terminal does not expose its session ID. Choose Formatted chat in Settings and open a new lane; this terminal and its history will remain available." }); return;
+      // Codex and Antigravity terminals do not tell Keel their conversation id.
+      if (l.interface === "terminal" && l.agent !== "claude" && !l.known) {
+        lane(lid, { error: `This ${agentName(l.agent)} terminal does not expose its session ID. Choose Formatted chat in Settings and open a new lane; this terminal and its history will remain available.` }); return;
       }
-      if (l.interface === "terminal" && l.agent === "codex" && terminalConnected(lid)) {
+      if (l.interface === "terminal" && l.agent !== "claude" && terminalConnected(lid)) {
         lane(lid, { submitting: true, error: undefined });
         try { await exitTerminal(lid); }
         catch (error) { lane(lid, { error: String(error) }); return; }

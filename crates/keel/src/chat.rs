@@ -58,6 +58,13 @@ struct Fingerprint {
     fingerprint: String,
 }
 
+/// Only Claude Code writes a transcript Keel can seed a conversation from. Codex and Antigravity
+/// conversations live in the journal alone, and looking for a Claude transcript under their id
+/// fails the second message with "the original conversation could not be found".
+fn reads_a_transcript(q: &ChatQuery) -> bool {
+    q.provider.as_deref().is_none_or(|p| p == "claude")
+}
+
 fn stamp(path: &std::path::Path) -> Option<(u64, SystemTime)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.len(), meta.modified().ok()?))
@@ -65,10 +72,7 @@ fn stamp(path: &std::path::Path) -> Option<(u64, SystemTime)> {
 
 impl History {
     fn seed(&mut self, state: &AppState, q: &ChatQuery, refresh: bool) -> Result<(), String> {
-        if self.running
-            || (!refresh && !self.records.is_empty())
-            || q.provider.as_deref() == Some("codex")
-        {
+        if self.running || (!refresh && !self.records.is_empty()) || !reads_a_transcript(q) {
             return Ok(());
         }
         match transcript(state, q)? {
@@ -114,7 +118,7 @@ impl History {
     /// already replay. Recording its fingerprint keeps the next reconnect from appending a whole
     /// second copy of the conversation as a `snapshot` — which is how one journal reached 58 MB.
     fn seen(&mut self, state: &AppState, q: &ChatQuery) -> Result<(), String> {
-        if q.provider.as_deref() == Some("codex") {
+        if !reads_a_transcript(q) {
             return Ok(());
         }
         match transcript(state, q)? {
@@ -410,7 +414,7 @@ pub async fn events(
 ) -> Result<axum::response::Response, Error> {
     let h = tokio::task::spawn_blocking(move || {
         let h = history(&state, &q.lane)?;
-        if q.session.is_some() && q.provider.as_deref() != Some("codex") {
+        if q.session.is_some() && q.provider.as_deref().is_none_or(|p| p == "claude") {
             let query = serde_json::from_value::<ChatQuery>(
                 json!({"prompt":"", "session": q.session, "provider":q.provider, "wt":q.wt}),
             )
@@ -513,6 +517,17 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A second Antigravity or Codex message must not go looking for a Claude transcript.
+    #[test]
+    fn only_claude_conversations_are_seeded_from_a_transcript() {
+        let q = |p: Option<&str>| {
+            serde_json::from_value::<ChatQuery>(json!({"prompt": "x", "provider": p})).unwrap()
+        };
+        assert!(reads_a_transcript(&q(None)));
+        assert!(reads_a_transcript(&q(Some("claude"))));
+        assert!(!reads_a_transcript(&q(Some("codex"))));
+        assert!(!reads_a_transcript(&q(Some("antigravity"))));
+    }
     #[test]
     fn receipt_is_idempotent_and_survives_reopening() {
         let root = tempfile::tempdir().unwrap();

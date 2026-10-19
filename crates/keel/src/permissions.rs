@@ -579,7 +579,7 @@ pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion|Write|Ed
 /// arrives as two arguments — and `clap`'s usage error exits 2, which a `PreToolUse` hook uses to
 /// mean *block this call*. Every command on a machine whose checkout lives under "My Projects"
 /// would have been refused, with a usage message as the reason.
-fn sh_quote(s: &str) -> String {
+pub(crate) fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 

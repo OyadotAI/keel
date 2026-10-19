@@ -113,6 +113,31 @@ pub struct Stopped {
 /// not, that a refusal is a question being asked rather than a wall, or what the scan already
 /// found. Everything it *can* work out by reading the repository is deliberately absent — a system
 /// prompt restating what `ls` would show is tokens spent on every turn to say nothing.
+/// Keel's prompt for an Antigravity lane: the same project facts, without the parts that describe
+/// Claude Code's tools. Each of those is refused in an agy lane with the opposite advice, and a
+/// refusal that contradicts the prompt is one the agent routes around.
+pub(crate) fn antigravity_prompt(repo: &Utf8Path) -> String {
+    const LAST: &str = "Keel also quarantines `.claude/settings.json` hooks.\n";
+    let full = system_prompt(repo);
+    let start = full.find("- Background commands belong to Keel");
+    let end = full.find(LAST);
+    let rules = "- Run commands in the foreground. Keel does not run background commands for \
+        Antigravity lanes: a command that never exits (a dev server, a watcher) is for the person \
+        to start.\n\
+        - Permissions: a command or edit may come back refused with a reason. Read the reason, do \
+        not work around it with another tool, and say what you needed.\n\
+        - To ask the person something, ask in your reply as plain text and end the turn; their \
+        next message is the answer. `ask_question` is not available here.\n\
+        - In plan mode nothing can be changed: no edits, no commands. Write the whole plan in your \
+        reply.\n\
+        - Git configuration, hooks and agent settings (`.git/`, `.claude/`, `.agents/`, \
+        `.vscode/`) are not yours to write.\n";
+    match (start, end) {
+        (Some(a), Some(b)) if b > a => format!("{}{rules}{}", &full[..a], &full[b + LAST.len()..]),
+        _ => full,
+    }
+}
+
 pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
     // Facts about the room, not instructions about how to behave. The agent is Claude Code —
     // the person's own `claude`, with its own judgement — and this used to be eleven
@@ -258,6 +283,7 @@ fn classify(stderr: &str) -> &'static str {
         "no-such-session"
     } else if has(&[
         "invalid api key",
+        "not signed in",
         "/login",
         "unauthorized",
         "authentication",
@@ -270,6 +296,7 @@ fn classify(stderr: &str) -> &'static str {
         "usage limit",
         "rate limit",
         "quota",
+        "resource_exhausted",
         "429",
     ]) {
         "limits"
@@ -321,6 +348,27 @@ fn redact(stderr: &str) -> String {
         out.push(' ');
     }
     out.trim().chars().take(200).collect()
+}
+
+#[cfg(test)]
+mod antigravity_prompt_tests {
+    /// Every Claude-only instruction an agy lane would be refused for is gone, and the facts stay.
+    #[test]
+    fn the_antigravity_prompt_drops_what_its_refusals_contradict() {
+        let d = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(d.path()).unwrap();
+        let full = super::system_prompt(root);
+        let agy = super::antigravity_prompt(root);
+        assert!(
+            full.contains("run_in_background"),
+            "the Claude block moved; update the cut"
+        );
+        for gone in ["run_in_background", "ask_user", "plan-mode reminder"] {
+            assert!(!agy.contains(gone), "{gone} is still in the agy prompt");
+        }
+        assert!(agy.contains("ask in your reply as plain text"));
+        assert!(agy.len() > 200);
+    }
 }
 
 #[cfg(test)]
@@ -741,16 +789,67 @@ pub async fn chat(
         let provider = query.provider.as_deref().unwrap_or("claude");
         // This scans files and invokes toolchain detection. Keeping it on the async executor
         // could delay the Stop request for the entire preparation on a large repository.
-        let base_system =
-            if provider == "claude" || (provider == "codex" && query.session.is_none()) {
-                let checkout = cwd.clone();
-                crate::serve::blocking(move || system_prompt(&checkout), String::new()).await
-            } else {
-                String::new()
-            };
+        let base_system = if provider == "claude" || query.session.is_none() {
+            let checkout = cwd.clone();
+            let agy = provider == "antigravity";
+            crate::serve::blocking(
+                move || {
+                    if agy {
+                        antigravity_prompt(&checkout)
+                    } else {
+                        system_prompt(&checkout)
+                    }
+                },
+                String::new(),
+            )
+            .await
+        } else {
+            String::new()
+        };
         if preparation_stopped(&stopper, &lane, token, &tx).await {
             return;
         }
+        // A provider with no system-prompt flag takes Keel's prompt ahead of the task, on the
+        // first turn only: a resumed conversation already has it.
+        let first_turn = match query
+            .system
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(extra) => format!("{}\n\n{extra}\n\nTask:\n{}", base_system, query.prompt),
+            None => format!("{}\n\nTask:\n{}", base_system, query.prompt),
+        };
+        // The gate, written before anything can run: an `agy` without it has no gate at all.
+        let agy_hooks = if provider == "antigravity" {
+            let made = crate::serve::blocking(
+                || {
+                    std::env::current_exe()
+                        .map_err(|e| e.to_string())
+                        .and_then(|exe| crate::antigravity::hooks_dir(&exe))
+                },
+                Err("the hook could not be prepared".into()),
+            )
+            .await;
+            match made {
+                Ok(dir) => Some(dir),
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(said(
+                            "fatal",
+                            format!(
+                                "Keel could not write the approval hook Antigravity needs ({e}), \
+                                 so the turn did not start. Without it nothing would ask before \
+                                 a command ran."
+                            ),
+                        )))
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let mut command = if provider == "codex" {
             let mut command = Command::new(crate::permissions::program("codex"));
             command.current_dir(&cwd).arg("exec");
@@ -777,19 +876,43 @@ pub async fn chat(
             if let Some(session) = &query.session {
                 command.arg("resume").arg(session).arg(&query.prompt);
             } else {
-                command.arg(
-                    match query
-                        .system
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        Some(extra) => {
-                            format!("{}\n\n{extra}\n\nTask:\n{}", base_system, query.prompt)
-                        }
-                        None => format!("{}\n\nTask:\n{}", base_system, query.prompt),
-                    },
-                );
+                command.arg(&first_turn);
+            }
+            command
+        } else if let Some(hooks) = &agy_hooks {
+            // `--dangerously-skip-permissions` because headless agy refuses every command and no
+            // hook answer lifts that; the hook in `hooks` is then the only gate, and it fails
+            // closed (`antigravity.rs`). The repository is never passed with `--add-dir`: its own
+            // `.agents/` would load from the project root, where quarantine has not run.
+            let mut command = Command::new(crate::permissions::program("agy"));
+            let mode = match query.mode.as_deref() {
+                Some("acceptEdits") => "acceptEdits",
+                _ => "plan",
+            };
+            command
+                .current_dir(&cwd)
+                .arg("-p")
+                .arg(if query.session.is_some() {
+                    &query.prompt
+                } else {
+                    &first_turn
+                })
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--dangerously-skip-permissions")
+                .arg("--mode")
+                .arg(if mode == "plan" {
+                    "plan"
+                } else {
+                    "accept-edits"
+                })
+                .arg("--add-dir")
+                .arg(hooks)
+                .env("KEEL_AGY_PORT", port.to_string())
+                .env("KEEL_AGY_LANE", query.lane.as_deref().unwrap_or(""))
+                .env("KEEL_AGY_MODE", mode);
+            if let Some(session) = &query.session {
+                command.arg("--conversation").arg(session);
             }
             command
         } else if provider == "claude" {
@@ -868,7 +991,10 @@ pub async fn chat(
 
         // Every provider's output is read the same way, so the pipe belongs here rather than in
         // one of the branches — which is exactly how Codex ended up without one.
+        // Not the daemon's stdin: that is the app's `--exit-on-stdin-eof` pipe, and an agent
+        // holding it open would keep it alive past the app.
         command
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -925,14 +1051,12 @@ pub async fn chat(
                     |scope| scope.set_tag("provider", provider),
                     || sentry::capture_message("could not start the agent", sentry::Level::Error),
                 );
-                let _ = tx
-                    .send(Ok(said(
-                        "fatal",
-                        format!(
-                            "could not start `{provider}`: {e}. Is the CLI installed and on PATH?"
-                        ),
-                    )))
-                    .await;
+                let why = if provider == "antigravity" && e.kind() == std::io::ErrorKind::NotFound {
+                    AGY_MISSING.to_string()
+                } else {
+                    format!("could not start `{provider}`: {e}. Is the CLI installed and on PATH?")
+                };
+                let _ = tx.send(Ok(said("fatal", why))).await;
                 return;
             }
         };
@@ -942,6 +1066,9 @@ pub async fn chat(
         if pid != 0 {
             stopper.started(&lane, token, pid);
         }
+        // On the parent-death path for as long as it runs: `exit` alone would reparent the agent
+        // and everything under it to init.
+        let _tracked = crate::runtime::Tracked::new(pid);
 
         // Drained, always, and not only to report it.
         //
@@ -991,6 +1118,9 @@ pub async fn chat(
         let mut key_attempts = 0;
         let mut forwarder: Option<tokio::task::JoinHandle<()>> = None;
         let mut usage: Option<crate::turns::Usage> = None;
+        // agy says a spent quota only here, and exits 0 after it.
+        let mut result_error: Option<String> = None;
+        let mut agy_result = false;
         if let Some(session) = &session {
             stopper.bound(&lane, token, session);
         }
@@ -1025,6 +1155,69 @@ pub async fn chat(
                     crate::lines::Next::Done => break,
                 };
                 streamed = true;
+                if provider == "antigravity"
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
+                {
+                    match v["event"].as_str() {
+                        // No transcript to key a turn off, so the key is Keel's own — the one
+                        // `runtime.rs` mints for the same reason.
+                        Some("init") if key.is_none() => {
+                            if let Some(id) = v["conversation_id"].as_str() {
+                                if session.is_none() {
+                                    session = Some(id.to_string());
+                                    stopper.bound(&lane, token, id);
+                                }
+                                let turn = format!(
+                                    "keel-{}-{token}",
+                                    crate::turns::now().replace([':', '.'], "-")
+                                );
+                                forwarder = Some(
+                                    keyed(&stopper, &lane, token, &repo, id, &turn, &tx).await,
+                                );
+                                key = Some(turn);
+                            }
+                        }
+                        Some("step_update") => {
+                            let s = &v["step_update"];
+                            let tool = s["tool_name"].as_str().unwrap_or_default();
+                            if s["state"] == "DONE"
+                                && !tool.is_empty()
+                                && let Some(conv) = session.as_deref()
+                                && !crate::antigravity::gated(
+                                    conv,
+                                    s["step_index"].as_u64().unwrap_or(u64::MAX),
+                                    tool,
+                                )
+                            {
+                                result_error = Some(crate::antigravity::BYPASSED.into());
+                                let _ = tx.send(Ok(said("msg", line))).await;
+                                let _ = child.terminate().await;
+                                break;
+                            }
+                        }
+                        Some("result") => {
+                            agy_result = true;
+                            let r = &v["result"];
+                            let u = &r["usage"];
+                            usage = Some(crate::turns::Usage {
+                                input: u["input_tokens"].as_u64().unwrap_or(0),
+                                output: u["output_tokens"].as_u64().unwrap_or(0),
+                                cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0),
+                                cache_write: 0,
+                                cost_usd: None,
+                            });
+                            if r["status"] != "SUCCESS" && r["error"] != "interrupted" {
+                                result_error = Some(
+                                    r["error"]
+                                        .as_str()
+                                        .unwrap_or("Antigravity reported an error.")
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 // Cheap substring checks first; the parse only runs on the three records that
                 // matter, of the thousands a turn streams.
                 if session.is_none()
@@ -1049,43 +1242,8 @@ pub async fn chat(
                     )
                     .await;
                     if let Some((uuid, _prompt, _at)) = found {
-                        let early = stopper.keyed(&lane, token, &sid, &uuid);
-                        let (repo, sid2, uuid2) = (repo.clone(), sid.clone(), uuid.clone());
-                        crate::serve::blocking(
-                            move || crate::turns::flush_early(&repo, &sid2, &uuid2, early),
-                            (),
-                        )
-                        .await;
-                        // From here every fact about this turn — the gate, the commit, a
-                        // question asked by the hook — reaches the app through the bus.
-                        let (ftx, turn) = (tx.clone(), uuid.clone());
-                        let mut facts = crate::turns::subscribe(&sid);
-                        forwarder = Some(tokio::spawn(async move {
-                            loop {
-                                let received = tokio::select! {
-                                    _ = ftx.closed() => return,
-                                    received = facts.recv() => received,
-                                };
-                                let e = match received {
-                                    Ok(e) => e,
-                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                        continue;
-                                    }
-                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                                };
-                                let Ok(json) = serde_json::to_string(&*e) else {
-                                    continue;
-                                };
-                                if ftx.send(Ok(said("fact", json))).await.is_err() {
-                                    return;
-                                }
-                                if e.turn.as_deref() == Some(&turn)
-                                    && matches!(e.fact, crate::turns::Fact::Ended { .. })
-                                {
-                                    return;
-                                }
-                            }
-                        }));
+                        forwarder =
+                            Some(keyed(&stopper, &lane, token, &repo, &sid, &uuid, &tx).await);
                         key = Some(uuid);
                     }
                 }
@@ -1116,13 +1274,24 @@ pub async fn chat(
         }
 
         let status = wait_for_agent(&mut child, &tx).await;
+        // Reaped: off the parent-death list before the pid can be reused by something else.
+        drop(_tracked);
         // Stopped — the person pressed Stop, or closed the window or the lane — is how a turn
         // ends, not how it fails: no `fatal` blaming a sign-in, no failure fact, no error report.
         // It is still finished below, because every way a turn ends must leave the lane as a
         // finished turn does.
         let stopped = tx.is_closed() || stopper.was_interrupted(&lane, token);
         stopper.finished(&lane, token);
-        let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        let mut code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        // An agy that exited 0 having failed, or said nothing at all, is a failed turn.
+        if provider == "antigravity" && !stopped {
+            if !agy_result && result_error.is_none() {
+                result_error = Some(AGY_UNFINISHED.into());
+            }
+            if result_error.is_some() && code == 0 {
+                code = 1;
+            }
+        }
 
         // A provider that failed and said why on stderr used to say it to nobody: the app was
         // handed `done` with a code it ignored, and drew an empty turn card. An exit of 0 is
@@ -1136,7 +1305,9 @@ pub async fn chat(
             // line with the identifying parts taken out by the same rule `Telemetry.redact` uses
             // on the app side. Sign-in and a spent balance are the two most likely answers here,
             // and neither was distinguishable before.
-            let cause = classify(&why);
+            // Antigravity's own verdict is in `result_error`, not stderr; read it alone, so a
+            // stray "429" in a log line cannot relabel a stopped turn as a spent quota.
+            let cause = classify(result_error.as_deref().unwrap_or(&why));
             sentry::with_scope(
                 |scope| {
                     scope.set_tag("provider", provider);
@@ -1151,7 +1322,19 @@ pub async fn chat(
                     )
                 },
             );
-            if why.is_empty() {
+            if let Some(error) = result_error
+                .as_deref()
+                .filter(|_| provider == "antigravity")
+            {
+                // Keel's own sentences go out as written; agy's error is its own words.
+                let sentence = match cause {
+                    _ if error == crate::antigravity::BYPASSED || error == AGY_UNFINISHED => error,
+                    "limits" => AGY_QUOTA,
+                    "auth" => AGY_SIGNED_OUT,
+                    _ => error,
+                };
+                let _ = tx.send(Ok(said("fatal", sentence.to_string()))).await;
+            } else if why.is_empty() {
                 // Silence used to be the one case the person was told nothing about: the app got
                 // `done` with a code it ignores and drew an empty turn card, which is what the
                 // whole `fatal` path exists to prevent.
@@ -1222,7 +1405,11 @@ pub async fn chat(
                     failed,
                     expect_design: query.design.unwrap_or(false),
                     auto_commit: query.auto_commit.unwrap_or(true),
-                    refused: None,
+                    // Whatever an ungated tool wrote is not Keel's to vouch for with a commit.
+                    refused: result_error
+                        .as_deref()
+                        .filter(|e| *e == crate::antigravity::BYPASSED)
+                        .map(Into::into),
                 },
                 // The claim is held for the whole of this, so nothing else can take the tree.
                 || true,
@@ -1249,6 +1436,61 @@ pub async fn chat(
     // A comment line every fifteen seconds costs nothing, is discarded by the client's parser, and
     // turns a wedged stream into something the app can notice and say.
     alive(rx)
+}
+
+const AGY_UNFINISHED: &str = "Antigravity ended without finishing the turn. Run agy in a \
+    terminal to see why — an expired sign-in or a spent quota fails like this and says so there.";
+const AGY_MISSING: &str = "Antigravity isn't installed. In a terminal, run curl -fsSL \
+    https://antigravity.google/cli/install.sh | bash, then run agy once to sign in, and send again.";
+const AGY_SIGNED_OUT: &str = "Antigravity isn't signed in. Run agy in a terminal and finish \
+    signing in with your Google account, then send again.";
+const AGY_QUOTA: &str = "Antigravity is out of quota for now. It uses your Google AI Pro or \
+    Ultra plan's limits. Wait for the reset or upgrade the plan, then send again.";
+
+/// The turn now has its key: what was held for it is written, and from here every fact about it
+/// — the gate, the commit, a question the hook asked — reaches the window through the bus.
+async fn keyed(
+    stopper: &Arc<AppState>,
+    lane: &str,
+    token: u64,
+    repo: &camino::Utf8Path,
+    sid: &str,
+    turn: &str,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
+) -> tokio::task::JoinHandle<()> {
+    let early = stopper.keyed(lane, token, sid, turn);
+    let (repo, sid2, uuid2) = (repo.to_owned(), sid.to_string(), turn.to_string());
+    crate::serve::blocking(
+        move || crate::turns::flush_early(&repo, &sid2, &uuid2, early),
+        (),
+    )
+    .await;
+    let (ftx, turn) = (tx.clone(), turn.to_string());
+    let mut facts = crate::turns::subscribe(sid);
+    tokio::spawn(async move {
+        loop {
+            let received = tokio::select! {
+                _ = ftx.closed() => return,
+                received = facts.recv() => received,
+            };
+            let e = match received {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            let Ok(json) = serde_json::to_string(&*e) else {
+                continue;
+            };
+            if ftx.send(Ok(said("fact", json))).await.is_err() {
+                return;
+            }
+            if e.turn.as_deref() == Some(&turn)
+                && matches!(e.fact, crate::turns::Fact::Ended { .. })
+            {
+                return;
+            }
+        }
+    })
 }
 
 /// `.mcp.json` in the turn's tree, if it is there and Keel wrote it — as a second config for
@@ -1345,6 +1587,17 @@ pub(crate) fn interactive(
             }
             Ok((crate::permissions::program("codex"), args))
         }
+        // The CLI as it is, in its own default mode: it asks its own permission questions in the
+        // terminal and the person answers them there, so it needs none of the chat lane's gate.
+        // Quarantine above still ran, because a repository's `.agents/` hooks run unasked.
+        "antigravity" => Ok((
+            crate::permissions::program("agy"),
+            if resume {
+                vec!["--conversation".into(), session.to_string()]
+            } else {
+                Vec::new()
+            },
+        )),
         other => Err(format!("unknown agent `{other}`")),
     }
 }
@@ -1494,6 +1747,7 @@ pub(crate) fn translate(
     let mut decoder = matches!(query.ops.as_deref(), Some("1" | "true")).then(|| {
         let provider = match query.provider.as_deref() {
             Some("codex") => Provider::Codex,
+            Some("antigravity") => Provider::Antigravity,
             _ => Provider::Claude,
         };
         Decoder::new(provider, Source::Chat)

@@ -1,4 +1,5 @@
 import { get, type Endpoint } from "./api";
+import { offered, pending, readTeam } from "./team";
 
 /// Something about how this project is set up for an agent that is missing or not right: the CLI
 /// not installed or logged in, a suggested plugin not installed, no instructions, no reviewers, a
@@ -64,11 +65,12 @@ export interface Readiness {
 }
 
 export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings: Warning[]; readiness?: Readiness; license?: Meter }> {
-  const [claude, state, plugins, meter] = await Promise.allSettled([
+  const [claude, state, plugins, meter, team] = await Promise.allSettled([
     get<{ installed: boolean; authenticated: boolean }>(ep, "/api/claude"),
     get<{ scan: { findings: Finding[]; ignored: string[] } }>(ep, "/api/state"),
     get<{ suggested: Plugin[] }>(ep, "/api/plugins", { repo: path }),
     get<Meter | null>(ep, "/api/license"),
+    readTeam(ep),
   ]);
   const out: Warning[] = [];
   if (claude.status === "fulfilled") {
@@ -87,6 +89,10 @@ export async function readSetup(ep: Endpoint, path: string): Promise<{ warnings:
     for (const p of plugins.value.suggested)
       if (!p.installed) out.push({ id: `plugin/${p.name}`, severity: "medium", title: `Plugin “${p.name}” is not installed`, detail: p.reason ?? "Suggested for this project.", fix: "extensions", marketplace: p.marketplace });
   } else out.push(unread("plugins", "the plugin catalog", plugins.reason));
+  // Newer team files for a project that has the team: an offer, not a problem, so it never moves
+  // the readiness score and a team nobody added stays the scanner's finding alone.
+  if (team.status === "fulfilled" && offered(team.value))
+    out.push({ id: "team/update", severity: "medium", title: "Team update available", detail: `${pending(team.value)} files from Keel's agent team are out of date.`, fix: "extensions" });
   // The free tier's daily steps: said before they run out, so a refused step is never the first
   // anyone hears of the limit. A meter that cannot be read says nothing — it is not setup.
   if (meter.status === "fulfilled" && meter.value?.cap != null) {

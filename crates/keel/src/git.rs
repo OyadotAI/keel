@@ -36,6 +36,12 @@ const QUIET: &[(&str, &str)] = &[
     // takes `index.lock`, so the person's own `git add` failed now and then, and it fired the
     // repository's `post-index-change` hook on nobody's request.
     ("GIT_OPTIONAL_LOCKS", "0"),
+    // A repository's `core.fsmonitor` is a command `git status` runs, and anything that can write
+    // `.git/config` — an agent's edit — could otherwise have Keel's own polling run it on nobody's
+    // request. Environment config sits above the repository's, the same scope as `-c`.
+    ("GIT_CONFIG_COUNT", "1"),
+    ("GIT_CONFIG_KEY_0", "core.fsmonitor"),
+    ("GIT_CONFIG_VALUE_0", "false"),
 ];
 
 /// `git`, in `root`, that will never stop to ask a human something.

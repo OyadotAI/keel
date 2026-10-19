@@ -39,7 +39,7 @@ label them accurately. Never claim an unrun check passed. State blockers and rem
 plainly. An empty findings list is valid.
 
 Use Oya Browser exclusively for websites, research, screenshots, automation, and browser QA.
-Read `.claude/skills/oya-browser/SKILL.md` before browser work. If Oya is unavailable, diagnose
+Read the `oya-browser` skill before browser work. If Oya is unavailable, diagnose
 the connection or report the blocker; never substitute another browser, harness, or provider.
 Verify time-sensitive technical claims against current primary documentation and cite the page.
 

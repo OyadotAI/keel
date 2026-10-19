@@ -384,3 +384,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 
 .statusbar-details { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; height: 100%; overflow-x: auto; scrollbar-width: none; }
 .statusbar-details > * { flex-shrink: 0; }
+.team-install h3 { margin: 0 0 4px; font-size: var(--t-body, 13px); }
+.team-group { margin: 6px 0; }
+.team-group summary { cursor: pointer; font-weight: 500; }
+.team-group ul { list-style: none; margin: 4px 0 0; padding: 0 0 0 14px; }
+.team-group li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

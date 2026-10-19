@@ -113,6 +113,173 @@ pub fn files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
+/// A coding agent Keel installs the team for. Each reads subagents and skills from its own
+/// folder in its own format, and none reads another's — so one definition is rendered per agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Agent {
+    Claude,
+    Antigravity,
+    Codex,
+}
+
+/// Every team file for `agents`, as `(repository path, body)`. Claude Code's are the source; the
+/// others are rendered from them, so the team cannot drift between agents. Skills are the same
+/// bytes under `.agents/skills/`, which Antigravity and Codex both read.
+pub fn files_for(agents: &[Agent], frontend: bool) -> Vec<(String, String)> {
+    let mut claude: Vec<(String, String)> = files()
+        .into_iter()
+        .map(|(p, b)| (p.to_string(), b.to_string()))
+        .collect();
+    if frontend {
+        claude.push((FRONTEND_SKILL_PATH.into(), FRONTEND_SKILL.into()));
+    }
+    let others = agents.iter().any(|a| *a != Agent::Claude);
+    let mut out = Vec::new();
+    for (path, body) in &claude {
+        if let Some(rest) = path.strip_prefix(".claude/skills/")
+            && others
+        {
+            out.push((format!(".agents/skills/{rest}"), body.clone()));
+        }
+        let Some(stem) = path
+            .strip_prefix(".claude/agents/")
+            .and_then(|p| p.strip_suffix(".md"))
+        else {
+            continue;
+        };
+        if agents.contains(&Agent::Antigravity) {
+            out.push((format!(".agents/agents/{stem}.md"), antigravity_agent(body)));
+        }
+        if agents.contains(&Agent::Codex) {
+            out.push((format!(".codex/agents/{stem}.toml"), codex_agent(body)));
+        }
+    }
+    claude.extend(out);
+    claude
+}
+
+/// A Claude Code subagent split into its frontmatter lines and its prompt.
+fn split_agent(body: &str) -> (Vec<&str>, &str) {
+    let inner = body.strip_prefix("---\n").unwrap_or(body);
+    match inner.split_once("\n---\n") {
+        Some((front, prompt)) => (front.lines().collect(), prompt),
+        None => (Vec::new(), body),
+    }
+}
+
+fn field<'a>(front: &[&'a str], key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}: ");
+    front.iter().find_map(|l| l.strip_prefix(prefix.as_str()))
+}
+
+/// Antigravity's form: the same frontmatter less Claude's `tools`/`color`, and the prompt under
+/// an H1 — agy delimits a Markdown agent's system prompt by its headings. MCP access is said
+/// outright rather than left to agy's default, because the Claude agent names its MCP tools.
+pub fn antigravity_agent(body: &str) -> String {
+    let (front, prompt) = split_agent(body);
+    let name = field(&front, "name").unwrap_or_default();
+    let mut out = String::from("---\n");
+    for l in front
+        .iter()
+        .filter(|l| !l.starts_with("tools:") && !l.starts_with("color:"))
+    {
+        out.push_str(l);
+        out.push('\n');
+    }
+    if field(&front, "tools").is_some_and(|t| t.contains("mcp__")) {
+        out.push_str("inheritMcp: true\n");
+    }
+    out.push_str(&format!("---\n\n# {name}\n\n{}", prompt.trim_start()));
+    out
+}
+
+/// Codex's form: one TOML file with `name`, `description` and `developer_instructions`. A JSON
+/// string is a valid TOML basic string, so the two short fields are written as JSON. Codex has no
+/// preloaded skills, so the instructions say which to read first.
+pub fn codex_agent(body: &str) -> String {
+    let (front, prompt) = split_agent(body);
+    let name = field(&front, "name").unwrap_or_default();
+    let description = unquote(field(&front, "description").unwrap_or_default());
+    let skills: Vec<&str> = field(&front, "skills")
+        .map(|s| {
+            s.trim_matches(['[', ']'])
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut instructions = prompt.trim().to_string();
+    if !skills.is_empty() {
+        let list: Vec<String> = skills
+            .iter()
+            .map(|s| format!("`.agents/skills/{s}/SKILL.md`"))
+            .collect();
+        instructions = format!(
+            "Before starting, read {}.\n\n{instructions}",
+            list.join(", ")
+        );
+    }
+    format!(
+        "name = {}\ndescription = {}\ndeveloper_instructions = '''\n{instructions}\n'''\n",
+        toml_string(name),
+        toml_string(&description)
+    )
+}
+
+/// A YAML double-quoted scalar's text. The team's descriptions escape nothing but `"`.
+fn unquote(v: &str) -> String {
+    v.strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .map(|v| v.replace("\\\"", "\""))
+        .unwrap_or_else(|| v.to_string())
+}
+
+/// A TOML basic string: quotes and backslashes escaped, control characters as `\uXXXX`.
+fn toml_string(v: &str) -> String {
+    let mut out = String::from("\"");
+    for c in v.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// What [`SHIPPED`] calls a team path: the same file for every agent that has it, under one id,
+/// so a skill mirrored to `.agents/skills/` is recognised by the digest of the Claude copy.
+pub fn id(path: &str) -> Option<String> {
+    if let Some(rest) = path
+        .strip_prefix(".claude/skills/")
+        .or_else(|| path.strip_prefix(".agents/skills/"))
+    {
+        return Some(format!("skills/{rest}"));
+    }
+    [
+        (".claude/agents/", "claude"),
+        (".agents/agents/", "agy"),
+        (".codex/agents/", "codex"),
+    ]
+    .iter()
+    .find_map(|(prefix, tag)| {
+        path.strip_prefix(prefix)
+            .map(|r| format!("{tag}:agents/{r}"))
+    })
+}
+
+/// Every version of every team file Keel has ever written, as `<sha256> <id>` lines — the only
+/// way to tell, in a repository with no record of anything, which files are still Keel's own text
+/// and which a person has changed. Append-only: a version removed from here is a file a past Keel
+/// wrote that this one would call the person's, and never update again. Sections of the
+/// instructions file are `section:lifecycle` and `section:rules`, hashed with line endings as `\n`
+/// and trailing whitespace trimmed. Backfilled from git history: every raw-string agent and
+/// section constant, and every blob ever under `team/`.
+pub const SHIPPED: &str = include_str!("team/shipped.txt");
+
 pub const OYA_BROWSER_AGENT: &str = include_str!("team/agents/oya-browser.md");
 
 /// Where [`FRONTEND_SKILL`] is written. Only into a project with a frontend: a skill whose
@@ -196,8 +363,8 @@ changes to them; say which rule a deviation breaks and why it is worth it.
 pub const LIFECYCLE: &str = r#"## How a request becomes a change
 
 Every request that changes the product runs this pipeline, in this order, and the person sees one
-report at the end of it — not a stream of half-decisions along the way. The stages are the agents
-in `.claude/agents/`. They run **one after another**, never in parallel, because each one reads
+report at the end of it — not a stream of half-decisions along the way. The stages are the team's
+subagents (`.claude/agents/`, `.agents/agents/`, `.codex/agents/` — one per coding agent). They run **one after another**, never in parallel, because each one reads
 what the last one returned; and what a stage returned is handed to the next **verbatim**, because
 a subagent starts with an empty context and a paraphrase is where a scope quietly grows.
 
@@ -260,7 +427,7 @@ looking at them.
 - Find the project's design system before inventing one: tokens (CSS variables, Tailwind config,
   theme file), the component library, how an existing page of the same kind is built. Grep for
   the pattern you are about to write; reuse it. Two ways to draw a button is one too many.
-- Read `CLAUDE.md` for who the users are. A dashboard for engineers wants density; a landing page
+- Read the repository instructions (`CLAUDE.md` or `AGENTS.md`) for who the users are. A dashboard for engineers wants density; a landing page
   wants one idea per screen.
 
 ## 2. Commit to a direction
@@ -305,7 +472,7 @@ touch interfaces; keep desktop controls consistent with the existing application
 
 ## 7. Look at it
 
-Read `.claude/skills/oya-browser/SKILL.md` and use Oya Browser exclusively. If Oya is unavailable,
+Read the `oya-browser` skill and use Oya Browser exclusively. If Oya is unavailable,
 report the blocker without substituting another browser or harness. Run the dev server and open
 the page in an owned Oya tab. Take a screenshot at each width and in each theme and look
 at it; read the console for errors and warnings. Check the empty and error states by forcing
@@ -399,11 +566,114 @@ mod tests {
         assert!(half.contains(LIFECYCLE_HEADING) && !half.contains(RULES_HEADING));
     }
 
+    /// agy reads neither `tools:` nor `color:`, wants the prompt under a heading, and is told about
+    /// MCP exactly where the Claude agent uses it.
+    #[test]
+    fn the_antigravity_rendering_drops_claude_keys() {
+        for (path, body) in agents() {
+            let agy = antigravity_agent(body);
+            let stem = path
+                .trim_start_matches(".claude/agents/")
+                .trim_end_matches(".md");
+            assert!(agy.starts_with(&format!("---\nname: {stem}\n")), "{path}");
+            let front = agy.split("\n---\n").next().unwrap();
+            assert!(
+                !front.contains("\ntools:") && !front.contains("\ncolor:"),
+                "{path}"
+            );
+            assert!(
+                agy.contains(&format!("\n---\n\n# {stem}\n")),
+                "{path}: no heading"
+            );
+            assert_eq!(
+                front.contains("inheritMcp: true"),
+                body.contains("mcp__"),
+                "{path}"
+            );
+        }
+    }
+
+    /// No TOML parser here, so the shape is held by construction: the prompt cannot close its own
+    /// literal string, and the short fields are basic strings that read back as what went in.
+    #[test]
+    fn the_codex_rendering_is_well_formed() {
+        for (path, body) in agents() {
+            let toml = codex_agent(body);
+            let (front, prompt) = split_agent(body);
+            assert!(
+                !prompt.contains("'''"),
+                "{path}: its prompt would end the TOML string"
+            );
+            let line = |k: &str| {
+                let prefix = format!("{k} = ");
+                toml.lines()
+                    .find_map(|l| l.strip_prefix(prefix.as_str()).map(str::to_string))
+                    .unwrap()
+            };
+            assert_eq!(
+                line("name"),
+                toml_string(field(&front, "name").unwrap()),
+                "{path}"
+            );
+            let description = line("description");
+            assert!(
+                description.starts_with('"') && description.len() > 20,
+                "{path}"
+            );
+            assert!(!description.contains("\\\"\""), "{path}");
+            assert!(toml.contains("developer_instructions = '''\n"), "{path}");
+            if body.contains("skills: [team-work]") {
+                assert!(
+                    toml.contains("`.agents/skills/team-work/SKILL.md`"),
+                    "{path}"
+                );
+            }
+        }
+        assert_eq!(toml_string("a \"b\" \\"), "\"a \\\"b\\\" \\\\\"");
+    }
+
+    /// On a machine with only Antigravity or Codex, `.claude/` does not exist, so no team text may
+    /// send an agent there.
+    #[test]
+    fn no_team_body_names_a_claude_path() {
+        for (path, body) in files_for(&[Agent::Claude, Agent::Antigravity, Agent::Codex], true) {
+            if path.ends_with(".md") || path.ends_with(".toml") {
+                assert!(
+                    !body.contains(".claude/skills/"),
+                    "{path} names .claude/skills"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_agent_gets_its_own_folder_and_only_when_installed() {
+        let only = files_for(&[Agent::Claude], false);
+        assert!(only.iter().all(|(p, _)| p.starts_with(".claude/")));
+        let all = files_for(&[Agent::Claude, Agent::Antigravity, Agent::Codex], false);
+        for p in [
+            ".agents/agents/pm.md",
+            ".codex/agents/pm.toml",
+            ".agents/skills/team-work/SKILL.md",
+        ] {
+            assert!(all.iter().any(|(q, _)| q == p), "{p}");
+        }
+        assert_eq!(
+            id(".agents/skills/team-work/SKILL.md"),
+            id(".claude/skills/team-work/SKILL.md")
+        );
+        assert_eq!(
+            id(".codex/agents/pm.toml").as_deref(),
+            Some("codex:agents/pm.toml")
+        );
+        assert_eq!(id("src/main.rs"), None);
+    }
+
     #[test]
     fn the_frontend_skill_loads_under_its_directory_name() {
         assert!(FRONTEND_SKILL.starts_with("---\nname: frontend\ndescription: \""));
         assert!(FRONTEND_SKILL_PATH.ends_with("/frontend/SKILL.md"));
-        assert!(DESIGNER_AGENT.contains(FRONTEND_SKILL_PATH));
+        assert!(DESIGNER_AGENT.contains("the `frontend` skill"));
     }
 
     /// The principal is the stage that enforces the rules; if it stops naming them, they are a

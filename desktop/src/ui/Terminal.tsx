@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { get, type Endpoint } from "../api";
-import { useStore } from "../store";
+import { AGENT_NAME, useStore } from "../store";
 import { register } from "../typers";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
@@ -166,7 +166,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         params.set("agent", current.agent);
         params.set("session", current.session);
         params.set("lane", lane);
-        // Codex's sessions have ids of their own, which Keel does not learn: a Codex lane starts
+        // Codex and Antigravity sessions have ids of their own, which Keel does not learn: their lanes start
         // fresh each time rather than resuming something that is not there.
         if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
@@ -254,7 +254,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
     });
   }, [hidden]);
 
-  const name = agent ? (kind === "codex" ? "Codex" : "Claude Code") : "Shell";
+  const name = agent ? (kind === "claude" ? "Claude Code" : AGENT_NAME[kind]) : "Shell";
   if (elsewhere)
     return (
       <div className={`terminal ${hidden ? "hidden" : ""}`} aria-hidden={hidden}>

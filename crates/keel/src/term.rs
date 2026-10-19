@@ -25,7 +25,7 @@ fn shell() -> String {
 
 #[derive(serde::Deserialize)]
 pub struct TermQuery {
-    /// `claude` or `codex` to run the agent itself; absent for the person's shell.
+    /// `claude`, `codex` or `antigravity` to run the agent itself; absent for the person's shell.
     agent: Option<String>,
     /// The conversation: one Keel chose for a new session, or one to resume.
     session: Option<String>,

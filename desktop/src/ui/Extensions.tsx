@@ -4,6 +4,8 @@ import { EVENTS, groupHooks, tilde } from "../hooks";
 import { useEffect, useRef, useState } from "react";
 import { get, post, url, type Endpoint } from "../api";
 import { start, useRun } from "../runs";
+import { TeamUpdate, useTeamPlan } from "./TeamUpdate";
+import { absent, forAgents } from "../team";
 import { useStore } from "../store";
 import { Icon } from "./icons";
 import { MemberAvatar } from "./MemberAvatar";
@@ -163,7 +165,7 @@ export function Extensions() {
         ) : section === "skills" ? (
           <Skills ep={ep} ws={ws} call={call} />
         ) : section === "agents" ? (
-          <Agents ep={ep} ws={ws} call={call} />
+          <Agents ep={ep} ws={ws} call={call} project={project ?? ""} />
         ) : section === "mcp" ? (
           <McpServers ws={ws} stream={stream} running={running} />
         ) : section === "plugins" ? (
@@ -277,7 +279,8 @@ function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
   );
 }
 
-function Agents({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void> }) {
+function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void>; project: string }) {
+  const [plan, reread] = useTeamPlan(ep);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [installing, setInstalling] = useState(false);
   const missing = ["pm", "designer", "principal", "qa", "reviewer", "security", "reliability", "oya-browser"].some((name) => !ws.agents.some((agent) => agent.name === name));
@@ -302,16 +305,17 @@ function Agents({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
         {!ws.agents.length ? <>
           <p className="muted">Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @.</p>
           <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>
-          <p className="small muted">Adds eight members including Oya Browser, role playbooks, handoff templates, and a production checklist.</p>
+          <p className="small muted">Adds eight members for {forAgents(plan)}, including Oya Browser, role playbooks, handoff templates and a production checklist. {absent(plan)}</p>
         </> : <ul className="rules">
           {ws.agents.map((agent) => {
             const profile = profiles.find((p) => p.name === agent.name) ?? { name: agent.name, display_name: "", avatar: null };
             return <AgentProfileRow key={`${agent.scope}:${agent.name}`} agent={agent} profile={profile} save={save} />;
           })}
         </ul>}
+        <TeamUpdate key={project} ep={ep} project={project} plan={plan} reread={reread} />
         {!!ws.agents.length && missing && <div className="team-install">
           <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>
-          <p className="small muted">Includes Oya Browser and specialist playbooks. Keeps your existing definitions and images.</p>
+          <p className="small muted">Adds what's missing for {forAgents(plan)}. Keeps your existing definitions and images.</p>
         </div>}
       </section>
       <Create ep={ep} call={call} kind={AGENT} />
@@ -388,6 +392,7 @@ function Create({ ep, call, kind }: { ep: Endpoint; call: (run: () => Promise<un
   return (
     <section className="settings-section">
       <h2>{kind.title}</h2>
+      {kind === AGENT && <p className="small muted">Subagents you add here are for Claude Code only. Keel's team is installed for every coding agent on this machine.</p>}
       <div className="form">
         <label className="field">
           Name
@@ -409,7 +414,7 @@ function Create({ ep, call, kind }: { ep: Endpoint; call: (run: () => Promise<un
           <div className="segmented" role="radiogroup" aria-label="Where it lives">
             {[
               ["project", "This project", "In .claude/ — committed, so everyone who works here gets it"],
-              ["user", "Just me", "In ~/.claude/ — every project on this machine, nobody else"],
+              ["user", "Just me", "In ~/.claude/ — every project on this machine, nobody else. Claude Code only."],
             ].map(([v, l, t]) => (
               <button key={v} role="radio" aria-checked={form.scope === v} title={t} onClick={() => setForm({ ...form, scope: v })}>
                 {l}
@@ -590,7 +595,7 @@ function Hooks({ ws }: { ws: Workspace }) {
       {!ws.hooks.length && <p className="muted">No hooks. Keel runs its own approval hook beside them; that one is not listed.</p>}
       {fromRepo.length > 0 && (
         <p className="small" style={{ color: "var(--warn)", display: "flex", gap: 6, alignItems: "center" }}>
-          <Icon name="shield" size={14} /> Hooks from this repository's .claude/settings.json are quarantined before Keel starts an agent, because they are commands anyone who commits here can make your machine run.
+          <Icon name="shield" size={14} /> Hooks from this repository's .claude/settings.json and .agents/hooks.json are quarantined before Keel starts an agent, because they are commands anyone who commits here can make your machine run.
         </p>
       )}
       <ul className="hook-list">

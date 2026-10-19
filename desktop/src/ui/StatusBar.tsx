@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useStore, type Lane } from "../store";
+import { AGENT_NAME, useStore, type Agent, type Lane } from "../store";
 import { count } from "./Turn";
 import { Icon } from "./icons";
 import { label } from "../keys";
@@ -107,7 +107,7 @@ function CurrentActivity({ now, elsewhere }: { now: ReturnType<typeof useNow>; e
   const elapsed = now.since ? Math.floor((Date.now() - Date.parse(now.since)) / 1000) : undefined;
   return <button className={`sb-now ${now.tone}`} title="What the agent is doing">
     {now.tone === "warn" ? <Icon name="hand" size={14} /> : <span className={now.tone === "live" ? "busy-dot" : "sb-dot"} />}
-    <span className="sb-agent">{now.label.startsWith("codex") ? "Codex" : "Claude"}</span>
+    <span className="sb-agent">{AGENT_NAME[now.label.split(" · ")[0] as Agent] ?? "Claude"}</span>
     <span className="sb-label">{elsewhere ? "running in another terminal — Keel is following" : now.label.replace(/^\S+ · /, "")}</span>
     {!elsewhere && elapsed !== undefined && Number.isFinite(elapsed) && <span className="clock">{clock(elapsed)}</span>}
   </button>;

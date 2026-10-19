@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { get, url } from "../api";
-import { useStore, type Lane } from "../store";
+import { AGENT_NAME, useStore, type Lane } from "../store";
 import { ApprovalStrip } from "./Approvals";
 import { Working } from "./Working";
 import { activity } from "./StatusBar";
@@ -169,7 +169,7 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
 }) {
   const waiting = useStore((s) => !!s.lanes[lane]?.pending.length);
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
-  const agent = useStore((s) => s.lanes[lane]?.agent === "codex" ? "Codex" : "Claude");
+  const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
   const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan · Explore before making changes" : "Build · Changes stay in this lane’s checkout";
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span>{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;

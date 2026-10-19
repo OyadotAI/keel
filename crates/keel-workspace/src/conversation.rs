@@ -50,6 +50,7 @@ pub const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit",
 pub enum Provider {
     Claude,
     Codex,
+    Antigravity,
 }
 
 /// Where the lines come from. A transcript splits itself into turns at each prompt and says
@@ -343,6 +344,8 @@ impl Decoder {
         };
         if self.provider == Provider::Codex {
             self.codex(&record, &mut out, now);
+        } else if self.provider == Provider::Antigravity {
+            self.antigravity(&record, &mut out, now);
         } else {
             if self.source == Source::Transcript
                 && let Some((uuid, _, at)) = crate::sessions::opener(&record)
@@ -870,6 +873,105 @@ impl Decoder {
         }
     }
 
+    // --- Antigravity -------------------------------------------------------------------------
+
+    /// `agy -p --output-format stream-json`. A step is keyed by its index alone: a denied
+    /// `invoke_subagent` ends as `step_type: "subagent"` and a denied `ask_question` as
+    /// `"unknown"` with no tool name, so matching on the type would leave those rows spinning.
+    fn antigravity(&mut self, r: &Value, out: &mut Vec<Frame>, now: Instant) {
+        self.ensure_open(out);
+        match r["event"].as_str() {
+            Some("init") => {
+                if let Some(id) = r["conversation_id"].as_str() {
+                    self.seen.session_id = Some(id.to_string());
+                    self.push(
+                        out,
+                        Op::Session {
+                            id: id.to_string(),
+                            commands: Vec::new(),
+                        },
+                    );
+                }
+            }
+            Some("step_update") => {
+                let s = &r["step_update"];
+                let Some(idx) = s["step_index"].as_u64() else {
+                    return self.raw(out, &r.to_string(), Stream::Out, false, None);
+                };
+                let id = format!("agy:{idx}");
+                let state = s["state"].as_str().unwrap_or_default();
+                if let Some(t) = s["text_delta"].as_str().filter(|t| !t.is_empty())
+                    && s["step_type"] == "agent_response"
+                {
+                    self.text(format!("{id}:say"), TextKind::Say, t, out, now);
+                }
+                let info = &s["tool_info"];
+                let mut drawn = s["text_delta"].is_string() || s["step_type"] == "user_input";
+                if let Some(name) = s["tool_name"].as_str().or(info["name"].as_str())
+                    && state == "ACTIVE"
+                {
+                    let (tool, input) = antigravity_tool(name, &info["parameters"]);
+                    self.begin(&id, &tool, Some(input), None, None, out);
+                    drawn = true;
+                }
+                let open = self
+                    .turn
+                    .as_ref()
+                    .is_some_and(|t| t.calls.get(&id).is_some_and(|c| c.running));
+                if open && matches!(state, "DONE" | "ERROR") {
+                    let failed = state == "ERROR";
+                    let output = if failed {
+                        info["error"]["message"]
+                            .as_str()
+                            .unwrap_or("The tool failed.")
+                    } else {
+                        info["output"].as_str().unwrap_or_default()
+                    };
+                    self.finish(&id, output.replace("\r\n", "\n"), failed, None, out);
+                    drawn = true;
+                }
+                // A step that ended without ever opening (a refused `ask_question` arrives as one
+                // ERROR of type "unknown") is still something the person can see.
+                if !drawn && state == "ERROR" {
+                    self.raw(out, &r.to_string(), Stream::Out, false, None);
+                }
+            }
+            Some("result") => {
+                let res = &r["result"];
+                let u = &res["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                let t = Tokens {
+                    context: 0,
+                    input: n("input_tokens"),
+                    output: n("output_tokens"),
+                    cache_read: n("cache_read_tokens"),
+                    cache_write: 0,
+                };
+                let ms = res["duration_seconds"]
+                    .as_f64()
+                    .map(|s| (s * 1000.0) as u64);
+                self.push(out, usage(&t, None, ms, true));
+                // `interrupted` is Stop, which is not a failure; exhausted quota exits 0 and
+                // says so only here, so stderr never sees it.
+                if res["status"] != "SUCCESS" {
+                    let m = res["error"]
+                        .as_str()
+                        .unwrap_or("Antigravity reported an error.");
+                    if m != "interrupted" {
+                        self.seen.failed = Some(m.to_string());
+                        let kind = if m.contains("RESOURCE_EXHAUSTED") || m.contains("429") {
+                            "rate_limit"
+                        } else {
+                            "antigravity"
+                        };
+                        self.failure(out, kind, m.to_string(), None);
+                    }
+                }
+            }
+            _ => self.raw(out, &r.to_string(), Stream::Out, false, None),
+        }
+    }
+
     // --- Shared ------------------------------------------------------------------------------
 
     fn ensure_open(&mut self, out: &mut Vec<Frame>) {
@@ -1126,6 +1228,50 @@ fn classify(r: &Value) -> Option<(String, String, Option<f64>)> {
     })
 }
 
+/// An Antigravity tool as the Claude tool it does the work of, with Claude's argument names added
+/// beside agy's own. The decoder draws rows with it and the approval hook asks with it, so a row
+/// and the card asking about it can never disagree. A tool with no counterpart keeps its name.
+pub fn antigravity_tool(name: &str, args: &Value) -> (String, Value) {
+    let mut input = args.as_object().cloned().unwrap_or_default();
+    let first = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| args[*k].as_str().map(str::to_string))
+    };
+    let path = first(&["TargetFile", "AbsolutePath", "Path", "File"]);
+    let (tool, mapped): (&str, Vec<(&str, Option<String>)>) = match name {
+        "run_command" => ("Bash", vec![("command", first(&["CommandLine"]))]),
+        "write_to_file" => ("Write", vec![("file_path", path)]),
+        "replace_file_content" | "sed_file" => ("Edit", vec![("file_path", path)]),
+        "multi_replace_file_content" => ("MultiEdit", vec![("file_path", path)]),
+        "notebook_edit" => ("NotebookEdit", vec![("notebook_path", path)]),
+        "view_file" => ("Read", vec![("file_path", path)]),
+        "list_dir" => ("LS", vec![("path", first(&["DirectoryPath", "Path"]))]),
+        "grep_search" => (
+            "Grep",
+            vec![
+                ("pattern", first(&["Query", "Pattern"])),
+                ("path", first(&["SearchPath", "SearchDirectory"])),
+            ],
+        ),
+        "find_by_name" => (
+            "Glob",
+            vec![
+                ("pattern", first(&["Pattern", "Query"])),
+                ("path", first(&["SearchDirectory", "SearchPath"])),
+            ],
+        ),
+        "search_web" => ("WebSearch", vec![("query", first(&["query", "Query"]))]),
+        "read_url_content" => ("WebFetch", vec![("url", first(&["Url", "url"]))]),
+        _ => (name, Vec::new()),
+    };
+    for (k, v) in mapped {
+        if let Some(v) = v {
+            input.insert(k.to_string(), Value::String(v));
+        }
+    }
+    (tool.to_string(), Value::Object(input))
+}
+
 /// The one-line summary of a call, in the order the tools actually carry it.
 pub fn subject(input: &Value) -> String {
     let s = [
@@ -1134,6 +1280,8 @@ pub fn subject(input: &Value) -> String {
         "path",
         "notebook_path",
         "pattern",
+        "url",
+        "query",
         "description",
     ]
     .iter()

@@ -40,7 +40,10 @@ pub fn vouch(root: &Utf8Path, rel: &str) -> Result<(), String> {
 
 /// Whether `bytes`, found at `rel` in `root`, are exactly what Keel wrote there on this machine.
 pub fn holds(root: &Utf8Path, rel: &str, bytes: &[u8]) -> bool {
-    store().is_some_and(|s| holds_in(&s, root, rel, bytes))
+    // Keel's own Antigravity agents, in any clone: bytes that are a shipped template carry no
+    // hooks, plugins or MCP of anybody's, so no record on this machine is needed to trust them.
+    (rel.starts_with(".agents/agents/") && crate::team::shipped(rel, bytes))
+        || store().is_some_and(|s| holds_in(&s, root, rel, bytes))
 }
 
 /// The project a tree belongs to, for keying records: its resolved path, with a lane's checkout

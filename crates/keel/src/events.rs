@@ -175,7 +175,7 @@ pub async fn after_mutation(
             emit("git.changed", None, serde_json::Value::Null);
             emit("tree.changed", None, serde_json::Value::Null);
         }
-        p if p.starts_with("/api/adopt") => {
+        p if p.starts_with("/api/adopt") || p.starts_with("/api/team/update") => {
             emit("state.changed", None, serde_json::Value::Null);
             emit("git.changed", wt, serde_json::Value::Null);
             emit("tree.changed", wt, serde_json::Value::Null);

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { agentsIn } from "../team";
 import { get, post, type Endpoint } from "../api";
 import { useStore } from "../store";
 import { repairLane } from "../repairs";
@@ -146,7 +147,8 @@ export function Readiness({ lane }: { lane: string }) {
     setFailed(undefined);
     try {
       const r = await post<{ written: string[]; committed?: string | null }>(ep!, "/api/adopt", undefined, { commit: true });
-      setNote(`Added ${r.written.length} files${r.committed ? ` in commit ${r.committed}` : ""}.`);
+      const who = agentsIn(r.written);
+      setNote(`Added ${who ? `the team for ${who}: ` : ""}${r.written.length} files${r.committed ? ` in commit ${r.committed}` : ""}.`);
       window.dispatchEvent(new Event("keel:subagents-changed"));
     } catch (e) {
       setFailed(`Could not add the team: ${e instanceof Error ? e.message : e}`);

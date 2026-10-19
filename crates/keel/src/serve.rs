@@ -790,6 +790,11 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::review::api_review_save),
         )
         .route("/api/adopt", axum::routing::post(crate::review::api_adopt))
+        .route("/api/team", get(crate::team::api_team))
+        .route(
+            "/api/team/update",
+            axum::routing::post(crate::team::api_update),
+        )
         .route("/api/git/stage-all", axum::routing::post(api_git_stage_all))
         .route(
             "/api/git/discard-all",

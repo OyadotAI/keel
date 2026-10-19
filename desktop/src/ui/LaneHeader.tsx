@@ -1,6 +1,6 @@
 import { UpdateButton } from "./UpdateButton";
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../store";
+import { AGENT_NAME, useStore } from "../store";
 import { Floating } from "./Menu";
 import { Icon } from "./icons";
 import { Dialog, restoreFocus } from "./kit";
@@ -62,10 +62,13 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
             {title}
           </span>
         )}
-        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span>{agent === "codex" ? "Codex" : "Claude"}</span>
+        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span>{AGENT_NAME[agent ?? "claude"]}</span>
       </div>
       <UpdateButton />
       <LaneViewSwitch lane={lane} />
+      <button className="ghost shell-toggle" aria-pressed={shell} aria-label={shell ? "Close the terminal" : "Open a terminal"} title={`Terminal (${label({ key: "j" })})`} onClick={toggleShell}>
+        <Icon name="terminal" />
+      </button>
       <button className="ghost" aria-label="Lane actions" title="Lane actions" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}>
         <Icon name="more" />
       </button>

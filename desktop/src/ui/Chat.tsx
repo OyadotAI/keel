@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
-import { useStore } from "../store";
+import { AGENT_NAME, useStore } from "../store";
 import { Markdown, Copy } from "./Markdown";
 import { Icon } from "./icons";
 import { BrandMark } from "./BrandMark";
@@ -69,7 +69,7 @@ export function Chat({ lane }: { lane: string }) {
   const remember = () => list.current?.getState((state) => scrolls.set(lane, state));
   if (!rows.length) return <div className="chat-empty"><div className="chat-empty-mark">{running ? <Working /> : <Icon name="chat" size={24} />}</div>
     <h2>{!loaded ? "Opening your conversation…" : running ? "Starting your agent…" : "What are we building?"}</h2>
-    <p>{loaded && !running ? `Work with ${agent === "codex" ? "Codex" : "Claude"} in this lane. Ask a question, attach context, or start a task.` : "Your conversation and workspace stay together."}</p>
+    <p>{loaded && !running ? `Work with ${AGENT_NAME[agent ?? "claude"]} in this lane. Ask a question, attach context, or start a task.` : "Your conversation and workspace stay together."}</p>
     {loaded && !running && <span className="small faint">@ for files · / for commands · Shift+Enter for a new line</span>}</div>;
   return <div className="chat-transcript" aria-label="Conversation">
     <Virtuoso ref={list} scrollerRef={scrollerRef} data={rows} computeItemKey={(_, row) => row.key}
@@ -101,7 +101,7 @@ function Block({ lane, index, step }: { lane: string; index: number; step: strin
   const [open, setOpen] = useState(expanded.has(key));
   // Older saved conversations may contain reasoning items without displayable text.
   if (!block || (block.kind === "think" && !block.text.trim())) return null;
-  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{agent === "codex" ? "Codex" : "Claude"}</div>}{block.kind === "think" ? <details className="chat-thinking" open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
+  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{AGENT_NAME[agent ?? "claude"]}</div>}{block.kind === "think" ? <details className="chat-thinking" open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
 }
 
 function Activity({ lane, index, id }: { lane: string; index: number; id: string }) {

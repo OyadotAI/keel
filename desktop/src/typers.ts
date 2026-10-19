@@ -64,7 +64,7 @@ export function exitTerminal(lane: string): Promise<void> {
       if (error) reject(error); else resolve();
     };
     const closed = () => finish();
-    const timeout = setTimeout(() => finish(new Error("The terminal did not exit. Exit Codex in the terminal, then choose Chat again.")), 10_000);
+    const timeout = setTimeout(() => finish(new Error("The terminal did not exit. Exit the agent in the terminal, then choose Chat again.")), 10_000);
     const waiting = exits.get(lane) ?? new Set<() => void>();
     waiting.add(closed); exits.set(lane, waiting);
     try {

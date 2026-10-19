@@ -29,6 +29,23 @@ fn processes() -> &'static Mutex<HashSet<u32>> {
     PROCESSES.get_or_init(Mutex::default)
 }
 
+/// A pid on the parent-death list for as long as this lives. A one-shot turn's agent is a child
+/// of the daemon like a runtime's, and was on no list at all.
+pub struct Tracked(u32);
+impl Tracked {
+    pub fn new(pid: u32) -> Self {
+        if pid != 0 {
+            processes().locked().insert(pid);
+        }
+        Self(pid)
+    }
+}
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        processes().locked().remove(&self.0);
+    }
+}
+
 /// Parent shutdown uses process::exit, so idle provider sessions need explicit cleanup too.
 pub fn stop_all() {
     for pid in processes().locked().drain() {
@@ -287,6 +304,9 @@ pub async fn control(
     let r = state.runtimes.0.locked().get(&q.lane).cloned();
     let Some(r) = r else {
         return if q.method == "close" {
+            // An Antigravity turn is a one-shot `agy`, not a runtime: closing its lane must still
+            // end it, or it runs on with nothing on screen.
+            state.interrupt(&q.lane);
             Ok(Json(json!({"ok":true})))
         } else {
             Err((
@@ -342,6 +362,14 @@ async fn emit(tx: &Tx, name: &'static str, data: Value) {
 
 pub async fn chat(state: Arc<AppState>, q: ChatQuery) -> axum::response::Response {
     // no-blocking: wire channels only; the runner offloads filesystem preparation.
+    // A turn per `agy -p`: the one-shot path already owns the claim, quarantine, the process
+    // group, Stop and `turns::finish`, and the Rust decoder reads agy's stream.
+    if q.provider.as_deref() == Some("antigravity") {
+        use axum::response::IntoResponse;
+        return crate::agent::chat(axum::extract::State(state), axum::extract::Query(q))
+            .await
+            .into_response();
+    }
     let (tx, rx) = mpsc::channel(256);
     let out = crate::agent::translate(rx, &q);
     tokio::spawn(async move {

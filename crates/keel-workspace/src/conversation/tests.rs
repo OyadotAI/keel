@@ -514,3 +514,100 @@ fn bookkeeping_between_turns_is_not_a_turn() {
     assert_eq!(f.turns.len(), 1);
     assert_eq!(f.turns[0].closed, Some(Ending::Done));
 }
+
+fn agy(fixture: &str) -> (Fold, Seen) {
+    let mut d = Decoder::new(Provider::Antigravity, Source::Chat);
+    let now = Instant::now();
+    let mut frames = d.open(Some("x".into()), None, None, None);
+    for line in fixture.lines().filter(|l| !l.is_empty()) {
+        frames.extend(d.feed(line, None, now));
+    }
+    frames.extend(d.close(Ending::Done));
+    let mut f = Fold::default();
+    f.apply(&frames);
+    (f, d.state().clone())
+}
+
+/// Antigravity: a command is a Bash row with its output, a hook's refusal is a failed row, and
+/// the reply's deltas are one step.
+#[test]
+fn antigravity_commands_refusals_and_text() {
+    let (f, seen) = agy(include_str!("../../tests/fixtures/agy-command-ok.jsonl"));
+    let t = &f.turns[0];
+    assert_eq!(
+        seen.session_id.as_deref(),
+        Some("1a24f799-a632-4bad-af88-d3918923453c")
+    );
+    let ok = &t.calls["agy:2"];
+    assert_eq!((ok.tool.as_str(), ok.state), ("Bash", Some(CallState::Ok)));
+    assert_eq!(ok.input.as_ref().unwrap()["command"], "ls -la");
+    assert!(
+        !ok.output.as_ref().unwrap().contains('\r'),
+        "CRLF reaches the row"
+    );
+    let no = &t.calls["agy:4"];
+    assert_eq!(no.state, Some(CallState::Failed));
+    assert!(no.output.as_ref().unwrap().contains("the person said no"));
+    assert_eq!(t.text["agy:5:say"], "Here are the results.\n");
+    assert_eq!(t.usage, Some((37621, 1014)));
+    assert!(seen.failed.is_none());
+}
+
+/// Every refused step closes its row — including `invoke_subagent`, which ends as a step of type
+/// "subagent", and `ask_question`, which ends as "unknown" without ever opening.
+#[test]
+fn antigravity_refusals_of_every_shape_close_their_rows() {
+    let (f, _) = agy(include_str!("../../tests/fixtures/agy-hook-denials.jsonl"));
+    assert!(f.running().is_empty(), "left spinning: {:?}", f.running());
+    let t = &f.turns[0];
+    assert_eq!(t.calls["agy:10"].state, Some(CallState::Failed));
+    assert_eq!(t.calls["agy:2"].tool, "Read");
+    assert_eq!(t.calls["agy:20"].tool, "Write");
+    assert_eq!(t.calls["agy:14"].tool, "WebSearch");
+    assert!(
+        t.raw >= 1,
+        "the unopened ask_question refusal is not shown anywhere"
+    );
+}
+
+/// Spent quota exits 0 and says so only in `result`; Stop's `interrupted` is not a failure.
+#[test]
+fn antigravity_quota_is_a_failure_and_stop_is_not() {
+    let (_, seen) = agy(include_str!("../../tests/fixtures/agy-quota.jsonl"));
+    assert!(
+        seen.failed
+            .as_deref()
+            .is_some_and(|m| m.contains("RESOURCE_EXHAUSTED"))
+    );
+    let (_, seen) = agy(include_str!("../../tests/fixtures/agy-interrupted.jsonl"));
+    assert!(seen.failed.is_none());
+}
+
+/// A tool still running when the turn closes is answered, like every other provider's.
+#[test]
+fn antigravity_a_call_open_at_close_is_interrupted() {
+    let line = r#"{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"sleep 9"}}}}"#;
+    let (f, _) = agy(line);
+    assert_eq!(
+        f.turns[0].calls["agy:3"].state,
+        Some(CallState::Interrupted)
+    );
+}
+
+#[test]
+fn antigravity_tools_map_to_claude_names_and_keys() {
+    let (tool, input) = antigravity_tool("replace_file_content", &json!({"TargetFile": "/r/a.rs"}));
+    assert_eq!(
+        (tool.as_str(), input["file_path"].as_str()),
+        ("Edit", Some("/r/a.rs"))
+    );
+    assert_eq!(
+        input["TargetFile"], "/r/a.rs",
+        "agy's own key is kept for the expanded row"
+    );
+    let (tool, input) = antigravity_tool("browser_click_element", &json!({"Index": 3}));
+    assert_eq!(
+        (tool.as_str(), input["Index"].as_u64()),
+        ("browser_click_element", Some(3))
+    );
+}

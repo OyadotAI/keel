@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { agentsIn } from "../team";
 import { useStore } from "../store";
 import { blocks, readSetup, scope, type Warning } from "../setup";
 import { installSetup } from "../setup-install";
@@ -55,7 +56,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
   const go = (w: Warning) => {
     close();
     if (w.fix === "settings") useStore.setState({ settings: true, extensions: false, creating: false });
-    else if (w.fix === "extensions") useStore.setState({ extensions: true, settings: false, creating: false });
+    else if (w.fix === "extensions") useStore.setState({ extensions: true, settings: false, creating: false, ...(w.id === "team/update" ? { extensionsSection: "agents" as const } : {}) });
     else {
       // From the sidebar the project may not be the one on screen: go to it, then to its tab.
       useStore.getState().select(laneIn(project));
@@ -104,7 +105,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
         if (handedOff) handedTo = `${left.length} item${left.length === 1 ? "" : "s"} handed to the agent in “${useStore.getState().lanes[lane]?.title ?? "the lane"}”. They leave this list when its turn ends and the check passes.`;
       }
       setDoing([
-        team ? (team.written.some((p) => p.startsWith(".claude/agents/")) ? "Agent team added." : "Agent team checked.") : "",
+        team ? (agentsIn(team.written) ? `Agent team added for ${agentsIn(team.written)}.` : "Agent team checked.") : "",
         team?.note ?? "",
         total ? `${installed} of ${total} plugins installed.` : "",
         handedTo,
@@ -163,6 +164,16 @@ export function SetupList({ project, close }: { project: string; close: () => vo
   );
 }
 
+/// What the chip says and in what colour. A team update alone is an offer, not a problem, so it
+/// reads as one: its own words, in the quiet colour.
+function badge(warnings: Warning[] | undefined, running: boolean): { label: string; color: string } {
+  const onlyUpdate = warnings?.length === 1 && warnings[0].id === "team/update";
+  const reviewOnly = !!warnings?.length && warnings.every((w) => SET_ASIDE.test(w.id));
+  const blocking = warnings?.some((w) => w.severity === "critical");
+  const label = running ? "Setting up…" : onlyUpdate ? "Team update" : warnings?.length ? `${warnings.length} ${reviewOnly ? "to review" : "to set up"}` : "Setup result";
+  return { label, color: blocking ? "var(--del)" : onlyUpdate ? "var(--dim)" : "var(--warn)" };
+}
+
 /// The count, where a project is named: quiet when nothing is missing, one click to the list.
 export function SetupBadge({ project, showTab }: { project: string; showTab?: (t: "readiness") => void }) {
   const warnings = useStore((s) => s.setup[project]);
@@ -170,13 +181,12 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
   const run = useRun<string>(`setup:${project}`);
   const [at, setAt] = useState<DOMRect | null>(null);
   if (!warnings?.length && !run) return null;
-  const blocking = warnings?.some((w) => w.severity === "critical");
-  const reviewOnly = !!warnings?.length && warnings.every((w) => SET_ASIDE.test(w.id));
+  const { label, color } = badge(warnings, !!run?.running);
   return (
     <>
       <button
         className="setup-badge"
-        style={{ color: blocking ? "var(--del)" : "var(--warn)" }}
+        style={{ color }}
         onClick={(e) => {
           e.stopPropagation();
           setAt(e.currentTarget.getBoundingClientRect());
@@ -186,7 +196,7 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
         title={`${warnings?.length ?? 0} setup item${warnings?.length === 1 ? "" : "s"}${findings != null ? ` · ${findings} finding${findings === 1 ? "" : "s"} in Readiness` : ""}`}
         aria-label={`${warnings?.length ?? 0} setup warnings`}
       >
-        <Icon name="octagon" size={13} /> {run?.running ? "Setting up…" : warnings?.length ? `${warnings.length} ${reviewOnly ? "to review" : "to set up"}` : "Setup result"}
+        <Icon name="octagon" size={13} /> {label}
       </button>
       {at && (
         <Floating anchor={at} kind="popover" width={380} onClose={() => setAt(null)}>

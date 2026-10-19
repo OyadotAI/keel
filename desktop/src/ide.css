@@ -15,7 +15,7 @@
 .ide-layout .chat-dock { padding: 12px 14px; }
 .ide-layout .chat-markdown { font-size: 14px; line-height: 1.65; }
 .ide-layout .chat-composer textarea { font-size: 14px; }
-.ide-layout .main.has-shell .ide-center { padding-bottom: 32vh; }
+.ide-layout .main.has-shell .ide-center { padding-bottom: var(--shell-h); }
 .ide-center .side-panel { width: 100%; height: 100%; position: static; box-shadow: none; background: var(--bg); border-radius: 0; }
 .ide-center .inspector-heading > div > button:first-child { display: none; }
 /* Keep overflow controls outside the scrolling strip so they are always reachable. */
@@ -96,9 +96,9 @@
 /* The terminal is a stable sibling of code and chat; hiding it keeps the PTY alive. */
 .main { position: relative; }
 .shell-dock[hidden], .ide-git-slot[hidden] { display: none; }
-.shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: 32vh; z-index: 3; background: var(--bg); border: 1px solid var(--line); border-radius: 0 0 10px 10px; overflow: hidden; }
+.shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: var(--shell-h); z-index: 3; background: var(--bg); border: 1px solid var(--line); border-radius: 0 0 10px 10px; overflow: hidden; }
 .shell-dock .shell { height: 100%; position: static; }
-.main.has-shell .agent-pane { padding-bottom: 32vh; }
+.main.has-shell .agent-pane { padding-bottom: var(--shell-h); }
 .main.with-panel .shell-dock { right: calc(var(--panel-w) + 10px); }
 .ide-layout .main.has-shell .agent-pane { padding-bottom: 0; }
 .ide-layout .shell-dock { right: calc(min(var(--ide-chat-w), 55%) + 10px); }
@@ -256,3 +256,6 @@
 .ide-tab-dirty { flex: none; font-size: 8px; }
 .ide-document.split > .code-editor { width: 50%; }
 @container (max-width: 560px) { .ide-document.split > .code-editor { width: 100%; height: 0; } }
+.shell-dock .handle-row { position: absolute; top: 0; left: 0; right: 0; height: 6px; z-index: 4; cursor: row-resize; }
+.shell-dock .handle-row::after { top: 0; bottom: auto; left: 0; right: 0; width: auto; height: 1px; }
+.ide-layout .lane-header .shell-toggle { display: none; }

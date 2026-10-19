@@ -56,7 +56,7 @@ export function Shell({ lane, close, hidden = false }: { lane: string; close: ()
 }
 
 /** Hiding the dock or switching layouts/lanes keeps each opened PTY connected. */
-export function ShellDock({ lane, open, close }: { lane?: string; open: boolean; close: () => void }) {
+export function ShellDock({ lane, open, close, handle }: { lane?: string; open: boolean; close: () => void; handle?: ReactNode }) {
   const [opened, setOpened] = useState<string[]>([]);
   const existing = useStore((s) => Object.keys(s.lanes).sort().join("\n"));
   useEffect(() => {
@@ -67,6 +67,7 @@ export function ShellDock({ lane, open, close }: { lane?: string; open: boolean;
     });
   }, [lane, open, existing]);
   return <div className="shell-dock" hidden={!open} aria-label="Integrated terminal">
+    {handle}
     {opened.map((id) => <Shell key={id} lane={id} hidden={!open || lane !== id} close={close} />)}
   </div>;
 }
