@@ -605,6 +605,14 @@ fn antigravity_tools_map_to_claude_names_and_keys() {
         input["TargetFile"], "/r/a.rs",
         "agy's own key is kept for the expanded row"
     );
+    let (tool, input) = antigravity_tool(
+        "call_mcp_tool",
+        &json!({"ServerName": "qa", "ToolName": "echo", "Arguments": {"text": "hi"}}),
+    );
+    assert_eq!(
+        (tool.as_str(), input["text"].as_str()),
+        ("mcp__qa__echo", Some("hi"))
+    );
     let (tool, input) = antigravity_tool("browser_click_element", &json!({"Index": 3}));
     assert_eq!(
         (tool.as_str(), input["Index"].as_u64()),

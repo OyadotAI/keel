@@ -155,6 +155,13 @@ fn bash(pattern: &str, command: &str) -> Option<bool> {
     // `git -C . push` is `git push` with an option in between: a multi-word rule cannot see past
     // it, so it is a card.
     let pwords: Vec<&str> = pattern.trim_end_matches(" *").split(' ').collect();
+    // The rule's program anywhere after the first word — `busybox rm`, `caffeinate rm`, a launcher
+    // no list names — may be what runs: a card, not a pass.
+    if canonical.first().map(String::as_str) != Some(pwords[0])
+        && words.iter().skip(1).any(|w| base(w) == pwords[0])
+    {
+        return None;
+    }
     if pwords.len() > 1
         && canonical.first().map(String::as_str) == Some(pwords[0])
         && canonical.get(1).is_some_and(|w| w.starts_with('-'))
@@ -201,7 +208,7 @@ fn glob(pattern: &str, text: &str) -> bool {
 fn host(url: &str) -> Option<String> {
     // A backslash or an escape in the authority is read differently by different parsers, so it
     // is no host at all here — and no host is a card.
-    if url.contains('\\') {
+    if url.contains('\\') || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }
     let rest = url.split_once("://")?.1;
@@ -252,6 +259,9 @@ mod tests {
         assert_eq!(sh(&r, "timeout 60 rm -rf build"), Verdict::Unsure);
         assert_eq!(sh(&r, "RM -rf build"), Verdict::Denied("Bash(rm *)".into()));
         assert_eq!(bash("rm *", "FOO=1 rm x"), None);
+        assert_eq!(sh(&r, "busybox rm -rf build"), Verdict::Unsure);
+        assert_eq!(sh(&r, "caffeinate /bin/rm x"), Verdict::Unsure);
+        assert_eq!(sh(&r, "ls rm-notes"), Verdict::Clear);
         assert_eq!(bash("rm *", "ls\trm x"), None);
         assert_eq!(sh(&r, "/BIN/RM x"), Verdict::Denied("Bash(rm *)".into()));
         assert_eq!(sh(&r, "ls"), Verdict::Clear);
@@ -313,6 +323,7 @@ mod tests {
         );
         assert_eq!(url("https://evil.com\\@x.com/"), Verdict::Unsure);
         assert_eq!(url("https://%78.com/"), Verdict::Unsure);
+        assert_eq!(url("https://evil.com x.com/"), Verdict::Unsure);
         assert_eq!(
             check(&[], "Bash", &json!({"command": "ls $(rm x)"})),
             Verdict::Clear

@@ -457,7 +457,10 @@ pub async fn ask(
     // own `deny` rules and Claude Code's shell checks still apply to them. The cost: a terminal
     // session started before the project was trusted keeps its older allowlist for commands
     // until it is restarted. A chat turn is a fresh `claude` and always has the current one.
-    if !is_question && !leaves_the_project && trusted && !unsure {
+    // Trust is "stop asking about commands"; for Claude it never covered MCP tools (Claude Code
+    // refuses an MCP tool its allowlist lacks), so for agy it does not either.
+    let mcp_for_agy = strict && hook.tool_name.starts_with("mcp__");
+    if !is_question && !leaves_the_project && trusted && !unsure && !mcp_for_agy {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
         }

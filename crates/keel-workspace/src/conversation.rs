@@ -1232,6 +1232,16 @@ fn classify(r: &Value) -> Option<(String, String, Option<f64>)> {
 /// beside agy's own. The decoder draws rows with it and the approval hook asks with it, so a row
 /// and the card asking about it can never disagree. A tool with no counterpart keeps its name.
 pub fn antigravity_tool(name: &str, args: &Value) -> (String, Value) {
+    // An MCP call is drawn as the tool it calls, the name its approval card used.
+    if name == "call_mcp_tool"
+        && let (Some(server), Some(tool)) = (args["ServerName"].as_str(), args["ToolName"].as_str())
+    {
+        let input = args.get("Arguments").cloned().filter(Value::is_object);
+        return (
+            format!("mcp__{server}__{tool}"),
+            input.unwrap_or_else(|| serde_json::json!({})),
+        );
+    }
     let mut input = args.as_object().cloned().unwrap_or_default();
     let first = |keys: &[&str]| {
         keys.iter()

@@ -226,9 +226,15 @@ fn mcp_call(args: &Value) -> Route {
 
 /// Whether every subagent asked for runs in this turn's own workspace.
 fn inherits(args: &Value) -> bool {
+    // Fails closed: every entry an object, its workspace absent or exactly "inherit".
     args["Subagents"].as_array().is_some_and(|a| {
-        a.iter()
-            .all(|s| s["Workspace"].as_str().is_none_or(|w| w == "inherit"))
+        a.iter().all(|s| {
+            s.is_object()
+                && match s.get("Workspace") {
+                    None | Some(Value::Null) => true,
+                    Some(w) => w.as_str() == Some("inherit"),
+                }
+        })
     })
 }
 
@@ -555,6 +561,16 @@ mod tests {
         );
         let sub = json!({"Subagents": [{"Model": "inherit", "Prompt": "x", "Role": "r"}]});
         assert_eq!(route("invoke_subagent", &sub, false), Route::Allow);
+        let odd = json!({"Subagents": [{"Prompt": "x", "Workspace": {"Type": "branch"}}]});
+        assert_eq!(
+            route("invoke_subagent", &odd, false),
+            Route::Deny(WORKSPACE)
+        );
+        let bare = json!({"Subagents": ["x"]});
+        assert_eq!(
+            route("invoke_subagent", &bare, false),
+            Route::Deny(WORKSPACE)
+        );
         let branch = json!({"Subagents": [{"Prompt": "x", "Workspace": "branch"}]});
         assert_eq!(
             route("invoke_subagent", &branch, false),
