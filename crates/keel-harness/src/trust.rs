@@ -171,15 +171,19 @@ fn quarantine_in(
     // A link for any folder on the way would carry every move and every write somewhere else:
     // `.claude -> ~/.claude` had quarantine rename the person's own global settings into the
     // repository, and a project install write into them.
-    for dir in [
-        ".claude",
-        ".keel",
-        ".keel/quarantine",
-        ".agents",
-        ".agent",
-        "_agents",
-        "_agent",
-    ] {
+    // Every folder on the way to an entry, derived from the entries themselves so a new agent's
+    // prefix cannot be forgotten here — `.codex` was, for one commit.
+    let mut dirs: Vec<&str> = vec![".keel", ".keel/quarantine"];
+    for rel in entries {
+        let mut at = Utf8Path::new(rel).parent();
+        while let Some(d) = at.filter(|d| !d.as_str().is_empty()) {
+            if !dirs.contains(&d.as_str()) {
+                dirs.push(d.as_str());
+            }
+            at = d.parent();
+        }
+    }
+    for dir in dirs {
         if std::fs::symlink_metadata(repo.join(dir)).is_ok_and(|m| m.file_type().is_symlink()) {
             anyhow::bail!("{dir} is a link — Keel will not move or keep agent config through it");
         }
@@ -507,6 +511,16 @@ mod tests {
                 .iter()
                 .any(|q| q == "../../.agents/hooks.json")
         );
+    }
+
+    /// `.codex -> ~/.codex` would move the person's own Codex config out of their home.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_codex_folder_is_refused() {
+        let (_d, root) = repo(&[("elsewhere/config.toml", "mine")]);
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join(".codex")).unwrap();
+        assert!(quarantine(&root).is_err());
+        assert!(root.join("elsewhere/config.toml").exists());
     }
 
     /// A repo's Codex project layer is config too.
