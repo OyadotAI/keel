@@ -89,6 +89,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
         COMMENTER: ${{ github.event.comment.user.type }}
+        ASSOCIATION: ${{ github.event.comment.author_association }}
         THREADS: ${{ runner.temp }}/keel-review-threads.json
       run: |
         set -euo pipefail
@@ -98,18 +99,26 @@ runs:
         if [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ] && [ "$COMMENTER" = "Bot" ]; then
           echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
         fi
+        # Anyone can reply on a public PR, and this run holds the secrets. Only someone with a
+        # say over the repository gets an answer; anyone else's reply waits for the next push.
+        if [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
+          case "$ASSOCIATION" in OWNER|MEMBER|COLLABORATOR) ;; *)
+            echo "keel review: $ASSOCIATION replies are answered at the next push, not now." >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+        fi
         [ -n "$PR" ] || exit 0
         gh api graphql -F owner="${GITHUB_REPOSITORY%/*}" -F repo="${GITHUB_REPOSITORY#*/}" -F n="$PR" -f query='
           query($owner: String!, $repo: String!, $n: Int!) {
             repository(owner: $owner, name: $repo) { pullRequest(number: $n) {
               reviewThreads(first: 100) { nodes { id isResolved path line originalLine
-                comments(first: 50) { nodes { databaseId body author { login __typename } } } } } } } }' \
+                comments(first: 50) { nodes { databaseId body authorAssociation author { login __typename } } } } } } } }' \
           --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
                  | select((.isResolved | not) and .comments.nodes[0].author.__typename == "Bot"
                           and (.comments.nodes[0].body | endswith("<!-- keel-review-line -->")))
                  | {id, comment_id: .comments.nodes[0].databaseId, path, line: (.line // .originalLine),
                     comments: [.comments.nodes[] | {author: (.author.login // "ghost"),
-                                                    bot: (.author.__typename == "Bot"), body}]}]' \
+                                                    bot: (.author.__typename == "Bot"), association: .authorAssociation, body}]}]' \
           > "$THREADS" || { echo '[]' > "$THREADS"; echo "keel review: could not read the review threads; replying to none." >&2; }
 
     - name: Review

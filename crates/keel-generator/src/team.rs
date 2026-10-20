@@ -455,7 +455,7 @@ Earlier runs left review threads on this PR. The open ones, with every reply, ar
 - `answered` — the problem is still there, but a reply settles it: a deliberate decision with a sound reason, a product question raised with the right person, a follow-up ticket. `reply` acknowledges it in one sentence; disagree in it if the reason does not hold, and use `open` instead.
 - `open` — still a problem and nothing settles it. `reply` says what remains, in one or two sentences, or is empty if there is nothing new to say.
 
-A finding that is already an open thread is not repeated in `findings`.
+A finding that still holds stays in `findings` even when it is already an open thread — the verdict counts it, and Keel does not post it twice. A 🔴 blocking thread is closed by a fix in the code, never by a reply alone: judge it `fixed` or `open`, not `answered`.
 
 The verdict is `do not ship` when any finding is `blocking`: a bug on a reachable path, a security exposure, data loss, a broken contract, the change not doing what it says. Otherwise `ship`. Never invent a stage's result: a stage that could not run is reported as not run."#;
 
@@ -469,7 +469,7 @@ The threads, each with the finding and every reply, are in `threads.md` in the e
 For each thread return one entry in `threads`, by its `T` number:
 
 - `fixed` — the current code no longer has the problem. Read the code to confirm; a reply saying "fixed" is a claim, not evidence. `reply` says in one sentence what changed.
-- `answered` — the problem is still there, but the reply settles it: a deliberate decision with a sound reason, a product question raised with the right person, a follow-up ticket. `reply` acknowledges it in one sentence.
+- `answered` — the problem is still there, but the reply settles it: a deliberate decision with a sound reason, a product question raised with the right person, a follow-up ticket. `reply` acknowledges it in one sentence. Never for a 🔴 blocking finding: that one closes only when the code changes.
 - `open` — the reply does not settle it: the fix is not in the code, or the reason does not hold. `reply` says why, in one or two sentences, plainly and without repeating the whole finding.
 
 Be brief and specific; name the file and line you checked."#;

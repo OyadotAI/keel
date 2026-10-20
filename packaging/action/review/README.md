@@ -20,8 +20,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   review:
-    # Not for a bot's comment, Keel's own line comments included.
-    if: github.event_name == 'pull_request' || github.event.comment.user.type != 'Bot'
+    # A reply from a collaborator, never a bot's comment (Keel's own line comments included).
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.comment.user.type != 'Bot' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -72,8 +75,10 @@ jobs:
   write, and never holds the GitHub token.
 - Threads close themselves. On every push Keel reads its open line comments with their replies
   and, in the same thread, says ✅ fixed (checked in the code, not taken on trust), 👍
-  acknowledged (a reply settles it) or 🔁 still open, resolving the first two. A reply gets its
-  answer right away, from one reviewer rather than the whole team. Keel never deletes a thread.
+  acknowledged (a reply settles it) or 🔁 still open, resolving the first two. A 🔴 blocking
+  finding closes only when the code changes (or a maintainer resolves it), never on a reply. A
+  collaborator's reply gets its answer right away, from one reviewer rather than the whole team;
+  anyone else's waits for the next push. Keel never deletes a thread.
 - The verdict is advisory. It comes from an agent that read the PR's text, and that text can
   mislead it.
 - Exit codes of `keel review-pr`, for running it outside this action: 0 ship, 1 do not ship, 2 no

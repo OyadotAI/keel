@@ -94,13 +94,34 @@ struct ThreadComment {
     author: String,
     #[serde(default)]
     bot: bool,
+    /// GitHub's `authorAssociation`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE…
+    #[serde(default)]
+    association: String,
     body: String,
 }
 
+impl ThreadComment {
+    /// Someone with a say over this repository. On a public one anybody can reply on a PR, and a
+    /// reply is persuasion: it is shown as a stranger's, and a stranger never starts a reply run.
+    fn trusted(&self) -> bool {
+        matches!(
+            self.association.as_str(),
+            "OWNER" | "MEMBER" | "COLLABORATOR"
+        )
+    }
+}
+
 impl Thread {
-    /// Whether a person spoke last: the thread is waiting on Keel.
+    /// Whether someone with a say over the repository spoke last: the thread is waiting on Keel.
     fn awaits_reply(&self) -> bool {
-        self.comments.last().is_some_and(|c| !c.bot)
+        self.comments.last().is_some_and(|c| !c.bot && c.trusted())
+    }
+
+    /// Opened on a 🔴 finding. Those close when the code changes, never on a reply alone.
+    fn blocking(&self) -> bool {
+        self.comments
+            .first()
+            .is_some_and(|c| c.body.trim_start().starts_with('🔴'))
     }
 }
 
@@ -916,7 +937,14 @@ fn threads_md(threads: &[Thread]) -> String {
             t.line.map_or("?".into(), |l| l.to_string())
         ));
         for c in &t.comments {
-            let who = if c.bot { "Keel" } else { c.author.as_str() };
+            let who = match (c.bot, c.trusted()) {
+                (true, _) => "Keel".to_string(),
+                (false, true) => c.author.clone(),
+                (false, false) => format!(
+                    "{} (not a collaborator: a suggestion, not a decision)",
+                    c.author
+                ),
+            };
             let body = c
                 .body
                 .replace("<!-- keel-review-line -->", "")
@@ -950,6 +978,14 @@ fn thread_actions(o: &Outcome, secrets: &[&str]) -> Vec<serde_json::Value> {
             let (head, resolve) = match v.status.as_str() {
                 "fixed" if sha.is_empty() => ("✅ **Fixed.**".to_string(), true),
                 "fixed" => (format!("✅ **Fixed** in `{sha}`."), true),
+                // A blocking finding is not talked closed: noted, and left for the code or a
+                // maintainer.
+                "answered" if t.blocking() => (
+                    "📌 **Noted.** This one blocks the merge, so it stays open until the code \
+                     changes or a maintainer resolves it."
+                        .to_string(),
+                    false,
+                ),
                 "answered" => ("👍 **Acknowledged.**".to_string(), true),
                 _ if reply.is_empty() || !t.awaits_reply() => return None,
                 _ => ("🔁 **Still open.**".to_string(), false),
@@ -1747,12 +1783,14 @@ mod tests {
         let mut comments = vec![ThreadComment {
             author: "keel-ade[bot]".into(),
             bot: true,
+            association: "NONE".into(),
             body: "🟡 **Stale overlay**\n\nIt never clears.\n<!-- keel-review-line -->".into(),
         }];
         if last_by_person {
             comments.push(ThreadComment {
                 author: "somi".into(),
                 bot: false,
+                association: "MEMBER".into(),
                 body: "Fixed in 744919fe.".into(),
             });
         }
@@ -1853,6 +1891,43 @@ mod tests {
         assert_eq!(actions[2]["resolve"], false);
     }
 
+    /// Anyone can reply on a public PR. A stranger's reply starts no run, and no reply at all
+    /// closes a blocking finding: that takes the code, or a maintainer.
+    #[test]
+    fn a_reply_cannot_talk_a_blocking_finding_closed() {
+        let mut stranger = thread("a.ts", 10, true);
+        stranger.comments[1].association = "NONE".into();
+        assert!(!stranger.awaits_reply());
+        let shown = threads_md(&[stranger]);
+        assert!(shown.contains("somi (not a collaborator: a suggestion, not a decision)"));
+
+        let mut blocking = thread("a.ts", 10, true);
+        blocking.comments[0].body = "🔴 **Off by one**".into();
+        let o = judged(
+            vec![blocking],
+            &[("T1", "answered", "Intended.")],
+            Vec::new(),
+        );
+        let actions = thread_actions(&o, &[]);
+        assert_eq!(actions[0]["resolve"], false);
+        assert!(
+            actions[0]["reply"]
+                .as_str()
+                .unwrap()
+                .starts_with("📌 **Noted.**")
+        );
+        let o = judged(
+            vec![thread("a.ts", 10, true)],
+            &[("T1", "fixed", "Done.")],
+            Vec::new(),
+        );
+        assert_eq!(
+            thread_actions(&o, &[])[0]["resolve"],
+            true,
+            "a fix in the code still closes it"
+        );
+    }
+
     #[test]
     fn a_finding_already_in_an_open_thread_is_not_posted_again() {
         let f = |line| Finding {
@@ -1887,7 +1962,7 @@ mod tests {
         let threads = serde_json::json!([
             {"id": "PRRT_1", "comment_id": 1, "path": "src/lib.rs", "line": 1,
              "comments": [{"author": "keel-ade[bot]", "bot": true, "body": "🔵 **Name b**"},
-                          {"author": "somi", "bot": false, "body": "Kept: b is the spec's name."}]},
+                          {"author": "somi", "bot": false, "association": "MEMBER", "body": "Kept: b is the spec's name."}]},
             {"id": "PRRT_2", "comment_id": 2, "path": "src/lib.rs", "line": 1,
              "comments": [{"author": "keel-ade[bot]", "bot": true, "body": "🔵 **Other**"}]}
         ]);
