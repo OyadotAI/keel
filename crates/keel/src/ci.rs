@@ -33,6 +33,12 @@ pub struct Opts {
     pub out: Utf8PathBuf,
     /// Where to write the line comments, as the `comments` of a GitHub pull request review.
     pub comments: Option<Utf8PathBuf>,
+    /// The PR's open review threads from earlier runs, as the action read them (JSON).
+    pub threads: Option<Utf8PathBuf>,
+    /// Where to write what to do with each thread: a reply, and whether to resolve it (JSON).
+    pub thread_actions: Option<Utf8PathBuf>,
+    /// Answer replies on threads only: no team, no summary comment, no verdict.
+    pub replies_only: bool,
     pub minutes: u64,
     pub model: Option<String>,
 }
@@ -60,11 +66,50 @@ struct Answer {
     summary: String,
     #[serde(default)]
     findings: Vec<Finding>,
+    #[serde(default)]
     report: String,
+    #[serde(default)]
     stages: Vec<Stage>,
+    #[serde(default)]
+    threads: Vec<ThreadVerdict>,
+    #[serde(default)]
     verdict: String,
     #[serde(default)]
     reason: String,
+}
+
+/// One of Keel's open review threads, as the action read it from GitHub.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct Thread {
+    id: String,
+    comment_id: u64,
+    path: String,
+    #[serde(default)]
+    line: Option<u32>,
+    comments: Vec<ThreadComment>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ThreadComment {
+    author: String,
+    #[serde(default)]
+    bot: bool,
+    body: String,
+}
+
+impl Thread {
+    /// Whether a person spoke last: the thread is waiting on Keel.
+    fn awaits_reply(&self) -> bool {
+        self.comments.last().is_some_and(|c| !c.bot)
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ThreadVerdict {
+    thread: String,
+    status: String,
+    #[serde(default)]
+    reply: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -95,6 +140,8 @@ struct Outcome {
     hunks: Vec<(String, u32, u32)>,
     /// `https://github.com/<owner>/<repo>`, when known, so a finding links to its line.
     web: Option<String>,
+    /// The open threads this run was shown, in `T1…` order.
+    threads: Vec<Thread>,
     sha: String,
     base: String,
     took: Duration,
@@ -248,9 +295,12 @@ fn review(
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .unwrap_or_default();
     let pr = &event["pull_request"];
+    // From the event as well as GITHUB_BASE_REF: a `pull_request_review_comment` run has the
+    // pull request in its payload but no GITHUB_BASE_REF.
     let base = opts
         .base
         .clone()
+        .or_else(|| pr["base"]["ref"].as_str().map(|b| format!("origin/{b}")))
         .or_else(|| get(env, "GITHUB_BASE_REF").map(|b| format!("origin/{b}")))
         .unwrap_or_else(|| "origin/main".into());
     // HEAD of a `pull_request` checkout is the merge commit; the commit the author pushed is the
@@ -260,18 +310,39 @@ fn review(
         .map(str::to_owned)
         .or_else(|| crate::git::trimmed(repo, &["rev-parse", "HEAD"]).ok())
         .unwrap_or_default();
+    let threads: Vec<Thread> = opts
+        .threads
+        .as_ref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    // A reply run answers only the threads a person spoke in last; with none, there is nothing to
+    // say and nothing is spent.
+    let threads: Vec<Thread> = if opts.replies_only {
+        threads.into_iter().filter(Thread::awaits_reply).collect()
+    } else {
+        threads
+    };
+    if opts.replies_only && threads.is_empty() {
+        eprintln!("keel review-pr: no review thread is waiting on a reply");
+        if let Some(path) = &opts.thread_actions {
+            let _ = std::fs::write(path, "[]");
+        }
+        return 0;
+    }
     let started = Instant::now();
     let web = match (get(env, "GITHUB_SERVER_URL"), get(env, "GITHUB_REPOSITORY")) {
         (Some(server), Some(repository)) => Some(format!("{server}/{repository}")),
         _ => None,
     };
 
-    let outcome = match prepare(repo, &base, pr) {
+    let outcome = match prepare(repo, &base, pr, &threads) {
         Err(why) => Outcome {
             verdict: Verdict::None(format!("Keel could not prepare the review: {why}")),
             answer: None,
             hunks: Vec::new(),
             web,
+            threads: threads.clone(),
             sha,
             base: base.clone(),
             took: started.elapsed(),
@@ -291,12 +362,14 @@ fn review(
                 opts.model.as_deref(),
                 ceiling,
                 stop,
+                opts.replies_only,
             );
             Outcome {
                 verdict,
                 answer,
                 hunks: prepared.hunks.clone(),
                 web,
+                threads: threads.clone(),
                 sha,
                 base: base.clone(),
                 took: started.elapsed(),
@@ -310,6 +383,30 @@ fn review(
         .filter_map(|k| get(env, k))
         .filter(|v| v.len() >= 8)
         .collect();
+    if let Some(path) = &opts.thread_actions {
+        let actions = thread_actions(&outcome, &secrets);
+        let json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".into());
+        if let Err(e) = std::fs::write(path, json) {
+            eprintln!("keel review-pr: could not write {path}: {e}");
+            return 2;
+        }
+    }
+    if opts.replies_only {
+        return match &outcome.verdict {
+            Verdict::None(why) => {
+                eprintln!("keel review-pr: the replies were not answered: {why}");
+                2
+            }
+            _ => {
+                eprintln!(
+                    "keel review-pr: answered {} thread(s) ({})",
+                    outcome.threads.len(),
+                    clock(outcome.took)
+                );
+                0
+            }
+        };
+    }
     let text = render(&outcome, &secrets);
     // The whole report goes to the log; the comment may be cut.
     println!("{text}");
@@ -434,7 +531,12 @@ fn capped(patch: &str) -> (String, bool) {
     (out, true)
 }
 
-fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepared, String> {
+fn prepare(
+    repo: &Utf8Path,
+    base: &str,
+    pr: &serde_json::Value,
+    threads: &[Thread],
+) -> Result<Prepared, String> {
     crate::git::trimmed(
         repo,
         &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
@@ -613,6 +715,10 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
     ] {
         std::fs::write(evidence.join(name), text).map_err(|e| format!("{name}: {e}"))?;
     }
+    if !threads.is_empty() {
+        std::fs::write(evidence.join("threads.md"), threads_md(threads))
+            .map_err(|e| format!("threads.md: {e}"))?;
+    }
     eprintln!(
         "keel review-pr: reviewing {}{}",
         stat.lines().last().unwrap_or("no changes").trim(),
@@ -632,6 +738,7 @@ fn ask(
     model: Option<&str>,
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
+    replies_only: bool,
 ) -> (Verdict, Option<Answer>, Option<f64>) {
     // Said, because the agent cannot see it: on the first live run it flagged a checkout with no
     // `ref` as letting the PR rewrite its reviewers, which is exactly what this function undoes.
@@ -641,7 +748,11 @@ fn ask(
          directory is the copy from `{}`, not the PR's (the PR's own versions are in \
          `diff.patch`), and the team you are running is that copy. Whatever runs this review \
          (a workflow, a checkout step) does not need to do it again.",
-        team::PR_REVIEW,
+        if replies_only {
+            team::PR_REPLIES
+        } else {
+            team::PR_REVIEW
+        },
         prepared.evidence,
         prepared.base
     );
@@ -659,7 +770,11 @@ fn ask(
                 .map(|(k, v)| (k, v)),
         )
         .args(["-p", &prompt, "--output-format", "json", "--json-schema"])
-        .arg(team::PR_REVIEW_SCHEMA)
+        .arg(if replies_only {
+            team::PR_REPLIES_SCHEMA
+        } else {
+            team::PR_REVIEW_SCHEMA
+        })
         .args([
             "--permission-mode",
             "dontAsk",
@@ -752,6 +867,16 @@ fn ask(
     let answer = reply
         .get("structured_output")
         .and_then(|v| serde_json::from_value::<Answer>(v.clone()).ok());
+    if replies_only {
+        return match answer {
+            Some(a) => (Verdict::Ship, Some(a), cost),
+            None => (
+                Verdict::None("The reply finished without an answer Keel could read.".into()),
+                None,
+                cost,
+            ),
+        };
+    }
     // A partial review is no review: measured on the first live run, the agent started `pm`,
     // answered before the rest, and the check failed on one stage's opinion of the PR.
     let missing: Vec<&str> = answer.as_ref().map_or(Vec::new(), |a| {
@@ -778,6 +903,83 @@ fn ask(
     };
     let answer = answer.filter(|_| !matches!(verdict, Verdict::None(_)));
     (verdict, answer, cost)
+}
+
+/// The open threads as the agent reads them: numbered, with every reply in order.
+fn threads_md(threads: &[Thread]) -> String {
+    let mut out = String::from("# Open review threads\n");
+    for (i, t) in threads.iter().enumerate() {
+        out.push_str(&format!(
+            "\n## T{} — `{}:{}`\n\n",
+            i + 1,
+            t.path,
+            t.line.map_or("?".into(), |l| l.to_string())
+        ));
+        for c in &t.comments {
+            let who = if c.bot { "Keel" } else { c.author.as_str() };
+            let body = c
+                .body
+                .replace("<!-- keel-review-line -->", "")
+                .replace("<!-- keel-review-reply -->", "");
+            out.push_str(&format!("**{who}:**\n\n{}\n\n", body.trim()));
+        }
+    }
+    out
+}
+
+/// What to do with each thread the agent judged: a reply, and whether to resolve it.
+///
+/// `still open` is said only when a person spoke last, so a thread nobody has touched is not
+/// answered again on every push.
+fn thread_actions(o: &Outcome, secrets: &[&str]) -> Vec<serde_json::Value> {
+    let Some(a) = &o.answer else {
+        return Vec::new();
+    };
+    let sha: String = o.sha.chars().take(7).collect();
+    a.threads
+        .iter()
+        .filter_map(|v| {
+            let n: usize = v
+                .thread
+                .trim()
+                .trim_start_matches(['T', 't'])
+                .parse()
+                .ok()?;
+            let t = o.threads.get(n.checked_sub(1)?)?;
+            let reply = v.reply.trim();
+            let (head, resolve) = match v.status.as_str() {
+                "fixed" if sha.is_empty() => ("✅ **Fixed.**".to_string(), true),
+                "fixed" => (format!("✅ **Fixed** in `{sha}`."), true),
+                "answered" => ("👍 **Acknowledged.**".to_string(), true),
+                _ if reply.is_empty() || !t.awaits_reply() => return None,
+                _ => ("🔁 **Still open.**".to_string(), false),
+            };
+            let body = format!("{head} {reply}\n\n<!-- keel-review-reply -->").replace(" \n", "\n");
+            Some(serde_json::json!({
+                "thread_id": t.id,
+                "comment_id": t.comment_id,
+                "reply": clean(body, secrets),
+                "resolve": resolve,
+            }))
+        })
+        .collect()
+}
+
+/// Whether a thread this run left open already covers this finding: the same file, within a few
+/// lines. One finding is one thread, however many pushes it survives.
+fn already_open(o: &Outcome, f: &Finding) -> bool {
+    let resolved: Vec<&str> = o.answer.as_ref().map_or(Vec::new(), |a| {
+        a.threads
+            .iter()
+            .filter(|v| v.status != "open")
+            .map(|v| v.thread.trim())
+            .collect()
+    });
+    o.threads.iter().enumerate().any(|(i, t)| {
+        !resolved.contains(&format!("T{}", i + 1).as_str())
+            && t.path == f.path
+            && t.line.is_some_and(|l| l.abs_diff(f.line) <= 5)
+    })
 }
 
 fn clock(d: Duration) -> String {
@@ -830,7 +1032,7 @@ fn line_comments(o: &Outcome, secrets: &[&str]) -> Vec<serde_json::Value> {
     };
     a.findings
         .iter()
-        .filter(|f| in_diff(o, f))
+        .filter(|f| in_diff(o, f) && !already_open(o, f))
         .map(|f| {
             let body = format!(
                 "{} **{}**\n\n{}\n\n<sub>Keel review · {}</sub>\n<!-- keel-review-line -->",
@@ -1088,7 +1290,7 @@ mod tests {
     #[test]
     fn the_team_is_the_base_branch_s_not_the_pr_s() {
         let (_dir, root) = pr_repo();
-        let p = prepare(&root, "main", &serde_json::Value::Null).unwrap();
+        let p = prepare(&root, "main", &serde_json::Value::Null, &[]).unwrap();
         let read = |path: &str| std::fs::read_to_string(p.tree.join(path)).ok();
         assert_eq!(
             read(".claude/agents/reviewer.md").as_deref(),
@@ -1152,6 +1354,9 @@ mod tests {
             base: Some("main".into()),
             out: root.join("report.md"),
             comments: Some(root.join("comments.json")),
+            threads: None,
+            thread_actions: Some(root.join("actions.json")),
+            replies_only: false,
             minutes,
             model: None,
         }
@@ -1323,7 +1528,7 @@ mod tests {
         std::fs::remove_file(root.join("src/lib.rs")).unwrap();
         std::os::unix::fs::symlink("/etc/hosts", root.join("src/lib.rs")).unwrap();
         git(&root, &["commit", "-qam", "link out"]);
-        let p = prepare(&root, "main", &serde_json::Value::Null).unwrap();
+        let p = prepare(&root, "main", &serde_json::Value::Null, &[]).unwrap();
         assert_eq!(
             std::fs::read_to_string(p.tree.join("CLAUDE.md")).unwrap(),
             "base agents rules\n"
@@ -1481,6 +1686,7 @@ mod tests {
                 finding("src/pager.py", 4, "blocking", "Page 1 | skips items"),
             ],
             report: "x".repeat(70_000),
+            threads: Vec::new(),
             stages: vec![Stage {
                 name: "security".into(),
                 ran: false,
@@ -1494,6 +1700,7 @@ mod tests {
             answer: Some(answer),
             hunks: vec![("src/pager.py".into(), 1, 6)],
             web: Some("https://github.com/o/r".into()),
+            threads: Vec::new(),
             sha: "0123456789abcdef".into(),
             base: "origin/main".into(),
             took: Duration::from_secs(372),
@@ -1536,6 +1743,191 @@ mod tests {
         );
     }
 
+    fn thread(path: &str, line: u32, last_by_person: bool) -> Thread {
+        let mut comments = vec![ThreadComment {
+            author: "keel-ade[bot]".into(),
+            bot: true,
+            body: "🟡 **Stale overlay**\n\nIt never clears.\n<!-- keel-review-line -->".into(),
+        }];
+        if last_by_person {
+            comments.push(ThreadComment {
+                author: "somi".into(),
+                bot: false,
+                body: "Fixed in 744919fe.".into(),
+            });
+        }
+        Thread {
+            id: format!("PRRT_{path}{line}"),
+            comment_id: 7,
+            path: path.into(),
+            line: Some(line),
+            comments,
+        }
+    }
+
+    fn judged(
+        threads: Vec<Thread>,
+        verdicts: &[(&str, &str, &str)],
+        findings: Vec<Finding>,
+    ) -> Outcome {
+        Outcome {
+            verdict: Verdict::Ship,
+            answer: Some(Answer {
+                summary: String::new(),
+                findings,
+                report: String::new(),
+                stages: Vec::new(),
+                threads: verdicts
+                    .iter()
+                    .map(|(t, status, reply)| ThreadVerdict {
+                        thread: t.to_string(),
+                        status: status.to_string(),
+                        reply: reply.to_string(),
+                    })
+                    .collect(),
+                verdict: "ship".into(),
+                reason: String::new(),
+            }),
+            hunks: vec![("a.ts".into(), 1, 100)],
+            web: None,
+            threads,
+            sha: "744919fe0000".into(),
+            base: "origin/develop".into(),
+            took: Duration::ZERO,
+            cost: None,
+        }
+    }
+
+    /// The PR #300 case: an author answered every finding. Each one is acknowledged in its own
+    /// thread and resolved, and nothing is deleted.
+    #[test]
+    fn an_answered_thread_is_acknowledged_and_resolved() {
+        let o = judged(
+            vec![
+                thread("a.ts", 10, true),
+                thread("a.ts", 40, true),
+                thread("b.go", 5, true),
+                thread("c.go", 9, false),
+            ],
+            &[
+                ("T1", "fixed", "The overlay now clears when rows change."),
+                (
+                    "T2",
+                    "answered",
+                    "Deliberate: router.refresh() would call Stripe per agency.",
+                ),
+                (
+                    "T3",
+                    "open",
+                    "The audit write can still fail after the link is minted.",
+                ),
+                ("T4", "open", "Nothing new."),
+            ],
+            Vec::new(),
+        );
+        let actions = thread_actions(&o, &[]);
+        assert_eq!(
+            actions.len(),
+            3,
+            "an untouched open thread is not answered again: {actions:?}"
+        );
+        assert_eq!(
+            actions[0]["reply"],
+            "✅ **Fixed** in `744919f`. The overlay now clears when rows change.\n\n<!-- keel-review-reply -->"
+        );
+        assert_eq!(actions[0]["resolve"], true);
+        assert_eq!(actions[0]["thread_id"], "PRRT_a.ts10");
+        assert!(
+            actions[1]["reply"]
+                .as_str()
+                .unwrap()
+                .starts_with("👍 **Acknowledged.** Deliberate")
+        );
+        assert_eq!(actions[1]["resolve"], true);
+        assert!(
+            actions[2]["reply"]
+                .as_str()
+                .unwrap()
+                .starts_with("🔁 **Still open.**")
+        );
+        assert_eq!(actions[2]["resolve"], false);
+    }
+
+    #[test]
+    fn a_finding_already_in_an_open_thread_is_not_posted_again() {
+        let f = |line| Finding {
+            path: "a.ts".into(),
+            line,
+            severity: "warning".into(),
+            title: "Stale overlay".into(),
+            body: String::new(),
+        };
+        let o = judged(
+            vec![thread("a.ts", 10, true)],
+            &[("T1", "open", "still")],
+            vec![f(12), f(60)],
+        );
+        let lines: Vec<_> = line_comments(&o, &[])
+            .iter()
+            .map(|c| c["line"].clone())
+            .collect();
+        assert_eq!(lines, vec![serde_json::json!(60)]);
+        // Once the thread is resolved the same spot can carry a new finding.
+        let o = judged(
+            vec![thread("a.ts", 10, true)],
+            &[("T1", "fixed", "done")],
+            vec![f(12)],
+        );
+        assert_eq!(line_comments(&o, &[]).len(), 1);
+    }
+
+    #[test]
+    fn a_reply_run_answers_only_threads_a_person_spoke_in_last() {
+        let (_dir, root) = pr_repo();
+        let threads = serde_json::json!([
+            {"id": "PRRT_1", "comment_id": 1, "path": "src/lib.rs", "line": 1,
+             "comments": [{"author": "keel-ade[bot]", "bot": true, "body": "🔵 **Name b**"},
+                          {"author": "somi", "bot": false, "body": "Kept: b is the spec's name."}]},
+            {"id": "PRRT_2", "comment_id": 2, "path": "src/lib.rs", "line": 1,
+             "comments": [{"author": "keel-ade[bot]", "bot": true, "body": "🔵 **Other**"}]}
+        ]);
+        std::fs::write(root.join("threads.json"), threads.to_string()).unwrap();
+        let seen = root.join("threads-seen.md");
+        let answer = serde_json::json!({"structured_output": {"threads": [{"thread": "T1", "status": "answered", "reply": "Agreed."}]}});
+        let program = stub(
+            &root,
+            &format!(
+                "dir=$(printf '%s' \"$2\" | sed -n 's/.*The evidence folder is `\\([^`]*\\)`.*/\\1/p' | head -1)\ncat \"$dir/threads.md\" > '{seen}'\ncat <<'EOF'\n{answer}\nEOF"
+            ),
+        );
+        let mut o = opts(&root, 1);
+        o.threads = Some(root.join("threads.json"));
+        o.replies_only = true;
+        assert_eq!(review(&root, &o, program.as_os_str(), &env(&[]), &NEVER), 0);
+        assert!(
+            !root.join("report.md").exists(),
+            "a reply run posts no summary"
+        );
+        let shown = std::fs::read_to_string(&seen).unwrap();
+        assert!(shown.contains("## T1") && shown.contains("Kept: b is the spec's name."));
+        assert!(
+            !shown.contains("Other"),
+            "a thread Keel spoke in last is not reopened"
+        );
+        let actions: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("actions.json")).unwrap())
+                .unwrap();
+        assert_eq!(actions[0]["thread_id"], "PRRT_1");
+        assert_eq!(actions[0]["resolve"], true);
+
+        // Nobody waiting: nothing runs and nothing is spent.
+        let quiet = serde_json::json!([threads[1]]);
+        std::fs::write(root.join("threads.json"), quiet.to_string()).unwrap();
+        let program = stub(&root, &format!("touch '{root}/ran'"));
+        assert_eq!(review(&root, &o, program.as_os_str(), &env(&[]), &NEVER), 0);
+        assert!(!root.join("ran").exists());
+    }
+
     #[test]
     fn hunks_are_the_new_side_of_the_diff() {
         let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,4 @@\n x\n+y\n@@ -10 +11 @@\n-z\n+w\ndiff --git a/gone b/gone\n--- a/gone\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n";
@@ -1557,7 +1949,7 @@ mod tests {
         git(&root, &["commit", "-qm", "main moves"]);
         git(&root, &["merge", "-q", "--no-ff", "pr", "-m", "merge"]);
         let pr = serde_json::json!({"head": {"sha": pushed}});
-        let p = prepare(&root, "main~1", &pr).unwrap();
+        let p = prepare(&root, "main~1", &pr, &[]).unwrap();
         assert!(
             !p.tree.join("src/other.rs").exists(),
             "the merge's tree is not the PR's"

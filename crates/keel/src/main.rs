@@ -140,6 +140,17 @@ enum Command {
         /// pull request review (JSON).
         #[arg(long)]
         comments: Option<Utf8PathBuf>,
+        /// The PR's open Keel review threads, as JSON: each `{id, comment_id, path, line,
+        /// comments: [{author, bot, body}]}`. Each one is judged fixed, answered or still open.
+        #[arg(long)]
+        threads: Option<Utf8PathBuf>,
+        /// Where to write the reply for each thread and whether to resolve it, as JSON.
+        #[arg(long)]
+        thread_actions: Option<Utf8PathBuf>,
+        /// Answer only the threads a person replied in last, with no team and no summary. For a
+        /// `pull_request_review_comment` run.
+        #[arg(long)]
+        replies_only: bool,
         /// Stop the review after this long.
         #[arg(long, default_value_t = 30)]
         minutes: u64,
@@ -388,6 +399,9 @@ fn main() -> Result<()> {
             base,
             out,
             comments,
+            threads,
+            thread_actions,
+            replies_only,
             minutes,
             model,
         } => {
@@ -396,6 +410,9 @@ fn main() -> Result<()> {
                 base,
                 out,
                 comments,
+                threads,
+                thread_actions,
+                replies_only,
                 minutes,
                 model,
             };

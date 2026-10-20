@@ -7,15 +7,21 @@ review that could not finish.
 
 ```yaml
 name: Keel review
-on: pull_request
+on:
+  pull_request:
+  # A reply on one of Keel's threads is answered there, without re-running the team.
+  pull_request_review_comment:
+    types: [created]
 permissions:
   contents: read
   pull-requests: write
 concurrency:
-  group: keel-review-${{ github.event.pull_request.number }}
+  group: keel-review-${{ github.event.pull_request.number }}-${{ github.event_name }}
   cancel-in-progress: true
 jobs:
   review:
+    # Not for a bot's comment, Keel's own line comments included.
+    if: github.event_name == 'pull_request' || github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -64,6 +70,10 @@ jobs:
   `CLAUDE.md`. Without a team, Keel's shipped one reviews.
 - The agent can read the checkout and the diff, and nothing else. It cannot run commands, cannot
   write, and never holds the GitHub token.
+- Threads close themselves. On every push Keel reads its open line comments with their replies
+  and, in the same thread, says ✅ fixed (checked in the code, not taken on trust), 👍
+  acknowledged (a reply settles it) or 🔁 still open, resolving the first two. A reply gets its
+  answer right away, from one reviewer rather than the whole team. Keel never deletes a thread.
 - The verdict is advisory. It comes from an agent that read the PR's text, and that text can
   mislead it.
 - Exit codes of `keel review-pr`, for running it outside this action: 0 ship, 1 do not ship, 2 no
