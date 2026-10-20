@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: OyadotAI/keel-releases/review@v0.4.13
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -65,7 +66,8 @@ jobs:
           with:
             app-id: ${{ secrets.KEEL_APP_ID }}
             private-key: ${{ secrets.KEEL_APP_PRIVATE_KEY }}
-            permission-contents: read
+            # write only because resolveReviewThread requires it
+            permission-contents: write
             permission-issues: write
             permission-pull-requests: write
         - uses: OyadotAI/keel-releases/review@review-v8
