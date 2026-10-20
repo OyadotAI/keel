@@ -125,12 +125,14 @@ runs:
         id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
           --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- keel-review -->"))) | .id' | head -1)"
         if [ -n "$id" ]; then
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" >/dev/null
+          me="$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" --jq .user.login)"
         else
-          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" >/dev/null
+          me="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" --jq .user.login)"
         fi
+        # Only this token's own line comments, ending in the marker: another bot quoting the
+        # marker, or one whose comment merely mentions it, keeps its comment.
         gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" --paginate \
-          --jq '.[] | select(.user.type == "Bot" and (.body | contains("<!-- keel-review-line -->"))) | .id' |
+          --jq ".[] | select(.user.login == \"$me\" and (.body | endswith(\"<!-- keel-review-line -->\"))) | .id" |
           while read -r old; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/pulls/comments/$old" >/dev/null || true; done
         if [ -s "$LINES" ] && [ "$(jq length "$LINES")" -gt 0 ]; then
           # A line comment GitHub refuses fails the whole review; the summary has them all anyway.
