@@ -12,6 +12,7 @@ mod approve;
 mod askmcp;
 mod aws;
 mod chat;
+mod ci;
 mod clitools;
 mod completion;
 mod connect;
@@ -116,6 +117,31 @@ enum Command {
         /// Exit non-zero when anything critical or high is outstanding, for CI.
         #[arg(long)]
         strict: bool,
+    },
+
+    /// Review a pull request with this repository's team, for CI.
+    ///
+    /// Runs the review stages (pm, designer, principal, reviewer, security, reliability, qa)
+    /// read-only, with the team from the base branch, and writes the PR comment to --out. Exits
+    /// 0 for ship, 1 for do not ship, 2 when there is no verdict. Credentials are Claude Code's
+    /// own variables: ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_BASE_URL with
+    /// ANTHROPIC_AUTH_TOKEN for a proxy. With none set it skips and exits 0.
+    ReviewPr {
+        /// Repository to review, checked out at the PR. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: Utf8PathBuf,
+        /// The branch to review against. Defaults to origin/$GITHUB_BASE_REF, else origin/main.
+        #[arg(long)]
+        base: Option<String>,
+        /// Where to write the comment, as markdown.
+        #[arg(long, default_value = "keel-review.md")]
+        out: Utf8PathBuf,
+        /// Stop the review after this long.
+        #[arg(long, default_value_t = 30)]
+        minutes: u64,
+        /// The model to review with; Claude Code's default otherwise.
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// The gate a Keel-driven `agy` runs before every tool. Prints one decision; never nothing.
@@ -353,6 +379,23 @@ fn main() -> Result<()> {
                 keel_license::mint(&signing, &license).map_err(anyhow::Error::msg)?
             );
         }
+        Command::ReviewPr {
+            path,
+            base,
+            out,
+            minutes,
+            model,
+        } => {
+            // Its own exit codes: an `Err` from main is 1, which would read as "do not ship".
+            let opts = ci::Opts {
+                base,
+                out,
+                minutes,
+                model,
+            };
+            std::process::exit(ci::run(&path, &opts));
+        }
+
         Command::Scan { path, json, strict } => {
             let ctx = RepoContext::load(&path)
                 .with_context(|| format!("reading repository at {path}"))?;

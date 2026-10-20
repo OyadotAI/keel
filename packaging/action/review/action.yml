@@ -1,0 +1,142 @@
+# Keel review: the repository's team reviews a pull request and posts one comment.
+#
+# Published to OyadotAI/keel-releases at `review/action.yml` by release.yml, so it is used as
+# `OyadotAI/keel-releases/review@v<version>` and downloads the `keel` of that same release.
+# Everything that decides anything is `keel review-pr`; this only installs, runs and posts.
+#
+# Use it under `pull_request`, never `pull_request_target`: the second runs the PR's code with
+# this repository's secrets. Under `pull_request` a fork's PR gets no secrets, and the review
+# skips with one line in the log rather than failing.
+name: Keel review
+description: Review a pull request with the repository's Keel team and post one comment.
+branding:
+  icon: check-circle
+  color: blue
+inputs:
+  anthropic-api-key:
+    description: An Anthropic API key. Or use claude-code-oauth-token, or api-proxy-url.
+    required: false
+  claude-code-oauth-token:
+    description: A Claude Code OAuth token (`claude setup-token`).
+    required: false
+  api-proxy-url:
+    description: An http(s) gateway in front of the Anthropic API (ANTHROPIC_BASE_URL). Treated as a secret.
+    required: false
+  api-proxy-token:
+    description: Bearer token for the gateway (ANTHROPIC_AUTH_TOKEN). Optional.
+    required: false
+  fail-on-block:
+    description: Fail the check when the verdict is "do not ship" or there is no verdict.
+    default: "true"
+  minutes:
+    description: Stop the review after this many minutes.
+    default: "30"
+  model:
+    description: The model to review with. Claude Code's default otherwise.
+    required: false
+  version:
+    # Written in by release.yml, so a pin by SHA runs the same release a pin by tag does.
+    description: The Keel release to run. Defaults to the release this action was published with.
+    default: "__KEEL_VERSION__"
+  claude-version:
+    description: The Claude Code version to install.
+    default: "2.1.304"
+  github-token:
+    description: Posts the comment. Needs pull-requests write.
+    default: ${{ github.token }}
+outputs:
+  verdict:
+    description: ship, do not ship, none, or skipped.
+    value: ${{ steps.review.outputs.verdict }}
+runs:
+  using: composite
+  steps:
+    - name: Mask the proxy URL
+      shell: bash
+      env:
+        URL: ${{ inputs.api-proxy-url }}
+      run: if [ -n "$URL" ]; then echo "::add-mask::$URL"; fi
+
+    - name: Install keel and Claude Code
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VERSION: ${{ inputs.version }}
+        CLAUDE_VERSION: ${{ inputs.claude-version }}
+      run: |
+        set -euo pipefail
+        case "$VERSION" in
+          v*) ;;
+          *) echo "keel review: this copy of the action was not published by a release; set version (v0.4.13)." >&2; exit 1 ;;
+        esac
+        dir="$RUNNER_TEMP/keel-bin"
+        mkdir -p "$dir"
+        gh release download "$VERSION" -R OyadotAI/keel-releases -p keel-linux-x64.tar.gz -D "$dir" --clobber
+        tar -xzf "$dir/keel-linux-x64.tar.gz" -C "$dir"
+        echo "$dir" >> "$GITHUB_PATH"
+        npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_VERSION"
+
+    # No GH_TOKEN here: `keel review-pr` passes the agent an allowlisted environment anyway, and
+    # the write token is not in this step to be passed.
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_BASE_URL: ${{ inputs.api-proxy-url }}
+        ANTHROPIC_AUTH_TOKEN: ${{ inputs.api-proxy-token }}
+        MINUTES: ${{ inputs.minutes }}
+        MODEL: ${{ inputs.model }}
+        OUT: ${{ runner.temp }}/keel-review.md
+      run: |
+        rm -f "$OUT"
+        args=(review-pr --out "$OUT" --minutes "$MINUTES")
+        if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+        set +e
+        keel "${args[@]}"
+        code=$?
+        set -e
+        case "$code" in
+          0) if [ -f "$OUT" ]; then verdict=ship; else verdict=skipped; fi ;;
+          1) verdict="do not ship" ;;
+          *) verdict=none ;;
+        esac
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+    # One comment per PR: the marker finds it, and only a bot's is edited, so a person quoting
+    # the marker does not get their comment overwritten.
+    - name: Post the comment
+      if: always() && steps.review.outputs.code != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        OUT: ${{ runner.temp }}/keel-review.md
+      run: |
+        set -euo pipefail
+        [ -f "$OUT" ] || exit 0
+        if [ -z "$PR" ]; then echo "keel review: not a pull_request event, so there is nowhere to comment." >&2; exit 0; fi
+        id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+          --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- keel-review -->"))) | .id' | head -1)"
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" >/dev/null
+        else
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" >/dev/null
+        fi
+
+    - name: Verdict
+      shell: bash
+      env:
+        CODE: ${{ steps.review.outputs.code }}
+        FAIL: ${{ inputs.fail-on-block }}
+        OUT: ${{ runner.temp }}/keel-review.md
+      run: |
+        case "$CODE" in
+          0) exit 0 ;;
+          1) echo "keel review: do not ship." >&2 ;;
+          *) if [ -f "$OUT" ]; then echo "keel review: no verdict; the comment says why." >&2
+             else echo "keel review: keel review-pr exited $CODE without a report; see the Review step." >&2; exit 1; fi ;;
+        esac
+        [ "$FAIL" = "true" ] && exit 1 || exit 0

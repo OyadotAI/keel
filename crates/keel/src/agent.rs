@@ -274,7 +274,7 @@ pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
 ///
 /// Ordered, and the order is the whole trick: "no conversation found" contains "not found", and
 /// a generic bucket that swallows the specific one is how a report stays useless.
-fn classify(stderr: &str) -> &'static str {
+pub(crate) fn classify(stderr: &str) -> &'static str {
     let s = stderr.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| s.contains(n));
     if s.is_empty() {
@@ -328,7 +328,7 @@ fn classify(stderr: &str) -> &'static str {
 /// this workspace has none and one dependency for five patterns is not a trade worth making.
 /// Conservative by construction: a token is kept only when it cannot be a path, a URL, a quoted
 /// name, an address, an id or anything long enough to be a secret.
-fn redact(stderr: &str) -> String {
+pub(crate) fn redact(stderr: &str) -> String {
     let line = stderr.lines().next_back().unwrap_or_default();
     let mut out = String::new();
     for token in line.split_whitespace() {

@@ -118,7 +118,19 @@ pub fn output(command: Command) -> std::io::Result<Output> {
 }
 
 /// The same, with the ceiling named — so a test can assert the timeout without sitting through it.
-pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result<Output> {
+pub fn output_within(command: Command, ceiling: Duration) -> std::io::Result<Output> {
+    static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    output_until(command, ceiling, &NEVER)
+}
+
+/// [`output_within`], also ended early — tree and all, as `Interrupted` — once `stop` is set: for
+/// `keel review-pr`, whose CI job is cancelled by a signal that its own child, leading a group of
+/// its own, never receives.
+pub fn output_until(
+    mut command: Command,
+    ceiling: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Output> {
     use crate::signals::Leads;
     // Its own group, so a timeout ends everything it started (`crate::signals`): a `claude` or a
     // credential helper that forks and hangs left its children reparented to init.
@@ -177,6 +189,14 @@ pub fn output_within(mut command: Command, ceiling: Duration) -> std::io::Result
     let status = loop {
         match child.try_wait()? {
             Some(status) => break status,
+            None if stop.load(std::sync::atomic::Ordering::Relaxed) => {
+                crate::signals::end_tree(pid);
+                let _ = child.wait();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "was cancelled",
+                ));
+            }
             None if Instant::now() >= deadline => {
                 // The readers end when the pipes close, which ending the whole group does.
                 crate::signals::end_tree(pid);

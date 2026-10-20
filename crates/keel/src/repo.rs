@@ -1592,7 +1592,7 @@ pub fn git_diff_area(root: &Utf8Path, path: &str, staged: Option<bool>) -> DiffR
 /// prefix, and a prefix's numbers are exactly as true as they were. Whole-hunks-only also failed
 /// on the one case that motivated the cap, because a newly written file is a single hunk with
 /// every line in it, so the 3.8 MB went out unchanged with a note on top saying it had not.
-const MAX_DIFF_LINES: usize = 3_000;
+pub(crate) const MAX_DIFF_LINES: usize = 3_000;
 
 fn capped(hunks: Vec<Hunk>) -> (Vec<Hunk>, Option<String>) {
     let total: usize = hunks.iter().map(|h| h.lines.len()).sum();
