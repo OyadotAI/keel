@@ -442,12 +442,19 @@ Run the team's subagents with the Task tool, **one after another**, each given t
 5. `security` and `reliability` — each only when its description says the change is its kind of change. Otherwise skipped, with the reason.
 6. `qa` — what the change needs verified and what the tests do and do not cover. It cannot run the app here; it reads.
 
-Then answer with the report the lifecycle describes: what was asked, what each stage found in a line or a short list, findings ranked with `path:line`, and what no stage could check. The verdict is `do not ship` when any stage found a defect that should block a merge (a bug on a reachable path, a security exposure, data loss, a broken contract, the change not doing what it says); otherwise `ship`, with the non-blocking findings still listed. Never invent a stage's result: a stage that could not run is reported as not run."#;
+Then answer, short — the person reads this on a pull request between other work:
+
+- `summary`: two sentences at most. What the change does and whether it holds.
+- `stages`: every stage, with `note` saying in under fifteen words what it found, or why it was skipped.
+- `findings`: every finding worth acting on, each pinned to the exact `path` and `line` in the PR's version of the file — the line numbers on the `+` side of `diff.patch`, or the line you read in the working directory. One finding per line; a finding that spans several lines names the first. `severity` is `blocking` (should stop the merge), `warning` (should be fixed, not a blocker) or `nit`. `title` is under ten words; `body` is one to three sentences: what breaks, when, and the fix.
+- `report`: the longer account, for anyone who opens it: what each stage said, and what no stage could check. Keep it under 400 words.
+
+The verdict is `do not ship` when any finding is `blocking`: a bug on a reachable path, a security exposure, data loss, a broken contract, the change not doing what it says. Otherwise `ship`. Never invent a stage's result: a stage that could not run is reported as not run."#;
 
 /// What `keel review-pr` asks Claude Code to return (`--json-schema`). The verdict is read from
 /// here and nowhere else, so text the PR's author wrote cannot become the verdict by appearing in
 /// the report.
-pub const PR_REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["report","stages","verdict","reason"],"properties":{"report":{"type":"string","description":"The team's report, markdown, without a verdict line"},"stages":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","ran","note"],"properties":{"name":{"enum":["pm","designer","principal","reviewer","security","reliability","qa"]},"ran":{"type":"boolean"},"note":{"type":"string","description":"Why it was skipped, or empty when it ran"}}}},"verdict":{"enum":["ship","do not ship"]},"reason":{"type":"string","description":"For do not ship: the blocking finding in one line"}}}"#;
+pub const PR_REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","stages","findings","report","verdict","reason"],"properties":{"summary":{"type":"string","description":"Two sentences at most"},"stages":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","ran","note"],"properties":{"name":{"enum":["pm","designer","principal","reviewer","security","reliability","qa"]},"ran":{"type":"boolean"},"note":{"type":"string","description":"What it found, or why it was skipped, in under fifteen words"}}}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","severity","title","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"severity":{"enum":["blocking","warning","nit"]},"title":{"type":"string"},"body":{"type":"string"}}}},"report":{"type":"string","description":"The longer account, markdown, under 400 words"},"verdict":{"enum":["ship","do not ship"]},"reason":{"type":"string","description":"For do not ship: the blocking finding in one line"}}}"#;
 
 /// Keel's own, not a copy of Anthropic's `frontend-design`: that one ships under its own licence
 /// and asks for boldness alone. This keeps its best idea — commit to a direction, never the

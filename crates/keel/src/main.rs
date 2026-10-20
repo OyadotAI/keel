@@ -136,6 +136,10 @@ enum Command {
         /// Where to write the comment, as markdown.
         #[arg(long, default_value = "keel-review.md")]
         out: Utf8PathBuf,
+        /// Also write each finding on a line of the diff here, as the `comments` of a GitHub
+        /// pull request review (JSON).
+        #[arg(long)]
+        comments: Option<Utf8PathBuf>,
         /// Stop the review after this long.
         #[arg(long, default_value_t = 30)]
         minutes: u64,
@@ -383,6 +387,7 @@ fn main() -> Result<()> {
             path,
             base,
             out,
+            comments,
             minutes,
             model,
         } => {
@@ -390,6 +395,7 @@ fn main() -> Result<()> {
             let opts = ci::Opts {
                 base,
                 out,
+                comments,
                 minutes,
                 model,
             };

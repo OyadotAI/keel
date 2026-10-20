@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 pub struct Opts {
     pub base: Option<String>,
     pub out: Utf8PathBuf,
+    /// Where to write the line comments, as the `comments` of a GitHub pull request review.
+    pub comments: Option<Utf8PathBuf>,
     pub minutes: u64,
     pub model: Option<String>,
 }
@@ -54,6 +56,10 @@ struct Stage {
 
 #[derive(Debug, serde::Deserialize)]
 struct Answer {
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    findings: Vec<Finding>,
     report: String,
     stages: Vec<Stage>,
     verdict: String,
@@ -61,9 +67,34 @@ struct Answer {
     reason: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct Finding {
+    path: String,
+    line: u32,
+    severity: String,
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+
+impl Finding {
+    fn mark(&self) -> &'static str {
+        match self.severity.as_str() {
+            "blocking" => "🔴",
+            "warning" => "🟡",
+            _ => "🔵",
+        }
+    }
+}
+
 struct Outcome {
     verdict: Verdict,
     answer: Option<Answer>,
+    /// The `+` side of every hunk, as `(path, first, last)`: the only lines GitHub takes a
+    /// review comment on. One outside them fails the whole review with a 422.
+    hunks: Vec<(String, u32, u32)>,
+    /// `https://github.com/<owner>/<repo>`, when known, so a finding links to its line.
+    web: Option<String>,
     sha: String,
     base: String,
     took: Duration,
@@ -230,11 +261,17 @@ fn review(
         .or_else(|| crate::git::trimmed(repo, &["rev-parse", "HEAD"]).ok())
         .unwrap_or_default();
     let started = Instant::now();
+    let web = match (get(env, "GITHUB_SERVER_URL"), get(env, "GITHUB_REPOSITORY")) {
+        (Some(server), Some(repository)) => Some(format!("{server}/{repository}")),
+        _ => None,
+    };
 
     let outcome = match prepare(repo, &base, pr) {
         Err(why) => Outcome {
             verdict: Verdict::None(format!("Keel could not prepare the review: {why}")),
             answer: None,
+            hunks: Vec::new(),
+            web,
             sha,
             base: base.clone(),
             took: started.elapsed(),
@@ -258,6 +295,8 @@ fn review(
             Outcome {
                 verdict,
                 answer,
+                hunks: prepared.hunks.clone(),
+                web,
                 sha,
                 base: base.clone(),
                 took: started.elapsed(),
@@ -278,6 +317,14 @@ fn review(
         eprintln!("keel review-pr: could not write {}: {e}", opts.out);
         return 2;
     }
+    if let Some(path) = &opts.comments {
+        let comments = line_comments(&outcome, &secrets);
+        let json = serde_json::to_string(&comments).unwrap_or_else(|_| "[]".into());
+        if let Err(e) = std::fs::write(path, json) {
+            eprintln!("keel review-pr: could not write {path}: {e}");
+            return 2;
+        }
+    }
     let (word, code) = match &outcome.verdict {
         Verdict::Ship => ("ship", 0),
         Verdict::Block(_) => ("do not ship", 1),
@@ -295,6 +342,7 @@ fn review(
 struct Prepared {
     repo: Utf8PathBuf,
     base: String,
+    hunks: Vec<(String, u32, u32)>,
     tree: Utf8PathBuf,
     home: Utf8PathBuf,
     evidence: Utf8PathBuf,
@@ -421,6 +469,20 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
             }
         }
     }
+    // The commit the author pushed, not the merge commit a `pull_request` checkout stands on:
+    // GitHub numbers a PR's lines against the head, and a line comment from the merge's
+    // numbering lands on the wrong line as soon as the base has moved.
+    let head = pr["head"]["sha"]
+        .as_str()
+        .filter(|sha| {
+            crate::git::trimmed(
+                repo,
+                &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
+            )
+            .is_ok()
+        })
+        .unwrap_or("HEAD")
+        .to_string();
     crate::git::run(
         repo,
         // Links check out as files holding their target: the PR's checkout is its author's, and
@@ -433,12 +495,13 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
             "add",
             "--detach",
             tree.as_str(),
-            "HEAD",
+            &head,
         ],
     )?;
-    let prepared = Prepared {
+    let mut prepared = Prepared {
         repo: repo.to_owned(),
         base: base.to_string(),
+        hunks: Vec::new(),
         tree: tree.clone(),
         home,
         evidence: evidence.clone(),
@@ -521,8 +584,10 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
     );
 
     std::fs::create_dir_all(&evidence).map_err(|e| format!("evidence: {e}"))?;
-    let range = format!("{base}...HEAD");
-    let (patch, cut) = capped(&crate::git::run(repo, &["diff", "--no-color", &range])?);
+    let range = format!("{base}...{head}");
+    let full = crate::git::run(repo, &["diff", "--no-color", &range])?;
+    prepared.hunks = hunks(&full);
+    let (patch, cut) = capped(&full);
     let stat = crate::git::run(repo, &["diff", "--stat", &range])?;
     let log = crate::git::run(
         repo,
@@ -530,7 +595,7 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
             "log",
             "--oneline",
             "--no-decorate",
-            &format!("{base}..HEAD"),
+            &format!("{base}..{head}"),
         ],
     )?;
     let title = pr["title"].as_str().unwrap_or("(no title)");
@@ -722,64 +787,189 @@ fn clock(d: Duration) -> String {
 /// GitHub refuses a comment past 65,536 characters; this leaves room for everything but the body.
 const COMMENT_MAX: usize = 60_000;
 
+/// The `+` side of each hunk in a unified diff.
+fn hunks(patch: &str) -> Vec<(String, u32, u32)> {
+    let mut out = Vec::new();
+    let mut file: Option<String> = None;
+    for line in patch.lines() {
+        if let Some(path) = line.strip_prefix("+++ ") {
+            file = path.strip_prefix("b/").map(str::to_owned);
+        } else if let (Some(path), Some(rest)) = (&file, line.strip_prefix("@@ ")) {
+            let Some(new) = rest.split(' ').find_map(|w| w.strip_prefix('+')) else {
+                continue;
+            };
+            let (start, count) = new.split_once(',').unwrap_or((new, "1"));
+            if let (Ok(start), Ok(count)) = (start.parse::<u32>(), count.parse::<u32>())
+                && count > 0
+            {
+                out.push((path.clone(), start, start + count - 1));
+            }
+        }
+    }
+    out
+}
+
+/// A finding GitHub can pin to its line: inside a hunk of this PR's diff.
+fn in_diff(o: &Outcome, f: &Finding) -> bool {
+    o.hunks
+        .iter()
+        .any(|(path, first, last)| *path == f.path && (*first..=*last).contains(&f.line))
+}
+
+/// Every finding inside the diff, as a GitHub review comment on its line.
+fn line_comments(o: &Outcome, secrets: &[&str]) -> Vec<serde_json::Value> {
+    let Some(a) = &o.answer else {
+        return Vec::new();
+    };
+    a.findings
+        .iter()
+        .filter(|f| in_diff(o, f))
+        .map(|f| {
+            let body = format!(
+                "{} **{}**\n\n{}\n\n<sub>Keel review · {}</sub>\n<!-- keel-review-line -->",
+                f.mark(),
+                f.title.trim(),
+                f.body.trim(),
+                f.severity
+            );
+            serde_json::json!({
+                "path": f.path,
+                "line": f.line,
+                "side": "RIGHT",
+                "body": clean(body, secrets),
+            })
+        })
+        .collect()
+}
+
+fn clean(text: String, secrets: &[&str]) -> String {
+    let text = secrets
+        .iter()
+        .fold(text, |text, secret| text.replace(secret, "***"));
+    // Posted under the bot's name, so text the PR steered into it must not page anyone:
+    // `@name` keeps reading as itself and stops being a mention.
+    unmention(&text)
+}
+
+/// A table cell holds one line, and a `|` would end it.
+fn cell(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
+}
+
 fn render(o: &Outcome, secrets: &[&str]) -> String {
-    let heading = match o.verdict {
-        Verdict::Ship => "Ship",
-        Verdict::Block(_) => "Do not ship",
-        Verdict::None(_) => "No verdict",
+    let (mark, heading) = match o.verdict {
+        Verdict::Ship => ("✅", "Ship"),
+        Verdict::Block(_) => ("⛔", "Do not ship"),
+        Verdict::None(_) => ("⚠️", "No verdict"),
     };
     let sha: String = o.sha.chars().take(7).collect();
     let cost = o
         .cost
         .map_or("cost not reported".into(), |c| format!("${c:.2}"));
     let mut out = format!(
-        "<!-- keel-review -->\n### Keel review: {heading}\nReviewed `{sha}` against `{}` · {} · {cost}\n\n",
+        "<!-- keel-review -->\n## {mark} Keel review: {heading}\n`{sha}` vs `{}` · {} · {cost}\n\n",
         o.base,
         clock(o.took)
     );
     match (&o.verdict, &o.answer) {
         (Verdict::None(why), _) => {
             out.push_str(&format!(
-                "**No verdict.** {why}\n\nThis check failed because Keel could not finish the \
-                 review, not because of the change. Re-run the job to try again.\n"
+                "{why}\n\nThe check failed because Keel could not finish the review, not because \
+                 of the change. Re-run the job to try again.\n"
             ));
         }
         (_, None) => unreachable!("a verdict always carries its answer"),
         (verdict, Some(a)) => {
+            if let Verdict::Block(why) = verdict {
+                out.push_str(&format!("**Blocking:** {}\n\n", why.trim()));
+            }
+            if !a.summary.trim().is_empty() {
+                out.push_str(a.summary.trim());
+                out.push_str("\n\n");
+            }
+            let mut findings: Vec<&Finding> = a.findings.iter().collect();
+            findings.sort_by_key(|f| match f.severity.as_str() {
+                "blocking" => 0,
+                "warning" => 1,
+                _ => 2,
+            });
+            if findings.is_empty() {
+                out.push_str("No findings.\n\n");
+            } else {
+                out.push_str("| | Finding | Where |\n|---|---|---|\n");
+                for f in &findings {
+                    let place = format!("{}:{}", f.path, f.line);
+                    let place = match &o.web {
+                        Some(web) if !o.sha.is_empty() => {
+                            format!("[`{place}`]({web}/blob/{}/{}#L{})", o.sha, f.path, f.line)
+                        }
+                        _ => format!("`{place}`"),
+                    };
+                    let note = if in_diff(o, f) {
+                        ""
+                    } else {
+                        " (outside the diff)"
+                    };
+                    out.push_str(&format!(
+                        "| {} | {} | {place}{note} |\n",
+                        f.mark(),
+                        cell(&f.title)
+                    ));
+                }
+                out.push('\n');
+            }
+            out.push_str(&format!("**Team** {}\n\n", team_row(&a.stages)));
+            out.push_str(&format!(
+                "<details><summary>What each stage said</summary>\n\n{}\n</details>\n\n",
+                stages(&a.stages)
+            ));
             let footer = format!(
-                "\n\n**Stages**\n{}\n\n**Verdict: {}**\n\n<sub>The verdict is advisory. It comes \
-                 from an agent that read this PR's text, and that text can mislead it. The team \
-                 is from `{}`, not from this branch.</sub>\n",
-                stages(&a.stages),
-                match verdict {
-                    Verdict::Block(why) => format!("do not ship: {why}"),
-                    _ => "ship".into(),
-                },
+                "<sub>Advisory: an agent that read this PR's text wrote it, and that text can mislead \
+                 it. The team is from `{}`.</sub>\n",
                 o.base
             );
             let room = COMMENT_MAX.saturating_sub(out.len() + footer.len() + 200);
-            let report = a.report.trim();
+            let mut report = a.report.trim().to_string();
             if report.len() > room {
                 let mut end = room;
                 while !report.is_char_boundary(end) {
                     end -= 1;
                 }
-                out.push_str(&report[..end]);
+                report.truncate(end);
+                report.push_str("\n\n*Cut here. The full report is in the job log.*");
+            }
+            if !report.is_empty() {
                 out.push_str(&format!(
-                    "\n\n*Report cut at {COMMENT_MAX} characters. The full report is in the job log.*"
+                    "<details><summary>Full report</summary>\n\n{report}\n</details>\n\n"
                 ));
-            } else {
-                out.push_str(report);
             }
             out.push_str(&footer);
         }
     }
-    let out = secrets
+    clean(out, secrets)
+}
+
+fn stage_mark(name: &str, reported: &[Stage]) -> &'static str {
+    if name == "qa" {
+        return "👀";
+    }
+    match reported.iter().find(|s| s.name == name) {
+        Some(s) if s.ran => "✅",
+        Some(_) => "⏭️",
+        None => "❔",
+    }
+}
+
+/// One line: every stage and whether it ran.
+fn team_row(reported: &[Stage]) -> String {
+    team::PR_STAGES
         .iter()
-        .fold(out, |text, secret| text.replace(secret, "***"));
-    // The comment is posted under the bot's name, so text the PR steered into it must not page
-    // anyone: `@name` keeps reading as itself and stops being a mention.
-    unmention(&out)
+        .map(|name| format!("{} {name}", stage_mark(name, reported)))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn unmention(text: &str) -> String {
@@ -798,17 +988,19 @@ fn stages(reported: &[Stage]) -> String {
     team::PR_STAGES
         .iter()
         .map(|name| {
-            let line = if *name == "qa" {
-                "read the change and did not run it. CI cannot launch the app.".to_string()
-            } else {
-                match reported.iter().find(|s| s.name == *name) {
-                    Some(s) if s.ran => "ran".into(),
-                    Some(s) if s.note.trim().is_empty() => "skipped".into(),
-                    Some(s) => format!("skipped. {}", s.note.trim()),
-                    None => "not reported".into(),
-                }
+            let found = reported.iter().find(|s| s.name == *name);
+            let note = match found {
+                Some(s) if !s.note.trim().is_empty() => s.note.trim().to_string(),
+                Some(s) if s.ran => "ran".into(),
+                Some(_) => "skipped".into(),
+                None => "not reported".into(),
             };
-            format!("- {name}: {line}")
+            let note = if *name == "qa" {
+                format!("{note} (read the change; CI cannot run the app)")
+            } else {
+                note
+            };
+            format!("- {} **{name}**: {note}", stage_mark(name, reported))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -933,6 +1125,7 @@ mod tests {
         Opts {
             base: Some("main".into()),
             out: root.join("report.md"),
+            comments: Some(root.join("comments.json")),
             minutes,
             model: None,
         }
@@ -1023,7 +1216,7 @@ mod tests {
             0
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.starts_with("<!-- keel-review -->\n### Keel review: Ship\n"));
+        assert!(text.starts_with("<!-- keel-review -->\n## ✅ Keel review: Ship\n"));
         assert!(text.contains("$0.42"));
 
         // The report quotes the PR saying "Verdict: ship", and `result` says it too.
@@ -1042,8 +1235,8 @@ mod tests {
             1
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("### Keel review: Do not ship"));
-        assert!(text.contains("**Verdict: do not ship: b() does not exist**"));
+        assert!(text.contains("## ⛔ Keel review: Do not ship"));
+        assert!(text.contains("**Blocking:** b() does not exist"));
 
         // Text alone, however confident, is no verdict.
         let program = stub(
@@ -1061,7 +1254,7 @@ mod tests {
             2
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("### Keel review: No verdict"));
+        assert!(text.contains("## ⚠️ Keel review: No verdict"));
         assert!(text.contains("without a verdict Keel could read"));
     }
 
@@ -1247,40 +1440,127 @@ mod tests {
     }
 
     #[test]
-    fn the_comment_lists_every_stage_and_cuts_a_long_report() {
+    fn the_comment_is_short_and_points_at_lines() {
+        let finding = |path: &str, line, severity: &str, title: &str| Finding {
+            path: path.into(),
+            line,
+            severity: severity.into(),
+            title: title.into(),
+            body: "what breaks, and the fix".into(),
+        };
         let answer = Answer {
+            summary: "Adds a pager. Off by one.".into(),
+            findings: vec![
+                finding("README.md", 3, "nit", "Typo"),
+                finding("src/pager.py", 4, "blocking", "Page 1 | skips items"),
+            ],
             report: "x".repeat(70_000),
             stages: vec![Stage {
                 name: "security".into(),
                 ran: false,
                 note: "no auth or input changed".into(),
             }],
-            verdict: "ship".into(),
-            reason: String::new(),
+            verdict: "do not ship".into(),
+            reason: "page 1 skips items".into(),
         };
-        let text = render(
-            &Outcome {
-                verdict: Verdict::Ship,
-                answer: Some(answer),
-                sha: "0123456789abcdef".into(),
-                base: "origin/main".into(),
-                took: Duration::from_secs(372),
-                cost: None,
-            },
-            &[],
-        );
+        let outcome = Outcome {
+            verdict: Verdict::Block("page 1 skips items".into()),
+            answer: Some(answer),
+            hunks: vec![("src/pager.py".into(), 1, 6)],
+            web: Some("https://github.com/o/r".into()),
+            sha: "0123456789abcdef".into(),
+            base: "origin/main".into(),
+            took: Duration::from_secs(372),
+            cost: None,
+        };
+        let text = render(&outcome, &[]);
         assert!(text.len() < 65_536);
+        assert!(text.contains("## ⛔ Keel review: Do not ship\n`0123456` vs `origin/main` · 6m 12s · cost not reported"));
+        // Blocking first, linked to its line, and a `|` cannot break the table.
+        let blocking = text.find("| 🔴 | Page 1 \\| skips items | [`src/pager.py:4`](https://github.com/o/r/blob/0123456789abcdef/src/pager.py#L4) |").unwrap();
+        assert!(blocking < text.find("| 🔵 | Typo |").unwrap());
+        assert!(text.contains("/README.md#L3) (outside the diff) |"));
+        assert!(text.contains("**Team** ❔ pm · ❔ designer · ❔ principal · ❔ reviewer · ⏭️ security · ❔ reliability · 👀 qa"));
+        assert!(text.contains("- ⏭️ **security**: no auth or input changed"));
+        assert!(text.contains("<details><summary>Full report</summary>"));
+        assert!(text.contains("The full report is in the job log"));
+
+        // Only the finding inside a hunk becomes a line comment; GitHub refuses the rest.
+        let comments = line_comments(&outcome, &[]);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["path"], "src/pager.py");
+        assert_eq!(comments[0]["line"], 4);
+        assert_eq!(comments[0]["side"], "RIGHT");
         assert!(
-            text.contains("Reviewed `0123456` against `origin/main` · 6m 12s · cost not reported")
+            comments[0]["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("🔴 **Page 1 | skips items**")
         );
-        assert!(text.contains("Report cut at 60000 characters"));
-        for stage in team::PR_STAGES {
-            assert!(text.contains(&format!("- {stage}: ")), "{stage}");
-        }
-        assert!(text.contains("- security: skipped. no auth or input changed"));
-        assert!(text.contains("- pm: not reported"));
-        assert!(text.contains("- qa: read the change and did not run it."));
-        let verdict = text.find("**Verdict: ship**").unwrap();
-        assert!(verdict > text.find("**Stages**").unwrap());
+    }
+
+    #[test]
+    fn hunks_are_the_new_side_of_the_diff() {
+        let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,4 @@\n x\n+y\n@@ -10 +11 @@\n-z\n+w\ndiff --git a/gone b/gone\n--- a/gone\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n";
+        assert_eq!(
+            hunks(patch),
+            vec![("a.rs".to_string(), 1, 4), ("a.rs".to_string(), 11, 11)]
+        );
+    }
+
+    /// GitHub numbers a PR's lines against the commit the author pushed. The review reads that
+    /// commit, so the lines it cites are the lines a comment lands on.
+    #[test]
+    fn the_review_reads_the_pushed_commit_not_the_merge() {
+        let (_dir, root) = pr_repo();
+        let pushed = crate::git::trimmed(&root, &["rev-parse", "HEAD"]).unwrap();
+        git(&root, &["checkout", "-q", "main"]);
+        write(&root, "src/other.rs", "moved on\n");
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-qm", "main moves"]);
+        git(&root, &["merge", "-q", "--no-ff", "pr", "-m", "merge"]);
+        let pr = serde_json::json!({"head": {"sha": pushed}});
+        let p = prepare(&root, "main~1", &pr).unwrap();
+        assert!(
+            !p.tree.join("src/other.rs").exists(),
+            "the merge's tree is not the PR's"
+        );
+        assert!(p.hunks.iter().any(|(path, _, _)| path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn a_shipped_review_writes_its_line_comments() {
+        let (_dir, root) = pr_repo();
+        let stages: Vec<_> = ["pm", "principal", "reviewer", "qa"]
+            .iter()
+            .map(|n| serde_json::json!({"name": n, "ran": true, "note": ""}))
+            .collect();
+        let answer = serde_json::json!({
+            "summary": "ok", "report": "", "verdict": "ship", "reason": "",
+            "stages": stages,
+            "findings": [{"path": "src/lib.rs", "line": 1, "severity": "nit", "title": "Name b", "body": "ping @octocat"}],
+        });
+        let out = serde_json::json!({"structured_output": answer});
+        let program = stub(&root, &format!("cat <<'EOF'\n{out}\nEOF"));
+        assert_eq!(
+            review(
+                &root,
+                &opts(&root, 1),
+                program.as_os_str(),
+                &env(&[]),
+                &NEVER
+            ),
+            0
+        );
+        let comments: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("comments.json")).unwrap())
+                .unwrap();
+        assert_eq!(comments[0]["path"], "src/lib.rs");
+        assert!(
+            comments[0]["body"]
+                .as_str()
+                .unwrap()
+                .contains("@\u{200D}octocat")
+        );
     }
 }

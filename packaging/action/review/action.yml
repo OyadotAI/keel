@@ -89,9 +89,10 @@ runs:
         MINUTES: ${{ inputs.minutes }}
         MODEL: ${{ inputs.model }}
         OUT: ${{ runner.temp }}/keel-review.md
+        LINES: ${{ runner.temp }}/keel-review-lines.json
       run: |
-        rm -f "$OUT"
-        args=(review-pr --out "$OUT" --minutes "$MINUTES")
+        rm -f "$OUT" "$LINES"
+        args=(review-pr --out "$OUT" --comments "$LINES" --minutes "$MINUTES")
         if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
         set +e
         keel "${args[@]}"
@@ -106,14 +107,17 @@ runs:
         echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
     # One comment per PR: the marker finds it, and only a bot's is edited, so a person quoting
-    # the marker does not get their comment overwritten.
+    # the marker does not get their comment overwritten. The line comments are a review of the
+    # pushed commit, and the last run's are deleted first, so a fixed finding does not linger.
     - name: Post the comment
       if: always() && steps.review.outputs.code != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
         OUT: ${{ runner.temp }}/keel-review.md
+        LINES: ${{ runner.temp }}/keel-review-lines.json
       run: |
         set -euo pipefail
         [ -f "$OUT" ] || exit 0
@@ -124,6 +128,16 @@ runs:
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" >/dev/null
         else
           gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" >/dev/null
+        fi
+        gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" --paginate \
+          --jq '.[] | select(.user.type == "Bot" and (.body | contains("<!-- keel-review-line -->"))) | .id' |
+          while read -r old; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/pulls/comments/$old" >/dev/null || true; done
+        if [ -s "$LINES" ] && [ "$(jq length "$LINES")" -gt 0 ]; then
+          # A line comment GitHub refuses fails the whole review; the summary has them all anyway.
+          jq -n --arg sha "$HEAD" --slurpfile c "$LINES" \
+            '{commit_id: $sha, event: "COMMENT", body: "Keel review: findings on their lines. The verdict is in the summary comment.", comments: $c[0]}' |
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input - >/dev/null \
+            || echo "keel review: GitHub refused the line comments; every finding is in the summary comment." >&2
         fi
 
     - name: Verdict
