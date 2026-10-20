@@ -1152,7 +1152,14 @@ fn which(program: &str) -> Option<String> {
 
 fn curl_stream(url: &str) -> String {
     let out = Command::new("curl")
-        .args(["-sN", "--max-time", "300", url])
+        .args([
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
+            "-sN",
+            "--max-time",
+            "300",
+            url,
+        ])
         .output()
         .expect("curl");
     String::from_utf8_lossy(&out.stdout).into_owned()
@@ -1161,6 +1168,8 @@ fn curl_stream(url: &str) -> String {
 fn post_read(port: u16, path: &str, body: &str) -> Option<String> {
     let mut child = Command::new("curl")
         .args([
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-s",
             "--max-time",
             "20",
@@ -1168,8 +1177,6 @@ fn post_read(port: u16, path: &str, body: &str) -> Option<String> {
             "POST",
             "-H",
             "content-type: application/json",
-            "-H",
-            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-d",
             "@-",
             &format!("http://127.0.0.1:{port}{path}"),
@@ -1249,7 +1256,14 @@ fn chat(port: u16, lane: &str, prompt: &str) -> String {
         urlencode(prompt)
     );
     let out = Command::new("curl")
-        .args(["-sN", "--max-time", "300", &url])
+        .args([
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
+            "-sN",
+            "--max-time",
+            "300",
+            &url,
+        ])
         .output()
         .expect("curl");
     String::from_utf8_lossy(&out.stdout).into_owned()
@@ -1271,6 +1285,8 @@ fn ids(body: &str) -> Vec<String> {
 fn get(port: u16, path: &str) -> Option<String> {
     let out = Command::new("curl")
         .args([
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-sf",
             "--max-time",
             "10",
@@ -1286,6 +1302,8 @@ fn get(port: u16, path: &str) -> Option<String> {
 fn post(port: u16, path: &str, body: &str) {
     let mut child = Command::new("curl")
         .args([
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-sf",
             "--max-time",
             "10",
@@ -1293,8 +1311,6 @@ fn post(port: u16, path: &str, body: &str) {
             "POST",
             "-H",
             "content-type: application/json",
-            "-H",
-            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-d",
             "@-",
             &format!("http://127.0.0.1:{port}{path}"),

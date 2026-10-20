@@ -381,21 +381,18 @@ fn from_a_page(headers: &axum::http::HeaderMap) -> Option<&'static str> {
     None
 }
 
-/// The person's answers: a card answered, a rule saved, the project trusted. Loopback is open to
-/// the hook and the CLI, and so to every process the agent can start — and an agent that can
-/// `curl` its own approval, or trust the project, has no approvals at all. None of Keel's own
-/// callers but the window sends these, so on loopback they need the token it was handed.
-const PERSON_ONLY: &[&str] = &[
-    "/api/approve/answer",
-    "/api/chat/control",
-    "/api/permissions/trust",
-    "/api/permissions/add",
-    "/api/permissions/remove",
-];
+/// What loopback serves without the window's token: the `PreToolUse` hook (and the chat bridges)
+/// asking, and Claude Code's MCP client reaching `ask_user`. Nothing else of Keel's calls in
+/// without the token, and every process the agent starts is on loopback too.
+///
+/// Denied by default, because listing what to protect was tried and fell short: the first list
+/// was the approval and permission routes, and left `/api/mcp/add` (a command that runs), pairing,
+/// and the terminal's socket a `curl` away — several of them `GET`s.
+const TOKENLESS: &[&str] = &["/api/approve/ask", "/mcp"];
 
-/// Whether a loopback request may say what the person decided.
+/// Whether a loopback request may reach `path`: the window, or one of Keel's own tokenless callers.
 fn speaks_for_the_person(path: &str, headers: &axum::http::HeaderMap) -> bool {
-    !PERSON_ONLY.contains(&path) || app_token(headers)
+    TOKENLESS.contains(&path) || app_token(headers)
 }
 
 /// The one place that decides whether a request from off this machine is allowed in.
@@ -415,7 +412,7 @@ pub async fn guard(
         if !speaks_for_the_person(req.uri().path(), req.headers()) {
             return Err((
                 StatusCode::FORBIDDEN,
-                "Only the Keel window answers approvals and changes permissions.".to_string(),
+                "Only the Keel window can do this. Open the project in the Keel app.".to_string(),
             ));
         }
         return Ok(next.run(req).await);
@@ -482,13 +479,22 @@ mod tests {
         let bare = HeaderMap::new();
         let mut app = HeaderMap::new();
         app.insert("authorization", HeaderValue::from_static(TOKEN));
-        for path in PERSON_ONLY {
+        for path in [
+            "/api/approve/answer",
+            "/api/permissions/trust",
+            "/api/mcp/add",
+            "/api/plugins/install",
+            "/api/pair/begin",
+            "/api/term/ws",
+            "/api/chat",
+            "/api/state",
+        ] {
             assert!(!speaks_for_the_person(path, &bare), "{path}");
             assert!(speaks_for_the_person(path, &app), "{path}");
         }
-        // The hook and the CLI keep what they use.
+        // The hook, the bridges and `ask_user` keep what they use.
         assert!(speaks_for_the_person("/api/approve/ask", &bare));
-        assert!(speaks_for_the_person("/api/state", &bare));
+        assert!(speaks_for_the_person("/mcp", &bare));
     }
 
     #[test]

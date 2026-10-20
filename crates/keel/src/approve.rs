@@ -130,12 +130,29 @@ pub fn waiters() -> &'static Waiters {
     W.get_or_init(Default::default)
 }
 
-/// Calls the person approved, by tool-use id. One call can pass two gates — the hook, and then
-/// Claude Code asking again for an `ask` rule or a path it protects — and the second must not put
-/// the same question back on screen. Bounded: only the latest few are ever looked up.
-fn approved() -> &'static Mutex<std::collections::VecDeque<String>> {
-    static A: OnceLock<Mutex<std::collections::VecDeque<String>>> = OnceLock::new();
+/// Calls the person approved. One call can pass two gates — the hook, and then Claude Code asking
+/// again for an `ask` rule or a path it protects — and the second must not put the same question
+/// back on screen. Keyed by the call itself — its id, tool and input — and spent once, so an id
+/// alone never carries an approval to a different call. Bounded: only the latest few are kept.
+type Call = (String, String, String);
+fn approved() -> &'static Mutex<std::collections::VecDeque<Call>> {
+    static A: OnceLock<Mutex<std::collections::VecDeque<Call>>> = OnceLock::new();
     A.get_or_init(Default::default)
+}
+
+fn call_of(hook: &HookInput) -> Call {
+    (
+        hook.tool_use_id.clone(),
+        hook.tool_name.clone(),
+        hook.tool_input.to_string(),
+    )
+}
+
+/// Whether the person already approved exactly this call; spends it if so.
+fn take_approved(call: &Call) -> bool {
+    let mut calls = approved().locked();
+    let found = calls.iter().position(|c| c == call);
+    found.and_then(|i| calls.remove(i)).is_some()
 }
 
 /// `permissions.ask` from the person's settings — in a test, the test's own, never the machine's.
@@ -148,11 +165,11 @@ fn person_asks() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn note_approved(id: &str) {
-    let mut ids = approved().locked();
-    ids.push_back(id.to_string());
-    while ids.len() > 256 {
-        ids.pop_front();
+fn note_approved(call: Call) {
+    let mut calls = approved().locked();
+    calls.push_back(call);
+    while calls.len() > 256 {
+        calls.pop_front();
     }
 }
 
@@ -349,10 +366,13 @@ pub fn already_allowed(rules: &[String], allowed: &[String]) -> bool {
                 a == rule
                     || a == "Bash"
                     // `mcp__srv` covers `mcp__srv__tool`, and not `mcp__srv2__tool`.
+                    // Both sides unambiguous: `mcp__srv` names one server, and `__tool` one tool on
+                    // it — `mcp__srv__a__b` may be a tool on the server `srv__a`.
                     || a.strip_prefix("mcp__").is_some_and(|server| !server.contains("__"))
                         && rule
                             .strip_prefix(a.as_str())
-                            .is_some_and(|r| r.starts_with("__"))
+                            .and_then(|r| r.strip_prefix("__"))
+                            .is_some_and(|tool| !tool.is_empty() && !tool.contains("__"))
                     || a.strip_suffix(" *)")
                         .zip(rule.strip_suffix(" *)"))
                         .is_some_and(|(a, r)| a == r)
@@ -440,6 +460,7 @@ async fn decide(
     let repo = state.repo();
     let strict = hook.provider == "antigravity";
     let sdk = is_final(&hook.provider);
+    let codex = hook.provider == CODEX;
     if strict {
         crate::antigravity::note_asked(&hook.tool_use_id);
     }
@@ -508,7 +529,7 @@ async fn decide(
     }
     let session = (!hook.session_id.is_empty()).then_some(hook.session_id.as_str());
     // Already answered by the person at the hook: the gate asking again is not a second question.
-    if sdk && !hook.tool_use_id.is_empty() && approved().locked().contains(&hook.tool_use_id) {
+    if hook.provider == SDK && !hook.tool_use_id.is_empty() && take_approved(&call_of(&hook)) {
         return Ok(Json(Decision {
             decision: "allow".into(),
             reason: String::new(),
@@ -527,8 +548,9 @@ async fn decide(
                     is_edit(&tool) && !edit_is_inside(&repo, &input),
                     crate::permissions::trusted(&repo),
                     crate::permissions::effective(&repo, session.as_deref()),
-                    // For agy only: Claude Code reads its own deny rules after a `defer`.
-                    if strict {
+                    // For agy and Codex: Claude Code reads its own deny rules after a `defer`, and
+                    // nothing reads them after Keel for these two.
+                    if strict || codex {
                         keel_workspace::claude_home()
                             .map(|h| crate::denies::read(&h))
                             .unwrap_or_default()
@@ -721,7 +743,12 @@ async fn decide(
         Ok(Ok(decision)) if background && decision.decision == "allow" => {
             Ok(Json(monitor_request(&state, &hook).await))
         }
-        Ok(Ok(decision)) => Ok(Json(decision)),
+        Ok(Ok(decision)) => {
+            if decision.decision == "allow" && !hook.tool_use_id.is_empty() {
+                note_approved(call_of(&hook));
+            }
+            Ok(Json(decision))
+        }
         _ => {
             waiters().locked().remove(&id);
             queue().locked().retain(|p| p.id != id);
@@ -1296,9 +1323,6 @@ pub async fn answer(
 
     match waiters().locked().remove(&body.id) {
         Some((tx, lane)) => {
-            if decision.decision == "allow" {
-                note_approved(&body.id);
-            }
             crate::turns::emit_for_lane(
                 &state,
                 &lane,
@@ -1410,6 +1434,9 @@ pub(crate) mod tests {
         );
         let allowed = vec!["mcp__oya-browser".to_string()];
         let call = |t: &str| already_allowed(&[t.to_string()], &allowed);
+        // `mcp__oya-browser__a__b` may be the tool `b` on a server `oya-browser__a`.
+        assert!(!call("mcp__oya-browser__a__b"));
+        assert!(!call("mcp__oya-browser__"));
         assert!(call("mcp__oya-browser__open_tab"));
         assert!(call("mcp__oya-browser"));
         assert!(!call("mcp__oya-browser2__open_tab"));
@@ -1932,6 +1959,17 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(again.decision, "allow");
+        // Spent: the same call a third time, or that id with another command, is a card again.
+        for (command, id) in [
+            ("git push --keel-test origin", "a2"),
+            ("git push --keel-test evil", "a2"),
+        ] {
+            let replay = tokio::spawn(ask(State(state.clone()), Json(hook(SDK, command, id))));
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            assert!(!replay.is_finished(), "{command}");
+            replay.abort();
+        }
+        queue().locked().retain(|p| p.lane != "asks");
         ASKS.locked().clear();
     }
 
