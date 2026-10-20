@@ -15,16 +15,19 @@ on:
 permissions:
   contents: read
   pull-requests: write
-concurrency:
-  group: keel-review-${{ github.event.pull_request.number }}-${{ github.event_name }}
-  cancel-in-progress: true
 jobs:
   review:
-    # A reply from a collaborator, never a bot's comment (Keel's own line comments included).
+    name: ${{ github.event_name == 'pull_request' && 'Team review' || 'Keel replies' }}
+    # A collaborator's reply in a thread, never a bot's comment (Keel's own line comments
+    # included).
     if: >-
       github.event_name == 'pull_request' ||
-      (github.event.comment.user.type != 'Bot' &&
+      (github.event.comment.in_reply_to_id && github.event.comment.user.type != 'Bot' &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    # In the job, so a skipped run never cancels a real one. A push cancels; a reply waits.
+    concurrency:
+      group: keel-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -65,7 +68,7 @@ jobs:
             permission-contents: read
             permission-issues: write
             permission-pull-requests: write
-        - uses: OyadotAI/keel-releases/review@review-v5
+        - uses: OyadotAI/keel-releases/review@review-v8
           with:
             github-token: ${{ steps.app.outputs.token || github.token }}
   ```

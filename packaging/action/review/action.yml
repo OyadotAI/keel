@@ -200,7 +200,7 @@ runs:
         if [ -s "$LINES" ] && [ "$(jq length "$LINES")" -gt 0 ]; then
           # A line comment GitHub refuses fails the whole review; the summary has them all anyway.
           jq -n --arg sha "$HEAD" --slurpfile c "$LINES" \
-            '{commit_id: $sha, event: "COMMENT", body: "Keel review: findings on their lines. The verdict is in the summary comment.", comments: $c[0]}' |
+            '{commit_id: $sha, event: "COMMENT", body: "", comments: $c[0]}' |
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input - >/dev/null \
             || echo "keel review: GitHub refused the line comments; every finding is in the summary comment." >&2
         fi
