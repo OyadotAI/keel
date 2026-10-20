@@ -302,6 +302,8 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
     <>
       <section className="settings-section">
         <h2>Subagents</h2>
+        {/* Above the members: the update is the action, and eight rows pushed it out of view. */}
+        <TeamUpdate key={project} ep={ep} project={project} plan={plan} reread={reread} />
         {!ws.agents.length ? <>
           <p className="muted">Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @.</p>
           <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>
@@ -312,7 +314,6 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
             return <AgentProfileRow key={`${agent.scope}:${agent.name}`} agent={agent} profile={profile} save={save} />;
           })}
         </ul>}
-        <TeamUpdate key={project} ep={ep} project={project} plan={plan} reread={reread} />
         {!!ws.agents.length && missing && <div className="team-install">
           <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>
           <p className="small muted">Adds what's missing for {forAgents(plan)}. Keeps your existing definitions and images.</p>

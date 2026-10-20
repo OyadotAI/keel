@@ -294,7 +294,7 @@ function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?
     {lane && <LaneHeader key={`header:${lane}`} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
     {lane && <LaneError lane={lane} />}
     <div className="agents"><Agents /></div>
-    <div className="ide-chat-tools"><button className="ghost" onClick={closeConversation}>Close conversation</button></div>
+    <div className="ide-chat-tools"><button className="link" onClick={closeConversation}>Close conversation</button></div>
     {lane && <LaneComposer key={`composer:${lane}`} lane={lane} />}
   </section>;
 }
