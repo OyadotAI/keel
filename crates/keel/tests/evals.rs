@@ -475,16 +475,14 @@ fn stubbed_project() -> (tempfile::TempDir, u16, Child, std::path::PathBuf) {
     }
     let (shell, argv) = stub_agent(dir);
     let port = free_port();
-    let daemon = Command::new(env!("CARGO_BIN_EXE_keel"))
-        .arg("serve")
-        .arg(dir)
-        .args(["--port", &port.to_string(), "--no-open"])
-        .env("SHELL", &shell)
-        .env("KEEL_PERMISSIONS_DIR", permission_test_storage())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("daemon");
+    let daemon = with_window_token(
+        Command::new(env!("CARGO_BIN_EXE_keel"))
+            .arg("serve")
+            .arg(dir)
+            .args(["--port", &port.to_string(), "--no-open"])
+            .env("SHELL", &shell)
+            .env("KEEL_PERMISSIONS_DIR", permission_test_storage()),
+    );
     wait_for_daemon(port);
     (repo, port, daemon, argv)
 }
@@ -1170,6 +1168,8 @@ fn post_read(port: u16, path: &str, body: &str) -> Option<String> {
             "POST",
             "-H",
             "content-type: application/json",
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-d",
             "@-",
             &format!("http://127.0.0.1:{port}{path}"),
@@ -1192,15 +1192,35 @@ fn free_port() -> u16 {
 }
 
 fn serve(dir: &std::path::Path, port: u16) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_keel"))
-        .arg("serve")
-        .arg(dir)
-        .args(["--port", &port.to_string(), "--no-open"])
-        .env("KEEL_PERMISSIONS_DIR", permission_test_storage())
+    with_window_token(
+        Command::new(env!("CARGO_BIN_EXE_keel"))
+            .arg("serve")
+            .arg(dir)
+            .args(["--port", &port.to_string(), "--no-open"])
+            .env("KEEL_PERMISSIONS_DIR", permission_test_storage()),
+    )
+}
+
+/// What the app hands its daemon on stdin. Answering a card or trusting a project is the
+/// window's alone (`pair::PERSON_ONLY`), so the evals speak as the window, as a person would.
+const WINDOW_TOKEN: &str = "eval-window-token-0123456789abcdef0123456789";
+
+/// Starts the daemon the way the app does: the token first, and the pipe held open for its life.
+fn with_window_token(command: &mut Command) -> Child {
+    let mut child = command
+        .arg("--exit-on-stdin-eof")
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("could not start the daemon")
+        .expect("could not start the daemon");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(format!("{WINDOW_TOKEN}\n").as_bytes())
+        .expect("token");
+    child
 }
 
 /// Shared across test daemons but never written into a fixture repository or the user's HOME.
@@ -1273,6 +1293,8 @@ fn post(port: u16, path: &str, body: &str) {
             "POST",
             "-H",
             "content-type: application/json",
+            "-H",
+            &format!("authorization: Bearer {WINDOW_TOKEN}"),
             "-d",
             "@-",
             &format!("http://127.0.0.1:{port}{path}"),

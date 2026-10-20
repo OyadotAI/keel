@@ -151,7 +151,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
       {l &&
         (trusted ? (
-          <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Commands here run without asking. Click to change.">
+          <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Commands and MCP tools here run without asking. Click to change.">
             <Icon name="shield" size={14} /> Trusted
           </button>
         ) : (

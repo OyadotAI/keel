@@ -5,7 +5,7 @@ import { ContextInspector } from './context.mjs';
 
 // App Server owns thread state; this adapter maps its items to Keel's ordered conversation ops.
 export class Codex {
-  constructor(emit, ask) { this.emit = emit; this.ask = ask; this.requests = new Map(); this.next = 0; this.text = new Set(); }
+  constructor(emit, ask, decide) { this.emit = emit; this.ask = ask; this.decide = decide; this.requests = new Map(); this.next = 0; this.text = new Set(); }
   write(value) { this.child.stdin.write(JSON.stringify(value) + '\n'); }
   rpc(method, params, timeoutMs) {
     const id = ++this.next;
@@ -17,7 +17,7 @@ export class Codex {
   }
   ops(...ops) { this.emit('turn', ops.map((op) => ({ turn: null, ...op }))); }
   async start(q, done) {
-    this.done = done;
+    this.done = done; this.mode = q.mode;
     if (!this.child) {
       this.child = spawn(q.executable, ['app-server', '--stdio'], { cwd: q.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       createInterface({ input: this.child.stdout }).on('line', (line) => {
@@ -83,8 +83,17 @@ export class Codex {
         result = { answers: Object.fromEntries((p.questions ?? []).map((q) => [q.id, { answers: [answer.answers?.[q.id] ?? answer.answers?.[q.question] ?? ''] }])) };
       } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
         const choices = (p.availableDecisions ?? ['accept', 'acceptForSession', 'decline', 'cancel']).map((value) => ({ value, label: typeof value === 'string' ? ({ accept: 'Allow once', acceptForSession: 'Allow for session', decline: 'Deny', cancel: 'Cancel turn' }[value] ?? value) : 'Allow with proposed rule' }));
-        const answer = await this.ask(message.method.includes('fileChange') ? 'File changes' : 'Command', p.command ?? '', p, choices);
-        result = { decision: answer.decision };
+        // A command the sandbox refused is asked of Keel first: trust and saved rules answer it,
+        // or Keel's card asks with "always". File changes and a read-only lane keep this card.
+        const command = script(p.command);
+        const decided = message.method.includes('commandExecution') && p.kind !== 'writeStdin' && this.mode === 'acceptEdits' && command
+          ? await this.decide('Bash', { command }, p.approvalId ?? p.itemId, 'codex', this.thread) : undefined;
+        if (decided === 'allow') result = { decision: 'accept' };
+        else if (decided) result = { decision: 'decline' };
+        else {
+          const answer = await this.ask(message.method.includes('fileChange') ? 'File changes' : 'Command', p.command ?? '', p, choices);
+          result = { decision: answer.decision };
+        }
       } else if (message.method === 'mcpServer/elicitation/request') {
         const answer = await this.ask('MCP input', p.message ?? '', p, [{ label: 'Accept', value: 'accept' }, { label: 'Decline', value: 'decline' }, { label: 'Cancel', value: 'cancel' }], 'elicitation');
         result = { action: answer.decision, content: answer.content ?? null };
@@ -138,6 +147,32 @@ export class Codex {
   interrupt() { return this.turn ? this.rpc('turn/interrupt', { threadId: this.thread, turnId: this.turn }) : Promise.resolve(); }
   steer(prompt) { return this.rpc('turn/steer', { threadId: this.thread, expectedTurnId: this.turn, input: [{ type: 'text', text: prompt }] }); }
   close() { this.child?.kill(); }
+}
+
+/// The command Codex will run, without the shell it wraps every command in. Codex sends
+/// `/bin/zsh -lc 'git status'` (or its argv); read whole, the program is `zsh`, no saved rule ever
+/// matches, and "always" would save `Bash(zsh *)` — every command there is. Anything that does not
+/// unwrap cleanly is undefined, so Codex's own card asks instead.
+const SHELLS = new Set(['/bin/sh', '/bin/bash', '/bin/zsh', '/usr/bin/bash', '/usr/bin/zsh']);
+export function script(command) {
+  const plain = /^[A-Za-z0-9_\-./:@,+%=]+$/;
+  // The system's shells, by exact path. A pattern let `./tools/zsh -lc 'git status'` — a binary
+  // the repository ships — read as `git status` and pass a `Bash(git *)` rule.
+  const shell = { test: (p) => SHELLS.has(p) };
+  if (Array.isArray(command)) {
+    if (command.length === 3 && shell.test(command[0]) && ['-c', '-lc'].includes(command[1])) return command[2] || undefined;
+    return command.length && command.every((w) => plain.test(w)) ? command.join(' ') : undefined;
+  }
+  if (typeof command !== 'string' || !command.trim()) return undefined;
+  const wrapped = command.match(/^(\S+) (-l?c) ([\s\S]*)$/);
+  if (!wrapped) return command;
+  // Shaped like a wrapper around a shell this cannot vouch for: Codex's card.
+  if (!shell.test(wrapped[1])) return undefined;
+  const body = wrapped[3];
+  if (/^'[^']*'$/.test(body)) return body.slice(1, -1) || undefined;
+  if (/^"[^"$`\\]*"$/.test(body)) return body.slice(1, -1) || undefined;
+  // Unquoted, `-c` takes one word and the rest become `$0`, `$1`: one word or nothing.
+  return plain.test(body) ? body : undefined;
 }
 
 export function historyFrames(turns) {

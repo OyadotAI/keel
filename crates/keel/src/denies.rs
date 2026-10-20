@@ -22,12 +22,24 @@ pub enum Verdict {
 /// `permissions.deny` from the person's Claude Code settings. Absent is none; unreadable is none
 /// too, said once on stderr — a broken settings file must not refuse every command.
 pub fn read(claude_home: &Utf8Path) -> Vec<String> {
+    read_list(claude_home, "deny")
+}
+
+/// `permissions.ask`: what the person wants asked about whatever else allows it. Keel's own rules
+/// and trust answer before Claude Code reads these, so Keel has to read them too — a saved
+/// `Bash(git *)` waved through the `git push` they had asked to be asked about. Matched with
+/// [`check`], where `Denied` and `Unsure` both mean "show the card".
+pub fn read_ask(claude_home: &Utf8Path) -> Vec<String> {
+    read_list(claude_home, "ask")
+}
+
+fn read_list(claude_home: &Utf8Path, key: &str) -> Vec<String> {
     let path = claude_home.join("settings.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
     let rules = serde_json::from_str::<Value>(&text).ok().and_then(|v| {
-        v["permissions"]["deny"].as_array().map(|a| {
+        v["permissions"][key].as_array().map(|a| {
             a.iter()
                 .map(|r| r.as_str().map(str::to_string))
                 .collect::<Option<Vec<_>>>()
@@ -36,7 +48,7 @@ pub fn read(claude_home: &Utf8Path) -> Vec<String> {
     match rules {
         Some(Some(rules)) => rules,
         None if serde_json::from_str::<Value>(&text)
-            .is_ok_and(|v| v["permissions"]["deny"].is_null()) =>
+            .is_ok_and(|v| v["permissions"][key].is_null()) =>
         {
             Vec::new()
         }
@@ -44,8 +56,8 @@ pub fn read(claude_home: &Utf8Path) -> Vec<String> {
             static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 eprintln!(
-                    "keel: {path} could not be read as settings, so its deny rules are not \
-                     applied to Antigravity lanes"
+                    "keel: {path} could not be read as settings, so its deny and ask rules are \
+                     not applied by Keel"
                 );
             }
             Vec::new()
@@ -349,6 +361,20 @@ mod tests {
             r#"{"permissions":{"deny":["Bash(rm *)"]}}"#,
         )
         .unwrap();
+        assert_eq!(read(home), vec!["Bash(rm *)".to_string()]);
+    }
+
+    /// `ask` is read from the same file, and kept apart from `deny`.
+    #[test]
+    fn ask_rules_are_their_own_list() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Utf8Path::from_path(d.path()).unwrap();
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"permissions":{"deny":["Bash(rm *)"],"ask":["Bash(git push *)"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(read_ask(home), vec!["Bash(git push *)".to_string()]);
         assert_eq!(read(home), vec!["Bash(rm *)".to_string()]);
     }
 }

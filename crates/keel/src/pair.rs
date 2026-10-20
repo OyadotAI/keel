@@ -381,6 +381,23 @@ fn from_a_page(headers: &axum::http::HeaderMap) -> Option<&'static str> {
     None
 }
 
+/// The person's answers: a card answered, a rule saved, the project trusted. Loopback is open to
+/// the hook and the CLI, and so to every process the agent can start — and an agent that can
+/// `curl` its own approval, or trust the project, has no approvals at all. None of Keel's own
+/// callers but the window sends these, so on loopback they need the token it was handed.
+const PERSON_ONLY: &[&str] = &[
+    "/api/approve/answer",
+    "/api/chat/control",
+    "/api/permissions/trust",
+    "/api/permissions/add",
+    "/api/permissions/remove",
+];
+
+/// Whether a loopback request may say what the person decided.
+fn speaks_for_the_person(path: &str, headers: &axum::http::HeaderMap) -> bool {
+    !PERSON_ONLY.contains(&path) || app_token(headers)
+}
+
 /// The one place that decides whether a request from off this machine is allowed in.
 pub async fn guard(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -393,6 +410,12 @@ pub async fn guard(
             return Err((
                 StatusCode::FORBIDDEN,
                 format!("Refused a request carrying {why}."),
+            ));
+        }
+        if !speaks_for_the_person(req.uri().path(), req.headers()) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only the Keel window answers approvals and changes permissions.".to_string(),
             ));
         }
         return Ok(next.run(req).await);
@@ -448,6 +471,25 @@ pub fn tailscale_ip() -> Option<std::net::Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The agent can `curl` loopback. It must not be able to approve itself or trust the project.
+    #[test]
+    fn only_the_window_answers_for_the_person() {
+        use axum::http::{HeaderMap, HeaderValue};
+        const TOKEN: &str =
+            "Bearer kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk";
+        set_app_token(&TOKEN["Bearer ".len()..]);
+        let bare = HeaderMap::new();
+        let mut app = HeaderMap::new();
+        app.insert("authorization", HeaderValue::from_static(TOKEN));
+        for path in PERSON_ONLY {
+            assert!(!speaks_for_the_person(path, &bare), "{path}");
+            assert!(speaks_for_the_person(path, &app), "{path}");
+        }
+        // The hook and the CLI keep what they use.
+        assert!(speaks_for_the_person("/api/approve/ask", &bare));
+        assert!(speaks_for_the_person("/api/state", &bare));
+    }
 
     #[test]
     fn a_web_page_cannot_reach_the_loopback_api() {

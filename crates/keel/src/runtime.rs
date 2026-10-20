@@ -462,7 +462,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     .map_err(|e| e.to_string())?;
     r.send(json!({"method":"start", "query": {
         "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":q.prompt, "session":q.session,
-        "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings,
+        "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings, "port":state.port(),
         "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy()
     }})).await?;
     let mut session = q.session.clone();

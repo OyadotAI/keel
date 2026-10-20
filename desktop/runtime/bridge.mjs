@@ -39,6 +39,25 @@ function ask(tool, command, input, choices, kind = 'permission') {
   emit('request', { id, tool, command, input, choices, kind, provider, session_id: session ?? '', lane: config.lane, rules: [] });
   return new Promise((resolve) => pending.set(id, resolve)).finally(() => emit('resolved', { id }));
 }
+// 'allow', a refusal ({reason}), or undefined when the daemon could not be asked — in which case
+// the local card asks instead, so this never fails open and never waits forever.
+async function daemonDecision(tool, input, toolUseID, from = 'claude-sdk', thread = session) {
+  if (!config?.port) return undefined;
+  try {
+    const res = await fetch(`http://127.0.0.1:${config.port}/api/approve/ask`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tool_name: tool, tool_input: input, tool_use_id: toolUseID ?? '', session_id: thread ?? '', lane: config.lane, cwd: config.cwd, provider: from }),
+      // Held open while the person decides; the daemon's own wait is four minutes.
+      signal: AbortSignal.timeout(300_000),
+    });
+    if (!res.ok) return undefined;
+    const d = await res.json();
+    if (d.decision === 'allow') return 'allow';
+    if (d.decision === 'deny') return { reason: d.reason };
+  } catch { /* the local card asks */ }
+  return undefined;
+}
 async function startClaude(q) {
   if (!claude) {
     config = q;
@@ -57,6 +76,15 @@ async function startClaude(q) {
       stderr: (line) => emit('err', line),
       canUseTool: async (tool, input, options) => {
         const question = tool === 'AskUserQuestion';
+        // The daemon holds trust, saved and session rules, and a card that can say "always". This
+        // allowlist was frozen when the lane started, and this card could only say "once".
+        // A plan is the person's to approve, and a planning lane's edits and commands stay theirs
+        // to allow; trust covers its MCP tools.
+        if (!question && tool !== 'ExitPlanMode' && (config.mode === 'acceptEdits' || tool.startsWith('mcp__'))) {
+          const decided = await daemonDecision(tool, input, options.toolUseID);
+          if (decided === 'allow') return { behavior: 'allow', updatedInput: input };
+          if (decided) return { behavior: 'deny', message: decided.reason || 'Not approved in Keel.' };
+        }
         const answer = await ask(tool, input.command ?? '', input,
           [{ label: 'Allow once', value: 'allow' }, { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission');
         if (question) return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers ?? {} }, toolUseID: options.toolUseID };
@@ -128,7 +156,7 @@ async function command(message) {
   try {
     if (provider === 'claude') await startClaude(q);
     else if (provider === 'codex') {
-      codex ??= new Codex(emit, ask);
+      codex ??= new Codex(emit, ask, daemonDecision);
       await codex.start(q, () => { busy = false; });
     } else throw new Error(`Unsupported provider: ${provider}`);
   } catch (error) { busy = false; emit('fatal', String(error)); emit('end', { code: 1 }); }

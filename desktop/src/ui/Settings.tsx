@@ -184,14 +184,14 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
       {error && <div className="error">{error}</div>}
       {p.trusted ? (
         <p>
-          <strong>Trusted.</strong> The agent runs commands here without asking. Rules you approved are kept if you withdraw it.{agy && " Antigravity lanes don't apply your Read/Edit/Write path deny rules."}{" "}
+          <strong>Trusted.</strong> The agent runs commands and MCP tools here without asking. Rules you approved are kept if you withdraw it.{agy && " Antigravity lanes don't apply your Read/Edit/Write path deny rules."}{" "}
           <button onClick={() => change(() => post(ep, "/api/permissions/trust", { trusted: false }))}>Stop trusting</button>
         </p>
       ) : asking ? (
         <div className="card">
           <p>
-            Trusting <code>{project}</code> lets the agent run <strong>any command in this project without asking you</strong> — installs,
-            deletes, network calls — for as long as it is trusted. It applies to this project only, is shown while it holds, and you can withdraw it here.
+            Trusting <code>{project}</code> lets the agent run <strong>any command or MCP tool in this project without asking you</strong> — installs,
+            deletes, network calls, browser actions — for as long as it is trusted. It applies to this project only, is shown while it holds, and you can withdraw it here.
           </p>
           {agy && <p className="small muted">In Antigravity lanes, deny rules from ~/.claude/settings.json still apply to commands, MCP tools and web fetches. Path rules (Read, Edit, Write with a path) do not.</p>}
           <div className="card-actions">
@@ -231,7 +231,7 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
               .map((r) => (
                 <li key={r}>
                   <code>{r}</code>
-                  <button className="ghost" onClick={() => change(() => post(ep, "/api/permissions/add", { rule: r, scope: "project" }))}>
+                  <button className="link" onClick={() => change(() => post(ep, "/api/permissions/add", { rule: r, scope: "project" }))}>
                     Allow
                   </button>
                 </li>

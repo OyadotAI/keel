@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Codex, historyFrames } from './codex.mjs';
+import { Codex, historyFrames, script } from './codex.mjs';
 
 test('streamed text is not duplicated by the completed item', async () => {
   const events = [];
@@ -122,4 +122,35 @@ test('streamed reasoning stays ordered without duplicating the completed summary
   await c.message({ method: 'item/completed', params: { item: { id: 'r1', type: 'reasoning', summary: ['Checking the files.'] } } });
   assert.equal(events.map((e) => e.data[0].append).join(''), 'Checking the files.');
   assert.ok(events.every((e) => e.data[0].kind === 'think'));
+});
+
+test('a command is asked about without the shell Codex wraps it in', () => {
+  assert.equal(script(['/bin/zsh', '-lc', 'git status --short']), 'git status --short');
+  assert.equal(script("/bin/zsh -lc 'git status'"), 'git status');
+  assert.equal(script('/bin/bash -c "npm test"'), 'npm test');
+  assert.equal(script('/bin/zsh -lc git status'), undefined);
+  assert.equal(script('/bin/zsh -lc ls'), 'ls');
+  assert.equal(script('git status'), 'git status');
+  assert.equal(script(['git', 'status']), 'git status');
+  // Quoting it cannot read is Codex's own card, never a guess.
+  assert.equal(script(`/bin/zsh -lc 'a'"$(rm x)"'b'`), undefined);
+  assert.equal(script('/bin/zsh -lc "echo $(rm x)"'), undefined);
+  assert.equal(script(['ls', '$(rm x)']), undefined);
+  assert.equal(script(''), undefined);
+  // Only the system's shells are stepped over; one from the repository is Codex's card.
+  assert.equal(script(['./tools/zsh', '-lc', 'git status']), undefined);
+  assert.equal(script("/tmp/x/zsh -lc 'git status'"), undefined);
+  assert.equal(script("zsh -lc 'git status'"), undefined);
+});
+
+test('a sandboxed command is asked of Keel first, unwrapped, and its answer is final', async () => {
+  const sent = []; const asked = [];
+  const c = new Codex(() => {}, async () => { throw new Error('the local card must not show'); },
+    async (...args) => { asked.push(args); return 'allow'; });
+  c.thread = 'th'; c.mode = 'acceptEdits';
+  c.write = (value) => sent.push(value);
+  await c.message({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'th', itemId: 'i', command: "/bin/zsh -lc 'git status'" } });
+  assert.deepEqual(asked[0].slice(0, 2), ['Bash', { command: 'git status' }]);
+  assert.equal(asked[0][3], 'codex');
+  assert.deepEqual(sent.at(-1), { id: 7, result: { decision: 'accept' } });
 });
