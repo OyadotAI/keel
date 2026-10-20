@@ -923,7 +923,7 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
             }
             out.push_str(&format!("**Team** {}\n\n", team_row(&a.stages)));
             out.push_str(&format!(
-                "<details><summary>What each stage said</summary>\n\n{}\n</details>\n\n",
+                "**What each agent said**\n\n{}\n\n",
                 stages(&a.stages)
             ));
             let footer = format!(
@@ -950,6 +950,20 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
         }
     }
     clean(out, secrets)
+}
+
+/// Each agent's own icon, so a glance down the list finds the one you care about.
+fn agent_icon(name: &str) -> &'static str {
+    match name {
+        "pm" => "🧭",
+        "designer" => "🎨",
+        "principal" => "🏛️",
+        "reviewer" => "🔍",
+        "security" => "🛡️",
+        "reliability" => "⚙️",
+        "qa" => "🧪",
+        _ => "🤖",
+    }
 }
 
 fn stage_mark(name: &str, reported: &[Stage]) -> &'static str {
@@ -1000,7 +1014,11 @@ fn stages(reported: &[Stage]) -> String {
             } else {
                 note
             };
-            format!("- {} **{name}**: {note}", stage_mark(name, reported))
+            format!(
+                "- {} **{name}** {} {note}",
+                agent_icon(name),
+                stage_mark(name, reported)
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1481,7 +1499,12 @@ mod tests {
         assert!(blocking < text.find("| 🔵 | Typo |").unwrap());
         assert!(text.contains("/README.md#L3) (outside the diff) |"));
         assert!(text.contains("**Team** ❔ pm · ❔ designer · ❔ principal · ❔ reviewer · ⏭️ security · ❔ reliability · 👀 qa"));
-        assert!(text.contains("- ⏭️ **security**: no auth or input changed"));
+        assert!(text.contains("**What each agent said**\n\n- 🧭 **pm** ❔ not reported\n"));
+        assert!(text.contains("- 🛡️ **security** ⏭️ no auth or input changed\n"));
+        assert!(
+            !text.contains("<summary>What each"),
+            "the agents are shown, not folded"
+        );
         assert!(text.contains("<details><summary>Full report</summary>"));
         assert!(text.contains("The full report is in the job log"));
 
