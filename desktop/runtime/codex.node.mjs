@@ -11,6 +11,26 @@ test('streamed text is not duplicated by the completed item', async () => {
   assert.equal(events[0].data[0].append, '**Hello**');
 });
 
+test('a spawned member thread neither ends the turn nor speaks for it', async () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push({ event, data }), () => {});
+  c.thread = 'parent';
+  await c.message({ method: 'item/agentMessage/delta', params: { threadId: 'child', itemId: 'm1', delta: 'not mine' } });
+  await c.message({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 't', status: 'completed' } } });
+  assert.equal(events.length, 0);
+  await c.message({ method: 'item/agentMessage/delta', params: { threadId: 'parent', itemId: 'm2', delta: 'mine' } });
+  assert.equal(events.length, 1);
+});
+
+test('a child thread approval request is still answered', async () => {
+  const sent = [];
+  const c = new Codex(() => {}, async () => ({ decision: 'decline' }));
+  c.thread = 'parent';
+  c.write = (value) => sent.push(value);
+  await c.message({ id: 5, method: 'item/commandExecution/requestApproval', params: { threadId: 'child', command: 'ls' } });
+  assert.deepEqual(sent, [{ id: 5, result: { decision: 'decline' } }]);
+});
+
 test('approval returns the exact provider decision and request id', async () => {
   const sent = [];
   const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['git', 'fetch'] } };

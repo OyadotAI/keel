@@ -32,7 +32,9 @@ export class Codex {
       const thread = await this.rpc(q.session ? 'thread/resume' : 'thread/start', {
         ...(q.session ? { threadId: q.session } : {}), cwd: q.cwd,
         model: q.model || null, approvalPolicy: 'on-request', sandbox: q.mode === 'acceptEdits' ? 'workspace-write' : 'read-only',
-        baseInstructions: q.system || null,
+        // Added to Codex's own instructions. `baseInstructions` replaced them: measured, every
+        // Keel thread ran without Codex's base prompt and its tool guidance.
+        developerInstructions: q.system || null,
       });
       this.thread = thread.thread.id;
       this.inspector = new ContextInspector('codex', q.cwd, this.emit);
@@ -94,6 +96,10 @@ export class Codex {
       this.write({ id: message.id, result }); return;
     }
     const method = message.method;
+    // A spawned member's thread reports on this connection too. Its turn ending is not this
+    // turn ending, and its words are not this agent's. Requests above stay answered whatever the
+    // thread, or the member waits on an approval nobody can see.
+    if (p.threadId && this.thread && p.threadId !== this.thread) return;
     if (method === 'item/agentMessage/delta' || method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
       const key = `${p.itemId}:${method.includes('reasoning') ? 'think' : 'say'}`;
       if (typeof p.delta === 'string' && p.delta.length) {
