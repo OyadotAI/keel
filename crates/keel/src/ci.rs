@@ -117,6 +117,15 @@ impl Thread {
         self.comments.last().is_some_and(|c| !c.bot && c.trusted())
     }
 
+    /// The finding's title as the thread opened it, `🟡 **Title**`, in comparable words.
+    fn title(&self) -> String {
+        let first = self
+            .comments
+            .first()
+            .map_or("", |c| c.body.lines().next().unwrap_or(""));
+        words(first.split("**").nth(1).unwrap_or(""))
+    }
+
     /// Opened on a 🔴 finding. Those close when the code changes, never on a reply alone.
     fn blocking(&self) -> bool {
         self.comments
@@ -1017,8 +1026,10 @@ fn thread_actions(o: &Outcome, secrets: &[&str]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Whether a thread this run left open already covers this finding: the same file, within a few
-/// lines. One finding is one thread, however many pushes it survives.
+/// Whether a thread this run left open already covers this finding: the same file, and within a
+/// few lines or under the same title. The title matters once the code moves: GitHub reports an
+/// outdated thread with no current line, and on #305 that let one finding open a second thread.
+/// One finding is one thread, however many pushes it survives.
 fn already_open(o: &Outcome, f: &Finding) -> bool {
     let resolved: Vec<&str> = o.answer.as_ref().map_or(Vec::new(), |a| {
         a.threads
@@ -1030,8 +1041,18 @@ fn already_open(o: &Outcome, f: &Finding) -> bool {
     o.threads.iter().enumerate().any(|(i, t)| {
         !resolved.contains(&format!("T{}", i + 1).as_str())
             && t.path == f.path
-            && t.line.is_some_and(|l| l.abs_diff(f.line) <= 5)
+            && (t.line.is_some_and(|l| l.abs_diff(f.line) <= 5) || t.title() == words(&f.title))
     })
+}
+
+/// Lowercase words only, so `Action pinned by a mutable tag.` and `action pinned by a mutable tag`
+/// are one title.
+fn words(text: &str) -> String {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn clock(d: Duration) -> String {
@@ -1963,13 +1984,32 @@ mod tests {
         let o = judged(
             vec![thread("a.ts", 10, true)],
             &[("T1", "open", "still")],
-            vec![f(12), f(60)],
+            vec![
+                f(12),
+                Finding {
+                    title: "Unbounded retry".into(),
+                    ..f(60)
+                },
+            ],
         );
         let lines: Vec<_> = line_comments(&o, &[])
             .iter()
             .map(|c| c["line"].clone())
             .collect();
         assert_eq!(lines, vec![serde_json::json!(60)]);
+        // An outdated thread (no current line) still covers the same finding by its title.
+        let mut outdated = thread("a.ts", 10, true);
+        outdated.line = None;
+        outdated.comments[0].body = "🟡 **Action pinned by mutable tag**\n\nPin it.".into();
+        let moved = Finding {
+            title: "Action pinned by mutable tag.".into(),
+            ..f(66)
+        };
+        let o3 = judged(vec![outdated], &[("T1", "open", "")], vec![moved]);
+        assert!(
+            line_comments(&o3, &[]).is_empty(),
+            "the moved finding is the open thread's"
+        );
         // Once the thread is resolved the same spot can carry a new finding.
         let o = judged(
             vec![thread("a.ts", 10, true)],
