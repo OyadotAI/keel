@@ -12,7 +12,7 @@ Founder-provided usage statement: **Used daily by engineers at Oya.ai and Jumper
 Keep that wording precise. It is not a claim about company-wide adoption, user counts, or an
 endorsement by either company.
 
-Sponsor: **[getOya.ai](https://getoya.ai), a runtime for accurate agents.**
+Sponsor: **[OyaBrowser.com](https://oyabrowser.com).**
 Lead maintainer: **Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)).
 
 The founder story has three parts: keeping a team's skills, plugins, hooks, and tools consistent;
@@ -93,7 +93,7 @@ Suggested opening:
 >
 > Engineers at Oya.ai and Jumpermedia.co use it daily. Keel is free and open source, and will
 > always be free to use. Claude account access is separate.
-> The project is sponsored by getOya.ai, a runtime for accurate agents.
+> The project is sponsored by OyaBrowser.com.
 >
 > You don't need to start over: Keel loads existing project conversations, shows their recorded
 > details, and follows running sessions in real time. That includes compatible local Claude Code
