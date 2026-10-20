@@ -40,6 +40,26 @@ jobs:
   first (`npm ci`, the tests) runs before the review and on the same machine.
 - The comment is updated in place when it is posted with the job's `GITHUB_TOKEN` or an App token.
   A personal token posts as a person, and each push adds a new comment.
+- To post as your own app rather than `github-actions`, mint its token in a step guarded on the
+  secret — unguarded, a fork's PR fails at that step instead of skipping:
+
+  ```yaml
+      env:
+        HAS_APP: ${{ secrets.KEEL_APP_ID != '' }}
+      steps:
+        - uses: actions/create-github-app-token@v2
+          id: app
+          if: env.HAS_APP == 'true'
+          with:
+            app-id: ${{ secrets.KEEL_APP_ID }}
+            private-key: ${{ secrets.KEEL_APP_PRIVATE_KEY }}
+            permission-contents: read
+            permission-issues: write
+            permission-pull-requests: write
+        - uses: OyadotAI/keel-releases/review@review-v5
+          with:
+            github-token: ${{ steps.app.outputs.token || github.token }}
+  ```
 - The team comes from the base branch, so a PR cannot rewrite its own reviewers, their skills or
   `CLAUDE.md`. Without a team, Keel's shipped one reviews.
 - The agent can read the checkout and the diff, and nothing else. It cannot run commands, cannot

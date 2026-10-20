@@ -125,9 +125,13 @@ runs:
         if [ -z "$PR" ]; then echo "keel review: not a pull_request event, so there is nowhere to comment." >&2; exit 0; fi
         id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
           --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- keel-review -->"))) | .id' | head -1)"
+        # A comment another account posted cannot be edited (a switch from GITHUB_TOKEN to an app
+        # token is exactly that), so a refused edit becomes a new comment rather than a red job.
+        me=""
         if [ -n "$id" ]; then
-          me="$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" --jq .user.login)"
-        else
+          me="$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" --jq .user.login 2>/dev/null)" || me=""
+        fi
+        if [ -z "$me" ]; then
           me="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" --jq .user.login)"
         fi
         # Only this token's own line comments, ending in the marker: another bot quoting the
