@@ -93,6 +93,8 @@ runs:
         THREADS: ${{ runner.temp }}/keel-review-threads.json
       run: |
         set -euo pipefail
+        # GitHub's API returns the odd 502/503; a review must not turn red over one.
+        gh() { local i; for i in 1 2 3 4; do command gh "$@" && return 0; [ $i = 4 ] && return 1; sleep $((i * 5)); done; }
         echo '[]' > "$THREADS"
         # A reply run that a bot started is Keel answering itself (an app token's comments do
         # trigger workflows): nothing to do.
@@ -168,11 +170,16 @@ runs:
         LINES: ${{ runner.temp }}/keel-review-lines.json
         ACTIONS: ${{ runner.temp }}/keel-review-thread-actions.json
       run: |
-        set -euo pipefail
+        set -uo pipefail
+        # GitHub's API returns the odd 502/503; a review must not turn red over one.
+        gh() { local i; for i in 1 2 3 4; do command gh "$@" && return 0; [ $i = 4 ] && return 1; sleep $((i * 5)); done; }
+        # Posting is what people see, but the verdict is decided already: a post that still
+        # fails after the retries is a warning, and the Verdict step below sets the check.
+        post() {
         if [ -z "$PR" ]; then echo "keel review: not a pull_request event, so there is nowhere to comment." >&2; exit 0; fi
         if [ -f "$OUT" ]; then
           id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- keel-review -->"))) | .id' | head -1)"
+            --jq '[.[] | select(.user.type == "Bot" and (.body | startswith("<!-- keel-review -->"))) | .id] | first // empty')"
           # A comment another account posted cannot be edited (a switch from GITHUB_TOKEN to an
           # app token is exactly that), so a refused edit becomes a new comment, not a red job.
           me=""
@@ -180,7 +187,7 @@ runs:
             me="$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$OUT" --jq .user.login 2>/dev/null)" || me=""
           fi
           if [ -z "$me" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$OUT" >/dev/null || return 1
           fi
         fi
         # Each judged thread: the reply in the thread, then resolved when fixed or answered.
@@ -204,8 +211,11 @@ runs:
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input - >/dev/null \
             || echo "keel review: GitHub refused the line comments; every finding is in the summary comment." >&2
         fi
+        }
+        post || echo "::warning::keel review: could not post everything to the PR; the verdict below still stands."
 
     - name: Verdict
+      if: always() && steps.review.outputs.code != ''
       shell: bash
       env:
         CODE: ${{ steps.review.outputs.code }}
