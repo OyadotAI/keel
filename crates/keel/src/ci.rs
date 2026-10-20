@@ -70,6 +70,10 @@ struct Outcome {
     cost: Option<f64>,
 }
 
+/// The stages a review cannot skip. designer, security and reliability run only when the change
+/// is theirs; these four judge every change.
+const REQUIRED: &[&str] = &["pm", "principal", "reviewer", "qa"];
+
 /// The variables a review may hand `claude`, by name or by prefix. Everything else is dropped.
 const PASSED: &[&str] = &[
     "PATH",
@@ -290,6 +294,7 @@ fn review(
 /// The scratch worktree the review runs in, and the evidence beside it. Removed on every exit.
 struct Prepared {
     repo: Utf8PathBuf,
+    base: String,
     tree: Utf8PathBuf,
     home: Utf8PathBuf,
     evidence: Utf8PathBuf,
@@ -433,6 +438,7 @@ fn prepare(repo: &Utf8Path, base: &str, pr: &serde_json::Value) -> Result<Prepar
     )?;
     let prepared = Prepared {
         repo: repo.to_owned(),
+        base: base.to_string(),
         tree: tree.clone(),
         home,
         evidence: evidence.clone(),
@@ -562,10 +568,17 @@ fn ask(
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
 ) -> (Verdict, Option<Answer>, Option<f64>) {
+    // Said, because the agent cannot see it: on the first live run it flagged a checkout with no
+    // `ref` as letting the PR rewrite its reviewers, which is exactly what this function undoes.
     let prompt = format!(
-        "{}\n\nThe evidence folder is `{}`.",
+        "{}\n\nThe evidence folder is `{}`.\n\nWhat Keel already did, which you cannot see: \
+         every `.claude/` file, `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` in the working \
+         directory is the copy from `{}`, not the PR's (the PR's own versions are in \
+         `diff.patch`), and the team you are running is that copy. Whatever runs this review \
+         (a workflow, a checkout step) does not need to do it again.",
         team::PR_REVIEW,
-        prepared.evidence
+        prepared.evidence,
+        prepared.base
     );
     let mut command = std::process::Command::new(program);
     command
@@ -674,7 +687,20 @@ fn ask(
     let answer = reply
         .get("structured_output")
         .and_then(|v| serde_json::from_value::<Answer>(v.clone()).ok());
+    // A partial review is no review: measured on the first live run, the agent started `pm`,
+    // answered before the rest, and the check failed on one stage's opinion of the PR.
+    let missing: Vec<&str> = answer.as_ref().map_or(Vec::new(), |a| {
+        REQUIRED
+            .iter()
+            .copied()
+            .filter(|name| !a.stages.iter().any(|s| s.name == *name && s.ran))
+            .collect()
+    });
     let verdict = match answer.as_ref().map(|a| a.verdict.as_str()) {
+        Some(_) if !missing.is_empty() => Verdict::None(format!(
+            "Only part of the team ran: {} did not, so this is not a verdict on the change.",
+            missing.join(", ")
+        )),
         Some("ship") => Verdict::Ship,
         Some("do not ship") => Verdict::Block(
             answer
@@ -913,16 +939,73 @@ mod tests {
     }
 
     fn reply(verdict: &str, report: &str) -> String {
+        reply_with(verdict, report, &["pm", "principal", "reviewer", "qa"])
+    }
+
+    fn reply_with(verdict: &str, report: &str, ran: &[&str]) -> String {
+        let mut stages: Vec<_> = ran
+            .iter()
+            .map(|name| serde_json::json!({"name": name, "ran": true, "note": ""}))
+            .collect();
+        stages.push(serde_json::json!({"name": "designer", "ran": false, "note": "nothing a person reads changed"}));
         let answer = serde_json::json!({
             "report": report,
-            "stages": [{"name": "pm", "ran": true, "note": ""},
-                       {"name": "designer", "ran": false, "note": "nothing a person reads changed"}],
+            "stages": stages,
             "verdict": verdict,
             "reason": if verdict == "ship" { "" } else { "b() does not exist" },
         });
         let out = serde_json::json!({"is_error": false, "result": "Verdict: ship",
                                      "structured_output": answer, "total_cost_usd": 0.42});
         format!("cat <<'EOF'\n{out}\nEOF")
+    }
+
+    /// The first live run: `pm` returned, the rest were "cut short", and the check failed on one
+    /// stage's opinion. Neither verdict stands on part of the team.
+    #[test]
+    fn a_review_by_part_of_the_team_is_no_verdict() {
+        let (_dir, root) = pr_repo();
+        for verdict in ["ship", "do not ship"] {
+            let program = stub(&root, &reply_with(verdict, "pm says so", &["pm"]));
+            assert_eq!(
+                review(
+                    &root,
+                    &opts(&root, 1),
+                    program.as_os_str(),
+                    &env(&[]),
+                    &NEVER
+                ),
+                2,
+                "{verdict}"
+            );
+            let text = std::fs::read_to_string(root.join("report.md")).unwrap();
+            assert!(
+                text.contains("Only part of the team ran: principal, reviewer, qa did not"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prompt_says_the_team_is_already_the_base_s() {
+        let (_dir, root) = pr_repo();
+        let seen = root.join("args.txt");
+        let program = stub(
+            &root,
+            &format!("printf '%s\\n' \"$@\" > '{seen}'\n{}", reply("ship", "ok")),
+        );
+        review(
+            &root,
+            &opts(&root, 1),
+            program.as_os_str(),
+            &env(&[]),
+            &NEVER,
+        );
+        let args = std::fs::read_to_string(seen).unwrap();
+        assert!(
+            args.contains("is the copy from `main`, not the PR's"),
+            "{args}"
+        );
+        assert!(args.contains("never in the background"));
     }
 
     #[test]
