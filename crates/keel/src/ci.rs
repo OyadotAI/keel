@@ -787,6 +787,10 @@ fn clock(d: Duration) -> String {
 /// The app's own icon, from the public repository, at the size of the heading's text.
 const LOGO: &str = r#"<img src="https://raw.githubusercontent.com/OyadotAI/keel/main/desktop/src-tauri/icons/64x64.png" width="22" height="22" alt="Keel" align="top">"#;
 
+/// Under every review, verdict or not. `latest` is always the app: review releases are
+/// published with `--latest=false` for exactly this reason.
+const DOWNLOAD: &str = "\n<sub>Reviewed by [Keel](https://github.com/OyadotAI/keel), the agentic development environment · Download the app: [macOS](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg) · [Windows](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe)</sub>\n";
+
 /// GitHub refuses a comment past 65,536 characters; this leaves room for everything but the body.
 const COMMENT_MAX: usize = 60_000;
 
@@ -952,6 +956,7 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
             out.push_str(&footer);
         }
     }
+    out.push_str(DOWNLOAD);
     clean(out, secrets)
 }
 
@@ -1511,6 +1516,10 @@ mod tests {
             "the agents are shown, not folded"
         );
         assert!(text.contains("<details><summary>Full report</summary>"));
+        assert!(
+            text.ends_with(DOWNLOAD),
+            "the download line closes every review"
+        );
         assert!(text.contains("The full report is in the job log"));
 
         // Only the finding inside a hunk becomes a line comment; GitHub refuses the rest.
