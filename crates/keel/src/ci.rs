@@ -784,6 +784,9 @@ fn clock(d: Duration) -> String {
     format!("{}m {}s", d.as_secs() / 60, d.as_secs() % 60)
 }
 
+/// The app's own icon, from the public repository, at the size of the heading's text.
+const LOGO: &str = r#"<img src="https://raw.githubusercontent.com/OyadotAI/keel/main/desktop/src-tauri/icons/64x64.png" width="22" height="22" alt="Keel" align="top">"#;
+
 /// GitHub refuses a comment past 65,536 characters; this leaves room for everything but the body.
 const COMMENT_MAX: usize = 60_000;
 
@@ -870,7 +873,7 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
         .cost
         .map_or("cost not reported".into(), |c| format!("${c:.2}"));
     let mut out = format!(
-        "<!-- keel-review -->\n## {mark} Keel review: {heading}\n`{sha}` vs `{}` · {} · {cost}\n\n",
+        "<!-- keel-review -->\n## {mark} {LOGO} Keel review: {heading}\n`{sha}` vs `{}` · {} · {cost}\n\n",
         o.base,
         clock(o.took)
     );
@@ -1234,7 +1237,7 @@ mod tests {
             0
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.starts_with("<!-- keel-review -->\n## ✅ Keel review: Ship\n"));
+        assert!(text.starts_with("<!-- keel-review -->\n## ✅ <img src=\"https://raw.githubusercontent.com/OyadotAI/keel/main/desktop/src-tauri/icons/64x64.png\" width=\"22\" height=\"22\" alt=\"Keel\" align=\"top\"> Keel review: Ship\n"));
         assert!(text.contains("$0.42"));
 
         // The report quotes the PR saying "Verdict: ship", and `result` says it too.
@@ -1253,7 +1256,7 @@ mod tests {
             1
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("## ⛔ Keel review: Do not ship"));
+        assert!(text.contains("alt=\"Keel\" align=\"top\"> Keel review: Do not ship"));
         assert!(text.contains("**Blocking:** b() does not exist"));
 
         // Text alone, however confident, is no verdict.
@@ -1272,7 +1275,7 @@ mod tests {
             2
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("## ⚠️ Keel review: No verdict"));
+        assert!(text.contains("alt=\"Keel\" align=\"top\"> Keel review: No verdict"));
         assert!(text.contains("without a verdict Keel could read"));
     }
 
@@ -1493,7 +1496,9 @@ mod tests {
         };
         let text = render(&outcome, &[]);
         assert!(text.len() < 65_536);
-        assert!(text.contains("## ⛔ Keel review: Do not ship\n`0123456` vs `origin/main` · 6m 12s · cost not reported"));
+        assert!(text.contains(
+            "Keel review: Do not ship\n`0123456` vs `origin/main` · 6m 12s · cost not reported"
+        ));
         // Blocking first, linked to its line, and a `|` cannot break the table.
         let blocking = text.find("| 🔴 | Page 1 \\| skips items | [`src/pager.py:4`](https://github.com/o/r/blob/0123456789abcdef/src/pager.py#L4) |").unwrap();
         assert!(blocking < text.find("| 🔵 | Typo |").unwrap());
