@@ -1,7 +1,8 @@
 # Keel review: the repository's team reviews a pull request and posts one comment.
 #
 # Published to OyadotAI/keel-releases at `review/action.yml` by release.yml, so it is used as
-# `OyadotAI/keel-releases/review@v<version>` and downloads the `keel` of that same release.
+# `OyadotAI/keel-releases/review@<tag>` and downloads the `keel` of that same release: a
+# `review-v*` tag (review.yml, the review alone) or an app release `v*` (release.yml).
 # Everything that decides anything is `keel review-pr`; this only installs, runs and posts.
 #
 # Use it under `pull_request`, never `pull_request_target`: the second runs the PR's code with
@@ -66,7 +67,7 @@ runs:
       run: |
         set -euo pipefail
         case "$VERSION" in
-          v*) ;;
+          v*|review-v*) ;;
           *) echo "keel review: this copy of the action was not published by a release; set version (v0.4.13)." >&2; exit 1 ;;
         esac
         dir="$RUNNER_TEMP/keel-bin"

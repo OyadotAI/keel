@@ -87,6 +87,17 @@ release:
 	git push -q origin "v$$next"; \
 	echo "    tagged v$$next — the release workflow builds, signs, notarises and publishes it"
 
+# The review action alone (review.yml): the Linux `keel` and the action, published to the feed in
+# a few minutes, with no app build. Numbered on its own, review-v1, review-v2, …
+release-review:
+	@set -e; \
+	last="$$(git tag -l 'review-v*' | sed 's/^review-v//' | sort -n | tail -1)"; \
+	next="review-v$$(( $${last:-0} + 1 ))"; \
+	git push -q origin HEAD; \
+	git tag -a "$$next" -m "Keel review $$next"; \
+	git push -q origin "$$next"; \
+	echo "    tagged $$next — review.yml publishes it as OyadotAI/keel-releases/review@$$next"
+
 # One-time: the updater's signing key pair. The private half stays in ~/.tauri and goes into the
 # repository's TAURI_SIGNING_PRIVATE_KEY secret; the public half is in tauri.conf.json already.
 updater-keys:
