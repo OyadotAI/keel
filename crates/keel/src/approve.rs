@@ -155,10 +155,19 @@ fn take_approved(call: &Call) -> bool {
     found.and_then(|i| calls.remove(i)).is_some()
 }
 
-/// `permissions.ask` from the person's settings — in a test, the test's own, never the machine's.
-fn person_asks() -> Vec<String> {
+/// `permissions.ask` from the person's settings — in a test, the test's own, never the machine's,
+/// and only for the lane that test asks from: tests run side by side, and one test's ask rule
+/// read by another turned that other's `allow` into a card on CI.
+fn person_asks(lane: &str) -> Vec<String> {
     #[cfg(test)]
-    return tests::ASKS.locked().clone();
+    return tests::ASKS
+        .locked()
+        .iter()
+        .filter(|(l, _)| l == lane)
+        .map(|(_, rule)| rule.clone())
+        .collect();
+    #[cfg(not(test))]
+    let _ = lane;
     #[cfg(not(test))]
     keel_workspace::claude_home()
         .map(|h| crate::denies::read_ask(&h))
@@ -647,11 +656,12 @@ async fn decide(
         }));
     }
     let (leaves_the_project, trusted, effective, denies, asks) = {
-        let (repo, tool, input, session) = (
+        let (repo, tool, input, session, lane) = (
             repo.clone(),
             hook.tool_name.clone(),
             hook.tool_input.clone(),
             session.map(str::to_string),
+            hook.lane.clone(),
         );
         crate::serve::blocking(
             move || {
@@ -669,7 +679,7 @@ async fn decide(
                         Vec::new()
                     },
                     // Every provider: trust and Keel's rules answer before Claude reads these.
-                    person_asks(),
+                    person_asks(&lane),
                 )
             },
             // Closed: a read that failed is not evidence the edit stays in the repository.
@@ -1871,6 +1881,8 @@ pub(crate) mod tests {
     /// so `allow` is said only where Keel can vouch for the whole call.
     #[tokio::test]
     async fn a_final_caller_is_allowed_only_what_keel_can_vouch_for() {
+        // The queue is shared: the tests that clear it hold this too.
+        let _guard = lock().await;
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::create_dir(root.join(".git")).unwrap();
@@ -1972,6 +1984,8 @@ pub(crate) mod tests {
     /// terminal Claude, whose allowlist was fixed at its start, would ask about again itself.
     #[tokio::test]
     async fn a_terminal_lanes_click_is_asked_on_keels_card_and_never_deferred() {
+        // The queue is shared: the tests that clear it hold this too.
+        let _guard = lock().await;
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::create_dir(root.join(".git")).unwrap();
@@ -2120,6 +2134,8 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn publication_prefix_rules_cannot_bypass_background_authorization() {
+        // The queue is shared: the tests that clear it hold this too.
+        let _guard = lock().await;
         check_background_authorization(true, "deny").await;
     }
 
@@ -2466,18 +2482,22 @@ pub(crate) mod tests {
         LOCK.lock().await
     }
 
-    pub(super) static ASKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// The person's `ask` rules for a test, by the lane that test asks from.
+    pub(super) static ASKS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
     /// A person's `ask` rule is a card whatever else would allow the call — trust, a broader
     /// saved rule — and once they approve it at the hook, the gate asking again gets that answer.
     #[tokio::test]
     async fn the_persons_ask_rules_are_always_a_card() {
+        // The queue is shared: the tests that clear it hold this too.
+        let _guard = lock().await;
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::create_dir(root.join(".git")).unwrap();
         crate::permissions::remember(&root, "Bash(git *)", "project", None).unwrap();
         crate::permissions::set_trusted(&root, true).unwrap();
-        *ASKS.locked() = vec!["Bash(git push --keel-test *)".into()];
+        ASKS.locked()
+            .push(("asks".into(), "Bash(git push --keel-test *)".into()));
         let state = Arc::new(AppState::new(root.clone()));
         let hook = |provider: &str, command: &str, id: &str| HookInput {
             tool_name: "Bash".into(),
@@ -2540,7 +2560,7 @@ pub(crate) mod tests {
             replay.abort();
         }
         queue().locked().retain(|p| p.lane != "asks");
-        ASKS.locked().clear();
+        ASKS.locked().retain(|(lane, _)| lane != "asks");
     }
 
     /// A link inside the repository that leads out of it, or a path that climbs out once a

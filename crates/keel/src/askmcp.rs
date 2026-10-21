@@ -547,6 +547,8 @@ mod browser_gate_tests {
     /// is asked.
     #[tokio::test]
     async fn a_browser_action_is_asked_once_by_whoever_is_in_front() {
+        // The approval queue is shared: the tests that clear it hold this too.
+        let _guard = crate::approve::tests::lock().await;
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::create_dir(root.join(".git")).unwrap();
