@@ -853,6 +853,7 @@ pub fn is_background(tool: &str, input: &serde_json::Value) -> bool {
 /// `echo "a & b"` is not a detach, and `&&`, `&>` and `>&` are excluded because none of them
 /// background anything.
 fn detaches(command: &str) -> bool {
+    let command = without_heredocs(command);
     let mut bare = String::with_capacity(command.len());
     let (mut single, mut double) = (false, false);
     for c in command.chars() {
@@ -888,6 +889,93 @@ fn detaches(command: &str) -> bool {
         return true;
     }
     false
+}
+
+/// The command with every heredoc's body taken out. A body is data the shell hands to a program,
+/// not shell: a Python script editing Rust (`&self`, `&[]`) was read as a detach and run as a
+/// background job, and the edit it made landed outside the turn. Before that, the same edits got
+/// through only when an apostrophe in their prose happened to toggle the quote state.
+///
+/// Only a `<<` the shell would read as one starts a body: not quoted, not inside `$((…))` where it
+/// is a shift, not after a `#`. And a body that never reaches its terminator line drops nothing —
+/// so the cheap way to hide a `nohup` from the scan, a `<<` that is not a heredoc, gets nothing.
+fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
+    if !command.contains("<<") {
+        return command.into();
+    }
+    let mut out = String::with_capacity(command.len());
+    let mut until: Vec<String> = Vec::new();
+    let (mut single, mut double, mut arithmetic) = (false, false, 0usize);
+    for line in command.split_inclusive('\n') {
+        if let Some(end) = until.first() {
+            if line.trim_end_matches(['\n', '\r']).trim_start_matches('\t') == end {
+                until.remove(0);
+            }
+            continue;
+        }
+        out.push_str(line);
+        let c: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < c.len() {
+            let next = |k: usize| c.get(i + k).copied();
+            match c[i] {
+                '\\' if !single => {
+                    i += 2;
+                    continue;
+                }
+                '\'' if !double => single = !single,
+                '"' if !single => double = !double,
+                _ if single || double => {}
+                '(' if next(1) == Some('(') => {
+                    arithmetic += 1;
+                    i += 2;
+                    continue;
+                }
+                ')' if arithmetic > 0 && next(1) == Some(')') => {
+                    arithmetic -= 1;
+                    i += 2;
+                    continue;
+                }
+                '#' if arithmetic == 0 && (i == 0 || c[i - 1].is_whitespace()) => break,
+                // `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-EOF`; not `<<<`, a here-string.
+                '<' if arithmetic == 0 && next(1) == Some('<') => {
+                    if next(2) == Some('<') {
+                        i += 3;
+                        continue;
+                    }
+                    let mut j = i + 2;
+                    if c.get(j) == Some(&'-') {
+                        j += 1;
+                    }
+                    while c.get(j).is_some_and(|ch| *ch == ' ' || *ch == '\t') {
+                        j += 1;
+                    }
+                    let mut word = String::new();
+                    while let Some(&ch) = c.get(j) {
+                        if ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | ')' | '<' | '>') {
+                            break;
+                        }
+                        if !matches!(ch, '\'' | '"' | '\\') {
+                            word.push(ch);
+                        }
+                        j += 1;
+                    }
+                    if !word.is_empty() {
+                        until.push(word);
+                    }
+                    i = j;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    if until.is_empty() {
+        out.into()
+    } else {
+        command.into()
+    }
 }
 
 /// Take an authorized command off the turn and run it in the daemon.
@@ -1818,11 +1906,30 @@ pub(crate) mod tests {
             "grep -r 'a & b' .",
             "ls -la",
             "npm run build &> out.log",
+            // A heredoc's body is data: this one is a script that edits Rust.
+            "cd src && python3 - <<'EOF'\nnew = 'fn f(x: &[u8]) -> &str { &self.a }'\nEOF\necho drafted",
+            "cat <<-END > notes.md\n\ta & b\n\tEND",
         ] {
             assert!(
                 !is_background("Bash", &bash(command)),
                 "false positive: {command}"
             );
+        }
+        // What comes after the body is shell again, and a here-string has no body to skip.
+        assert!(is_background(
+            "Bash",
+            &bash("cat <<EOF > a\n&x\nEOF\npnpm dev &")
+        ));
+        assert!(is_background("Bash", &bash("grep x <<< \"$v\" &")));
+        // A `<<` that is not a heredoc hides nothing after it.
+        for command in [
+            "echo \"<<EOF\"\nnohup pnpm dev &",
+            "echo $((1<<2))\nnohup pnpm dev &",
+            "cat <<\\EOF\nbody\nEOF\nnohup pnpm dev &",
+            "true # <<X\nsetsid pnpm dev",
+            "cat <<EOF\nnever closed\nnohup pnpm dev &",
+        ] {
+            assert!(is_background("Bash", &bash(command)), "hidden: {command}");
         }
     }
 
