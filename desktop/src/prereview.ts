@@ -113,6 +113,19 @@ export function openPullRequest(ep: Endpoint, wt: string | undefined, o: { title
   );
 }
 
+/// The pull request a run opened, or found already open: `gh` prints its address either way —
+/// on success, and in the error when one exists for the branch. Once there is one, nothing offers
+/// to open another: a second click used to make a second pull request.
+export function prLink(run?: { state: PrRun }): string | undefined {
+  return run?.state.lines.map((l) => l.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/)?.[0]).find(Boolean);
+}
+
+/// `OyadotAI/oya-browser#44` for a pull request's address.
+export function prLabel(link: string): string {
+  const m = link.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+  return m ? `${m[1]}#${m[2]}` : link;
+}
+
 const ORDER: Record<string, number> = { blocking: 0, warning: 1, note: 2 };
 export const sorted = (findings: Finding[]) => [...findings].sort((a, b) => (ORDER[a.severity] ?? 3) - (ORDER[b.severity] ?? 3));
 

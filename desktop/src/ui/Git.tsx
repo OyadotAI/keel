@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
-import { useRun } from "../runs";
+import { clear, useRun } from "../runs";
 import { useStore } from "../store";
 import { SourceControl } from "./SourceControl";
 import { InlineDiff } from "./InlineDiff";
@@ -10,8 +10,8 @@ import { CommitGraph } from "./CommitGraph";
 import { useIde } from "../ide";
 import { useGitCards } from "../git-cards";
 import { Banner, Count, Tabs } from "./kit";
-import { PreReview } from "./PreReview";
-import { clock, openPullRequest, prKey, refreshReview, startReview, useReview, type PrRun } from "../prereview";
+import { PreReview, PrLink } from "./PreReview";
+import { clock, openPullRequest, prKey, prLink, refreshReview, startReview, useReview, type PrRun } from "../prereview";
 import { Icon } from "./icons";
 
 interface Commit {
@@ -339,7 +339,7 @@ function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string
     return <div style={{ padding: "10px 12px" }}><PreReview lane={lane} ep={ep} wt={wt} place="tab" />{lines.length > 0 && <pre className="code">{lines.join("\n")}</pre>}</div>;
   }
   const first = () => { setError(""); startReview(lane, ep, wt, { title, draft }).catch((e) => setError(e instanceof Error ? e.message : String(e))); };
-  const link = lines.map((l) => l.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)?.[0]).find(Boolean);
+  const link = prLink(run);
   return (
     <div style={{ padding: "10px 12px" }}>
       {cancelled && review?.outcome?.kind === "none" && <Banner tone="note">Review cancelled after {clock(review.outcome.took)}.</Banner>}
@@ -351,16 +351,21 @@ function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string
       <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", margin: "6px 0" }}>
         <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Open as a draft
       </label>
-      <div className="actions">
-        <button className="primary" disabled={state === "running"} onClick={first}>Review first</button>
-        <button disabled={state === "running"} onClick={() => openPullRequest(ep, wt, { title, draft })}>
-          {state === "running" ? "Opening…" : "Open without review"}
-        </button>
-      </div>
-      {link && (
-        <p>
-          <a href={link}>{link}</a>
-        </p>
+      {/* Once a pull request exists, nothing offers to open another: a second click made one. */}
+      {link ? (
+        <div className="review-pr">
+          <Icon name="check-circle" size={14} style={{ color: "var(--add)" }} />
+          <span>{state === "failed" ? "Already open:" : "Opened"}</span>
+          <PrLink link={link} />
+          <button className="link small" onClick={() => clear(prKey(ep, wt))}>Start another pull request</button>
+        </div>
+      ) : (
+        <div className="actions">
+          <button className="primary" disabled={state === "running"} onClick={first}>Review first</button>
+          <button disabled={state === "running"} onClick={() => openPullRequest(ep, wt, { title, draft })}>
+            {state === "running" ? "Opening…" : "Open without review"}
+          </button>
+        </div>
       )}
       {lines.length > 0 && <pre className="code">{lines.join("\n")}</pre>}
     </div>
