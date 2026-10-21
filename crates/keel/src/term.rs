@@ -270,6 +270,8 @@ fn pty_thread(
                 Ok((program, args)) => {
                     let mut c = CommandBuilder::new(program);
                     c.args(args);
+                    // A question asked through `ask_user` waits for the person, not for 60 s.
+                    c.env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout());
                     c
                 }
                 Err(why) => {

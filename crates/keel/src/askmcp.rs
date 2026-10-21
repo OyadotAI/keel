@@ -73,6 +73,18 @@ fn rpc_err(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// `MCP_TOOL_TIMEOUT` for every `claude` Keel starts: past `WAIT`, so the person has the whole
+/// four minutes a question card promises. Claude Code abandoned `ask_user` at 60 s otherwise. A
+/// longer value the person set themselves is kept.
+pub fn tool_timeout() -> String {
+    let ours = (WAIT.as_millis() + 60_000) as u64;
+    let theirs = std::env::var("MCP_TOOL_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    ours.max(theirs).to_string()
+}
+
 /// Queue the questions for the lane and wait for the answer. Public so a test can drive it
 /// without HTTP.
 pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
@@ -114,17 +126,19 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
         None,
         serde_json::json!({ "lane": lane.unwrap_or_default() }),
     );
+    // Claude Code gives up on a tool call before `WAIT` does — measured, 60.1 s, twice in one
+    // session — and its request is dropped here mid-wait. The card stayed on screen for the rest
+    // of the four minutes and took the person's answer into nothing: they answered three times
+    // and the agent was told nobody had. So the card goes when the asker does.
+    let _withdrawn = crate::approve::Withdraw(id.clone());
     match tokio::time::timeout(WAIT, rx).await {
         Ok(Ok(decision)) => Ok(decision
             .reason
             .split_once("do not ask again.\n\n")
             .map(|(_, a)| a.to_string())
             .unwrap_or(decision.reason)),
-        _ => {
-            waiters().locked().remove(&id);
-            queue().locked().retain(|p| p.id != id);
-            Err("nobody answered within the time allowed; proceed with your best judgement and say what you assumed".into())
-        }
+        // `_withdrawn` takes the card down and tells the window.
+        _ => Err("nobody answered within the time allowed; proceed with your best judgement and say what you assumed".into()),
     }
 }
 
@@ -223,5 +237,41 @@ mod tests {
         tx.0.send(crate::approve::answered("Blue")).unwrap();
         assert_eq!(asking.await.unwrap().unwrap(), "Blue");
         assert!(config(7777, Some("lane-1")).contains("/mcp?lane=lane-1"));
+    }
+
+    /// Claude Code abandoned the call at 60 s; the card stayed and took three answers into
+    /// nothing. When the asker goes, the question goes with it.
+    #[tokio::test]
+    async fn a_question_whose_asker_gave_up_leaves_the_screen() {
+        let _guard = crate::approve::tests::lock().await;
+        let args = json!({ "questions": [{ "question": "Ship it?", "header": "Ship", "options": [{ "label": "Yes" }, { "label": "No" }] }] });
+        let asking = tokio::spawn(async move { ask(Some("lane-gone"), &args).await });
+        let mut queued = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if queue()
+                .locked()
+                .iter()
+                .any(|p| p.session_id == "lane:lane-gone")
+            {
+                queued = true;
+                break;
+            }
+        }
+        assert!(queued, "queued");
+        // The request is dropped mid-wait, as axum drops it when Claude Code hangs up.
+        asking.abort();
+        let _ = asking.await;
+        assert!(
+            !queue()
+                .locked()
+                .iter()
+                .any(|p| p.session_id == "lane:lane-gone"),
+            "the card outlived the call that asked it"
+        );
+        assert!(
+            waiters().locked().is_empty()
+                || !waiters().locked().values().any(|(_, l)| l == "lane-gone")
+        );
     }
 }

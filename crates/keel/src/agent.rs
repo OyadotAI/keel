@@ -919,6 +919,7 @@ pub async fn chat(
             let mut command = Command::new(crate::permissions::program("claude"));
             command
                 .current_dir(&cwd)
+                .env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout())
                 .arg("-p")
                 .arg(&query.prompt)
                 .arg("--output-format")

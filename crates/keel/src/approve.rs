@@ -176,8 +176,8 @@ fn note_approved(call: Call) {
 /// Withdraws a question however its wait ends. The hook process is killed by Stop, or by Claude
 /// Code's own hook timeout, and axum then drops the waiting future — and only the timeout branch
 /// used to clean up, so the card stayed on screen for the life of the daemon and answering it
-/// reported success to nobody.
-struct Withdraw(String);
+/// reported success to nobody. `ask_user` (askmcp.rs) waits the same way, and holds one too.
+pub(crate) struct Withdraw(pub(crate) String);
 
 impl Drop for Withdraw {
     fn drop(&mut self) {
