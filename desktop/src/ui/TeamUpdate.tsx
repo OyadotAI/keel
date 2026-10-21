@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { post, type Endpoint } from "../api";
 import { task, useRun } from "../runs";
 import { absent, offered, pending, readTeam, updatedSentence, type TeamPlan, type TeamUpdated } from "../team";
+import { useStore } from "../store";
 import { Banner } from "./kit";
 
 interface Shown { tone: "note" | "error"; text: string }
@@ -21,7 +22,7 @@ function Group({ title, paths, reason, sub, dirty = [] }: { title: string; paths
   </details>;
 }
 
-/** The inline panel in Extensions › Subagents. Root checkout only: the project endpoint, no lane. */
+/** The inline panel in Extensions › Subagents. The project root, or a lane of its own when the root is busy. */
 export function TeamUpdate({ ep, project, plan, reread }: { ep: Endpoint; project: string; plan?: TeamPlan; reread: () => void }) {
   const key = `team-update:${project}`;
   const run = useRun<Shown>(key);
@@ -32,6 +33,13 @@ export function TeamUpdate({ ep, project, plan, reread }: { ep: Endpoint; projec
     void task<Shown>(key, { tone: "note", text: `Updating ${pending(plan)} files…` }, async (put) => {
       const r = await post<TeamUpdated>(ep, "/api/team/update");
       setLast(r);
+      // Written beside the busy tree rather than refused: open the lane, where it can be read and finished.
+      if (r.lane) {
+        const store = useStore.getState();
+        const lid = store.newLane(project, true);
+        useStore.setState((s) => ({ lanes: { ...s.lanes, [lid]: { ...s.lanes[lid], wt: r.lane!, title: "Update the agent team" } } }));
+        store.select(lid);
+      }
       put({ tone: "note", text: updatedSentence(r) });
       window.dispatchEvent(new Event("keel:subagents-changed"));
     }, (e) => ({ tone: "error", text: e instanceof Error ? e.message : String(e) }));

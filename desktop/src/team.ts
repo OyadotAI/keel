@@ -18,6 +18,8 @@ export interface TeamUpdated {
   uncommitted: string[];
   committed?: string | null;
   note?: string | null;
+  /** The lane it went into, because a turn or a terminal session was writing the project's tree. */
+  lane?: string | null;
 }
 
 export const readTeam = (ep: Endpoint) => get<TeamPlan>(ep, "/api/team");
@@ -69,6 +71,7 @@ export function updatedSentence(r: TeamUpdated): string {
   const counts = `${r.replaced.length} replaced, ${r.added.length} added.`;
   const kept = r.kept.length ? ` Kept ${plural(r.kept.length, "file")} you changed.` : "";
   if (!r.replaced.length && !r.added.length) return `The team is up to date.${kept}`;
+  if (r.lane) return `A session was editing the project, so the update went to its own lane, keel/${r.lane}: ${counts}${kept} Finish that lane to merge it.`;
   if (r.committed) return `Team updated in commit ${r.committed}: ${counts}${kept}`;
   return `Team updated: ${counts}${r.note ? ` Not committed: ${r.note}.` : ""}${kept}`;
 }

@@ -225,6 +225,9 @@ pub struct Updated {
     pub uncommitted: Vec<String>,
     pub committed: Option<String>,
     pub note: Option<String>,
+    /// The lane it was written in instead, because something else was writing the project's
+    /// tree: the page opens it, and finishing it merges the update.
+    pub lane: Option<String>,
 }
 
 pub async fn api_team(State(state): State<Arc<AppState>>) -> Json<Plan> {
@@ -246,9 +249,50 @@ pub async fn api_update(
     .map(Json)
 }
 
-/// Always the project root, never a lane's checkout: a lane's tree is that lane's work.
+/// The project root, never an existing lane's checkout: a lane's tree is that lane's work. While
+/// a turn or a terminal session is writing the root, the update gets a lane of its own instead —
+/// refusing sent the person off to wait for a session that may be the one they are talking to.
 fn update(state: &Arc<AppState>, agents: &[Agent]) -> Result<Updated, crate::writes::Failure> {
     let root = state.repo();
+    // Another of Keel's own writes is over in a moment, so that one is still waited for.
+    if state
+        .writer_of(&root)
+        .is_none_or(|holder| holder.starts_with("keel:"))
+    {
+        return write_team(state, &root, agents);
+    }
+    let name = new_lane(&root).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let checkout = crate::worktree::path_of(&root, &name)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let mut done = write_team(state, &checkout, agents)?;
+    done.lane = Some(name);
+    Ok(done)
+}
+
+/// A fresh lane cut from where the project stands: `team-update`, or the first free
+/// `team-update-N` — an earlier one may still be open, or its branch left behind.
+fn new_lane(root: &Utf8Path) -> Result<String, String> {
+    let mut last = String::new();
+    for n in 1..=20 {
+        let name = if n == 1 {
+            "team-update".to_string()
+        } else {
+            format!("team-update-{n}")
+        };
+        match crate::worktree::create_from(root, &name, None) {
+            Ok(w) => return Ok(w.name),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+fn write_team(
+    state: &Arc<AppState>,
+    root: &Utf8Path,
+    agents: &[Agent],
+) -> Result<Updated, crate::writes::Failure> {
+    let root = root.to_owned();
     let _held = crate::writes::hold(state, &root, "team")?;
     if let Some(op) = crate::writes::in_progress(&root) {
         return Err((
@@ -481,6 +525,45 @@ mod tests {
         );
         // Up to date now: nothing left to replace.
         assert!(plan(&root, &[Agent::Claude]).replace.is_empty());
+    }
+
+    /// A terminal session writing the project's tree: the update goes to a lane of its own and
+    /// commits there, and the project's tree and branch are not touched.
+    #[test]
+    fn a_busy_tree_gets_the_update_in_a_lane() {
+        let (_d, root) = repo();
+        for (k, v) in [("user.name", "t"), ("user.email", "t@t")] {
+            crate::git::run(&root, &["config", k, v]).unwrap();
+        }
+        crate::review::adopt_for(&root, &[Agent::Claude]).unwrap();
+        let rel = ".claude/agents/principal.md";
+        write(&root, rel, &old_version(rel));
+        crate::git::run(&root, &["add", "-A"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "adopted"]).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        state.claim_terminal("s", &root).unwrap();
+        let head = crate::git::run(&root, &["rev-parse", "HEAD"]).unwrap();
+        let done = update(&state, &[Agent::Claude]).unwrap();
+        assert_eq!(done.lane.as_deref(), Some("team-update"), "{done:?}");
+        assert_eq!(done.replaced, vec![rel.to_string()]);
+        assert!(done.committed.is_some(), "{done:?}");
+        assert_eq!(
+            crate::git::run(&root, &["rev-parse", "HEAD"]).unwrap(),
+            head
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(rel)).unwrap(),
+            old_version(rel)
+        );
+        let lane = crate::worktree::path_of(&root, "team-update").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(lane.join(rel)).unwrap(),
+            tmpl::PRINCIPAL_AGENT
+        );
+        // A second one while the first lane is still open takes the next name.
+        write(&lane, rel, &old_version(rel));
+        let again = update(&state, &[Agent::Claude]).unwrap();
+        assert_eq!(again.lane.as_deref(), Some("team-update-2"));
     }
 
     fn committed_repo() -> (tempfile::TempDir, camino::Utf8PathBuf) {
