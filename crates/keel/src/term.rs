@@ -39,7 +39,7 @@ const INSTALLERS: &[(&str, &str, &str)] = &[
 /// install folder a disk cleanup removed left a link pointing at nothing, and the same message.
 /// `None` when the program is there, or Keel knows no installer for it.
 #[cfg(unix)]
-fn install_first(program: &std::ffi::OsStr, args: &[String]) -> Option<String> {
+fn install_first(program: &std::ffi::OsStr, args: &[String]) -> Option<Vec<String>> {
     let name = program.to_str()?;
     if crate::permissions::find_on_path(name).is_some() {
         return None;
@@ -47,23 +47,21 @@ fn install_first(program: &std::ffi::OsStr, args: &[String]) -> Option<String> {
     install_line(name, args)
 }
 
-/// The line itself, for a program known to be missing.
+/// The command itself, for a program known to be missing: `/bin/sh` with a script that is fixed
+/// text, and the agent's own argv as its positional parameters. Never quoted into a string for
+/// `$SHELL` — that may be fish, which does not read POSIX quoting the way it was written.
 #[cfg(unix)]
-fn install_line(name: &str, args: &[String]) -> Option<String> {
+fn install_line(name: &str, args: &[String]) -> Option<Vec<String>> {
     let (_, who, install) = INSTALLERS.iter().find(|(p, _, _)| *p == name)?;
-    let run = shlex::try_join(std::iter::once(name).chain(args.iter().map(String::as_str))).ok()?;
-    let said = shlex::try_quote(&format!(
-        "{who} is not installed on this machine, so Keel is installing it with its own installer, then starting it."
-    ))
-    .ok()?
-    .into_owned();
-    Some(format!(
-        "printf '%s\\n\\n' {said}; echo '$ {install}'; {install} && export PATH=\"$HOME/.local/bin:$PATH\" && exec {run}"
-    ))
+    let script = format!(
+        "echo '{who} is not installed on this machine, so Keel is installing it with its own installer, then starting it.'; echo; echo '$ {install}'; {install} && PATH=\"$HOME/.local/bin:$PATH\" exec \"$@\""
+    );
+    let head = ["/bin/sh", "-c", &script, "sh", name].map(String::from);
+    Some(head.into_iter().chain(args.iter().cloned()).collect())
 }
 
 #[cfg(not(unix))]
-fn install_first(_program: &std::ffi::OsStr, _args: &[String]) -> Option<String> {
+fn install_first(_program: &std::ffi::OsStr, _args: &[String]) -> Option<Vec<String>> {
     None
 }
 
@@ -319,11 +317,9 @@ fn pty_thread(
             ) {
                 Ok((program, args)) => {
                     let mut c = match install_first(&program, &args) {
-                        Some(line) => {
-                            let mut c = CommandBuilder::new(shell());
-                            c.args(["-lc", &line]);
-                            c
-                        }
+                        Some(argv) => CommandBuilder::from_argv(
+                            argv.into_iter().map(std::ffi::OsString::from).collect(),
+                        ),
                         None => {
                             let mut c = CommandBuilder::new(program);
                             c.args(args);
@@ -483,18 +479,18 @@ mod tests {
     #[test]
     fn a_missing_agent_is_installed_then_started() {
         let args = vec!["--resume".to_string(), "a b".to_string()];
-        let line = install_line("codex", &args).expect("codex has an installer");
-        assert!(
-            line.contains("curl -fsSL https://chatgpt.com/codex/install.sh | sh &&"),
-            "{line}"
-        );
-        assert!(line.ends_with("exec codex --resume 'a b'"), "{line}");
-        assert!(line.contains("Codex is not installed"), "{line}");
-        assert!(
-            install_line("claude", &[])
-                .unwrap()
-                .contains("https://claude.ai/install.sh")
-        );
+        let argv = install_line("codex", &args).expect("codex has an installer");
+        assert_eq!(argv[..2], ["/bin/sh", "-c"]);
+        assert!(argv[2].contains("curl -fsSL https://chatgpt.com/codex/install.sh | sh &&"));
+        assert!(argv[2].contains("Codex is not installed"));
+        // The agent's argv is never part of the script: positional parameters, untouched.
+        assert_eq!(argv[3..], ["sh", "codex", "--resume", "a b"]);
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf '%s|' \"$@\"", "sh", "--resume", "a b; echo pwned"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "--resume|a b; echo pwned|");
+        assert!(install_line("claude", &[]).unwrap()[2].contains("https://claude.ai/install.sh"));
         assert_eq!(
             install_line("agy", &[]),
             None,
