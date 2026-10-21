@@ -578,6 +578,13 @@ fn handler(
             let Ok(rel) = path.strip_prefix(real.as_std_path()) else {
                 continue;
             };
+            // The project folder itself: its timestamp moves whenever anything inside it is
+            // created, build output included, and the change that matters arrives as its own
+            // event for its own path. FSEvents delivered this one late on a loaded machine and
+            // woke the watch for a `target/` write.
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
             if let Some(wt) = checkout_of(rel) {
                 dirty.locked_insert(wt);
                 any = true;
