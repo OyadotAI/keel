@@ -17,6 +17,56 @@ fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
 }
 
+/// An agent CLI that is not on this machine, and the vendor's own installer for it. Both put
+/// the program in `~/.local/bin`. The one for Codex is the script it was installed with here.
+#[cfg(unix)]
+const INSTALLERS: &[(&str, &str, &str)] = &[
+    (
+        "codex",
+        "Codex",
+        "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+    ),
+    (
+        "claude",
+        "Claude Code",
+        "curl -fsSL https://claude.ai/install.sh | bash",
+    ),
+];
+
+/// When the lane's agent is not installed, the shell line that installs it in this terminal —
+/// where the person watches it happen — and then starts it as it would have started. "Could not
+/// start it: is it installed?" left them to go and find the installer themselves; a Codex whose
+/// install folder a disk cleanup removed left a link pointing at nothing, and the same message.
+/// `None` when the program is there, or Keel knows no installer for it.
+#[cfg(unix)]
+fn install_first(program: &std::ffi::OsStr, args: &[String]) -> Option<String> {
+    let name = program.to_str()?;
+    if crate::permissions::find_on_path(name).is_some() {
+        return None;
+    }
+    install_line(name, args)
+}
+
+/// The line itself, for a program known to be missing.
+#[cfg(unix)]
+fn install_line(name: &str, args: &[String]) -> Option<String> {
+    let (_, who, install) = INSTALLERS.iter().find(|(p, _, _)| *p == name)?;
+    let run = shlex::try_join(std::iter::once(name).chain(args.iter().map(String::as_str))).ok()?;
+    let said = shlex::try_quote(&format!(
+        "{who} is not installed on this machine, so Keel is installing it with its own installer, then starting it."
+    ))
+    .ok()?
+    .into_owned();
+    Some(format!(
+        "printf '%s\\n\\n' {said}; echo '$ {install}'; {install} && export PATH=\"$HOME/.local/bin:$PATH\" && exec {run}"
+    ))
+}
+
+#[cfg(not(unix))]
+fn install_first(_program: &std::ffi::OsStr, _args: &[String]) -> Option<String> {
+    None
+}
+
 /// `%COMSPEC%`, the shell Windows itself says is the command shell.
 #[cfg(windows)]
 fn shell() -> String {
@@ -268,8 +318,18 @@ fn pty_thread(
                 lane.as_deref(),
             ) {
                 Ok((program, args)) => {
-                    let mut c = CommandBuilder::new(program);
-                    c.args(args);
+                    let mut c = match install_first(&program, &args) {
+                        Some(line) => {
+                            let mut c = CommandBuilder::new(shell());
+                            c.args(["-lc", &line]);
+                            c
+                        }
+                        None => {
+                            let mut c = CommandBuilder::new(program);
+                            c.args(args);
+                            c
+                        }
+                    };
                     // A question asked through `ask_user` waits for the person, not for 60 s.
                     c.env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout());
                     c
@@ -416,6 +476,33 @@ fn pty_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing agent is installed by its vendor's installer in the terminal, then started with
+    /// the arguments it would have had — quoted, so a prompt or a path with spaces survives.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_agent_is_installed_then_started() {
+        let args = vec!["--resume".to_string(), "a b".to_string()];
+        let line = install_line("codex", &args).expect("codex has an installer");
+        assert!(
+            line.contains("curl -fsSL https://chatgpt.com/codex/install.sh | sh &&"),
+            "{line}"
+        );
+        assert!(line.ends_with("exec codex --resume 'a b'"), "{line}");
+        assert!(line.contains("Codex is not installed"), "{line}");
+        assert!(
+            install_line("claude", &[])
+                .unwrap()
+                .contains("https://claude.ai/install.sh")
+        );
+        assert_eq!(
+            install_line("agy", &[]),
+            None,
+            "no installer guessed for one Keel does not know"
+        );
+        // Something on PATH is started as it is.
+        assert_eq!(install_first(std::ffi::OsStr::new("sh"), &[]), None);
+    }
 
     /// What `ps -o comm=` actually prints, on both platforms and for a login shell.
     /// A session id goes on a command line, so nothing that reads as a flag gets there.
