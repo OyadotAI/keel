@@ -55,10 +55,18 @@ pub async fn create(
 
     // Three gits, read off the executor: one slow `git status` here held up every other request.
     let checked = {
-        let repo = repo.clone();
-        tokio::task::spawn_blocking(move || precheck(&repo))
-            .await
-            .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
+        let (repo, asked) = (repo.clone(), q.base.trim().to_string());
+        tokio::task::spawn_blocking(move || {
+            // The base `gh` will open against: the one asked for, else the remote's default.
+            let base = if asked.is_empty() {
+                crate::prereview::remote_default(&repo)
+            } else {
+                asked
+            };
+            precheck(&repo, &base)
+        })
+        .await
+        .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
     };
     let branch = match checked {
         Ok(b) => b,
@@ -129,7 +137,7 @@ pub async fn create(
 
 /// Whether `repo` can have a pull request opened from it, and the branch it would be from. The
 /// review before a pull request asks the same question first, in the same words.
-pub fn precheck(repo: &camino::Utf8Path) -> Result<String, String> {
+pub fn precheck(repo: &camino::Utf8Path, base: &str) -> Result<String, String> {
     // A branch with no commits on it is not a thing to open a pull request from, and it is the
     // ordinary state right after `git init` — so it gets its own sentence rather than being
     // folded into "not a git repository", which is both wrong and unactionable.
@@ -156,7 +164,32 @@ pub fn precheck(repo: &camino::Utf8Path) -> Result<String, String> {
                 .into(),
         );
     }
+    // Nothing the base does not already have: `gh` pushed and then refused with "could not
+    // compute title or body defaults: could not find any commits between origin/main and …",
+    // which says neither what is wrong nor what to do.
+    if ahead_of(repo, base) == Some(0) {
+        return Err(format!(
+            "`{branch}` has no commits that `{base}` doesn't already have, so there is nothing to \
+             open a pull request for. Commit the change on this branch first — or, if it was \
+             already merged, there is nothing left to open."
+        ));
+    }
     Ok(branch)
+}
+
+/// How many commits `HEAD` has that `base` does not, against the remote's copy of `base` as `gh`
+/// compares, else the local one; `None` when neither exists, which `gh` is left to say.
+fn ahead_of(repo: &camino::Utf8Path, base: &str) -> Option<u64> {
+    [format!("origin/{base}"), base.to_string()]
+        .iter()
+        .find_map(|b| {
+            let mut c = crate::git::command(repo);
+            c.args(["rev-list", "--count", &format!("{b}..HEAD")]);
+            let out = crate::git::output(c).ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())?
+        })
 }
 
 /// The current branch.
@@ -191,4 +224,43 @@ fn uncommitted(repo: &camino::Utf8Path) -> String {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(repo: &camino::Utf8Path, args: &[&str]) {
+        let mut c = crate::git::command(repo);
+        c.args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args);
+        assert!(
+            crate::git::output(c).unwrap().status.success(),
+            "git {args:?}"
+        );
+    }
+
+    /// A branch with nothing its base lacks is refused before anything is pushed, in words that
+    /// say what to do — `gh` pushed and then failed with "could not find any commits between".
+    #[test]
+    fn a_branch_with_no_commits_beyond_its_base_is_refused_before_the_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        git(&repo, &["checkout", "-qb", "feat/profile-groups"]);
+        let why = precheck(&repo, "main").unwrap_err();
+        assert!(
+            why.contains("`feat/profile-groups` has no commits that `main` doesn't already have"),
+            "{why}"
+        );
+        std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "the change"]);
+        assert_eq!(precheck(&repo, "main").unwrap(), "feat/profile-groups");
+        // A base nobody has is not a reason to refuse: `gh` says what is wrong with it.
+        assert!(precheck(&repo, "no-such-branch").is_ok());
+    }
 }

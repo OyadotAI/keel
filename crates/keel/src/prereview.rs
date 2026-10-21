@@ -261,10 +261,6 @@ fn run(
         std::thread::sleep(Duration::from_millis(500));
     }
     set(lane, |r| r.phase = "checking");
-    if let Err(why) = crate::pr::precheck(dir) {
-        return none("refused", why, since);
-    }
-    let sha = crate::git::trimmed(dir, &["rev-parse", "HEAD"]).unwrap_or_default();
     // Never the agent's `--base`: it could point the review at a branch with nothing on it and
     // get "Ship" over an empty diff, while Open opens against the default. The lane's own base,
     // or the remote's default — where the pull request will actually go.
@@ -273,6 +269,10 @@ fn run(
     } else {
         remote_default(dir)
     };
+    if let Err(why) = crate::pr::precheck(dir, &branch) {
+        return none("refused", why, since);
+    }
+    let sha = crate::git::trimmed(dir, &["rev-parse", "HEAD"]).unwrap_or_default();
     set(lane, |r| {
         r.phase = "fetching";
         r.sha = sha;
@@ -322,7 +322,7 @@ fn run(
 }
 
 /// The branch `origin`'s HEAD points at, else `main`.
-fn remote_default(dir: &Utf8Path) -> String {
+pub(crate) fn remote_default(dir: &Utf8Path) -> String {
     crate::git::trimmed(
         dir,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
