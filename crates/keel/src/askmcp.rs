@@ -593,8 +593,8 @@ mod browser_gate_tests {
             "a click always asks"
         );
 
-        // Claude's hook in front answered this exact click (its own rules decide after Keel): it
-        // passes, once; another click, or the same one again, is asked.
+        // Claude's hook in front asked about this exact click on Keel's card, and the person said
+        // yes: it passes, once; another click, or the same one again, is asked.
         let hook = crate::approve::HookInput {
             tool_name: "mcp__keel__browser_click".into(),
             tool_input: json!({"element": 2}),
@@ -604,17 +604,30 @@ mod browser_gate_tests {
             cwd: String::new(),
             provider: String::new(),
         };
-        let said = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            crate::approve::ask(State(state.clone()), Json(hook)),
-        )
+        let answering = tokio::spawn(crate::approve::ask(State(state.clone()), Json(hook)));
+        let id = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                if let Some(p) = crate::approve::queue()
+                    .locked()
+                    .iter()
+                    .find(|p| p.lane == "gate-test")
+                {
+                    break p.id.clone();
+                }
+            }
+        })
         .await
-        .expect("a trusted project's hook answers at once")
-        .unwrap();
-        assert_eq!(
-            said.0.decision, "defer",
-            "Claude Code's own rules decide a click after Keel"
-        );
+        .expect("the click is asked on Keel's card");
+        crate::approve::queue()
+            .locked()
+            .retain(|p| p.lane != "gate-test");
+        let (tx, _) = crate::approve::waiters().locked().remove(&id).unwrap();
+        let _ = tx.send(crate::approve::Decision {
+            decision: "allow".into(),
+            reason: String::new(),
+        });
+        assert_eq!(answering.await.unwrap().unwrap().0.decision, "allow");
         assert_eq!(
             asked("browser_click", json!({"element": 2})).await,
             (true, false),

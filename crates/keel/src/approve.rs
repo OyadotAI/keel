@@ -534,7 +534,10 @@ async fn decide(
     let repo = state.repo();
     let strict = hook.provider == "antigravity";
     let sdk = is_final(&hook.provider);
-    let reads_denies = reads_the_persons_denies(&hook.provider);
+    // Keel's own Browser tab tools are decided whole here, for every caller (`keel_decides`), so
+    // the person's deny rules are read here for them too.
+    let browser = keel_decides(&hook.tool_name);
+    let reads_denies = reads_the_persons_denies(&hook.provider) || browser;
     if strict {
         crate::antigravity::note_asked(&hook.tool_use_id);
     }
@@ -711,8 +714,11 @@ async fn decide(
     let mcp = hook.tool_name.starts_with("mcp__") && !acts_in_the_browser(&hook.tool_name);
     // A final caller asks about `Read` outside the workspace, a path its gate protects, or an `ask`
     // rule of the person's — none of which trust is about. Only what trust covers is answered.
-    let trust_covers =
-        !sdk || mcp || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str());
+    // Trust is never a yes to a click, a key or typing in the Browser tab — for any caller. Claude
+    // Code's own hook got a `defer` for one on a trusted project, and a terminal Claude then asked
+    // in the terminal instead of on Keel's card.
+    let trust_covers = !acts_in_the_browser(&hook.tool_name)
+        && (!sdk || mcp || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str()));
     if !is_question && !leaves_the_project && trusted && !unsure && trust_covers {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
@@ -772,8 +778,11 @@ async fn decide(
             already_allowed(&rules, &effective)
         }
     {
+        // A saved rule covers it. For a Browser tab tool that is a yes from Keel, not a `defer`:
+        // a terminal Claude's allowlist was fixed when it started, so a rule saved since — an
+        // "Always" on a click — was unknown to it, and it asked again in the terminal.
         return Ok(Json(Decision {
-            decision: "defer".into(),
+            decision: if browser { "allow" } else { "defer" }.into(),
             reason: String::new(),
         }));
     }
@@ -1041,6 +1050,14 @@ pub const OTHER_BROWSER: &str = "Not run: this drives the person's own browser, 
     out of its turns on purpose. Use this lane's Browser tab instead — the `browser_*` tools on \
     server `keel` — and do not reach the person's browser another way (`open`, AppleScript, a \
     different browser server).";
+
+/// Keel's own Browser tab tools, which Keel decides whole for every caller: it says yes or no
+/// rather than handing a call back to the agent's own permission prompt, which in a terminal is
+/// the terminal rather than Keel's card.
+fn keel_decides(tool: &str) -> bool {
+    tool.strip_prefix("mcp__keel__")
+        .is_some_and(crate::browser::is_tool)
+}
 
 /// A Browser tab tool that acts in the page as the person: click, type, a key.
 fn acts_in_the_browser(tool: &str) -> bool {
@@ -1934,6 +1951,58 @@ pub(crate) mod tests {
                 "{p}: Claude Code reads them itself"
             );
         }
+    }
+
+    /// A click from Claude Code's own hook — a terminal lane — is asked on Keel's card even on a
+    /// trusted project, and a saved rule answers it with a yes from Keel, never a `defer` that a
+    /// terminal Claude, whose allowlist was fixed at its start, would ask about again itself.
+    #[tokio::test]
+    async fn a_terminal_lanes_click_is_asked_on_keels_card_and_never_deferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        crate::permissions::set_trusted(&root, true).unwrap();
+        let hook = |tool: &str| HookInput {
+            tool_name: tool.into(),
+            tool_input: serde_json::json!({"element": 1}),
+            tool_use_id: format!("term-{tool}"),
+            session_id: "term-session".into(),
+            lane: "term-lane".into(),
+            cwd: root.to_string(),
+            provider: String::new(),
+        };
+        let decided = |h: HookInput| {
+            let state = state.clone();
+            async move {
+                let call = tokio::spawn(ask(State(state), Json(h)));
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                let out = if call.is_finished() {
+                    Some(call.await.unwrap().unwrap().0.decision)
+                } else {
+                    call.abort();
+                    None
+                };
+                queue().locked().retain(|p| p.lane != "term-lane");
+                out
+            }
+        };
+        assert_eq!(
+            decided(hook("mcp__keel__browser_click")).await,
+            None,
+            "a card, not a defer"
+        );
+        assert_eq!(
+            decided(hook("mcp__keel__browser_read")).await.as_deref(),
+            Some("allow"),
+            "reading follows trust"
+        );
+        crate::permissions::remember(&root, "mcp__keel__browser_click", "project", None).unwrap();
+        assert_eq!(
+            decided(hook("mcp__keel__browser_click")).await.as_deref(),
+            Some("allow"),
+            "a saved rule is Keel's yes"
+        );
     }
 
     /// An interactive terminal's own background command is Claude Code's to keep; `claude -p`'s,
