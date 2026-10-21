@@ -12,6 +12,7 @@ import { Agents, ShellDock, SidePanel, TABS, type Tab } from "./Lane";
 import { LaneHeader, Confirm, type Asking } from "./LaneHeader";
 import { LaneDock } from "./PreReview";
 import { listenPages } from "../browser";
+import { badge } from "../notify";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
@@ -129,6 +130,9 @@ export function App() {
   useEffect(() => { if (ide) setShell(true); }, [ide]);
   // Where each lane's Browser tab page is, as its webview reports it.
   useEffect(listenPages, []);
+  // The dock says how many lanes are waiting on the person, and clears as they are answered.
+  const waiting = useStore((s) => Object.values(s.lanes).filter((l) => l.pending.length > 0).length);
+  useEffect(() => badge(waiting), [waiting]);
   useEffect(() => {
     for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380], ["--ide-chat-w", 400], ["--coding-sidebar-w", 320], ["--shell-h", 300]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);
     // The lane on screen at launch is opened like a clicked one: its terminal, its transcript.

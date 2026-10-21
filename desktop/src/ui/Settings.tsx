@@ -1,4 +1,5 @@
 import { UpdateButton } from "./UpdateButton";
+import { NotificationSetting } from "./NotificationSetting";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { check, useUpdate } from "../update";
@@ -47,6 +48,7 @@ export function Settings() {
       </header>
       <div className="settings-body">
         <AppearanceSetting />
+        <NotificationSetting />
         <InterfaceSetting applyToLane />
         {error && <div className="error">{error}</div>}
         {!project ? (

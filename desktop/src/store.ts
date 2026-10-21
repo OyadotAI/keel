@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url } from "./api";
 import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
-import { notify } from "./notify";
+import { endBanner, needsYou, notify } from "./notify";
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
 import { refreshReview } from "./prereview";
@@ -365,7 +365,7 @@ export const useStore = create<State>()((set, getState) => {
       // what a terminal is doing, and it can only say what the transcript has been read for.
       if (busy) void follow(lid);
       if (!busy && l.running) {
-        void notify(l.title, "The agent is waiting for you.");
+        // No banner here: the turn's own `turn.ended` fact says it, once, with the checks' verdict.
         gitSoon(lid);
         drain(lid);
       }
@@ -516,11 +516,7 @@ export const useStore = create<State>()((set, getState) => {
         const got = await get<Pending[]>(p.endpoint, "/api/approve/poll", { lane: lid, session: l.session });
         if (got.length) {
           lane(lid, (l) => ({ pending: [...l.pending, ...got.filter((g) => !l.pending.some((x) => x.id === g.id))] }));
-          const first = got[0];
-          void notify(
-            `${getState().lanes[lid]?.title ?? "A lane"} is waiting for you`,
-            first.tool === "AskUserQuestion" ? "The agent asked a question." : `Allow ${first.tool}${first.command ? `: ${first.command.slice(0, 80)}` : ""}?`,
-          );
+          for (const p of got) announceCard(lid, p);
         }
       } catch {
         // The next `pending` or reconnect asks again.
@@ -530,6 +526,42 @@ export const useStore = create<State>()((set, getState) => {
 
   const follows = new Map<string, Stream>();
   const retries = new Map<string, number>();
+  /// A turn that ended while it was being watched: its lane, how long, and what the checks said.
+  /// Nothing for a turn the person stopped — they were there.
+  function announceEnd(lid: string, key: string | null) {
+    const l = getState().lanes[lid];
+    if (!l) return;
+    const turns = l.conv.turns;
+    const t = (key ? turns.find((x) => x.key === key) : undefined) ?? turns.at(-1);
+    const said = t && endBanner(t);
+    if (said) void notify(l.title, said);
+  }
+
+  function announceStop(lid: string, why: string) {
+    const l = getState().lanes[lid];
+    if (!l) return;
+    void needsYou(l.title, `Stopped: ${why.split("\n")[0].slice(0, 140)}`);
+  }
+
+  /// What a batch of live records says to the person: cards, turns that ended, a turn that stopped.
+  function announce(lid: string, live: { card?: Pending; fact?: Fact; fatal?: string }[]) {
+    for (const x of live) {
+      if (x.card) announceCard(lid, x.card);
+      if (x.fact?.kind === "turn.ended") announceEnd(lid, x.fact.turn);
+    }
+    const fatal = [...live].reverse().find((x) => x.fatal)?.fatal;
+    if (fatal) announceStop(lid, fatal);
+  }
+
+  /// A card the person has to answer, announced once whichever way it reached the window.
+  const announced = new Set<string>();
+  function announceCard(lid: string, p: Pending) {
+    if (announced.has(p.id)) return;
+    announced.add(p.id);
+    const title = `${getState().lanes[lid]?.title ?? "A lane"} is waiting for you`;
+    void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
+  }
+
   /// Follow a lane's transcript for as long as the lane is open: every turn, as the CLI writes
   /// it, with Keel's facts about it — the files, the checks, the commit. A session nobody has
   /// typed into has no transcript yet; that is a wait, retried, never an error on screen.
@@ -546,11 +578,13 @@ export const useStore = create<State>()((set, getState) => {
     if (follows.has(lid) || !getState().lanes[lid]) return;
     let missing = false;
     let fresh = true;
+    // Records before `caught-up` are the replay; only what arrives after it is news.
+    let live = false;
     const stream = openStream(
       url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt }),
       ep.token,
       (events) =>
-        lane(lid, (l) => {
+        { const ended: (string | null)[] = []; lane(lid, (l) => {
           // A replay starts over: what an earlier stream folded is let go once this one speaks,
           // not before, so a retry that fails does not blank the turns on screen.
           let conv = fresh && events.some((e) => e.event === "turn") ? empty : l.conv;
@@ -558,9 +592,13 @@ export const useStore = create<State>()((set, getState) => {
           let patch: Partial<Lane> = {};
           for (const e of events) {
             if (e.event === "turn") conv = applyFrames(conv, e.data as Frame[]);
-            else if (e.event === "fact") conv = applyFact(conv, e.data as Fact);
+            else if (e.event === "fact") {
+              conv = applyFact(conv, e.data as Fact);
+              if (live && (e.data as Fact).kind === "turn.ended") ended.push((e.data as Fact).turn);
+            }
             else if (e.event === "fatal") missing = true;
             else if (e.event === "caught-up") {
+              live = true;
               patch = { ...patch, loaded: true, known: true, error: undefined };
               // A replay rebuilds the background agents from the transcript; a session that has
               // ended wrote no notification for the ones it took with it.
@@ -571,7 +609,7 @@ export const useStore = create<State>()((set, getState) => {
             }
           }
           return { ...patch, conv };
-        }),
+        }); for (const key of ended) announceEnd(lid, key); },
       (error) => {
         if (follows.get(lid) !== stream) return;
         follows.delete(lid);
@@ -611,6 +649,9 @@ export const useStore = create<State>()((set, getState) => {
       let caughtUp = false;
       const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
         let idle = false;
+        // Only what arrives after `caught-up` is news; the backlog before it was already seen. Each
+        // is kept with whether it arrived live, and sorted out once the batch is folded.
+        const seen: { live: boolean; card?: Pending; fact?: Fact; fatal?: string }[] = [];
         lane(lid, (current) => {
           let conv = current.conv;
           const patch: Partial<Lane> = {};
@@ -645,14 +686,20 @@ export const useStore = create<State>()((set, getState) => {
             } else if (e.event === "request") {
               const p = e.data as Pending;
               patch.pending = [...(patch.pending ?? current.pending).filter((x) => x.id !== p.id), p];
+              seen.push({ live: caughtUp, card: p });
             } else if (e.event === "resolved") {
               patch.pending = (patch.pending ?? current.pending).filter((p) => p.id !== (e.data as { id: string }).id);
             } else if (e.event === "capabilities") {
               const c = e.data as { models?: Lane["models"]; commands?: { name: string }[] };
               patch.models = c.models;
               patch.commands = c.commands?.map((c) => c.name);
-            } else if (e.event === "fact") conv = applyFact(conv, e.data as Fact);
-            else if (e.event === "fatal") patch.error = String(e.data);
+            } else if (e.event === "fact") {
+              conv = applyFact(conv, e.data as Fact);
+              seen.push({ live: caughtUp, fact: e.data as Fact });
+            } else if (e.event === "fatal") {
+              patch.error = String(e.data);
+              seen.push({ live: caughtUp, fatal: String(e.data) });
+            }
             else if (e.event === "idle") {
               patch.running = false;
               patch.pending = [];
@@ -661,6 +708,7 @@ export const useStore = create<State>()((set, getState) => {
           }
           return { ...patch, conv, cursor };
         });
+        announce(lid, seen.filter((x) => x.live));
         const now = getState().lanes[lid];
         if (now?.managed) { follows.get(lid)?.close(); follows.delete(lid); }
         if (idle || events.some((e) => e.event === "record" && ["accepted", "capabilities"].includes((e.data as { event: string }).event))) save(getState());

@@ -8,6 +8,8 @@
   "permissions": [
     "core:default",
     "core:webview:allow-set-webview-zoom",
+    "core:window:allow-set-badge-count",
+    "core:window:allow-request-user-attention",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
