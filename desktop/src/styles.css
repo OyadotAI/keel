@@ -554,8 +554,15 @@ button.link {
 .terminal-host {
   flex: 1;
   min-height: 0;
-  padding: 6px 4px 4px 10px;
+  overflow: hidden;
   background: var(--term-bg);
+}
+/* The margin goes on `.xterm`, not the host: FitAddon subtracts the padding of this element
+   only, and with border-box it reads the host's width with its padding included — so padding
+   on the host gave a grid sized for the full width that spilled over the margin. */
+.terminal-host .xterm {
+  height: 100%;
+  padding: 10px 14px;
 }
 .terminal-state {
   height: 32px;
