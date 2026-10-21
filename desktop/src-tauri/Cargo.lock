@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "keel-desktop"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
