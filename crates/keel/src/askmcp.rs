@@ -563,7 +563,10 @@ mod browser_gate_tests {
             );
             async move {
                 let call = tokio::spawn(async move { gated(&state, &q, name, &args).await });
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                crate::approve::settled(&call, |p| {
+                    p.lane == "gate-test" && p.tool == format!("mcp__keel__{name}")
+                })
+                .await;
                 let finished = call.is_finished();
                 call.abort();
                 let card = crate::approve::queue()

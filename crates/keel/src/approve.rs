@@ -1740,6 +1740,20 @@ pub async fn request(port: u16, hook: &HookInput) -> Option<Decision> {
     serde_json::from_str::<Decision>(payload).ok()
 }
 
+/// For tests: wait until `call` has answered or a card matching `card` is queued — whichever comes
+/// first, within five seconds. A fixed sleep was a guess at how fast a busy machine decides, and
+/// CI's guessed wrong: the call had neither answered nor asked yet when the test looked.
+#[cfg(test)]
+pub(crate) async fn settled<T>(call: &tokio::task::JoinHandle<T>, card: impl Fn(&Pending) -> bool) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !call.is_finished()
+        && !queue().locked().iter().any(&card)
+        && std::time::Instant::now() < until
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1874,7 +1888,7 @@ pub(crate) mod tests {
             let state = state.clone();
             async move {
                 let call = tokio::spawn(ask(State(state), Json(h)));
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                settled(&call, |p| p.lane == "final").await;
                 if call.is_finished() {
                     Some(call.await.unwrap().unwrap().0.decision)
                 } else {
@@ -1976,7 +1990,7 @@ pub(crate) mod tests {
             let state = state.clone();
             async move {
                 let call = tokio::spawn(ask(State(state), Json(h)));
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                settled(&call, |p| p.lane == "term-lane").await;
                 let out = if call.is_finished() {
                     Some(call.await.unwrap().unwrap().0.decision)
                 } else {
@@ -2484,7 +2498,7 @@ pub(crate) mod tests {
             State(state.clone()),
             Json(hook("", "git push --keel-test origin", "a2")),
         ));
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        settled(&waiting, |p| p.id == "a2").await;
         assert!(!waiting.is_finished(), "an ask rule beats trust");
         let reason = queue()
             .locked()
@@ -2521,7 +2535,7 @@ pub(crate) mod tests {
             ("git push --keel-test evil", "a2"),
         ] {
             let replay = tokio::spawn(ask(State(state.clone()), Json(hook(SDK, command, id))));
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            settled(&replay, |p| p.id == id && p.command == command).await;
             assert!(!replay.is_finished(), "{command}");
             replay.abort();
         }
