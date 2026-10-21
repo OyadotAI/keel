@@ -439,7 +439,51 @@ pub const CODEX: &str = "codex";
 /// caller only reaches Keel because its own gate already declined, so `allow` is said only where
 /// Keel can vouch for the whole call — never on a weaker reading than the gate that declined.
 fn is_final(provider: &str) -> bool {
-    provider == SDK || provider == CODEX
+    provider == SDK || provider == CODEX || provider == MCP_GATE
+}
+
+/// Keel's own MCP server deciding a Browser tab action for an agent no hook asked for (`askmcp`).
+/// Final, like Codex: nothing checks the call after Keel does.
+pub const MCP_GATE: &str = "keel-mcp";
+
+/// How long a hook's yes to a Browser tab call waits for that call to reach Keel's server. The
+/// call follows the hook at once; this only bounds how long a stale yes can sit there.
+const HOOK_YES: std::time::Duration = std::time::Duration::from_secs(30);
+
+type HookYes = (String, String, String, std::time::Instant);
+
+fn hook_yeses() -> &'static Mutex<std::collections::VecDeque<HookYes>> {
+    static Y: OnceLock<Mutex<std::collections::VecDeque<HookYes>>> = OnceLock::new();
+    Y.get_or_init(Default::default)
+}
+
+/// A hook — Claude's, the SDK bridge's, agy's — said yes to this Browser tab call: the lane, the
+/// tool, its exact input. Keel's server lets that one call through once without asking again.
+/// Bound to the call, not to a mark on the address: a mark sits on the agent's command line and
+/// in a folder it can read, and an agent that could run a shell command could have sent its own
+/// click with it.
+fn note_hook_yes(hook: &HookInput) {
+    let mut yeses = hook_yeses().locked();
+    yeses.retain(|(_, _, _, at)| at.elapsed() < HOOK_YES);
+    yeses.push_back((
+        hook.lane.clone(),
+        hook.tool_name.clone(),
+        hook.tool_input.to_string(),
+        std::time::Instant::now(),
+    ));
+    while yeses.len() > 256 {
+        yeses.pop_front();
+    }
+}
+
+/// Whether a hook said yes to exactly this Browser tab call, recently; spends it if so.
+pub(crate) fn take_hook_yes(lane: &str, tool: &str, input: &serde_json::Value) -> bool {
+    let input = input.to_string();
+    let mut yeses = hook_yeses().locked();
+    let found = yeses
+        .iter()
+        .position(|(l, t, i, at)| l == lane && t == tool && *i == input && at.elapsed() < HOOK_YES);
+    found.and_then(|i| yeses.remove(i)).is_some()
 }
 
 /// Ask the person, and wait for them.
@@ -449,11 +493,24 @@ pub async fn ask(
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     // no-blocking: forwards to `decide`, whose disk reads are in `blocking(…)`.
     let last = is_final(&hook.provider);
+    let browser = hook.provider != MCP_GATE
+        && hook
+            .tool_name
+            .strip_prefix("mcp__keel__")
+            .is_some_and(crate::browser::is_tool);
+    let call = browser.then(|| hook.clone());
     let Json(mut decision) = decide(state, hook).await?;
     // For this caller `decide` defers only on trust or a rule it read whole; nobody answering is
     // a `deny` (`unanswered`).
     if last && decision.decision == "defer" {
         decision.decision = "allow".into();
+    }
+    // A `defer` to a caller with its own checks after Keel — Claude Code's hook, whose own rules
+    // then ask or allow — is that hook's answer too: whatever it decides is what reaches Keel's
+    // server, and asking there again would put a second question on one click.
+    let answered = decision.decision == "allow" || (!last && decision.decision == "defer");
+    if answered && let Some(call) = call {
+        note_hook_yes(&call);
     }
     Ok(Json(decision))
 }

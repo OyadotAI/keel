@@ -42,8 +42,16 @@ pub const LOCAL_ALLOW: &[&str] = &[
     // list, its own subagents (measured in a subagent run). None of them touches a file or the
     // machine, and refused, a turn could start a subagent and never wait for it.
     "schedule",
-    "manage_subagents",
 ];
+
+/// `manage_subagents` actions that look at or stop the turn's own subagents (measured on 1.4.4:
+/// `list`, `list_peers`, `kill`). Anything else — a later agy that lets it start one, in a
+/// workspace of its own — goes through `invoke_subagent`'s check instead of around it.
+const SUBAGENT_LOOKS: &[&str] = &["list", "list_peers", "kill"];
+
+pub const SUBAGENT_ACTION: &str = "Keel only lets a lane list or stop its subagents with \
+    manage_subagents, so this was refused. Start a subagent with invoke_subagent, in the turn's \
+    own workspace (Workspace: inherit).";
 
 /// `manage_task` actions that only look at or stop a running command. `send_input` types into
 /// one, and is not here: into a REPL somebody approved once — `python3`, `psql` — it would run
@@ -173,6 +181,14 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
             Route::Allow
         }
         "manage_task" => Route::Deny(TASK_INPUT),
+        "manage_subagents"
+            if args["Action"]
+                .as_str()
+                .is_some_and(|a| SUBAGENT_LOOKS.contains(&a)) =>
+        {
+            Route::Allow
+        }
+        "manage_subagents" => Route::Deny(SUBAGENT_ACTION),
         // agy's own browser — `open_browser_url`, `read_browser_page`, `browser_click_element` and
         // the rest in 1.4.4 — is another browser than the lane's, which is what a Keel lane is
         // never given; the refusal says where the lane's browser is, as it does for Claude.
@@ -509,8 +525,21 @@ mod tests {
     /// other browsers are, pointing at the lane's Browser tab.
     #[test]
     fn agy_1_4_4_reads_files_waits_on_subagents_and_keeps_its_own_browser_away() {
-        for t in ["read_file", "schedule", "manage_subagents"] {
+        for t in ["read_file", "schedule"] {
             assert_eq!(route(t, &json!({}), true), Route::Allow, "{t}");
+        }
+        for a in ["list", "list_peers", "kill"] {
+            assert_eq!(
+                route("manage_subagents", &json!({"Action": a}), true),
+                Route::Allow,
+                "{a}"
+            );
+        }
+        for a in [json!({"Action": "spawn", "Workspace": "branch"}), json!({})] {
+            assert_eq!(
+                route("manage_subagents", &a, false),
+                Route::Deny(SUBAGENT_ACTION)
+            );
         }
         // Looking at a running command is allowed; typing into one is not.
         for a in ["status", "list", "kill"] {

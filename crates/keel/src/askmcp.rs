@@ -18,22 +18,15 @@ use std::sync::Arc;
 pub const TOOL: &str = "ask_user";
 pub const SERVER: &str = "keel";
 
-/// The `--mcp-config` argument for one Claude turn: this daemon, this lane. Claude's hook decides
-/// each call before it arrives, so the address says so (`hooked`).
+/// The `--mcp-config` argument for one Claude turn: this daemon, this lane.
 pub fn config(port: u16, lane: Option<&str>) -> String {
-    json!({ "mcpServers": { SERVER: { "type": "http", "url": url(port, lane, true) } } })
-        .to_string()
+    json!({ "mcpServers": { SERVER: { "type": "http", "url": url(port, lane) } } }).to_string()
 }
 
 #[derive(Deserialize)]
 pub struct McpQuery {
     #[serde(default)]
     pub lane: Option<String>,
-    /// Set by a launcher whose agent has a Keel hook in front of its calls — Claude, and `agy` in a
-    /// chat lane — so this server does not ask again. Absent, it asks: a launcher that forgets the
-    /// mark costs one extra card, never a missing one.
-    #[serde(default)]
-    pub hooked: Option<String>,
 }
 
 /// The decision Claude's hook makes before a browser action, made here for an agent with no hook
@@ -41,19 +34,22 @@ pub struct McpQuery {
 /// approval at all, so without this a Codex lane would have clicked and typed in the Browser tab
 /// unasked. It is the same path the hook takes (`approve::ask`), so the card, the trust and the
 /// rules are the same ones — click, type and a key always ask — and as a caller nothing checks
-/// after (`CODEX`), a `defer` is never read as yes.
+/// after (`MCP_GATE`), a `defer` is never read as yes.
 async fn gated(
     state: &Arc<AppState>,
     q: &McpQuery,
     name: &str,
     args: &Value,
 ) -> Result<(), String> {
-    if q.hooked.as_deref().is_some_and(hooked_by_keel) {
+    let lane = q.lane.clone().unwrap_or_default();
+    let tool = format!("mcp__{SERVER}__{name}");
+    // A Keel hook in front of the agent — Claude's, the SDK bridge's, a chat `agy`'s — already
+    // decided this exact call; it is not asked twice.
+    if crate::approve::take_hook_yes(&lane, &tool, args) {
         return Ok(());
     }
-    let lane = q.lane.clone().unwrap_or_default();
     let hook = crate::approve::HookInput {
-        tool_name: format!("mcp__{SERVER}__{name}"),
+        tool_name: tool,
         tool_input: args.clone(),
         tool_use_id: {
             static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -66,7 +62,7 @@ async fn gated(
         session_id: state.lane_session(&lane).unwrap_or_default(),
         lane,
         cwd: String::new(),
-        provider: crate::approve::CODEX.into(),
+        provider: crate::approve::MCP_GATE.into(),
     };
     match crate::approve::ask(State(state.clone()), Json(hook)).await {
         Ok(Json(d)) if d.decision == "allow" => Ok(()),
@@ -77,47 +73,13 @@ async fn gated(
 
 /// The address of this server for one lane. The lane is escaped: it lands in a URL, in a TOML
 /// string on Codex's command line and in a JSON file, and a `&` or a `"` in it would add a
-/// parameter or end the string.
-pub fn url(port: u16, lane: Option<&str>, hooked: bool) -> String {
-    let mut url = format!("http://127.0.0.1:{port}/mcp");
-    let mut sep = '?';
-    if let Some(l) = lane {
-        url.push_str(&format!("{sep}lane={}", escaped(l)));
-        sep = '&';
+/// parameter or end the string. It carries nothing that waives a question: what a hook already
+/// decided is known from the hook's own call (`approve::take_hook_yes`).
+pub fn url(port: u16, lane: Option<&str>) -> String {
+    match lane {
+        Some(l) => format!("http://127.0.0.1:{port}/mcp?lane={}", escaped(l)),
+        None => format!("http://127.0.0.1:{port}/mcp"),
     }
-    if hooked {
-        url.push_str(&format!("{sep}hooked={}", hooked_mark()));
-    }
-    url
-}
-
-/// The mark a launcher puts on the address when something in front of its agent already asks.
-/// A secret of this daemon's, not `1`: `/mcp` is open to anything on loopback, and a process the
-/// agent started — or a page in the Preview — that could write the mark itself would skip the
-/// card. Only Keel's own launchers know it; anything else is asked.
-fn hooked_mark() -> &'static str {
-    static MARK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    MARK.get_or_init(|| {
-        let mut buf = [0u8; 24];
-        // No randomness from the system means no mark that could be trusted: one that matches
-        // nothing, so every call is asked.
-        if getrandom::fill(&mut buf).is_err() {
-            return String::from("unmatched");
-        }
-        buf.iter().map(|b| format!("{b:02x}")).collect()
-    })
-}
-
-/// Whether `given` is this daemon's mark, compared over its whole length.
-fn hooked_by_keel(given: &str) -> bool {
-    let mark = hooked_mark();
-    mark != "unmatched"
-        && given.len() == mark.len()
-        && given
-            .bytes()
-            .zip(mark.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0
 }
 
 /// Percent-encoding of everything but the unreserved characters.
@@ -170,7 +132,7 @@ fn codex_args_for(configured: &[String], port: u16, lane: Option<&str>) -> Vec<S
     let secs = tool_timeout().parse::<u64>().unwrap_or(300_000) / 1000;
     let mut args = vec![
         "-c".to_string(),
-        format!("mcp_servers.{SERVER}.url=\"{}\"", url(port, lane, false)),
+        format!("mcp_servers.{SERVER}.url=\"{}\"", url(port, lane)),
         "-c".to_string(),
         format!("mcp_servers.{SERVER}.default_tools_approval_mode=\"approve\""),
         "-c".to_string(),
@@ -222,21 +184,21 @@ fn codex_servers(cwd: &camino::Utf8Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// A folder of Keel's own, per lane and per surface, holding `.agents/mcp_config.json` with this
+/// A folder of Keel's own, per lane, holding `.agents/mcp_config.json` with this
 /// server: `agy` loads MCP servers from a folder passed with `--add-dir` (measured on 1.4.4), and
 /// the lane is in the address, so one folder cannot serve two lanes. Named by a hash of the lane,
 /// so no two lanes can share one — stripping odd characters made `a.b` and `ab` the same folder,
 /// and one lane's clicks would have landed in the other's tab. Never the repository's `.agents/`.
-pub fn agy_dir(port: u16, lane: Option<&str>, hooked: bool) -> Result<camino::Utf8PathBuf, String> {
+pub fn agy_dir(port: u16, lane: Option<&str>) -> Result<camino::Utf8PathBuf, String> {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(lane.unwrap_or("").as_bytes());
     let name: String = hash.iter().take(12).map(|b| format!("{b:02x}")).collect();
     let dir = crate::permissions::permissions_dir()?
         .with_file_name("antigravity-mcp")
-        .join(format!("{name}-{}", if hooked { "chat" } else { "term" }));
+        .join(name);
     let file = dir.join(".agents").join("mcp_config.json");
     let body = serde_json::to_vec_pretty(&json!({
-        "mcpServers": { SERVER: { "serverUrl": url(port, lane, hooked) } }
+        "mcpServers": { SERVER: { "serverUrl": url(port, lane) } }
     }))
     .map_err(|e| e.to_string())?;
     for p in [dir.clone(), dir.join(".agents"), file.clone()] {
@@ -551,64 +513,56 @@ mod browser_gate_tests {
             args.contains(&"features.browser_use_external=false".to_string()),
             "nor Codex's own"
         );
+        assert!(args.contains(&"features.computer_use=false".to_string()));
     }
 
-    /// The address asks unless a launcher with a hook marks it; a lane id cannot add a parameter.
+    /// The address names the lane and nothing that waives a question; a lane id cannot add a
+    /// parameter.
     #[test]
-    fn an_address_without_the_hooked_mark_is_gated() {
-        assert_eq!(url(1, Some("a"), false), "http://127.0.0.1:1/mcp?lane=a");
-        assert!(
-            config(1, Some("a")).contains(&format!("lane=a&hooked={}", hooked_mark())),
-            "Claude's hook asks for it"
-        );
+    fn an_address_carries_the_lane_and_nothing_that_waives_a_question() {
+        assert_eq!(url(1, Some("a")), "http://127.0.0.1:1/mcp?lane=a");
+        assert!(!config(1, Some("a")).contains("hooked"));
         assert_eq!(
-            url(1, Some("x&hooked=1\""), false),
+            url(1, Some("x&hooked=1\"")),
             "http://127.0.0.1:1/mcp?lane=x%26hooked%3D1%22"
         );
     }
 
-    /// agy's folder is Keel's own, per lane and per surface, and no two lanes can share one.
+    /// agy's folder is Keel's own, per lane, and no two lanes can share one.
     #[test]
     fn an_agy_lane_gets_its_own_folder_naming_keels_server() {
-        let terminal = agy_dir(7777, Some("lane-t"), false).unwrap();
-        let chat = agy_dir(7777, Some("lane-c"), true).unwrap();
-        let read = |d: &camino::Utf8Path| {
-            std::fs::read_to_string(d.join(".agents/mcp_config.json")).unwrap()
-        };
-        assert!(read(&terminal).contains("http://127.0.0.1:7777/mcp?lane=lane-t\""));
-        assert!(read(&chat).contains(&format!(
-            "http://127.0.0.1:7777/mcp?lane=lane-c&hooked={}",
-            hooked_mark()
-        )));
+        let one = agy_dir(7777, Some("lane-t")).unwrap();
+        let read = std::fs::read_to_string(one.join(".agents/mcp_config.json")).unwrap();
+        assert!(read.contains("http://127.0.0.1:7777/mcp?lane=lane-t\""));
         assert_ne!(
-            agy_dir(1, Some("a.b"), false).unwrap(),
-            agy_dir(1, Some("ab"), false).unwrap()
+            agy_dir(1, Some("a.b")).unwrap(),
+            agy_dir(1, Some("ab")).unwrap()
         );
-        assert!(
-            !agy_dir(1, Some("../../x"), false)
-                .unwrap()
-                .as_str()
-                .contains("..")
-        );
+        assert!(!agy_dir(1, Some("../../x")).unwrap().as_str().contains(".."));
     }
 
-    /// An agent with no hook is asked before the Browser tab acts — by the rules Claude's hook
-    /// applies: a click always asks, reading follows trust — and one whose hook asked is not
-    /// asked again.
+    /// Every Browser tab call is decided once: by the hook in front of the agent when there is one
+    /// — its yes to that exact call lets it through — and by Claude's rules here when there is
+    /// not: a click always asks, reading follows trust. Anything claiming a yes it was not given
+    /// is asked.
     #[tokio::test]
-    async fn a_hookless_agent_is_asked_before_the_browser_acts() {
+    async fn a_browser_action_is_asked_once_by_whoever_is_in_front() {
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::create_dir(root.join(".git")).unwrap();
         let state = Arc::new(AppState::new(root.clone()));
-        let q = |hooked: bool| McpQuery {
+        let q = McpQuery {
             lane: Some("gate-test".into()),
-            hooked: hooked.then(|| hooked_mark().to_string()),
         };
-        let asked = |name: &'static str, hooked: bool| {
-            let (state, q) = (state.clone(), q(hooked));
+        let asked = |name: &'static str, args: Value| {
+            let (state, q) = (
+                state.clone(),
+                McpQuery {
+                    lane: q.lane.clone(),
+                },
+            );
             async move {
-                let call = tokio::spawn(async move { gated(&state, &q, name, &json!({})).await });
+                let call = tokio::spawn(async move { gated(&state, &q, name, &args).await });
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 let finished = call.is_finished();
                 call.abort();
@@ -623,42 +577,58 @@ mod browser_gate_tests {
             }
         };
         assert_eq!(
-            asked("browser_read", false).await,
+            asked("browser_read", json!({})).await,
             (false, true),
             "untrusted: reading asks"
         );
         crate::permissions::set_trusted(&root, true).unwrap();
         assert_eq!(
-            asked("browser_click", true).await,
-            (true, false),
-            "its hook already asked"
-        );
-        assert_eq!(
-            asked("browser_read", false).await,
+            asked("browser_read", json!({})).await,
             (true, false),
             "trusted: reading needs no card"
         );
         assert_eq!(
-            asked("browser_click", false).await,
+            asked("browser_click", json!({"element": 1})).await,
             (false, true),
             "a click always asks"
         );
-        // A mark anyone on loopback could write is not Keel's: it is asked.
-        let forged = McpQuery {
-            lane: Some("gate-test".into()),
-            hooked: Some("1".into()),
+
+        // Claude's hook in front answered this exact click (its own rules decide after Keel): it
+        // passes, once; another click, or the same one again, is asked.
+        let hook = crate::approve::HookInput {
+            tool_name: "mcp__keel__browser_click".into(),
+            tool_input: json!({"element": 2}),
+            tool_use_id: "t1".into(),
+            session_id: String::new(),
+            lane: "gate-test".into(),
+            cwd: String::new(),
+            provider: String::new(),
         };
-        let st = state.clone();
-        let call =
-            tokio::spawn(async move { gated(&st, &forged, "browser_click", &json!({})).await });
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        assert!(
-            !call.is_finished(),
-            "a forged mark waits on a card like no mark"
+        let said = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::approve::ask(State(state.clone()), Json(hook)),
+        )
+        .await
+        .expect("a trusted project's hook answers at once")
+        .unwrap();
+        assert_eq!(
+            said.0.decision, "defer",
+            "Claude Code's own rules decide a click after Keel"
         );
-        call.abort();
-        crate::approve::queue()
-            .locked()
-            .retain(|p| p.lane != "gate-test");
+        assert_eq!(
+            asked("browser_click", json!({"element": 2})).await,
+            (true, false),
+            "the hook answered"
+        );
+        assert_eq!(
+            asked("browser_click", json!({"element": 2})).await,
+            (false, true),
+            "spent: asked again"
+        );
+        assert_eq!(
+            asked("browser_click", json!({"element": 3})).await,
+            (false, true),
+            "another click is not that one"
+        );
     }
 }
