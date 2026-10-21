@@ -984,7 +984,13 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
                 // `EOF) ; nohup …`: what follows the terminator is shell, and is read as shell.
                 let rest = rest.to_string();
                 until.remove(0);
-                if !until.is_empty() || rest.contains("<<") {
+                // Spliced in without passing through the quote tracking above, so only when it
+                // cannot change what that tracking would say: no quote, escape, `$`, backtick or
+                // comment, and no second heredoc.
+                if !until.is_empty()
+                    || rest.contains("<<")
+                    || rest.contains(['\'', '"', '\\', '`', '$', '#'])
+                {
                     return command.into();
                 }
                 out.push_str(&rest);
@@ -2063,6 +2069,7 @@ pub(crate) mod tests {
             "echo $(cat <<X\nbody\nX) ; nohup pnpm dev &",
             "echo $(cat <<X\nbody\nX)\nnohup pnpm dev &",
             "(true)#<<X\nnohup pnpm dev &\nX",
+            "echo $(cat <<X\nbody\nX) '\n<<Y'\nnohup pnpm dev &\nY",
             "diff <(cat <<X\nbody\nX\n) b\nnohup pnpm dev &",
         ] {
             assert!(is_background("Bash", &bash(command)), "hidden: {command}");
