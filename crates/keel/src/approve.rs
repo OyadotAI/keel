@@ -438,6 +438,13 @@ pub const CODEX: &str = "codex";
 /// Whether this caller takes the answer as final: nothing checks the call after Keel does. Such a
 /// caller only reaches Keel because its own gate already declined, so `allow` is said only where
 /// Keel can vouch for the whole call — never on a weaker reading than the gate that declined.
+/// Whether Keel must read the person's `~/.claude/settings.json` deny rules itself: for every caller
+/// with no Claude Code after it to read them. The MCP gate was left out when it got its own name,
+/// and a deny rule on a Browser tab tool stopped holding for Codex lanes.
+fn reads_the_persons_denies(provider: &str) -> bool {
+    matches!(provider, "antigravity" | CODEX | MCP_GATE)
+}
+
 fn is_final(provider: &str) -> bool {
     provider == SDK || provider == CODEX || provider == MCP_GATE
 }
@@ -508,6 +515,11 @@ pub async fn ask(
     // A `defer` to a caller with its own checks after Keel — Claude Code's hook, whose own rules
     // then ask or allow — is that hook's answer too: whatever it decides is what reaches Keel's
     // server, and asking there again would put a second question on one click.
+    //
+    // Anything on loopback can post here and mint that yes, and a `defer` for a click only comes
+    // back on a trusted project. There the forger is already code running as the person — which
+    // trust lets an agent be, and which can read the Browser tab's own login store off the disk.
+    // "A click always asks" guards an honest agent's mistake; it is not a wall against that.
     let answered = decision.decision == "allow" || (!last && decision.decision == "defer");
     if answered && let Some(call) = call {
         note_hook_yes(&call);
@@ -522,7 +534,7 @@ async fn decide(
     let repo = state.repo();
     let strict = hook.provider == "antigravity";
     let sdk = is_final(&hook.provider);
-    let codex = hook.provider == CODEX;
+    let reads_denies = reads_the_persons_denies(&hook.provider);
     if strict {
         crate::antigravity::note_asked(&hook.tool_use_id);
     }
@@ -643,9 +655,9 @@ async fn decide(
                     is_edit(&tool) && !edit_is_inside(&repo, &input),
                     crate::permissions::trusted(&repo),
                     crate::permissions::effective(&repo, session.as_deref()),
-                    // For agy and Codex: Claude Code reads its own deny rules after a `defer`, and
-                    // nothing reads them after Keel for these two.
-                    if strict || codex {
+                    // For agy, Codex and Keel's own MCP gate: Claude Code reads its own deny
+                    // rules after a `defer`, and nothing reads them after Keel for these.
+                    if reads_denies {
                         keel_workspace::claude_home()
                             .map(|h| crate::denies::read(&h))
                             .unwrap_or_default()
@@ -1890,6 +1902,20 @@ pub(crate) mod tests {
         assert_eq!(decided(h).await.as_deref(), Some("allow"));
         let read = hook(SDK, "Read", serde_json::json!({"file_path": "/etc/hosts"}));
         assert_eq!(decided(read).await, None);
+    }
+
+    /// The person's deny rules hold wherever no Claude Code reads them after Keel.
+    #[test]
+    fn every_caller_with_nothing_after_keel_reads_the_persons_denies() {
+        for p in ["antigravity", CODEX, MCP_GATE] {
+            assert!(reads_the_persons_denies(p), "{p}");
+        }
+        for p in ["", SDK] {
+            assert!(
+                !reads_the_persons_denies(p),
+                "{p}: Claude Code reads them itself"
+            );
+        }
     }
 
     /// The monitor keeps a job alive; the command's own detaching is what escaped it.
