@@ -43,7 +43,7 @@ impl Agent {
                 id,
             )?,
         };
-        Some(Transcript { agent: self, path })
+        Some(Transcript::at(self, path))
     }
 
     /// A decoder for this agent's transcript.
@@ -62,12 +62,19 @@ impl Agent {
 pub struct Transcript {
     agent: Agent,
     path: Utf8PathBuf,
+    /// Antigravity's subagents seen so far and whether each has finished, shared by every clone
+    /// so a stream says each one finished exactly once.
+    children: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, bool>>>,
 }
 
 impl Transcript {
     /// A transcript at a known path, for tests and for a caller that already found it.
     pub fn at(agent: Agent, path: Utf8PathBuf) -> Self {
-        Self { agent, path }
+        Self {
+            agent,
+            path,
+            children: Default::default(),
+        }
     }
 
     pub fn agent(&self) -> Agent {
@@ -89,12 +96,45 @@ impl Transcript {
     /// The records appended since `from`; see [`crate::tail`]. For Antigravity `from` is a step
     /// index rather than a byte offset — the caller treats it as a cursor either way.
     pub fn tail(&self, from: u64) -> Option<(Vec<String>, u64)> {
+        let (mut lines, next) = self.lines(from)?;
+        if self.agent == Agent::Antigravity {
+            lines.extend(self.children_done(&lines));
+        }
+        Some((lines, next))
+    }
+
+    /// The records past `from`, and nothing synthesised beside them.
+    fn lines(&self, from: u64) -> Option<(Vec<String>, u64)> {
         match self.agent {
             Agent::Antigravity => {
                 crate::antigravity::steps(&self.path, from, crate::antigravity::MAX_REPLAY_STEPS)
             }
             _ => crate::sessions::tail_file(&self.path, from, self.keep()),
         }
+    }
+
+    /// One line for each Antigravity subagent that has finished since the last read: those this
+    /// batch created are noted, and every one still working is checked in its own database.
+    fn children_done(&self, lines: &[String]) -> Vec<String> {
+        let mut known = self.children.lock().unwrap_or_else(|e| e.into_inner());
+        for v in lines
+            .iter()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        {
+            if v["call"]["name"] == "invoke_subagent" {
+                for id in crate::antigravity::children(v["output"].as_str().unwrap_or_default()) {
+                    known.entry(id).or_insert(false);
+                }
+            }
+        }
+        let mut done = Vec::new();
+        for (id, finished) in known.iter_mut().filter(|(_, f)| !**f) {
+            if crate::antigravity::finished(&self.path, id) {
+                *finished = true;
+                done.push(crate::antigravity::child_done(id));
+            }
+        }
+        done
     }
 
     /// The last `max` bytes of records; see [`crate::tail_last`]. For Antigravity, the last
@@ -141,7 +181,8 @@ impl Transcript {
     /// Whether a new turn was asked for past byte `from`: the next prompt, typed while the last
     /// turn's checks ran. A turn whose tree that is no longer has no commit of its own to make.
     pub fn opens_after(&self, from: u64, open: &str) -> bool {
-        self.tail(from).is_some_and(|(lines, _)| {
+        // The records alone: a subagent's end read here would be one the stream never says.
+        self.lines(from).is_some_and(|(lines, _)| {
             lines
                 .iter()
                 .filter_map(|l| self.opener_of(l))

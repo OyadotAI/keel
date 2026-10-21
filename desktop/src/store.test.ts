@@ -169,6 +169,18 @@ describe("chat delivery", () => {
     await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail") && u.includes("agent=antigravity") && u.includes("agy-1"))).toBe(true));
   });
 
+  it("a terminal whose process ended stops showing its subagents as working", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex", known: true, session: "c" } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+    const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+    tail[2]([{ event: "turn", data: [{ turn: "T1", op: "open", prompt: "run the pm", replayed: true }, { turn: "T1", op: "background", id: "A1", agent: "pm", running: true }] }, { event: "caught-up", data: "1" }]);
+    expect(Object.values(store.getState().lanes.test.conv.background ?? {})).toEqual(["pm"]);
+    tail[2]([{ event: "ended", data: "gone" }]);
+    expect(store.getState().lanes.test.conv.background).toBeUndefined();
+  });
+
   it("a Codex chat lane is not followed; its stream is Keel's own", async () => {
     const store = await fixture();
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "chat", agent: "codex", known: true, session: "c" } } }));

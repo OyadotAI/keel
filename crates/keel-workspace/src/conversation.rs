@@ -306,6 +306,10 @@ pub struct Decoder {
     /// Codex turns that have ended, which nothing written for them later may reopen. One id per
     /// turn of one stream's conversation.
     codex_closed: HashSet<String>,
+    /// Subagents a Codex or Antigravity chat turn started. Its process ends with the turn and
+    /// takes them with it, so `close` says each one stopped — or the sidebar showed `pm` working
+    /// for good.
+    chat_agents: Vec<String>,
 }
 
 impl Decoder {
@@ -318,6 +322,7 @@ impl Decoder {
             seen: Seen::default(),
             codex_total: [0; 3],
             codex_closed: HashSet::new(),
+            chat_agents: Vec::new(),
         }
     }
 
@@ -502,6 +507,16 @@ impl Decoder {
                     output: String::new(),
                     cut: 0,
                     at: None,
+                },
+            );
+        }
+        for id in std::mem::take(&mut self.chat_agents) {
+            self.push(
+                &mut out,
+                Op::Background {
+                    id,
+                    agent: None,
+                    running: false,
                 },
             );
         }
@@ -889,6 +904,11 @@ impl Decoder {
                 let item = &r["item"];
                 let id = item["id"].as_str().unwrap_or_default().to_string();
                 match item["type"].as_str() {
+                    // Not in `exec --json` at all: the chat turn reads it from Codex's own
+                    // transcript and passes it on under this name (`agent::codex_subagents`).
+                    Some("subagent_activity") if kind == "item.completed" => {
+                        self.subagent(item, None, out);
+                    }
                     Some("command_execution") if kind == "item.started" => {
                         let input = serde_json::json!({
                             "command": item["command"].as_str().unwrap_or_default(),
@@ -995,10 +1015,11 @@ impl Decoder {
                 if let Some(name) = s["tool_name"].as_str().or(info["name"].as_str())
                     && state == "ACTIVE"
                 {
-                    let (tool, input) = antigravity_tool(name, &info["parameters"]);
+                    let (tool, input) = agy::tool_of(name, &info["parameters"]);
                     self.begin(&id, &tool, Some(input), None, None, out);
                     drawn = true;
                 }
+                self.agy_chat_subagents(s, state, out);
                 let open = self
                     .turn
                     .as_ref()

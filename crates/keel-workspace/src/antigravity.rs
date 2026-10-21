@@ -321,6 +321,49 @@ fn read_varint(b: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
+/// The conversations an `invoke_subagent` created, from its output: agy answers the call as soon
+/// as they exist ("Created the following subagents: {"conversationId": …}") and each then runs in
+/// a database of its own, so the call finishing says nothing about the subagent finishing.
+pub(crate) fn children(output: &str) -> Vec<String> {
+    const KEY: &str = "\"conversationId\": \"";
+    output
+        .match_indices(KEY)
+        .filter_map(|(i, _)| {
+            let rest = &output[i + KEY.len()..];
+            let id = &rest[..rest.find('"')?];
+            id.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                .then(|| id.to_string())
+        })
+        .collect()
+}
+
+/// Whether a subagent's own conversation, beside its parent's, has finished its turn. A database
+/// that is not there or cannot be read counts as finished: a subagent marked working forever is
+/// the worse failure.
+pub(crate) fn finished(parent: &Utf8Path, child: &str) -> bool {
+    if child.is_empty() || !child.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return true;
+    }
+    let path = parent.with_file_name(format!("{child}.db"));
+    let Some(total) = count(&path) else {
+        return true;
+    };
+    let Some((lines, next)) = steps(&path, total.saturating_sub(1), 1) else {
+        return true;
+    };
+    next == total
+        && lines
+            .last()
+            .and_then(|l| serde_json::from_str::<Value>(l).ok())
+            .is_some_and(|v| ends(&v))
+}
+
+/// The line that says a subagent finished.
+pub(crate) fn child_done(id: &str) -> String {
+    json!({ "agy_child": id }).to_string()
+}
+
 /// Every settled step is shown.
 pub(crate) fn followable(_: &Value) -> bool {
     true
@@ -571,6 +614,29 @@ mod tests {
         let waiting = Utf8Path::from_path(tmp.path()).unwrap().join("w.db");
         database(&waiting, &[(0, 14, 3, vec![]), (1, 132, 9, vec![])]);
         assert_eq!(steps(&waiting, 0, 100).unwrap().1, 1);
+    }
+
+    /// A subagent has finished when its own conversation's last step ends a turn; one still
+    /// working has not; one whose database is gone counts as finished rather than working forever.
+    #[test]
+    fn a_subagent_finishes_when_its_own_conversation_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = Utf8Path::from_path(tmp.path()).unwrap();
+        let parent = dir.join("parent.db");
+        database(
+            &dir.join("done-1.db"),
+            &[(0, 14, 3, vec![]), (1, 15, 3, vec![])],
+        );
+        database(
+            &dir.join("busy-1.db"),
+            &[(0, 14, 3, vec![]), (1, 15, 8, vec![])],
+        );
+        assert!(finished(&parent, "done-1"));
+        assert!(!finished(&parent, "busy-1"));
+        assert!(finished(&parent, "gone-1"));
+        assert!(finished(&parent, "../x"));
+        let out = "Created the following subagents:\n{\n  \"conversationId\": \"done-1\",\n}\n{\n  \"conversationId\": \"busy-1\"\n}";
+        assert_eq!(children(out), ["done-1", "busy-1"]);
     }
 
     /// A conversation is found only by its own id, in its own workspace.

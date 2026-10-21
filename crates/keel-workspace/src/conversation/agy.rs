@@ -9,11 +9,19 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::{Decoder, Ending, Frame, Stream, TextKind, Tokens, antigravity_tool, usage};
-use crate::antigravity::{cancelled, ends, failed, key};
+use super::{Decoder, Ending, Frame, Op, Stream, TextKind, Tokens, antigravity_tool, usage};
+use crate::antigravity::{cancelled, children, ends, failed, key};
 
 impl Decoder {
     pub(super) fn agy_transcript(&mut self, r: &Value, out: &mut Vec<Frame>, now: Instant) {
+        if let Some(child) = r["agy_child"].as_str() {
+            let op = Op::Background {
+                id: child.to_string(),
+                agent: None,
+                running: false,
+            };
+            return self.push(out, op);
+        }
         let Some(idx) = r["agy"].as_i64() else {
             self.ensure_open(out);
             return self.raw(out, &r.to_string(), Stream::Out, false, None);
@@ -34,7 +42,7 @@ impl Decoder {
                     self.text(format!("agy:{idx}"), TextKind::Say, t, out, now);
                 }
                 if let Some(name) = r["call"]["name"].as_str() {
-                    let (tool, input) = antigravity_tool(name, &r["call"]["args"]);
+                    let (tool, input) = tool_of(name, &r["call"]["args"]);
                     let id = call_id(r, idx);
                     self.begin(&id, &tool, Some(input), None, at.clone(), out);
                 }
@@ -61,7 +69,7 @@ impl Decoder {
                 if !known {
                     // Its response was before the cut of a long replay.
                     let name = r["call"]["name"].as_str().unwrap_or("tool");
-                    let (tool, input) = antigravity_tool(name, &r["call"]["args"]);
+                    let (tool, input) = tool_of(name, &r["call"]["args"]);
                     self.begin(&id, &tool, Some(input), None, at.clone(), out);
                 }
                 let bad = failed(r) || cancelled(r);
@@ -73,6 +81,28 @@ impl Decoder {
                     r["output"].as_str().unwrap_or_default()
                 };
                 self.finish(&id, output.replace("\r\n", "\n"), bad, at, out);
+                // Each subagent it created works on in a conversation of its own until the reader
+                // says it finished.
+                if !bad && r["call"]["name"] == "invoke_subagent" {
+                    let subs = r["call"]["args"]["Subagents"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    for (i, child) in children(output).into_iter().enumerate() {
+                        let agent = subs
+                            .get(i)
+                            .and_then(|s| s["TypeName"].as_str())
+                            .map(str::to_string);
+                        self.push(
+                            out,
+                            Op::Background {
+                                id: child,
+                                agent,
+                                running: true,
+                            },
+                        );
+                    }
+                }
                 if ends(r) {
                     out.extend(self.close(Ending::Stopped));
                 }
@@ -105,6 +135,78 @@ impl Decoder {
     }
 }
 
+/// How a call is drawn. A subagent is an `Agent` row named for its type, the way Claude's are —
+/// `pm` for Keel's pm — and everything else is what the chat lane draws.
+pub(super) fn tool_of(name: &str, args: &Value) -> (String, Value) {
+    if name == "invoke_subagent" {
+        // The database records `{"Subagents": [..]}`; the chat stream gives the one subagent's
+        // fields directly.
+        let first = if args["Subagents"].is_array() {
+            &args["Subagents"][0]
+        } else {
+            args
+        };
+        let input = serde_json::json!({
+            "subagent_type": first["TypeName"].as_str().unwrap_or("subagent"),
+            "description": first["Role"],
+            "prompt": first["Prompt"],
+        });
+        return ("Agent".into(), input);
+    }
+    antigravity_tool(name, args)
+}
+
+impl Decoder {
+    /// A chat turn's subagents: `invoke_subagent` ends as a `subagent` step naming each one it
+    /// created, and `manage_subagents` with `kill` ends them. The rest end with the turn — `agy -p`
+    /// exits, and they go with it (`close`).
+    pub(super) fn agy_chat_subagents(&mut self, s: &Value, state: &str, out: &mut Vec<Frame>) {
+        if state != "DONE" {
+            return;
+        }
+        if s["step_type"] == "subagent" {
+            for sub in s["subagent_info"]["subagents"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let Some(id) = sub["conversation_id"].as_str() else {
+                    continue;
+                };
+                let agent = sub["type_name"].as_str().map(str::to_string);
+                self.chat_agents.push(id.to_string());
+                self.push(
+                    out,
+                    Op::Background {
+                        id: id.to_string(),
+                        agent,
+                        running: true,
+                    },
+                );
+            }
+        }
+        let p = &s["tool_info"]["parameters"];
+        if s["tool_name"] == "manage_subagents" && p["Action"] == "kill" {
+            for id in p["ConversationIds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                self.chat_agents.retain(|a| a != id);
+                self.push(
+                    out,
+                    Op::Background {
+                        id: id.to_string(),
+                        agent: None,
+                        running: false,
+                    },
+                );
+            }
+        }
+    }
+}
+
 /// A call's id: agy's own, which the response and the tool step share; the step index when a
 /// call has none, so the row still answers.
 fn call_id(r: &Value, idx: i64) -> String {
@@ -116,7 +218,7 @@ fn call_id(r: &Value, idx: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CallState, Op, Provider, Source};
+    use super::super::{CallState, Provider, Source};
     use super::*;
     use serde_json::json;
 
@@ -197,6 +299,67 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Measured on agy 1.4.3: `invoke_subagent` answers once the subagent exists. The row is an
+    /// `Agent` named for its type, and the subagent works until the reader says it finished.
+    #[test]
+    fn an_agy_subagent_is_an_agent_row_and_works_until_it_finishes() {
+        let args = json!({"Subagents":[{"Model":"inherit","Prompt":"verdict?","Role":"Product Manager","TypeName":"pm","Workspace":"inherit"}]});
+        let frames = decode(&[
+            json!({"agy":0,"step":14,"status":3,"prompt":"run the pm"}),
+            json!({"agy":1,"step":15,"status":3,"call":{"id":"c","name":"invoke_subagent","args":args}}),
+            json!({"agy":2,"step":132,"status":3,"call":{"id":"c","name":"invoke_subagent","args":args},"output":"Created the following subagents:\n{\n  \"conversationId\": \"577da446-ebaa\",\n}"}),
+            json!({"agy_child":"577da446-ebaa"}),
+        ]);
+        let ops: Vec<&Op> = frames.iter().map(|f| &f.op).collect();
+        assert!(ops.iter().any(|o| matches!(o, Op::Call { tool, input: Some(i), .. } if tool == "Agent" && i["subagent_type"] == "pm")));
+        assert!(ops.iter().any(|o| matches!(o, Op::Background { id, agent: Some(a), running: true } if id == "577da446-ebaa" && a == "pm")));
+        assert!(
+            matches!(ops.last(), Some(Op::Background { id, running: false, .. }) if id == "577da446-ebaa")
+        );
+    }
+
+    /// Measured on agy 1.4.4's `-p` stream: `invoke_subagent` ends as a `subagent` step naming
+    /// each subagent, `manage_subagents kill` ends one, and the rest end with the turn.
+    #[test]
+    fn an_agy_chat_subagent_works_until_killed_or_the_turn_ends() {
+        let mut d = Decoder::new(Provider::Antigravity, Source::Chat);
+        let now = Instant::now();
+        let step = |v: Value| json!({"event":"step_update","step_update":v}).to_string();
+        let mut frames = Vec::new();
+        for line in [
+            step(
+                json!({"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"invoke_subagent","tool_info":{"name":"invoke_subagent","parameters":{"Role":"Product Manager","TypeName":"pm"}}}),
+            ),
+            step(
+                json!({"step_index":2,"state":"DONE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"type_name":"pm","conversation_id":"c1"},{"type_name":"qa","conversation_id":"c2"}]}}),
+            ),
+            step(
+                json!({"step_index":5,"state":"DONE","step_type":"tool","tool_name":"manage_subagents","tool_info":{"parameters":{"Action":"kill","ConversationIds":["c1"]}}}),
+            ),
+        ] {
+            frames.extend(d.feed(&line, None, now));
+        }
+        frames.extend(d.close(Ending::Done));
+        let ops: Vec<&Op> = frames.iter().map(|f| &f.op).collect();
+        assert!(ops.iter().any(|o| matches!(o, Op::Call { tool, input: Some(i), .. } if tool == "Agent" && i["subagent_type"] == "pm")));
+        let bg: Vec<(String, bool)> = ops
+            .iter()
+            .filter_map(|o| match o {
+                Op::Background { id, running, .. } => Some((id.clone(), *running)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            bg,
+            [
+                ("c1".into(), true),
+                ("c2".into(), true),
+                ("c1".into(), false),
+                ("c2".into(), false)
+            ]
+        );
     }
 
     /// A refused tool answers its row as failed, with agy's reason.

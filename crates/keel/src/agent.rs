@@ -1138,6 +1138,8 @@ pub async fn chat(
         // agy says a spent quota only here, and exits 0 after it.
         let mut result_error: Option<String> = None;
         let mut agy_result = false;
+        // Codex's subagents, read from its own transcript for as long as the turn runs.
+        let mut subagents: Option<Aborts> = None;
         if let Some(session) = &session {
             stopper.bound(&lane, token, session);
         }
@@ -1172,6 +1174,19 @@ pub async fn chat(
                     crate::lines::Next::Done => break,
                 };
                 streamed = true;
+                if provider == "codex"
+                    && subagents.is_none()
+                    && line.contains("\"thread.started\"")
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
+                    && let Some(id) = v["thread_id"].as_str()
+                {
+                    subagents = Some(codex_subagents(
+                        cwd.clone(),
+                        id.to_string(),
+                        query.session.is_some(),
+                        tx.clone(),
+                    ));
+                }
                 if provider == "antigravity"
                     && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
                 {
@@ -1290,6 +1305,8 @@ pub async fn chat(
             }
         }
 
+        // Before the turn closes: a subagent's end read after that would open a turn of its own.
+        drop(subagents);
         let status = wait_for_agent(&mut child, &tx).await;
         // Reaped: off the parent-death list before the pid can be reused by something else.
         drop(_tracked);
@@ -1698,6 +1715,80 @@ impl Drop for AgentChild {
             crate::signals::end_tree(pid);
         }
     }
+}
+
+/// A task that ends when this is dropped: with the turn, however the turn ends.
+struct Aborts(tokio::task::JoinHandle<()>);
+
+impl Drop for Aborts {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// How often a Codex chat turn looks at its transcript for subagents.
+const SUBAGENT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Codex's subagents, for a chat turn. `codex exec --json` never says one started — measured on
+/// 0.163, a turn that ran the pm printed only its `wait` — while Codex's own transcript of the
+/// same turn records `SubAgentActivity` as it starts and finishes. So the turn reads those from
+/// there and passes them into its own stream as `subagent_activity` items, which the decoder
+/// draws like Claude's: an `Agent` row, and the sidebar's member working until it stops. A
+/// resumed conversation is read from where it ended when the turn began, so an earlier turn's
+/// subagents are not started again.
+fn codex_subagents(
+    cwd: camino::Utf8PathBuf,
+    thread: String,
+    resumed: bool,
+    tx: tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
+) -> Aborts {
+    Aborts(tokio::spawn(async move {
+        let mut found: Option<(keel_workspace::Transcript, u64)> = None;
+        while !tx.is_closed() {
+            if found.is_none() {
+                let (dir, id) = (cwd.clone(), thread.clone());
+                found = crate::serve::blocking(
+                    move || {
+                        let t = keel_workspace::Follows::Codex.locate(&dir, &id)?;
+                        let from = if resumed {
+                            std::fs::metadata(t.path()).ok()?.len()
+                        } else {
+                            0
+                        };
+                        Some((t, from))
+                    },
+                    None,
+                )
+                .await;
+            }
+            if let Some((t, from)) = found.as_mut() {
+                let (reader, at) = (t.clone(), *from);
+                if let Some((lines, next)) =
+                    crate::serve::blocking(move || reader.tail(at), None).await
+                {
+                    *from = next;
+                    for item in lines.iter().filter_map(|l| subagent_item(l)) {
+                        if tx.send(Ok(said("msg", item))).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(SUBAGENT_POLL).await;
+        }
+    }))
+}
+
+/// A transcript line's `SubAgentActivity`, as the `exec --json` item the decoder reads.
+fn subagent_item(line: &str) -> Option<String> {
+    if !line.contains("\"SubAgentActivity\"") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let mut item = v["payload"]["item"].clone();
+    (item["type"] == "SubAgentActivity").then_some(())?;
+    item["type"] = "subagent_activity".into();
+    Some(serde_json::json!({ "type": "item.completed", "item": item }).to_string())
 }
 
 async fn next_agent_line<R: tokio::io::AsyncBufRead + Unpin>(
@@ -2381,5 +2472,25 @@ mod stream_tests {
                 "never sent to the client"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod subagent_tests {
+    use super::subagent_item;
+
+    /// A Codex transcript's subagent record becomes the `exec --json` item the chat decoder reads;
+    /// every other record is left alone.
+    #[test]
+    fn a_codex_subagent_record_is_passed_on_as_an_exec_item() {
+        let line = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","kind":"started","agent_thread_id":"A1","agent_path":"/root/pm"}}}"#;
+        let item: serde_json::Value = serde_json::from_str(&subagent_item(line).unwrap()).unwrap();
+        assert_eq!(item["type"], "item.completed");
+        assert_eq!(item["item"]["type"], "subagent_activity");
+        assert_eq!(item["item"]["agent_path"], "/root/pm");
+        assert_eq!(
+            subagent_item(r#"{"type":"event_msg","payload":{"type":"token_count"}}"#),
+            None
+        );
     }
 }

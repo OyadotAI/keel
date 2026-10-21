@@ -650,6 +650,9 @@ export const useStore = create<State>()((set, getState) => {
               if (live && (e.data as Fact).kind === "turn.ended") ended.push((e.data as Fact).turn);
             }
             else if (e.event === "fatal") missing = true;
+            // The process is gone, and its subagents with it. Claude's lanes also hear this from
+            // the session list; Codex's and Antigravity's have only this to say it.
+            else if (e.event === "ended" && conv.background) conv = { turns: conv.turns };
             else if (e.event === "caught-up") {
               live = true;
               patch = { ...patch, loaded: true, known: true, error: undefined };

@@ -55,6 +55,30 @@ is the wrong trade:
   onto nothing is not a smaller bug than a crash — it is a larger one, because a crash at least
   gets reported.
 
+### Every agent, one product
+
+Keel drives three agents — **Claude Code, Codex and Antigravity** — and they are one product, not
+one product and two ports. **Whatever is added works on all three, or it is not done**: a lane's
+busy state and activity line, the turn view, the facts and the auto-commit, subagents and their
+sidebar animation, approvals, notifications, the Browser tab — every one of them, for every agent,
+in chat lanes and terminal lanes alike. It cost a release to learn: Codex and Antigravity terminal
+lanes read as idle with an empty Turns tab for as long as following a terminal was Claude's alone,
+and the person found out by using it.
+
+- **Same release.** A feature ships for all three agents together. Where an agent's own format
+  genuinely cannot support it yet, that is a named gap in the report and the PR — the agent, the
+  reason, what it would take — never silence, and never a quieter version on one agent passed off
+  as the feature.
+- **One place answers per agent.** The difference between agents lives in a strategy, not in
+  call sites: `keel_workspace::follow` for transcripts, `agent::interactive` for launching, the
+  decoder's per-provider branches for ops. A check on `agent === "claude"` anywhere else is a
+  parity bug waiting to be found.
+- **Measured, not assumed.** Each agent's on-disk format is undocumented and changes with its own
+  updates (agy went 1.4.3 → 1.4.4 mid-release). Read the real files, record a real turn, and pin
+  what was measured in a test named for the agent.
+- **The pipeline holds it.** `pm` scopes for all three, `principal` designs each agent's answer,
+  and `qa` runs a real turn on each — a stage that could not run one says which.
+
 The reporting in "What reports itself" exists because of this section: the failures that cost
 trust are the quiet ones, so they are made loud to us and never to the person.
 
@@ -872,6 +896,8 @@ report at the end of it — not a stream of half-decisions along the way. The st
 in `.claude/agents/`. They run **one after another**, never in parallel, because each one reads
 what the last one returned; and what a stage returned is handed to the next **verbatim**, because
 a subagent starts with an empty context and a paraphrase is where a scope quietly grows.
+
+Every stage covers **Claude Code, Codex and Antigravity** — see "Every agent, one product".
 
 1. **`pm`** — given the ask in the person's own words. Returns build / change / cut / not yet,
    and the smallest version worth shipping with its out-list. *Build* and *change* carry on, to

@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use super::{Decoder, Ending, Frame, Op, Stream, TextKind, Tokens, clean_path, usage};
+use super::{Decoder, Ending, Frame, Op, Source, Stream, TextKind, Tokens, clean_path, usage};
 
 impl Decoder {
     pub(super) fn codex_rollout(&mut self, r: &Value, out: &mut Vec<Frame>, now: Instant) {
@@ -192,6 +192,7 @@ impl Decoder {
                 };
                 self.finish(&id, output, failed, at, out);
             }
+            "SubAgentActivity" => self.subagent(item, at, out),
             "ContextCompaction" => {
                 self.raw(
                     out,
@@ -205,6 +206,60 @@ impl Decoder {
                 let line = item.to_string();
                 self.raw(out, &line, Stream::Out, false, Some(kind.to_string()));
             }
+        }
+    }
+}
+
+impl Decoder {
+    /// A Codex subagent starting or finishing, drawn the way Claude's are: an `Agent` row named
+    /// for it, and a background entry that says it is working until Codex says it stopped — it may
+    /// outlive the turn that started it. Keyed by the agent's own thread, which the start and the
+    /// end both carry (the end's item id is not the start's). Its name is the last part of its path:
+    /// `/root/pm` is the `pm` the sidebar lists. Messages sent to a running agent draw nothing.
+    pub(super) fn subagent(&mut self, item: &Value, at: Option<String>, out: &mut Vec<Frame>) {
+        let Some(thread) = item["agent_thread_id"].as_str() else {
+            return;
+        };
+        let name = item["agent_path"]
+            .as_str()
+            .and_then(|p| p.rsplit('/').next())
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
+        match item["kind"].as_str() {
+            Some("started") => {
+                let input = json!({ "subagent_type": name.clone().unwrap_or_default(), "description": item["agent_path"] });
+                self.begin(thread, "Agent", Some(input), None, at, out);
+                if self.source == Source::Chat {
+                    self.chat_agents.push(thread.to_string());
+                }
+                self.push(
+                    out,
+                    Op::Background {
+                        id: thread.to_string(),
+                        agent: name,
+                        running: true,
+                    },
+                );
+            }
+            Some(kind @ ("completed" | "interrupted")) => {
+                let running = self
+                    .turn
+                    .as_ref()
+                    .is_some_and(|t| t.calls.get(thread).is_some_and(|c| c.running));
+                if running {
+                    self.finish(thread, String::new(), kind == "interrupted", at, out);
+                }
+                self.chat_agents.retain(|a| a != thread);
+                self.push(
+                    out,
+                    Op::Background {
+                        id: thread.to_string(),
+                        agent: None,
+                        running: false,
+                    },
+                );
+            }
+            _ => {}
         }
     }
 }
@@ -453,6 +508,54 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// A subagent Codex starts is an `Agent` row named for it and a background agent until Codex
+    /// says it finished — so the sidebar shows `pm` working, as it does for Claude's.
+    #[test]
+    fn a_codex_subagent_is_an_agent_row_and_works_until_it_finishes() {
+        let sub = |kind: &str, id: &str| {
+            item(
+                "T1",
+                json!({"type":"SubAgentActivity","id":id,"kind":kind,"agent_thread_id":"A1","agent_path":"/root/pm"}),
+            )
+        };
+        let frames = decode(&[
+            user("T1", "run the pm"),
+            sub("started", "call_1"),
+            sub("interacted", "call_2"),
+            sub("completed", "subagent-completed-x"),
+        ]);
+        let ops: Vec<&Op> = frames.iter().map(|f| &f.op).collect();
+        assert!(ops.iter().any(|o| matches!(o, Op::Call { id, tool, input: Some(i), .. } if id == "A1" && tool == "Agent" && i["subagent_type"] == "pm")));
+        assert!(ops.iter().any(|o| matches!(o, Op::Background { id, agent: Some(a), running: true } if id == "A1" && a == "pm")));
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, Op::Result { id, state: CallState::Ok, .. } if id == "A1"))
+        );
+        assert!(matches!(
+            ops.last(),
+            Some(Op::Background { running: false, .. })
+        ));
+    }
+
+    /// A Codex chat turn learns of its subagent from the transcript, passed on as an
+    /// `exec --json` item; the subagent ends with the turn's process if Codex never said so.
+    #[test]
+    fn a_codex_chat_subagent_works_until_it_finishes_or_the_turn_ends() {
+        let mut d = Decoder::new(Provider::Codex, Source::Chat);
+        let now = Instant::now();
+        let started = json!({"type":"item.completed","item":{"type":"subagent_activity","kind":"started","agent_thread_id":"A1","agent_path":"/root/pm"}}).to_string();
+        let mut frames = d.feed(&started, None, now);
+        frames.extend(d.close(Ending::Done));
+        let ops: Vec<&Op> = frames.iter().map(|f| &f.op).collect();
+        assert!(ops.iter().any(|o| matches!(o, Op::Call { tool, input: Some(i), .. } if tool == "Agent" && i["subagent_type"] == "pm")));
+        assert!(ops.iter().any(|o| matches!(o, Op::Background { id, agent: Some(a), running: true } if id == "A1" && a == "pm")));
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, Op::Background { id, running: false, .. } if id == "A1")),
+            "{ops:#?}"
+        );
     }
 
     #[test]
