@@ -1,4 +1,4 @@
-//! Claude Code's stream-json, and Codex's events, as the turn a person reads.
+//! Claude Code's stream-json, and Codex's events and transcript, as the turn a person reads.
 //!
 //! This decoder used to live in the Swift app, about 4,300 lines across `SessionModel` and
 //! `Turn`, and the bugs testers reported most were there: a tool call stopped mid-run stayed
@@ -28,6 +28,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
+
+mod agy;
+mod rollout;
 
 /// How long text may wait to be batched with what follows it.
 pub const BATCH: Duration = Duration::from_millis(40);
@@ -287,6 +290,8 @@ struct Turn {
     raw_dropped: usize,
     ordinal: u64,
     pending: Option<(String, TextKind, String, Instant)>,
+    /// Codex's running token total when this turn opened: `[input, cached, output]`.
+    base: [u64; 3],
 }
 
 pub struct Decoder {
@@ -296,6 +301,11 @@ pub struct Decoder {
     /// The message the stream is inside, from `message_start`.
     message: Option<String>,
     seen: Seen,
+    /// Codex's running token total, as of its last `token_count`.
+    codex_total: [u64; 3],
+    /// Codex turns that have ended, which nothing written for them later may reopen. One id per
+    /// turn of one stream's conversation.
+    codex_closed: HashSet<String>,
 }
 
 impl Decoder {
@@ -306,6 +316,8 @@ impl Decoder {
             turn: None,
             message: None,
             seen: Seen::default(),
+            codex_total: [0; 3],
+            codex_closed: HashSet::new(),
         }
     }
 
@@ -364,8 +376,12 @@ impl Decoder {
                 return out;
             }
         };
-        if self.provider == Provider::Codex {
+        if self.provider == Provider::Codex && self.source == Source::Transcript {
+            self.codex_rollout(&record, &mut out, now);
+        } else if self.provider == Provider::Codex {
             self.codex(&record, &mut out, now);
+        } else if self.provider == Provider::Antigravity && self.source == Source::Transcript {
+            self.agy_transcript(&record, &mut out, now);
         } else if self.provider == Provider::Antigravity {
             self.antigravity(&record, &mut out, now);
         } else {

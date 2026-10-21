@@ -14,19 +14,27 @@ use std::time::SystemTime;
 /// database records its workspace in its first steps.
 const HEAD_BYTES: u64 = 8 * 1024 * 1024;
 
-/// The conversation `agent` started in `cwd` at or after `since`, if one has appeared.
-pub fn started(agent: &str, cwd: &Path, since: SystemTime) -> Option<String> {
+/// The conversation `agent` started in `cwd` at or after `since`, if one has appeared. `taken`
+/// says a conversation another terminal already runs: an older Codex in the same checkout writes
+/// its rollout on every turn, and a second terminal took the first one's id for its own.
+pub fn started(
+    agent: &str,
+    cwd: &Path,
+    since: SystemTime,
+    taken: fn(&str) -> bool,
+) -> Option<String> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     match agent {
         "codex" => {
-            let root = std::env::var_os("CODEX_HOME").map_or(home.join(".codex"), PathBuf::from);
-            codex(&root.join("sessions"), cwd, since)
+            let root = keel_workspace::codex_home()?.into_std_path_buf();
+            codex(&root.join("sessions"), cwd, since, taken)
         }
         "antigravity" => antigravity(
             &home.join(".gemini/antigravity-cli/conversations"),
             cwd,
             since,
-        ),
+        )
+        .filter(|id| !taken(id)),
         _ => None,
     }
 }
@@ -36,10 +44,17 @@ pub fn started(agent: &str, cwd: &Path, since: SystemTime) -> Option<String> {
 /// the newest day there is, so only that folder is read. The interactive CLI says `codex-tui`;
 /// a chat lane's `codex exec` beside it in the same checkout, and subagents (whose `source` is an
 /// object), are not this terminal's.
-fn codex(sessions: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
+fn codex(
+    sessions: &Path,
+    cwd: &Path,
+    since: SystemTime,
+    taken: fn(&str) -> bool,
+) -> Option<String> {
     let day = newest(&newest(&newest(sessions)?)?)?;
+    // Begun after the launch, not just written since: an older Codex in this checkout appends to
+    // its own rollout on every turn.
     let mut files: Vec<PathBuf> = entries(&day)
-        .filter(|p| p.extension().is_some_and(|e| e == "jsonl") && changed_since(p, since))
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl") && begun_since(p, since))
         .collect();
     // Named for when they began, so the first is the earliest conversation after the launch.
     files.sort();
@@ -52,7 +67,8 @@ fn codex(sessions: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
             && p["originator"] == "codex-tui"
             && p["source"].is_string()
             && p["cwd"].as_str().is_some_and(|c| Path::new(c) == cwd);
-        ours.then(|| p["id"].as_str().map(String::from)).flatten()
+        let id = p["id"].as_str().filter(|id| !taken(id))?;
+        ours.then(|| id.to_string())
     })
 }
 
@@ -63,7 +79,7 @@ fn codex(sessions: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
 fn antigravity(dir: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
     let needle = field(&format!("file://{}", cwd.display()));
     let mut found: Vec<(SystemTime, String)> = entries(dir)
-        .filter(|p| p.extension().is_some_and(|e| e == "db") && changed_since(p, since))
+        .filter(|p| p.extension().is_some_and(|e| e == "db") && begun_since(p, since))
         .filter(|p| {
             let wal = p.with_extension("db-wal");
             [p.as_path(), wal.as_path()]
@@ -105,10 +121,8 @@ fn newest(dir: &Path) -> Option<PathBuf> {
     entries(dir).filter(|p| p.is_dir()).max()
 }
 
-fn changed_since(path: &Path, since: SystemTime) -> bool {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .is_ok_and(|t| t >= since)
+fn begun_since(path: &Path, since: SystemTime) -> bool {
+    created(path).is_some_and(|t| t >= since)
 }
 
 fn created(path: &Path) -> Option<SystemTime> {
@@ -171,21 +185,39 @@ mod tests {
             "rollout-3-other.jsonl",
             meta("other", "/elsewhere", "codex-tui", "cli".into()),
         );
-        assert_eq!(codex(tmp.path(), Path::new("/repo"), since), None);
+        assert_eq!(
+            codex(tmp.path(), Path::new("/repo"), since, |_| false),
+            None
+        );
         write(
             &day,
             "rollout-4-mine.jsonl",
             meta("mine", "/repo", "codex-tui", "vscode".into()),
         );
         assert_eq!(
-            codex(tmp.path(), Path::new("/repo"), since).as_deref(),
+            codex(tmp.path(), Path::new("/repo"), since, |_| false).as_deref(),
             Some("mine")
         );
         let later = SystemTime::now() + std::time::Duration::from_secs(60);
         assert_eq!(
-            codex(tmp.path(), Path::new("/repo"), later),
+            codex(tmp.path(), Path::new("/repo"), later, |_| false),
             None,
             "nothing new since"
+        );
+        assert_eq!(
+            codex(tmp.path(), Path::new("/repo"), since, |id| id == "mine"),
+            None,
+            "another terminal already runs it"
+        );
+        // An older Codex in this checkout, still writing its own rollout, is not this terminal's.
+        let after = SystemTime::now();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut body = std::fs::read_to_string(day.join("rollout-4-mine.jsonl")).unwrap();
+        body.push_str("{}\n");
+        std::fs::write(day.join("rollout-4-mine.jsonl"), body).unwrap();
+        assert_eq!(
+            codex(tmp.path(), Path::new("/repo"), after, |_| false),
+            None
         );
     }
 

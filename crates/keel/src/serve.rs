@@ -427,10 +427,18 @@ impl AppState {
     /// leaves the listing, and a claim released only on "idle" held the tree until the daemon
     /// restarted.
     pub fn release_terminal_except(&self, busy: &std::collections::HashSet<&str>) {
-        // Contention ends with the session's turn, whoever was watching it.
+        // Contention ends with the session's turn, whoever was watching it — except a session a
+        // follower holds, which says its own turn ended (`uncontend`). Claude's session list is
+        // all `busy` is built from, so a Codex turn's contention was wiped within 5 s and a lane's
+        // checkpoint swept in its half-written files. Keys first, since `is_followed` locks too.
+        let contending: Vec<String> = self.contending.locked().keys().cloned().collect();
+        let over: std::collections::HashSet<String> = contending
+            .into_iter()
+            .filter(|s| !busy.contains(s.as_str()) && !self.is_followed(s))
+            .collect();
         self.contending
             .locked()
-            .retain(|session, _| busy.contains(session.as_str()));
+            .retain(|session, _| !over.contains(session));
         // Keys first and the lock let go, because `is_followed` takes a lock of its own.
         let lanes: Vec<String> = self.running.locked().keys().cloned().collect();
         let stale: Vec<String> = lanes
@@ -1243,6 +1251,8 @@ struct TailQuery {
     /// `1` for decoded `turn` ops in place of raw `msg` records (`keel_workspace::conversation`).
     /// Absent, the stream is exactly what it has always been, so the Swift app is untouched.
     ops: Option<String>,
+    /// Whose transcript: `claude` (the default, what every older client meant) or `codex`.
+    agent: Option<String>,
 }
 
 impl TailQuery {
@@ -1287,9 +1297,14 @@ async fn api_session_tail(
     State(state): State<Arc<AppState>>,
     Checkout(repo): Checkout,
     Query(query): Query<TailQuery>,
-) -> impl axum::response::IntoResponse {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
     use axum::response::sse::{Event, KeepAlive, Sse};
 
+    let agent = match keel_workspace::Follows::from_query(query.agent.as_deref()) {
+        Ok(agent) => agent,
+        Err(why) => return (axum::http::StatusCode::BAD_REQUEST, why).into_response(),
+    };
     let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
     let dir = if query.cwd.is_some() {
         state.session_dir(query.cwd.as_deref())
@@ -1338,19 +1353,21 @@ async fn api_session_tail(
         let mut from = query.from;
         // Decoded here rather than in every client, when asked for. Lives as long as the stream:
         // it holds the one open turn and nothing else.
-        let mut decoder = ops.then(|| {
-            keel_workspace::conversation::Decoder::new(
-                keel_workspace::conversation::Provider::Claude,
-                keel_workspace::conversation::Source::Transcript,
-            )
-        });
+        let mut decoder = ops.then(|| agent.decoder());
         // The first read is the catch-up; every one after it is the few hundred bytes that were
         // appended.
         let mut first = true;
+        // Found once: Codex's is a walk of its sessions folder. Not there yet — a conversation
+        // whose first message has not been written — is the `fatal` below, and the window asks
+        // again.
+        let transcript = {
+            let (d, sid) = (dir.clone(), query.id.clone());
+            blocking(move || agent.locate(&d, &sid), None).await
+        };
         // What Keel knew about these turns, keyed by the record that opened each. Sent right
         // after that record on the first pass, so a replayed turn carries its files, gate, commit
         // and cost exactly where a live one would have.
-        let known: std::collections::HashMap<String, crate::turns::Record> = {
+        let mut known: std::collections::HashMap<String, crate::turns::Record> = {
             let (store, id) = (store.clone(), query.id.clone());
             blocking(
                 move || {
@@ -1366,35 +1383,27 @@ async fn api_session_tail(
         // Woken by the file rather than by a clock. A watch on the transcript and on Claude
         // Code's pid files; the sleep below is the fallback for a watcher that could not be made.
         let (wake_tx, mut wake) = tokio::sync::mpsc::channel::<()>(1);
-        let _watcher = watch_session(&dir, &home, &query.id, wake_tx);
+        let _watcher = watch_session(transcript.as_ref(), &home, wake_tx);
         let mut follower: Option<crate::turns::Follower> = None;
         // The turn in flight when the window arrives: the last prompt of the replay with no
         // turn-end after it. A follower that starts at catch-up would otherwise never see that
         // turn open, and a window relaunched mid-turn — every `make dev` — lost the turn's
         // files, gate and commit for good.
         let mut inflight: Option<(String, String, Option<String>, String)> = None;
-        let mut alive = keel_workspace::status(&home, &query.id).is_some();
+        let mut alive = session_status(agent, &home, &query.id, false).is_some();
         let mut last_bytes = std::time::Instant::now();
         let mut said_ended = false;
         loop {
             if tx.is_closed() {
                 break;
             }
-            let (d, h, sid) = (dir.clone(), home.clone(), query.id.clone());
+            let t = transcript.clone();
             // Every read is off the executor, and bounded: the first is the tail of the file,
             // not the file, and none takes more than `MAX_READ` in one go.
             let read: Option<(Vec<String>, u64, u64)> = if first && from == 0 {
-                blocking(
-                    move || keel_workspace::tail_last(&d, &h, &sid, keel_workspace::MAX_READ),
-                    None,
-                )
-                .await
+                blocking(move || t?.tail_last(keel_workspace::MAX_READ), None).await
             } else {
-                blocking(
-                    move || keel_workspace::tail(&d, &h, &sid, from).map(|(l, n)| (l, n, 0)),
-                    None,
-                )
-                .await
+                blocking(move || t?.tail(from).map(|(l, n)| (l, n, 0)), None).await
             };
             let Some((lines, next, started_at)) = read else {
                 if let Some(d) = decoder.as_mut()
@@ -1410,6 +1419,8 @@ async fn api_session_tail(
                     .await;
                 break;
             };
+            // A read only succeeds with a transcript to read.
+            let Some(t) = transcript.as_ref() else { break };
 
             // A very long history sent whole is a wall of records the app has to decode on its
             // main actor before it can draw anything. The tail is what a person opening a
@@ -1466,9 +1477,24 @@ async fn api_session_tail(
             for line in lines {
                 wrote = true;
                 let frames = decoded.pop_front();
-                let kind = keel_workspace::kind_of(&line);
+                let kind = match t.kind_of(&line) {
+                    // Codex records no working directory per prompt; the conversation's is this
+                    // one, and without it the turn would claim and photograph the project root.
+                    keel_workspace::Kind::Opener {
+                        uuid,
+                        prompt,
+                        at,
+                        cwd: None,
+                    } if agent != keel_workspace::Follows::Claude => keel_workspace::Kind::Opener {
+                        uuid,
+                        prompt,
+                        at,
+                        cwd: Some(dir.to_string()),
+                    },
+                    kind => kind,
+                };
                 let opener = if first && !known.is_empty() {
-                    keel_workspace::opener_of(&line)
+                    t.opener_of(&line)
                 } else {
                     None
                 };
@@ -1485,7 +1511,8 @@ async fn api_session_tail(
                 {
                     break; // The window closed, or the lane opened something else.
                 }
-                if let Some(record) = opener.and_then(|uuid| known.get(&uuid)) {
+                // Once per turn: a Codex turn opens again with every word typed into it.
+                if let Some(record) = opener.and_then(|uuid| known.remove(&uuid)) {
                     for fact in record.facts() {
                         let Ok(json) = serde_json::to_string(&fact) else {
                             continue;
@@ -1506,7 +1533,7 @@ async fn api_session_tail(
                             prompt,
                             cwd,
                             at,
-                        } => {
+                        } if inflight.as_ref().is_none_or(|i| &i.0 != uuid) => {
                             inflight = Some((uuid.clone(), prompt.clone(), cwd.clone(), at.clone()))
                         }
                         keel_workspace::Kind::TurnEnd => inflight = None,
@@ -1547,9 +1574,11 @@ async fn api_session_tail(
                 // and belongs to the follower.
                 if let Some(d) = decoder.as_mut()
                     && d.is_open()
-                    && !matches!(
-                        keel_workspace::status(&home, &query.id),
-                        Some(keel_workspace::Status::Busy | keel_workspace::Status::Unknown)
+                    && !in_flight(
+                        agent,
+                        &home,
+                        &query.id,
+                        inflight.as_ref().map(|i| i.3.as_str()),
                     )
                     && let Some(e) =
                         turn_event(&d.close(keel_workspace::conversation::Ending::CaughtUp))
@@ -1576,20 +1605,25 @@ async fn api_session_tail(
                 // turn gets. One a lane is driving is that lane's chat task's business.
                 if !watched.owns_session(&query.id) {
                     watched.attach_follower(&query.id);
-                    let mut f = crate::turns::Follower::new(
-                        watched.clone(),
-                        store.clone(),
-                        home.clone(),
-                        query.id.clone(),
-                    );
+                    let mut f = match agent {
+                        keel_workspace::Follows::Claude => crate::turns::Follower::new(
+                            watched.clone(),
+                            store.clone(),
+                            home.clone(),
+                            query.id.clone(),
+                        ),
+                        _ => crate::turns::Follower::from_transcript(
+                            watched.clone(),
+                            store.clone(),
+                            query.id.clone(),
+                            t.clone(),
+                        ),
+                    };
                     // Busy, with a prompt nothing has closed: that turn is running now, and it
                     // is this follower's from here. The photograph is late — the turn may have
                     // written already — which beats no record of the turn at all.
                     if let Some((uuid, prompt, cwd, at)) = inflight.take()
-                        && matches!(
-                            keel_workspace::status(&home, &query.id),
-                            Some(keel_workspace::Status::Busy | keel_workspace::Status::Unknown)
-                        )
+                        && in_flight(agent, &home, &query.id, Some(&at))
                     {
                         f.opened(uuid, prompt, cwd, Some(at)).await;
                     }
@@ -1598,11 +1632,16 @@ async fn api_session_tail(
             }
             from = next;
             if let Some(f) = &mut follower {
+                f.read_to(next);
                 f.tick().await;
             }
             // The process went away and the file went quiet: the session is over, and the app
             // is told so a turn cut short by ⌃C in the terminal does not stay "running".
-            let now_alive = keel_workspace::status(&home, &query.id).is_some();
+            let open = match &follower {
+                Some(f) => f.is_open(),
+                None => decoder.as_ref().is_some_and(|d| d.is_open()),
+            };
+            let now_alive = session_status(agent, &home, &query.id, open).is_some();
             if alive
                 && !now_alive
                 && !said_ended
@@ -1622,7 +1661,10 @@ async fn api_session_tail(
                     .await;
                 said_ended = true;
             }
-            alive = now_alive;
+            // Lowered only once the end is said: a process that went within 5 s of its last write
+            // — which is how a Codex CLI usually goes — left `alive` false before the quiet was up,
+            // the edge above never fired, and the lane read as working for good.
+            alive = still_alive(alive, now_alive, said_ended);
             // The stream stays open for a session that is not being written: waiting on the
             // watcher costs nothing, and a session resumed in a terminal later is picked up here.
             let fallback = std::time::Duration::from_secs(if alive { 2 } else { 5 });
@@ -1638,7 +1680,50 @@ async fn api_session_tail(
         }
     });
 
-    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// What the process running a followed session says it is doing, or `None` when none has it
+/// open. Claude Code's pid file says; for Codex there is no such file, and a live Codex is always
+/// a Keel terminal, so the terminal is the answer and the open turn is what it is doing.
+fn session_status(
+    agent: keel_workspace::Follows,
+    home: &Utf8Path,
+    id: &str,
+    open: bool,
+) -> Option<keel_workspace::Status> {
+    match agent {
+        keel_workspace::Follows::Claude => keel_workspace::status(home, id),
+        _ => crate::term::live(id).then_some(if open {
+            keel_workspace::Status::Busy
+        } else {
+            keel_workspace::Status::Idle
+        }),
+    }
+}
+
+/// Whether a session counts as alive for the next pass: it goes on counting until its end has
+/// been said, so the "gone and quiet" edge can still fire once the quiet is up.
+fn still_alive(was: bool, now: bool, said_ended: bool) -> bool {
+    now || (was && !said_ended)
+}
+
+/// Whether the turn a replay ended inside is still being written. Claude Code's pid file says.
+/// For Codex, a live terminal is not enough: a terminal resumed after a relaunch is live and idle
+/// at its prompt, and the turn its last process died in is over. Only a turn asked after the
+/// running terminal started is that terminal's. Both stamps are the same fixed-width UTC form, so
+/// they compare as text.
+fn in_flight(agent: keel_workspace::Follows, home: &Utf8Path, id: &str, at: Option<&str>) -> bool {
+    match agent {
+        keel_workspace::Follows::Claude => matches!(
+            keel_workspace::status(home, id),
+            Some(keel_workspace::Status::Busy | keel_workspace::Status::Unknown)
+        ),
+        _ => crate::term::live_since(id)
+            .is_some_and(|since| at.is_some_and(|at| at >= since.as_str())),
+    }
 }
 
 /// Records sent when catching up on a conversation that was already long.
@@ -1650,9 +1735,8 @@ const MAX_REPLAY: usize = 1_500;
 /// instant, and never a recursive walk. `None` when a watcher cannot be made,
 /// in which case the poll's fallback sleep is the whole of it.
 fn watch_session(
-    dir: &Utf8Path,
+    transcript: Option<&keel_workspace::Transcript>,
     home: &Utf8Path,
-    id: &str,
     wake: tokio::sync::mpsc::Sender<()>,
 ) -> Option<notify::RecommendedWatcher> {
     use notify::Watcher;
@@ -1662,13 +1746,16 @@ fn watch_session(
             let _ = wake.try_send(());
         })
         .ok()?;
-    if let Some(path) = keel_workspace::transcript_path(dir, home, id) {
+    for path in transcript.map(|t| t.watched()).unwrap_or_default() {
         let _ = watcher.watch(path.as_std_path(), notify::RecursiveMode::NonRecursive);
     }
-    let _ = watcher.watch(
-        home.join("sessions").as_std_path(),
-        notify::RecursiveMode::NonRecursive,
-    );
+    // Claude Code's pid files; the others have none.
+    if transcript.is_none_or(|t| t.agent() == keel_workspace::Follows::Claude) {
+        let _ = watcher.watch(
+            home.join("sessions").as_std_path(),
+            notify::RecursiveMode::NonRecursive,
+        );
+    }
     Some(watcher)
 }
 
@@ -2643,6 +2730,83 @@ mod tests {
         );
     }
 
+    /// A conversation with no transcript on this machine is said, for every agent, and the stream
+    /// ends — the window retries on that word. A stream that panicked instead sent nothing at all,
+    /// and the lane sat waiting on it forever.
+    #[tokio::test]
+    async fn a_missing_transcript_is_said_not_hung() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let state = Arc::new(AppState::new(repo.clone()));
+        for agent in [None, Some("codex".to_string())] {
+            let query = TailQuery {
+                id: "no-such-session".into(),
+                cwd: None,
+                from: 0,
+                ops: Some("1".into()),
+                agent: agent.clone(),
+            };
+            let response =
+                api_session_tail(State(state.clone()), Checkout(repo.clone()), Query(query)).await;
+            let body = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                axum::body::to_bytes(response.into_body(), 1 << 20),
+            )
+            .await
+            .expect("the stream ends")
+            .unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(text.contains("event: fatal"), "{agent:?}: {text}");
+        }
+    }
+
+    /// A process that went within 5 s of its last write is still ended: "alive" holds until the
+    /// end is said, rather than dropping before the quiet is up and never firing.
+    #[test]
+    fn a_session_that_went_soon_after_writing_is_still_ended() {
+        assert!(
+            still_alive(true, false, false),
+            "gone, not yet quiet: still waiting to say so"
+        );
+        assert!(!still_alive(true, false, true), "said");
+        assert!(still_alive(false, true, true), "back again");
+        assert!(!still_alive(false, false, false));
+    }
+
+    /// A resumed Codex terminal is live and idle: the turn its last process died in is over, and
+    /// only a turn asked after this terminal took the conversation is running.
+    #[test]
+    fn a_codex_turn_older_than_its_terminal_is_not_in_flight() {
+        let home = Utf8PathBuf::from("/nonexistent");
+        let codex = keel_workspace::Follows::Codex;
+        let before = crate::turns::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(
+            !in_flight(codex, &home, "inflight-test", Some(&before)),
+            "no terminal"
+        );
+        let _live = crate::term::Live::hold("inflight-test");
+        assert!(
+            !in_flight(codex, &home, "inflight-test", Some(&before)),
+            "asked before it"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(in_flight(
+            codex,
+            &home,
+            "inflight-test",
+            Some(&crate::turns::now())
+        ));
+        assert!(!in_flight(codex, &home, "inflight-test", None));
+        // A new terminal: its first turn is asked before its id is found, and is its own.
+        let launched = crate::turns::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let first = crate::turns::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _found = crate::term::Live::since("inflight-new", launched);
+        assert!(in_flight(codex, &home, "inflight-new", Some(&first)));
+    }
+
     /// Following a session is woken by its transcript, not by the 2 s fallback: an append is on
     /// screen at once. Pinned on the real backend, because the backend moved from kqueue to
     /// FSEvents and a watch on a single file is exactly the case that could quietly stop firing.
@@ -2662,7 +2826,8 @@ mod tests {
         let file = project.join("s-1.jsonl");
         std::fs::write(&file, "{}\n").unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let _w = watch_session(&repo, &home, "s-1", tx).expect("a watcher");
+        let t = keel_workspace::Transcript::at(keel_workspace::Follows::Claude, file.clone());
+        let _w = watch_session(Some(&t), &home, tx).expect("a watcher");
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         while rx.try_recv().is_ok() {}
         use std::io::Write;

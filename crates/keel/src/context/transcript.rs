@@ -282,47 +282,9 @@ fn absorb(s: &mut Snapshot, r: &Value, repo: &Utf8Path, calls: &mut HashMap<Stri
 }
 
 fn codex_transcript(repo: &Utf8Path, session: &str) -> Option<Utf8PathBuf> {
-    let home = std::env::var("CODEX_HOME")
-        .ok()
-        .map(Utf8PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|s| Utf8PathBuf::from(s).join(".codex"))
-        })?;
-    let mut dirs = vec![(home.join("sessions"), 0)];
-    let mut count = 0;
-    while let Some((dir, depth)) = dirs.pop() {
-        for entry in std::fs::read_dir(dir).ok().into_iter().flatten().flatten() {
-            count += 1;
-            if count > 5000 {
-                return None;
-            }
-            let ty = entry.file_type().ok()?;
-            let path = Utf8PathBuf::from_path_buf(entry.path()).ok()?;
-            if ty.is_dir() && depth < 4 {
-                dirs.push((path, depth + 1));
-            } else if ty.is_file()
-                && path
-                    .file_name()
-                    .is_some_and(|n| n.ends_with(&format!("{session}.jsonl")))
-            {
-                let mut head = String::new();
-                std::fs::File::open(&path)
-                    .ok()?
-                    .take(64 * 1024)
-                    .read_to_string(&mut head)
-                    .ok()?;
-                let first: Value = serde_json::from_str(head.lines().next()?).ok()?;
-                if first["payload"]["id"] == session
-                    && first["payload"]["cwd"]
-                        .as_str()
-                        .is_some_and(|cwd| Utf8Path::new(cwd) == repo)
-                {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    None
+    keel_workspace::rollout(
+        &keel_workspace::codex_home()?.join("sessions"),
+        repo,
+        session,
+    )
 }

@@ -9,6 +9,9 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 camino.workspace = true
+# Antigravity keeps each conversation as a live SQLite database in WAL mode; bundled, so the
+# Windows build needs no system library.
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

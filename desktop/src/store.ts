@@ -357,6 +357,9 @@ export const useStore = create<State>()((set, getState) => {
     project(path, { sessions: list });
     for (const lid of lanesOf(path)) {
       const l = getState().lanes[lid];
+      // Claude's list says nothing about a Codex lane, and read as "not busy" it set a working
+      // one idle every few seconds and drained its queue mid-turn. Its transcript says instead.
+      if (l && (l.agent ?? "claude") !== "claude") continue;
       const s = l && list.find((x) => x.id === l.session);
       const busy = !!s && s.live && (s.busy || !!l.transcriptOpen);
       // A session that ended took its background agents with it.
@@ -396,6 +399,8 @@ export const useStore = create<State>()((set, getState) => {
       if (!d?.session || !l || l.project !== path || l.agent === "claude" || l.interface !== "terminal" || l.known) return;
       lane(l.id, { session: d.session, known: true });
       save(getState());
+      // Followed now, whichever lane is on screen: the sidebar says what it is doing.
+      void follow(l.id);
     },
     "context.changed": (path, _ep, data) => {
       const d = (data as { data?: { lane: string; snapshot: import("./context").ContextSnapshot } })?.data;
@@ -597,12 +602,18 @@ export const useStore = create<State>()((set, getState) => {
     void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
   }
 
+  /// Whose transcripts Keel follows: Claude's anywhere, and a Codex or Antigravity terminal's —
+  /// their chat lanes are Keel's own stream, read from the agent directly.
+  function followable(l: Lane): boolean {
+    return (l.agent ?? "claude") === "claude" || ((l.agent === "codex" || l.agent === "antigravity") && l.interface === "terminal");
+  }
+
   /// Follow a lane's transcript for as long as the lane is open: every turn, as the CLI writes
   /// it, with Keel's facts about it — the files, the checks, the commit. A session nobody has
   /// typed into has no transcript yet; that is a wait, retried, never an error on screen.
   async function follow(lid: string) {
     const l = getState().lanes[lid];
-    if (!l?.session || (l.managed && l.interface !== "terminal") || follows.has(lid) || l.agent !== "claude" || !l.known) return;
+    if (!l?.session || (l.managed && l.interface !== "terminal") || follows.has(lid) || !followable(l) || !l.known) return;
     let ep: Endpoint;
     try {
       ep = await endpoint(l.project);
@@ -616,7 +627,7 @@ export const useStore = create<State>()((set, getState) => {
     // Records before `caught-up` are the replay; only what arrives after it is news.
     let live = false;
     const stream = openStream(
-      url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt }),
+      url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt, agent: l.agent ?? "claude" }),
       ep.token,
       (events) =>
         { const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
@@ -669,7 +680,7 @@ export const useStore = create<State>()((set, getState) => {
         // one Keel has already seen, is not a wait — the pane sat empty saying nothing while this
         // retried every two seconds forever. It keeps looking, and says why it has nothing.
         if (missing && now.known && tries === 5)
-          lane(lid, { error: "Keel cannot find this conversation's transcript under ~/.claude/projects. It keeps looking; if the folder was moved or renamed, open the conversation from History." });
+          lane(lid, { error: `Keel cannot find this conversation's transcript under ${({ codex: "~/.codex/sessions", antigravity: "~/.gemini/antigravity-cli/conversations" } as Record<string, string>)[l.agent ?? ""] ?? "~/.claude/projects"}. It keeps looking; if the folder was moved or renamed, open the conversation from History.` });
         // Not written yet is a wait; anything else backs off, to a ceiling.
         const wait = missing ? 2000 : Math.min(30_000, 1000 * 2 ** Math.min(tries, 5));
         setTimeout(() => void follow(lid), wait);

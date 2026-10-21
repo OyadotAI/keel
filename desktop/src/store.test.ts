@@ -158,6 +158,33 @@ describe("chat delivery", () => {
     events[2]([{ event: "terminal.session", data: { data: { lane: "test", session: "codex-own" } } }]);
     expect(store.getState().lanes.test).toMatchObject({ session: "codex-own", known: true });
     expect(JSON.parse(localStorage.getItem("keel.layout.v1")!).lanes[0]).toMatchObject({ session: "codex-own", known: true });
+    // Followed from that moment, with its agent named, whether or not it is on screen.
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail") && u.includes("agent=codex") && u.includes("codex-own"))).toBe(true));
+  });
+
+  it("an Antigravity terminal lane is followed with its agent named", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "antigravity", known: true, session: "agy-1" } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail") && u.includes("agent=antigravity") && u.includes("agy-1"))).toBe(true));
+  });
+
+  it("a Codex chat lane is not followed; its stream is Keel's own", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "chat", agent: "codex", known: true, session: "c" } } }));
+    store.getState().load("test"); await Promise.resolve(); await Promise.resolve();
+    expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(false);
+  });
+
+  it("Claude's session list never sets a working Codex lane idle", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ projects: { "/repo": { ...s.projects["/repo"], endpoint: undefined } } }));
+    store.getState().load("test"); await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/events"))).toBe(true));
+    const queued = [{ id: "q", text: "next", attachments: [] }];
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex", known: true, session: "c", running: true, queued } } }));
+    const events = mocks.open.mock.calls.find(([u]) => u.includes("/api/events"))!;
+    events[2]([{ event: "sessions", data: { data: [] } }]);
+    expect(store.getState().lanes.test).toMatchObject({ running: true, queued });
   });
 
   it("a Codex terminal without a session id retains its original view and history", async () => {

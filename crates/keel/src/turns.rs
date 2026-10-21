@@ -688,28 +688,7 @@ pub fn now() -> String {
     let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = d.as_secs() as i64;
-    let millis = d.subsec_millis();
-    // Civil-from-days (Howard Hinnant), because pulling a date crate in for one timestamp
-    // format is the dependency the bar says to look before adding.
-    let days = secs.div_euclid(86_400);
-    let sod = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z",
-        sod / 3600,
-        (sod % 3600) / 60,
-        sod % 60
-    )
+    keel_workspace::iso(d.as_secs() as i64, d.subsec_millis())
 }
 
 /// The one path every fact takes: into the store, then onto the bus. Blocking — the store is a
@@ -1310,11 +1289,24 @@ const TERMINAL_QUIET: std::time::Duration = std::time::Duration::from_millis(150
 pub struct Follower {
     state: Arc<AppState>,
     repo: Utf8PathBuf,
-    home: Utf8PathBuf,
+    watch: Watch,
     session: String,
     open: Option<Open>,
     /// The last turn opened, for a job that finishes after its turn did.
     last_turn: Option<String>,
+    /// Where the transcript has been read to, for a next prompt typed while a turn's checks ran.
+    read_to: u64,
+}
+
+/// What says a terminal turn is over, per agent.
+pub enum Watch {
+    /// Claude Code's pid file, beside its own turn-end note.
+    Claude { home: Utf8PathBuf },
+    /// Codex and Antigravity write no pid file; their transcript's own end of a turn is the
+    /// boundary, and the transcript says whether the next turn has begun.
+    Transcript {
+        transcript: keel_workspace::Transcript,
+    },
 }
 
 struct Open {
@@ -1335,13 +1327,44 @@ impl Follower {
         home: Utf8PathBuf,
         session: String,
     ) -> Self {
+        Self::watching(state, repo, Watch::Claude { home }, session)
+    }
+
+    /// A follower for a terminal session whose agent has no pid file: Codex, Antigravity.
+    pub fn from_transcript(
+        state: Arc<AppState>,
+        repo: Utf8PathBuf,
+        session: String,
+        transcript: keel_workspace::Transcript,
+    ) -> Self {
+        Self::watching(state, repo, Watch::Transcript { transcript }, session)
+    }
+
+    fn watching(state: Arc<AppState>, repo: Utf8PathBuf, watch: Watch, session: String) -> Self {
         Self {
             state,
             repo,
-            home,
+            watch,
             session,
             open: None,
             last_turn: None,
+            read_to: 0,
+        }
+    }
+
+    /// The transcript has been read to byte `next`.
+    pub fn read_to(&mut self, next: u64) {
+        self.read_to = next;
+    }
+
+    /// Whether the session's own process says it is idle. Codex says nothing of the kind; its
+    /// turn-end record is the only word.
+    fn idle(&self) -> bool {
+        match &self.watch {
+            Watch::Claude { home } => {
+                keel_workspace::status(home, &self.session) == Some(keel_workspace::Status::Idle)
+            }
+            Watch::Transcript { .. } => false,
         }
     }
 
@@ -1366,7 +1389,6 @@ impl Follower {
         .await;
     }
 
-    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }
@@ -1390,6 +1412,12 @@ impl Follower {
         cwd: Option<String>,
         at: Option<String>,
     ) {
+        // More words for the turn already open — Codex files what a person types mid-turn under
+        // that turn — are not a new turn. Claude's openers never repeat, so this changes nothing
+        // there.
+        if self.open.as_ref().is_some_and(|o| o.turn == uuid) {
+            return;
+        }
         self.close_open().await;
         let checkout = self
             .state
@@ -1466,9 +1494,7 @@ impl Follower {
         // Idle is a thing the process said. No word at all is not idle: a pid file has no
         // `status` until Claude Code's first update, and a turn closed on that would be closed
         // under a `claude` mid-write.
-        let idle =
-            keel_workspace::status(&self.home, &self.session) == Some(keel_workspace::Status::Idle);
-        if (open.end_seen || idle) && open.quiet_since.elapsed() >= TERMINAL_QUIET {
+        if (open.end_seen || self.idle()) && open.quiet_since.elapsed() >= TERMINAL_QUIET {
             self.close_open().await;
         }
     }
@@ -1477,8 +1503,10 @@ impl Follower {
     /// finishing under a `claude` mid-write would commit half a turn.
     pub async fn close(&mut self) {
         // no-blocking: not a request handler — the follower's own task, and one pid-file read.
-        let idle =
-            keel_workspace::status(&self.home, &self.session) == Some(keel_workspace::Status::Idle);
+        let idle = match self.watch {
+            Watch::Claude { .. } => self.idle(),
+            Watch::Transcript { .. } => self.open.as_ref().is_none_or(|o| o.end_seen),
+        };
         if idle {
             self.close_open().await;
         } else if let Some(open) = self.open.take()
@@ -1491,7 +1519,20 @@ impl Follower {
     async fn close_open(&mut self) {
         let Some(open) = self.open.take() else { return };
         self.state.uncontend(&self.session);
-        let (home, session) = (self.home.clone(), self.session.clone());
+        let still_ours: Box<dyn Fn() -> bool + Send + Sync> = match &self.watch {
+            Watch::Claude { home } => {
+                let (home, session) = (home.clone(), self.session.clone());
+                Box::new(move || {
+                    keel_workspace::status(&home, &session) != Some(keel_workspace::Status::Busy)
+                })
+            }
+            // The next prompt arriving while this turn's checks ran makes the tree that turn's.
+            Watch::Transcript { transcript } => {
+                let (transcript, from, turn) =
+                    (transcript.clone(), self.read_to, open.turn.clone());
+                Box::new(move || !transcript.opens_after(from, &turn))
+            }
+        };
         finish(
             &self.state,
             Finish {
@@ -1508,8 +1549,8 @@ impl Follower {
                 auto_commit: true,
                 refused: open.refused,
             },
-            // The tree is this turn's for as long as its `claude` is not writing it again.
-            move || keel_workspace::status(&home, &session) != Some(keel_workspace::Status::Busy),
+            // The tree is this turn's for as long as its agent is not writing it again.
+            still_ours,
             || true,
         )
         .await;
@@ -2118,6 +2159,147 @@ mod tests {
         );
         assert!(r.shared.is_some());
         state.release("lane-a", token);
+    }
+
+    /// A Codex terminal session, with a rollout of its own the follower can read.
+    fn codex_followed(session: &str) -> (Utf8PathBuf, Arc<AppState>, keel_workspace::Transcript) {
+        let (repo, _home, state) = followed(session, "idle");
+        let path = scratch().join("rollout.jsonl");
+        std::fs::write(&path, codex_user("T1")).unwrap();
+        let t = keel_workspace::Transcript::at(keel_workspace::Follows::Codex, path);
+        (repo, state, t)
+    }
+
+    fn codex_user(turn: &str) -> String {
+        serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":turn,"item":{"type":"UserMessage","content":[{"type":"text","text":"go"}]}}}).to_string() + "\n"
+    }
+
+    /// Codex writes no pid file: `task_complete` and quiet close the turn, with its files, its
+    /// commit and its end — the lifecycle a Claude terminal turn gets.
+    #[tokio::test]
+    async fn a_followed_codex_turn_gets_files_gate_and_commit() {
+        let (repo, state, t) = codex_followed("c-files");
+        let mut f = Follower::from_transcript(state, repo.clone(), "c-files".into(), t);
+        f.opened("T1".into(), "write".into(), Some(repo.to_string()), None)
+            .await;
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        f.quiet();
+        f.tick().await;
+        assert!(f.is_open(), "no word from Codex that it ended: still open");
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        assert!(!f.is_open());
+        let r = record_of(&repo, "c-files", "T1");
+        assert_eq!(r.files, vec!["new.txt"]);
+        assert!(r.commit.is_some());
+        assert!(r.ended.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_codex_turn_with_no_change_commits_nothing() {
+        let (repo, state, t) = codex_followed("c-none");
+        let mut f = Follower::from_transcript(state, repo.clone(), "c-none".into(), t);
+        f.opened("T1".into(), "look".into(), None, None).await;
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        let r = record_of(&repo, "c-none", "T1");
+        assert!(r.files.is_empty() && r.commit.is_none());
+    }
+
+    /// More words typed into a running turn are that turn: nothing is finished halfway.
+    #[tokio::test]
+    async fn a_codex_steer_does_not_reopen_the_turn() {
+        let (repo, state, t) = codex_followed("c-steer");
+        let mut f = Follower::from_transcript(state, repo.clone(), "c-steer".into(), t);
+        f.opened("T1".into(), "go".into(), None, None).await;
+        std::fs::write(repo.join("half.txt"), "half\n").unwrap();
+        f.opened("T1".into(), "also this".into(), None, None).await;
+        assert!(f.is_open());
+        assert!(
+            record_of(&repo, "c-steer", "T1").commit.is_none(),
+            "not finished halfway"
+        );
+    }
+
+    /// The window going away mid-turn releases the tree and commits nothing; after the turn's
+    /// end it finishes the turn.
+    #[tokio::test]
+    async fn a_codex_turn_open_when_the_follower_goes_is_released_not_committed() {
+        let (repo, state, t) = codex_followed("c-gone");
+        let mut f = Follower::from_transcript(state.clone(), repo.clone(), "c-gone".into(), t);
+        f.opened("T1".into(), "go".into(), None, None).await;
+        std::fs::write(repo.join("half.txt"), "half\n").unwrap();
+        f.close().await;
+        assert!(
+            state.claim("lane-a", &repo, true).is_ok(),
+            "the claim was given back"
+        );
+        assert!(record_of(&repo, "c-gone", "T1").commit.is_none());
+    }
+
+    /// The next prompt typed while this turn's checks ran makes the tree the next turn's.
+    #[tokio::test]
+    async fn a_codex_turn_followed_by_the_next_prompt_commits_nothing() {
+        let (repo, state, t) = codex_followed("c-next");
+        let read = std::fs::metadata(t.path()).unwrap().len();
+        let path = t.path().to_owned();
+        let mut f = Follower::from_transcript(state, repo.clone(), "c-next".into(), t);
+        f.opened("T1".into(), "go".into(), None, None).await;
+        f.read_to(read);
+        std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+        let mut body = std::fs::read_to_string(&path).unwrap();
+        body.push_str(&codex_user("T2"));
+        std::fs::write(&path, body).unwrap();
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        let r = record_of(&repo, "c-next", "T1");
+        assert_eq!(r.files, vec!["new.txt"], "what it did is still recorded");
+        assert!(r.commit.is_none(), "nothing committed under the next turn");
+    }
+
+    /// A followed Codex turn writing a tree a lane holds stays a writer there after Claude's
+    /// sessions watcher runs — it lists Claude sessions only, and wiped the contention within 5 s,
+    /// so the lane's checkpoint swept in Codex's half-written files.
+    #[tokio::test]
+    async fn a_followed_codex_turns_contention_survives_the_sessions_watcher() {
+        let (repo, state, t) = codex_followed("c-contend");
+        let token = state.claim("lane-a", &repo, true).unwrap();
+        state.attach_follower("c-contend");
+        let mut f = Follower::from_transcript(state.clone(), repo.clone(), "c-contend".into(), t);
+        f.opened("T1".into(), "go".into(), None, None).await;
+        assert!(state.writer_in_other(&repo, "lane-a-session"));
+        state.release_terminal_except(&std::collections::HashSet::new());
+        assert!(
+            state.writer_in_other(&repo, "lane-a-session"),
+            "still writing there"
+        );
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        state.release("lane-a", token);
+        assert!(
+            !state.writer_in_other(&repo, "lane-a-session"),
+            "until its turn ends"
+        );
+    }
+
+    /// Non-negotiable 11 for a Codex terminal: its turn holds the tree against a writing lane.
+    #[tokio::test]
+    async fn a_codex_terminal_writer_refuses_a_keel_lane_on_the_same_tree() {
+        let (repo, state, t) = codex_followed("c-nn11");
+        let mut f = Follower::from_transcript(state.clone(), repo.clone(), "c-nn11".into(), t);
+        f.opened("T1".into(), "go".into(), None, None).await;
+        assert!(state.claim("lane-a", &repo, true).is_err());
+        f.turn_ended();
+        f.quiet();
+        f.tick().await;
+        assert!(
+            state.claim("lane-a", &repo, true).is_ok(),
+            "released with the turn"
+        );
     }
 
     #[test]

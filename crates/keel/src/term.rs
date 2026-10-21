@@ -271,6 +271,67 @@ async fn session(socket: WebSocket, cwd: String, launch: Launch) {
     let _ = spawned.join();
 }
 
+/// Conversations a Keel terminal is running right now, for the agents with no pid file of their
+/// own. Codex and `agy` write nothing that says a process has a session open, and every one Keel
+/// follows lives in a Keel PTY — a terminal ends its whole tree when its socket closes — so this
+/// is the whole answer to "is it still running".
+/// Each value is how many terminals hold the conversation, and when the first of them took it.
+type Running = std::collections::HashMap<String, (usize, String)>;
+
+fn running() -> &'static std::sync::Mutex<Running> {
+    static RUNNING: std::sync::OnceLock<std::sync::Mutex<Running>> = std::sync::OnceLock::new();
+    RUNNING.get_or_init(Default::default)
+}
+
+/// Whether a Keel terminal is running conversation `id`.
+pub fn live(id: &str) -> bool {
+    use crate::lock::Locked;
+    running().locked().contains_key(id)
+}
+
+/// When the terminal running conversation `id` took it, as `turns::now` writes a time — so a turn
+/// asked before then is one an earlier process died in.
+pub fn live_since(id: &str) -> Option<String> {
+    use crate::lock::Locked;
+    running().locked().get(id).map(|(_, since)| since.clone())
+}
+
+/// One terminal's hold on its conversation, given back however the PTY thread ends — an exit, a
+/// kill, a panic — because a conversation left marked live reads as a turn that never ends.
+pub(crate) struct Live(String);
+
+impl Live {
+    pub(crate) fn hold(id: &str) -> Self {
+        Self::since(id, crate::turns::now())
+    }
+
+    /// A hold dated from when the terminal started, not from when its id was found: the first
+    /// turn is asked before the id is on disk, and dated from the finding it read as a turn an
+    /// earlier process died in — closed at once, with no files, checks or commit.
+    pub(crate) fn since(id: &str, started: String) -> Self {
+        use crate::lock::Locked;
+        running()
+            .locked()
+            .entry(id.to_string())
+            .or_insert_with(|| (0, started))
+            .0 += 1;
+        Live(id.to_string())
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        use crate::lock::Locked;
+        let mut all = running().locked();
+        if let Some((n, _)) = all.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                all.remove(&self.0);
+            }
+        }
+    }
+}
+
 /// How often a terminal whose conversation is not yet named looks for it on disk: one folder
 /// listing, for as long as the CLI runs or until it is found.
 const LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
@@ -300,7 +361,22 @@ fn pty_thread(
             resume: false,
             lane: Some(lane),
             ..
-        } if agent != "claude" => Some((agent.clone(), lane.clone(), std::time::SystemTime::now())),
+        } if agent != "claude" => Some((
+            agent.clone(),
+            lane.clone(),
+            std::time::SystemTime::now(),
+            crate::turns::now(),
+        )),
+        _ => None,
+    };
+    // Resumed, the conversation is known from the start; started fresh, once it is found.
+    let mut _live = match &launch {
+        Launch::Agent {
+            agent,
+            session,
+            resume: true,
+            ..
+        } if agent != "claude" => Some(Live::hold(session)),
         _ => None,
     };
     let mut looked = std::time::Instant::now();
@@ -449,9 +525,11 @@ fn pty_thread(
         }
         if unnamed.is_some() && looked.elapsed() >= LOOK_EVERY {
             looked = std::time::Instant::now();
-            if let Some((agent, lane, since)) = &unnamed
-                && let Some(id) = crate::discover::started(agent, std::path::Path::new(cwd), *since)
+            if let Some((agent, lane, since, started)) = &unnamed
+                && let Some(id) =
+                    crate::discover::started(agent, std::path::Path::new(cwd), *since, live)
             {
+                _live = Some(Live::since(&id, started.clone()));
                 crate::events::emit(
                     "terminal.session",
                     None,
@@ -538,6 +616,17 @@ mod tests {
     }
 
     /// What `ps -o comm=` actually prints, on both platforms and for a login shell.
+    /// A conversation is live while any terminal holds it, and not after the last lets go.
+    #[test]
+    fn a_terminal_is_live_until_its_pty_ends() {
+        let (a, b) = (Live::hold("live-test"), Live::hold("live-test"));
+        assert!(live("live-test"));
+        drop(a);
+        assert!(live("live-test"), "the second terminal still has it");
+        drop(b);
+        assert!(!live("live-test"));
+    }
+
     /// A session id goes on a command line, so nothing that reads as a flag gets there.
     #[test]
     fn a_session_id_cannot_be_a_flag() {

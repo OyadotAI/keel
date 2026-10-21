@@ -1591,8 +1591,8 @@ pub(crate) fn interactive(
             }
             Ok((crate::permissions::program("claude"), args))
         }
-        // No transcript reader for Codex yet: its lane is the CLI and Keel's git panels. Its id is
-        // learned once the CLI writes the conversation; see `discover`.
+        // Its id is learned once the CLI writes the conversation (`discover`), and from then its
+        // rollout is followed like Claude's transcript (`keel_workspace::follow`).
         "codex" => {
             let mut args = vec!["--cd".to_string(), cwd.to_string()];
             if resume {
@@ -1607,6 +1607,8 @@ pub(crate) fn interactive(
         }
         // The CLI as it is, in its own default mode: it asks its own permission questions in the
         // terminal and the person answers them there, so it needs none of the chat lane's gate.
+        // Its conversation id is learned from disk (`discover`) and its database followed
+        // (`keel_workspace::antigravity`).
         // Quarantine above still ran, because a repository's `.agents/` hooks run unasked.
         "antigravity" => Ok((
             crate::permissions::program("agy"),

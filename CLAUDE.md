@@ -215,7 +215,7 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
     not in the settings UI, so a hand-edited `state.json` cannot open a port either.
 11. **One turn per lane, one writer per working tree.** `AppState::claim`, in the daemon — not a
     client. Both were kept in one window's Swift array and neither survived a second window, which
-    the tear-off-a-tab gesture produces on purpose. A terminal `claude` is a writer too: a busy
+    the tear-off-a-tab gesture produces on purpose. A terminal `claude` (or `codex`, or `agy`) is a writer too: a busy
     one holds `term:<session>` on its tree — through its follower when a window has it open, and
     through the sessions watcher (`events::hold_terminal_claims`) when none does — so a lane
     starting to write that tree is refused, and a terminal turn opening in a lane's tree gets its
@@ -338,6 +338,21 @@ already reads. So replaying a session and following one are one path, and it is 
 has always drawn a live turn. Both streams carry `fact` events as well; see "Facts". The first
 read of a transcript is its tail — at most 8 MB, on a record boundary — and no read takes more
 than that in one go; a 33 MB session was three copies of 33 MB on the executor's behalf before.
+
+**Codex terminals are followed the same way** (`keel-workspace::follow`, the one place that
+answers per agent where the transcript is, which records it shows, what opens and ends a turn and
+which decoder reads it). The interactive CLI appends `sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`
+under its home; only its `event_msg` records are read, because `response_item` is the same work
+again in the model's wire format. A turn is keyed by Codex's `turn_id` and opens on its first
+`UserMessage` — words typed mid-turn carry the same id and stay in it — and ends on `task_complete`
+or `turn_aborted`. Codex writes no pid file, so "is it running" is `term::live`: every Codex Keel
+follows lives in a Keel PTY. **Antigravity** keeps a SQLite database per conversation
+(`keel-workspace::antigravity`, read-only, `rusqlite` bundled); each step whose status has settled
+(3 done, 6 cancelled, 7 failed) becomes one JSON line, and nothing after a step still being
+written is read — waiting on the person's permission is status 9, and a reader that took it as
+settled drew the tool as answered and never saw its cancel. A turn opens on the input step and
+ends on a finished response that calls no tool, or on a cancelled step; "every row done" is true
+for seconds mid-turn and is not the end. The cursor is a step index, not a byte.
 
 That was the cheap version of a feature, and the deletion is the evidence: `transcript()`,
 `session_work()`, `api_session`, `api_session_work`, `SessionWork` and `moment()` all go, because a

@@ -116,10 +116,19 @@ pub fn tail(
     id: &str,
     from: u64,
 ) -> Option<(Vec<String>, u64)> {
+    tail_file(&transcript_path(repo, claude_home, id)?, from, followable)
+}
+
+/// [`tail`] for any append-only JSONL transcript, keeping the records `keep` says a follower is
+/// shown. Codex's rollout is read by the same rules as Claude Code's transcript.
+pub(crate) fn tail_file(
+    path: &Utf8Path,
+    from: u64,
+    keep: fn(&Value) -> bool,
+) -> Option<(Vec<String>, u64)> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let path = transcript_path(repo, claude_home, id)?;
-    let mut file = std::fs::File::open(&path).ok()?;
+    let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     // Shorter than we last read it: not an append. A session cleared or replaced under us is
     // read from the start rather than from an offset into something that is no longer there.
@@ -157,7 +166,7 @@ pub fn tail(
     let lines = text
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .filter(|line| serde_json::from_str::<Value>(line).is_ok_and(|record| followable(&record)))
+        .filter(|line| serde_json::from_str::<Value>(line).is_ok_and(|record| keep(&record)))
         .map(str::to_string)
         .collect();
     Some((lines, from + complete as u64))
@@ -197,22 +206,34 @@ pub fn tail_last(
     id: &str,
     max_bytes: u64,
 ) -> Option<(Vec<String>, u64, u64)> {
+    tail_last_file(
+        &transcript_path(repo, claude_home, id)?,
+        max_bytes,
+        followable,
+    )
+}
+
+/// [`tail_last`] for any append-only JSONL transcript.
+pub(crate) fn tail_last_file(
+    path: &Utf8Path,
+    max_bytes: u64,
+    keep: fn(&Value) -> bool,
+) -> Option<(Vec<String>, u64, u64)> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
-    let path = transcript_path(repo, claude_home, id)?;
-    let len = std::fs::metadata(&path).ok()?.len();
+    let len = std::fs::metadata(path).ok()?.len();
     let mut start = 0;
     if len > max_bytes {
         // Land just past the first newline at or after the cut, so the read opens on a whole
         // record rather than the middle of one.
-        let mut file = BufReader::new(std::fs::File::open(&path).ok()?);
+        let mut file = BufReader::new(std::fs::File::open(path).ok()?);
         let cut = len - max_bytes;
         file.seek(SeekFrom::Start(cut)).ok()?;
         let mut skipped = Vec::new();
         let n = file.read_until(b'\n', &mut skipped).ok()?;
         start = cut + n as u64;
     }
-    let (lines, next) = tail(repo, claude_home, id, start)?;
+    let (lines, next) = tail_file(path, start, keep)?;
     Some((lines, next, start))
 }
 
@@ -387,7 +408,7 @@ pub fn opening_turn(
 /// attributed to the person, which also *split the turn*, so every reply after it landed against
 /// the XML rather than against what they actually asked. Measured on this machine: 75 of them
 /// across one project's transcripts.
-fn followable(record: &Value) -> bool {
+pub(crate) fn followable(record: &Value) -> bool {
     if record["isSidechain"].as_bool() == Some(true) {
         return false;
     }
