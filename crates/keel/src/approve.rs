@@ -879,10 +879,28 @@ pub fn is_background(tool: &str, input: &serde_json::Value) -> bool {
 fn detaches(command: &str) -> bool {
     let command = without_heredocs(command);
     let mut bare = String::with_capacity(command.len());
-    let (mut single, mut double) = (false, false);
-    for c in command.chars() {
+    // `ansi` is `$'…'`, the one single-quoted form where `\'` escapes the quote. A `\` outside single
+    // quotes escapes the next character too, so `\'` and `\"` there open nothing: read as quotes,
+    // they swallowed the `nohup` on the next line.
+    let (mut single, mut double, mut ansi) = (false, false, false);
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
-            '\'' if !double => single = !single,
+            '\\' if !single || ansi => {
+                // Part of a word, and never an operator: `\&` is a literal ampersand.
+                if chars.next().is_some() && !single && !double {
+                    bare.push('_');
+                }
+            }
+            '$' if !single && !double && chars.peek() == Some(&'\'') => {
+                chars.next();
+                single = true;
+                ansi = true;
+            }
+            '\'' if !double => {
+                single = !single;
+                ansi = false;
+            }
             '"' if !single => double = !double,
             _ if single || double => {}
             _ => bare.push(c),
@@ -943,11 +961,25 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
         return command.into();
     }
     let mut out = String::with_capacity(command.len());
-    let mut until: Vec<String> = Vec::new();
+    // Each open body: its terminator, whether `<<-` lets it be indented by tabs, and whether it
+    // opened inside `$(cat <<…`, where bash also ends it at a line `EOF)`.
+    let mut until: Vec<(String, bool, bool)> = Vec::new();
     let (mut single, mut double, mut arithmetic) = (false, false, 0usize);
     for line in command.split_inclusive('\n') {
-        if let Some(end) = until.first() {
-            if line.trim_end_matches(['\n', '\r']).trim_start_matches('\t') == end {
+        if let Some((end, dash, inside)) = until.first() {
+            // Exactly as the shell compares it: no `\r` trimmed, tabs only after `<<-`.
+            let text = line.strip_suffix('\n').unwrap_or(line);
+            let text = if *dash {
+                text.trim_start_matches('\t')
+            } else {
+                text
+            };
+            let closes = text == end
+                || (*inside
+                    && text
+                        .strip_prefix(end.as_str())
+                        .is_some_and(|rest| rest.trim_start().starts_with(')')));
+            if closes {
                 until.remove(0);
             }
             continue;
@@ -975,33 +1007,65 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
                     i += 2;
                     continue;
                 }
-                '#' if arithmetic == 0 && (i == 0 || c[i - 1].is_whitespace()) => break,
+                // A comment starts a word: after whitespace or an operator (`;#`, `|#`, `` `# ``).
+                '#' if arithmetic == 0
+                    && (i == 0 || c[i - 1].is_whitespace() || ";&|()<>`".contains(c[i - 1])) =>
+                {
+                    break;
+                }
                 // `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-EOF`; not `<<<`, a here-string.
                 '<' if arithmetic == 0 && next(1) == Some('<') => {
                     if next(2) == Some('<') {
                         i += 3;
                         continue;
                     }
+                    // Fail closed on anything this reading does not model before the body starts:
+                    // `${…}`, `$'…'`, backticks, `$(…)` and `$[…]` all change where a `<<` means a
+                    // heredoc, and a line continued with `\` moves where its body begins. Found by
+                    // a security review, eight shapes in all, each with a hidden `nohup` the shell
+                    // ran. `$(cat <<'EOF'` alone is modelled: it is how an agent writes a commit
+                    // message or a pull request body, and that body is prose with `&` in it.
+                    let inside = c[..i].iter().collect::<String>().ends_with("$(cat ");
+                    let shell = out.replace("$(cat <<", "");
+                    if ["${", "$'", "`", "$(", "$["]
+                        .iter()
+                        .any(|u| shell.contains(u))
+                        || line.trim_end_matches('\n').ends_with('\\')
+                    {
+                        return command.into();
+                    }
+                    let dash = c.get(i + 2) == Some(&'-');
                     let mut j = i + 2;
-                    if c.get(j) == Some(&'-') {
+                    if dash {
                         j += 1;
                     }
                     while c.get(j).is_some_and(|ch| *ch == ' ' || *ch == '\t') {
                         j += 1;
                     }
                     let mut word = String::new();
+                    let mut quotes = 0;
                     while let Some(&ch) = c.get(j) {
                         if ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | ')' | '<' | '>') {
                             break;
                         }
-                        if !matches!(ch, '\'' | '"' | '\\') {
+                        if matches!(ch, '\'' | '"') {
+                            quotes += 1;
+                        } else if ch != '\\' {
                             word.push(ch);
                         }
                         j += 1;
                     }
-                    if !word.is_empty() {
-                        until.push(word);
+                    // Fail closed: a terminator that is not a plain word — a quoted space, a `$`,
+                    // a quote left open — is one this reading could end in the wrong place, and
+                    // the lines it would wrongly call a body are the ones that run.
+                    let plain = word.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+                        && word
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                    if quotes % 2 != 0 || !plain {
+                        return command.into();
                     }
+                    until.push((word, dash, inside));
                     i = j;
                     continue;
                 }
@@ -1947,6 +2011,9 @@ pub(crate) mod tests {
             "npm run build &> out.log",
             // A heredoc's body is data: this one is a script that edits Rust.
             "cd src && python3 - <<'EOF'\nnew = 'fn f(x: &[u8]) -> &str { &self.a }'\nEOF\necho drafted",
+            "echo a \\& b",
+            // How an agent writes a commit message: prose, with an ampersand in it.
+            "git commit -m \"$(cat <<'EOF'\nfix: A & B\n\nKeep both & say why.\nEOF\n)\"",
             "cat <<-END > notes.md\n\ta & b\n\tEND",
         ] {
             assert!(
@@ -1967,6 +2034,20 @@ pub(crate) mod tests {
             "cat <<\\EOF\nbody\nEOF\nnohup pnpm dev &",
             "true # <<X\nsetsid pnpm dev",
             "cat <<EOF\nnever closed\nnohup pnpm dev &",
+            // Three more, from a security review of the parser.
+            "cat <<'A B'\nA\nnohup pnpm dev &\nA B",
+            "cat <<\"$X\"\nX\nnohup pnpm dev &\n$X",
+            "true;#<<X\nsetsid pnpm dev",
+            "echo $[1<<2]\nnohup pnpm dev &",
+            // And eight more from the review that followed, each one run by bash and zsh.
+            "echo ${a:-<<X b}\nnohup pnpm dev &\nX",
+            "echo $'a\\' <<X b'\nnohup pnpm dev &\nX",
+            "cat <<X\n\tX\n<<Y\nX\nnohup pnpm dev &\nY",
+            "cat <<X \\\n; nohup pnpm dev &\nbody\nX",
+            "echo `# <<X b`\nnohup pnpm dev &\nX",
+            "echo $(cat <<X\nbody\nX)\nnohup pnpm dev &\nX",
+            "cat <<X\nX\r\n<<Y\nX\nnohup pnpm dev &\nY",
+            "a=(1); echo $[a[0] << X ]\nnohup pnpm dev &\nX",
         ] {
             assert!(is_background("Bash", &bash(command)), "hidden: {command}");
         }
