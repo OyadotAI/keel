@@ -71,5 +71,5 @@ export const appZoom = () => read(APP);
 /// A page rectangle in the window's units.
 export const toWindow = (r: DOMRect) => {
   const z = appZoom();
-  return { x: r.left * z, y: r.top * z, width: r.width * z, height: r.height * z };
+  return { x: r.left * z, y: r.top * z, width: r.width * z, height: r.height * z, viewport: window.innerHeight * z };
 };

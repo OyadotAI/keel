@@ -25,6 +25,10 @@ pub struct Bounds {
     y: f64,
     width: f64,
     height: f64,
+    /// The page's own viewport height, in the same units: with the main webview's real height it
+    /// gives how far down WebKit drew the page inside its own view (see `place`).
+    #[serde(default)]
+    viewport: Option<f64>,
 }
 
 impl Bounds {
@@ -51,20 +55,39 @@ pub(crate) async fn place(view: &tauri::Webview, bounds: &Bounds) -> Result<(), 
     let dy = *CORRECTION.lock().unwrap_or_else(|e| e.into_inner());
     view.set_bounds(at(dy)).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    if let Some(top) = measured_top(view).await {
-        let error = top - bounds.y;
-        if error.abs() > 0.5 {
-            let fixed = dy - error;
-            *CORRECTION.lock().unwrap_or_else(|e| e.into_inner()) = fixed;
-            view.set_bounds(at(fixed)).map_err(|e| e.to_string())?;
+    {
+        if let Some((top, page_height)) = measured_top(view).await {
+            // The page's coordinate 0 is not the main webview's top edge: WebKit insets its content
+            // under the title bar, so the page draws `inset` points lower than its view begins.
+            // Measured as the view's real height less the page's own viewport height.
+            let inset = bounds.viewport.map_or(0.0, |v| (page_height - v).max(0.0));
+            // Where it landed against where the page wanted it; `dy` was already applied.
+            let error = top - (bounds.y + inset);
+            if error.abs() > 0.5 {
+                let fixed = dy - error;
+                *CORRECTION.lock().unwrap_or_else(|e| e.into_inner()) = fixed;
+                view.set_bounds(at(fixed)).map_err(|e| e.to_string())?;
+            }
         }
     }
     Ok(())
 }
 
-/// Where the view's top edge really is, in points below the top of the window's content.
+/// Where the view's top edge really is, in points below the top of the main page's webview — the
+/// origin the page measured `bounds` from. Not the window's content view: the main webview need
+/// not start at its top, and measured against it a misplaced child read as placed.
 #[cfg(target_os = "macos")]
-async fn measured_top(view: &tauri::Webview) -> Option<f64> {
+async fn measured_top(view: &tauri::Webview) -> Option<(f64, f64)> {
+    use tauri::Manager;
+    let main = view.app_handle().get_webview("main")?;
+    let (child, _) = edge(view).await?;
+    let (page, page_height) = edge(&main).await?;
+    Some((child - page, page_height))
+}
+
+/// A webview's top edge, in points below the top of its window's content view, and its height.
+#[cfg(target_os = "macos")]
+async fn edge(view: &tauri::Webview) -> Option<(f64, f64)> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     // Runs on the main thread, after the `set_bounds` queued before it.
     view.with_webview(move |platform| {
@@ -75,7 +98,7 @@ async fn measured_top(view: &tauri::Webview) -> Option<f64> {
 }
 
 #[cfg(target_os = "macos")]
-fn top_of(webview: *mut std::ffi::c_void) -> Option<f64> {
+fn top_of(webview: *mut std::ffi::c_void) -> Option<(f64, f64)> {
     use objc2_app_kit::NSView;
     if webview.is_null() {
         return None;
@@ -86,7 +109,7 @@ fn top_of(webview: *mut std::ffi::c_void) -> Option<f64> {
     // Both in the window's base coordinates, origin at the bottom left.
     let c = content.convertRect_toView(content.bounds(), None);
     let v = view.convertRect_toView(view.bounds(), None);
-    Some((c.origin.y + c.size.height) - (v.origin.y + v.size.height))
+    Some(((c.origin.y + c.size.height) - (v.origin.y + v.size.height), v.size.height))
 }
 
 /// Only the dev server on this machine: the child webview may reach `preview_msg`, and nothing
