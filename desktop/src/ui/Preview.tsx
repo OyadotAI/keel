@@ -7,6 +7,7 @@ import { typeInto } from "../typers";
 import { urlIn, whyStopped } from "../devlog";
 import { arm, clearPins, sendPins, setNote, showingLane, unpin, useDesign, type Pin } from "../design";
 import { useCovered } from "../cover";
+import { toWindow } from "../zoom";
 import { flat } from "../pins";
 import { Icon } from "./icons";
 
@@ -137,10 +138,7 @@ function Page({ lane, url }: { lane: string; url: string }) {
       void invoke("preview_hide").catch(() => undefined);
       return;
     }
-    const bounds = () => {
-      const r = el.getBoundingClientRect();
-      return { x: r.left, y: r.top, width: r.width, height: r.height };
-    };
+    const bounds = () => toWindow(el.getBoundingClientRect());
     let disposed = false;
     let frame = 0;
     const move = () => {

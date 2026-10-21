@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { shownTool } from "../browser";
 import { get, post } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
 import { JOB_PREFIX, useStore } from "../store";
@@ -346,7 +347,7 @@ function CommandLine({ call, depth, open, toggle }: { call: Call; depth: number;
       <span className="glyph" style={call.state === "failed" ? { color: "var(--del)" } : undefined}>
         {call.state === "running" ? <span className="busy-dot" /> : <Icon name={glyph(call)} size={12} />}
       </span>
-      <span className="cmd-tool">{call.tool}</span>
+      <span className="cmd-tool">{shownTool(call.tool)}</span>
       <span className="cmd-subject">{call.subject || call.reason || ""}</span>
       {call.state === "interrupted" && <span className="small faint">interrupted</span>}
     </button>

@@ -62,3 +62,14 @@ export function zoom(dir: -1 | 0 | 1, focused: Element | null = document.activeE
 }
 
 export const RANGES = { APP, FONT };
+
+/// The window's zoom, for anything native laid over the page: a child webview is placed in the
+/// window's own units, the page measures in its CSS pixels, and at any zoom but 100% the two
+/// drift apart — the Browser tab's page sat over its own address bar.
+export const appZoom = () => read(APP);
+
+/// A page rectangle in the window's units.
+export const toWindow = (r: DOMRect) => {
+  const z = appZoom();
+  return { x: r.left * z, y: r.top * z, width: r.width * z, height: r.height * z };
+};

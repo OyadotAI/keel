@@ -896,6 +896,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::prereview::api_stop),
         )
         .route(
+            "/api/browser/result",
+            axum::routing::post(crate::browser::api_result),
+        )
+        .route(
             "/api/prereview/dismiss",
             axum::routing::post(crate::prereview::api_dismiss),
         )

@@ -15,6 +15,9 @@ fn main() {
         "preview_hide",
         "preview_send",
         "preview_msg",
+        "browser_act",
+        "browser_place",
+        "browser_close",
     ];
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)))
         .expect("the Tauri build");

@@ -170,7 +170,11 @@ pub async fn post(
             }),
         ),
         "ping" => rpc_ok(id, json!({})),
-        "tools/list" => rpc_ok(id, json!({ "tools": [tool_schema()] })),
+        "tools/list" => {
+            let mut tools = vec![tool_schema()];
+            tools.extend(crate::browser::schemas());
+            rpc_ok(id, json!({ "tools": tools }))
+        }
         "tools/call" => {
             let name = msg
                 .pointer("/params/name")
@@ -180,10 +184,15 @@ pub async fn post(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
-            if name != TOOL {
-                rpc_err(id, -32602, "unknown tool")
+            let answered = if crate::browser::is_tool(name) {
+                Some(crate::browser::call(q.lane.as_deref(), name, &args).await)
+            } else if name == TOOL {
+                Some(ask(q.lane.as_deref(), &args).await)
             } else {
-                match ask(q.lane.as_deref(), &args).await {
+                None
+            };
+            if let Some(answered) = answered {
+                match answered {
                     Ok(answer) => rpc_ok(
                         id,
                         json!({ "content": [{ "type": "text", "text": answer }], "isError": false }),
@@ -193,6 +202,8 @@ pub async fn post(
                         json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
                     ),
                 }
+            } else {
+                rpc_err(id, -32602, "unknown tool")
             }
         }
         _ => rpc_err(id, -32601, "method not found"),

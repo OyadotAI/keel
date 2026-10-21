@@ -565,6 +565,23 @@ pub fn effective(repo: &Utf8Path, session: Option<&str>) -> Vec<String> {
 /// the write was refused and the agent worked around it inside the repository instead.
 pub const HOOKED_TOOLS: &str = "Bash|WebSearch|WebFetch|AskUserQuestion|Write|Edit|MultiEdit";
 
+/// The lane's browser tools on Keel's own server, as a hook matcher.
+pub const BROWSER_TOOLS: &str = "mcp__keel__browser_.*";
+
+/// Any other MCP server that looks like a browser, so the hook can refuse it with a reason
+/// (`approve::drives_another_browser`): `WITHHELD` names the ones known, this catches the rest.
+pub const OTHER_BROWSERS: &str = "mcp__.*([Bb]rowser|[Cc]hrome).*";
+
+/// Browser servers that drive the person's own browser, withheld from every turn Keel runs. Both
+/// spellings of Oya's: the server has been registered under each.
+pub const WITHHELD: &[&str] = &[
+    "mcp__oya-browser",
+    "mcp__oya_browser",
+    "mcp__oya-browser-on-mac",
+    "mcp__claude-in-chrome",
+    "mcp__browseros-neo",
+];
+
 /// The `--settings` payload carrying those rules.
 /// The settings Keel hands `claude`: the allowlist, and the hook that makes the agent wait.
 ///
@@ -610,7 +627,12 @@ pub fn settings_json(
         crate::askmcp::SERVER,
         crate::askmcp::TOOL
     ));
-    let mut settings = serde_json::json!({ "permissions": { "allow": allow } });
+    // The person's own browsers are not a Keel turn's to drive: Oya's server took the tab they
+    // were reading and opened and closed its own in front of them, and Claude-in-Chrome says of
+    // itself that it opens tabs in their existing Chrome session. A lane's browser is its Browser
+    // tab (`browser.rs`). Deny beats every allow, whichever settings file the allow is in, and
+    // leaves the person's other servers alone — which `--strict-mcp-config` would not.
+    let mut settings = serde_json::json!({ "permissions": { "allow": allow, "deny": WITHHELD } });
 
     // Without an executable there is nothing to point the hook at, and a hook that cannot run
     // would stall every tool call until Claude Code's own timeout. Better to ship no hook and fall
@@ -625,8 +647,12 @@ pub fn settings_json(
             //
             // Reads and edits stay out. Edits are covered by `acceptEdits`, and asking about every
             // `Read` turns the loop into a clicking exercise.
+            //
+            // The browser tools too: opening an address is the same reach outward `WebFetch` is,
+            // and a page's text is untrusted input. Not in `HOOKED_TOOLS`, which is also split
+            // into allow rules on a trusted project; trust allows MCP tools at the hook.
             "PreToolUse": [{
-                "matcher": HOOKED_TOOLS,
+                "matcher": format!("{HOOKED_TOOLS}|{BROWSER_TOOLS}|{OTHER_BROWSERS}"),
                 "hooks": [{
                     "type": "command",
                     "command": format!(
@@ -1311,6 +1337,35 @@ mod tests {
         }
     }
 
+    /// Every turn Keel runs, trusted or not: the person's own browsers are withheld, the lane's
+    /// browser tools pass the hook, and none of them is allowed outright.
+    #[test]
+    fn a_turn_drives_the_lane_s_browser_and_never_the_person_s() {
+        let (_d, root) = repo(&["Cargo.toml"]);
+        for trusted in [false, true] {
+            set_trusted(&root, trusted).unwrap();
+            let json: serde_json::Value =
+                serde_json::from_str(&settings_json(&root, 7777, None, Some("l"), &root)).unwrap();
+            let deny = json["permissions"]["deny"].as_array().unwrap();
+            for server in [
+                "mcp__oya-browser",
+                "mcp__oya_browser",
+                "mcp__claude-in-chrome",
+            ] {
+                assert!(deny.iter().any(|r| r == server), "{server} is not withheld");
+            }
+            let matcher = json["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
+            assert!(matcher.contains("mcp__keel__browser_"), "{matcher}");
+            let allow = json["permissions"]["allow"].as_array().unwrap();
+            assert!(
+                !allow
+                    .iter()
+                    .any(|r| r.as_str().is_some_and(|r| r.contains("browser"))),
+                "a browser tool is allowed without the hook"
+            );
+        }
+    }
+
     #[test]
     fn a_trusted_project_says_so_in_its_settings() {
         let (_d, root) = repo(&["Cargo.toml"]);
@@ -1346,7 +1401,10 @@ mod tests {
                 .expect("valid json");
 
         let hook = &json["hooks"]["PreToolUse"][0];
-        assert_eq!(hook["matcher"], HOOKED_TOOLS);
+        assert_eq!(
+            hook["matcher"],
+            format!("{HOOKED_TOOLS}|{BROWSER_TOOLS}|{OTHER_BROWSERS}")
+        );
         // The regression this guards: `Bash` alone meant every other refusable tool failed
         // silently, with the agent reporting it could not proceed and no question anywhere.
         for tool in ["Bash", "WebSearch", "WebFetch"] {

@@ -587,6 +587,40 @@ server's frame regardless of origin. A page script cannot do that; a host-instal
 have to. This is the one feature that got *cheaper* by going native — the same thing needed a proxy
 in a browser shell, and a proxy breaks HMR.
 
+## The Browser tab
+
+When an agent in a lane needs a website, it uses the lane's **Browser tab**, not the person's
+browser. Oya's MCP drove their active window — took the tab they were reading, opened its own in
+front of them, closed them when the run ended — and Claude-in-Chrome says of itself that it opens
+tabs in their existing Chrome. Both are **withheld from every turn Keel runs**
+(`permissions::WITHHELD`, a `deny` that beats any allow) — chat lanes and terminal agent lanes
+alike. A `claude` the person types themselves in a shell keeps them.
+
+- **A webview of its own per lane, not the preview's** (`desktop/src-tauri/src/browser.rs`). It
+  loads any http(s) site, so it carries no picker and **no capability names it**: nothing it loads
+  can call the app. The web only (`preview::web_only`), no downloads, no camera or microphone, new
+  windows open in place. At most six live; the least recently used one no lane shows is closed.
+- **The agent drives it through `browser_*` tools on Keel's MCP server** (`crates/keel/src/browser.rs`):
+  the daemon emits a `browser` op, the window that has the lane runs it with `browser_act` and
+  posts `/api/browser/result`. No window open fails at once; every wait has its own ceiling; a call
+  Claude Code abandons takes its waiter with it.
+- **What decides an action is the hook**, like `WebFetch`: the tools are in the `PreToolUse`
+  matcher (`permissions::BROWSER_TOOLS`), trust allows them, an untrusted project asks once for
+  `mcp__keel`. Opening an address is reach outward, and page text is untrusted input.
+- **Logins are per project**: a WebKit data store keyed by the project path on macOS (which is why
+  the minimum is macOS 14), a data directory on Windows. None are shared with the person's own
+  browser, and Google's sign-in refuses embedded webviews.
+- **Limits, said in the tool descriptions rather than discovered**: text only (neither platform's
+  webview offers Tauri a snapshot), the top frame only, synthetic input, Claude lanes only for now.
+  When the agent opens a page in the lane on screen, or starts working in the browser after 30 s
+  of quiet, the workspace panel opens on the Browser tab — the first version waited for ⌥8 and was
+  reported as "it didn't open the browser". Not on every action of a run, so the person can look
+  elsewhere while it works; never keyboard focus, which would send what they type to the website;
+  and another lane's page does not move the panel. The badge and the turn row
+  say what the agent did.
+  The activity line gives a typed field's length, but the call row shows the input like any
+  tool's — the text included — so the tool description tells the agent not to type secrets.
+
 ## The one hook Keel ships
 
 `keel-harness::trust` quarantines a repository's `.claude/settings.json` and the scanner rates it
@@ -812,7 +846,8 @@ now applies to `SwiftTerm` and to WebKit's snapshot API rather than to Monaco.
 
 Direct `@member` requests go to that member for the assigned task. `oya-browser` is the team's
 browser specialist. Use Oya exclusively for all browser work, and report connection blockers
-without a provider fallback. Members preload their installed skills; role playbooks and report
+without a provider fallback. Inside a Keel lane, Keel's own Browser tab is the browser (`browser_*`
+on server `keel`) and Oya's tools are withheld; see "The Browser tab". Members preload their installed skills; role playbooks and report
 assets are under `.claude/skills/team-work/`, and Oya's workflow is under
 `.claude/skills/oya-browser/`.
 

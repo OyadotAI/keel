@@ -3,7 +3,7 @@ name: pm
 description: "Use this agent to scope a feature, prioritize work, or clarify a user journey before implementation. <example>user: @pm make onboarding simpler; assistant: inspect the journey and define the smallest useful scope.</example> <example>user: which of these fixes should ship first; assistant: rank them by evidence, user impact, and cost.</example>"
 model: inherit
 color: blue
-tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser
+tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser, mcp__keel
 skills: [team-work]
 ---
 

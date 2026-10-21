@@ -3,7 +3,7 @@ name: designer
 description: "Use this agent to design or review a visible surface, layout, interaction, or UI copy. <example>user: @designer this sidebar is crowded; assistant: inspect the rendered surface and return a concrete layout and state changes.</example> <example>user: design the installation failure state; assistant: specify copy, recovery, focus, and responsive behavior.</example>"
 model: inherit
 color: magenta
-tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser
+tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser, mcp__keel
 skills: [team-work]
 ---
 

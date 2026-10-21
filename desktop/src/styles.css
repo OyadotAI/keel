@@ -2259,6 +2259,184 @@ h3 {
   min-height: 0;
   position: relative;
 }
+/* The Browser tab. A browser's own shape — a filled address field between its buttons, one control
+   height — then a status row that is always there, so nothing above the page changes height while
+   the agent works (40 + 26 + 6 px). The page sits inside a ring (`RING` in Browser.tsx): a
+   hairline when idle, a steady green while the agent is browsing. One motion only, the sheen in
+   the status row; two pulsing things read as busy rather than as working. */
+.browser {
+  container-type: inline-size;
+}
+.browser-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 6px 8px;
+}
+.browser-nav {
+  display: flex;
+  gap: 1px;
+}
+.icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+}
+.icon-button.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.browser-address {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: text;
+  transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.browser-address:hover {
+  background: color-mix(in srgb, var(--surface) 70%, var(--chrome));
+}
+.browser-address:focus-within {
+  background: var(--raised);
+  box-shadow: var(--ring);
+}
+.browser-address svg {
+  flex: none;
+  color: var(--faint);
+}
+.browser-address input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: 400 var(--t-small) var(--font);
+  text-overflow: ellipsis;
+}
+.browser-status {
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  margin: 0 8px 6px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  font: 500 var(--t-micro) var(--font);
+  color: var(--faint);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.browser-status strong {
+  font-weight: 600;
+}
+.browser-status .faint {
+  color: var(--faint);
+}
+.browser-status.working {
+  background: var(--tint);
+  color: var(--accent);
+}
+.browser-status.working::after,
+.browser-status.loading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
+  background-size: 40% 100%;
+  animation: sheen 1.2s var(--ease) infinite;
+}
+.browser-status.loading::after {
+  opacity: 0.45;
+  background-image: linear-gradient(90deg, transparent, var(--faint), transparent);
+}
+@keyframes sheen {
+  from {
+    background-position: -70% 0;
+  }
+  to {
+    background-position: 170% 0;
+  }
+}
+.browser-status.error {
+  background: var(--del-bg);
+  color: var(--del);
+}
+/* The global rule runs every animation once in 0.01 ms, which leaves the sheen off-screen: a still
+   bar says the same thing without motion. */
+@media (prefers-reduced-motion: reduce) {
+  .browser-status.working::after {
+    animation: none !important;
+    background: var(--accent);
+    opacity: 0.5;
+  }
+}
+.browser-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-status-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.browser-status-dot.error {
+  background: var(--del);
+}
+.browser-page {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  margin: 0 8px 8px;
+  /* Small: the native page inside is square and cannot be rounded. */
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition: box-shadow var(--t-fast) var(--ease);
+}
+.browser-page.working {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* The tab's dot, the app's own running indicator, sized for a tab label. */
+.tab-dot {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+/* Narrow panel, not narrow window: forward goes; "open in your browser" stays, it is the only
+   way to the person's own browser. */
+@container (max-width: 360px) {
+  .browser-forward {
+    display: none;
+  }
+}
+
 .pins {
   flex: none;
   max-height: 42%;

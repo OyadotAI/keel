@@ -17,6 +17,7 @@ const VERBS: [RegExp, string][] = [
   [/^Write$/, "Writing"],
   [/^(Edit|MultiEdit)$/, "Editing"],
   [/^(Task|Agent)$/, "Agent —"],
+  [/^mcp__keel__browser_/, "Browser —"],
 ];
 
 /// What the agent is doing now, in one place — ported from the Swift app's working bar. Read off

@@ -18,12 +18,21 @@ tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The Browser tab waits for a page load and for a script's answer (browser.rs). Already in the build through Tauri.
+tokio = { version = "1", features = ["sync", "time"] }
 getrandom = "0.3"
 tempfile = "3"
 ed25519-dalek = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# Where a child webview really is in the window (browser.rs, preview.rs): Tauri's sizes say the
+# window has no title bar while it has one, so placement is measured on the native views. Already
+# in the build through wry, at these versions and features.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSView", "NSWindow", "NSResponder"] }
 
 # tao 0.37.1 declares its AppKit overrides `extern "C"`, so an Objective-C exception raised under
 # `-[NSApplication sendEvent:]` cannot unwind to NSApplication's own handler and aborts the app

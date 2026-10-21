@@ -11,6 +11,7 @@ mod antigravity;
 mod approve;
 mod askmcp;
 mod aws;
+mod browser;
 mod chat;
 mod ci;
 mod clitools;

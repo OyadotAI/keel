@@ -2079,6 +2079,8 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "keyring",
+ "objc2",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -2089,6 +2091,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

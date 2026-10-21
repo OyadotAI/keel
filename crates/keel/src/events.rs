@@ -70,10 +70,41 @@ pub fn subscribe() -> broadcast::Receiver<Arc<Emitted>> {
 
 /// `GET /api/events`: every change, as it happens, for the life of the window.
 // no-blocking: forwards a channel.
+/// Windows reading `/api/events` right now. Something only a window can do — drive a lane's
+/// browser tab — fails at once with none, instead of waiting out its timeout for nobody.
+static WINDOWS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn windows() -> usize {
+    WINDOWS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) struct Window;
+
+/// A window that is "open" for as long as the value lives, for tests of what only a window does.
+#[cfg(test)]
+pub(crate) fn tests_window() -> Window {
+    Window::open()
+}
+
+impl Window {
+    fn open() -> Self {
+        WINDOWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Window
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        WINDOWS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response::IntoResponse {
     // no-blocking: subscribes to an in-memory bus; nothing touches the disk.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
     tokio::spawn(async move {
+        // Counted for as long as this task runs, however it ends.
+        let _window = Window::open();
         let mut events = subscribe();
         // The first frame says which sequence number the window is reading from, so a
         // reconnect can tell whether it missed anything.

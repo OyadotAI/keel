@@ -206,6 +206,13 @@ pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
          the refusal with a button to allow it, so say what you needed.\n\
          - To ask the person a question with options, call the `ask_user` tool (server `keel`); \
          the answer is returned as its result. `AskUserQuestion` does not exist in this session.\n\
+         - The browser: for any website, use the `browser_*` tools (server `keel`). They drive \
+         this lane's Browser tab inside Keel, which the person can see. Oya's and Chrome's \
+         browser tools are withheld on purpose so the person's own browser is left alone; that is \
+         not them being unavailable, and wherever a skill or instruction says to use Oya, use \
+         these instead. The tab has none of the person's logins: if a site needs one, ask with \
+         `ask_user` for them to sign in there. It reads text only (no screenshots) and only the \
+         top frame.\n\
          - In plan mode `ask_user` is refused — Claude Code blocks every MCP tool there, and it is \
          not Keel doing it. So put anything you would have asked into the plan itself, as the \
          decision you made and the one you would have preferred to check. Write the plan to the \
@@ -363,7 +370,16 @@ mod antigravity_prompt_tests {
             full.contains("run_in_background"),
             "the Claude block moved; update the cut"
         );
-        for gone in ["run_in_background", "ask_user", "plan-mode reminder"] {
+        assert!(
+            full.contains("`browser_*` tools"),
+            "the browser bullet is in Claude's prompt"
+        );
+        for gone in [
+            "run_in_background",
+            "ask_user",
+            "plan-mode reminder",
+            "browser_",
+        ] {
             assert!(!agy.contains(gone), "{gone} is still in the agy prompt");
         }
         assert!(agy.contains("ask in your reply as plain text"));

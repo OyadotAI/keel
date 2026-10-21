@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { shownTool } from "../browser";
 import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import { AGENT_NAME, useStore } from "../store";
 import { Markdown, Copy } from "./Markdown";
@@ -111,7 +112,7 @@ function Activity({ lane, index, id }: { lane: string; index: number; id: string
   const [open, setOpen] = useState(expanded.has(key));
   if (!call) return null;
   return <div className="chat-row chat-activity"><details open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}>
-    <summary><span className={`activity-dot ${call.state}`} /><span>{call.tool}</span><span className="activity-subject">{call.subject}</span><span className="small faint">{call.state}</span></summary>
+    <summary><span className={`activity-dot ${call.state}`} /><span>{shownTool(call.tool)}</span><span className="activity-subject">{call.subject}</span><span className="small faint">{call.state}</span></summary>
     {open && <div className="activity-body">{call.reason && <p>{call.reason}</p>}{call.input && <><Copy text={JSON.stringify(call.input, null, 2)} /><pre tabIndex={0}>{JSON.stringify(call.input, null, 2)}</pre></>}
       {call.output && <><Copy text={call.output} /><pre tabIndex={0}>{call.output}</pre></>}{!!call.cut && <p className="small faint">Output truncated by the agent stream ({call.cut} characters omitted).</p>}
       {children?.map((child) => <Activity key={child} lane={lane} index={index} id={child} />)}</div>}

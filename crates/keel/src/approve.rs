@@ -306,6 +306,11 @@ pub fn rules_for(tool: &str, input: &serde_json::Value) -> Vec<String> {
             .unwrap_or_default();
         return vec![format!("{tool}({dir}/*)")];
     }
+    // The Browser tab's tools are not a set: reading a page and submitting a form in it — as the
+    // person, if they signed in there — are different answers, so "always" is the one tool.
+    if tool.starts_with("mcp__keel__browser_") {
+        return vec![tool.to_string()];
+    }
     // A server's tools come as a set — a browser is thirty of them — so "always" is the server,
     // `mcp__<server>`, which Claude Code's allowlist reads the same way.
     // Only when the name has one reading: in `mcp__a__b__c` the server could be `a` or `a__b`, so
@@ -506,6 +511,15 @@ async fn decide(
         }));
     }
 
+    // The person's own browser is not a Keel turn's to drive, however its server is named; the
+    // refusal says where the lane's browser is, so the agent does not go looking for another.
+    if drives_another_browser(&hook.tool_name) {
+        return Ok(Json(Decision {
+            decision: "deny".into(),
+            reason: OTHER_BROWSER.into(),
+        }));
+    }
+
     // A pull request is reviewed by the project's team before it opens, so the agent's
     // `gh pr create` starts that review instead of running — whatever the trust, because refusing
     // has no effect on the machine and the review is what the person asked for. The person opens
@@ -621,7 +635,10 @@ async fn decide(
     // Trust covers MCP tools too: it is "stop asking whether it may do things here", and a
     // browser server is thirty tools that asked one card at a time on a trusted project. An MCP
     // call is `allow`ed rather than deferred, because no allowlist rule names every server.
-    let mcp = hook.tool_name.starts_with("mcp__");
+    // Not the Browser tab's actions: they act inside whatever the person signed into there, which
+    // `WebFetch` (no cookies) never could, so trust does not cover clicking, typing or a key —
+    // those ask, and are allowed one tool at a time. Opening, reading, scrolling and back follow it.
+    let mcp = hook.tool_name.starts_with("mcp__") && !acts_in_the_browser(&hook.tool_name);
     // A final caller asks about `Read` outside the workspace, a path its gate protects, or an `ask`
     // rule of the person's — none of which trust is about. Only what trust covers is answered.
     let trust_covers =
@@ -931,6 +948,33 @@ fn detaches(command: &str) -> bool {
         return true;
     }
     false
+}
+
+pub const OTHER_BROWSER: &str = "Not run: this drives the person's own browser, which Keel keeps \
+    out of its turns on purpose. Use this lane's Browser tab instead — the `browser_*` tools on \
+    server `keel` — and do not reach the person's browser another way (`open`, AppleScript, a \
+    different browser server).";
+
+/// A Browser tab tool that acts in the page as the person: click, type, a key.
+fn acts_in_the_browser(tool: &str) -> bool {
+    matches!(
+        tool,
+        "mcp__keel__browser_click" | "mcp__keel__browser_type" | "mcp__keel__browser_key"
+    )
+}
+
+/// A server other than Keel's that drives a browser — the person's own, signed in. Withheld from
+/// every Keel turn whatever it is called: a fixed list missed `browseros-neo`, an
+/// `oya-browser-on-mac` alias, and every plugin's `mcp__plugin_<p>_<s>` spelling.
+pub(crate) fn drives_another_browser(tool: &str) -> bool {
+    let Some(server) = tool
+        .strip_prefix("mcp__")
+        .map(|rest| rest.split("__").next().unwrap_or(""))
+    else {
+        return false;
+    };
+    let server = server.to_ascii_lowercase();
+    server != "keel" && (server.contains("browser") || server.contains("chrome"))
 }
 
 /// The checkout a `gh pr create` run in `cwd` would open from — the project or one of its lanes —
@@ -1632,6 +1676,42 @@ pub(crate) mod tests {
     #[test]
     fn an_unanswered_sdk_call_is_refused() {
         assert_eq!(unanswered(true, false).unwrap().decision, "deny");
+    }
+
+    /// The Browser tab's tools are allowed one at a time, and acting in a page — as the person,
+    /// once they signed in there — is never something trust answers alone. Every other browser
+    /// server is the person's own, whatever its name.
+    #[test]
+    fn the_browser_tab_is_asked_about_tool_by_tool() {
+        assert_eq!(
+            rules_for("mcp__keel__browser_read", &serde_json::json!({})),
+            vec!["mcp__keel__browser_read".to_string()]
+        );
+        for acting in [
+            "mcp__keel__browser_click",
+            "mcp__keel__browser_type",
+            "mcp__keel__browser_key",
+        ] {
+            assert!(acts_in_the_browser(acting), "{acting}");
+        }
+        for reading in [
+            "mcp__keel__browser_open",
+            "mcp__keel__browser_read",
+            "mcp__keel__ask_user",
+        ] {
+            assert!(!acts_in_the_browser(reading), "{reading}");
+        }
+        for other in [
+            "mcp__browseros-neo__navigate",
+            "mcp__oya-browser-on-mac__open_tab",
+            "mcp__plugin_tools_chrome__click",
+            "mcp__claude-in-chrome__navigate",
+        ] {
+            assert!(drives_another_browser(other), "{other}");
+        }
+        for not in ["mcp__keel__browser_open", "mcp__github__create_pr", "Bash"] {
+            assert!(!drives_another_browser(not), "{not}");
+        }
     }
 
     /// One "always" covers a server's tools, and only that server's.

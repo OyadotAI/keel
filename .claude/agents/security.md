@@ -3,7 +3,7 @@ name: security
 description: "Use this agent for changes to authentication, authorization, sessions, secrets, file/shell access, untrusted input, or external calls. <example>user: @security review session logout; assistant: trace stale credentials and authorization boundaries.</example> <example>user: are these checked-in keys dangerous; assistant: distinguish real exposure from fixtures and explain evidence.</example>"
 model: inherit
 color: red
-tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser
+tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser, mcp__keel
 skills: [team-work]
 ---
 

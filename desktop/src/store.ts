@@ -14,6 +14,7 @@ import { notify } from "./notify";
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
 import { refreshReview } from "./prereview";
+import { closeTab, onBrowser, type Op as BrowserOp } from "./browser";
 import { inArea, prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
 export interface Pending {
@@ -190,7 +191,7 @@ interface State {
   handed: Record<string, { lane: string; ids: string[] }>;
   /// A side-panel tab asked for from outside the window's own state (the sidebar's setup list).
   /// The window shows it and clears the request.
-  panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context";
+  panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context" | "browser";
   /// The project's daemon, started if it is not running. For views that talk to it directly.
   ensure(project: string): Promise<Endpoint>;
   openProject(path: string): Promise<void>;
@@ -410,6 +411,13 @@ export const useStore = create<State>()((set, getState) => {
         soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
         void refreshReview(lid, ep, getState().lanes[lid]?.wt);
       }
+    },
+    // The lane's Browser tab: the agent asked the daemon, the daemon asks the window that has it.
+    browser: (path, ep, data) => {
+      const d = (data as { data?: { id: string; lane: string; op: BrowserOp } })?.data;
+      // Only for the lane on screen: another lane's page opening does not move the panel.
+      const reveal = (lid: string) => { if (getState().active === lid) set({ panelTab: "browser" }); };
+      if (d) void onBrowser(path, ep, (lid) => lanesOf(path).includes(lid), d, reveal);
     },
     // The review before a pull request: the daemon's record, re-read for the lane it names. A
     // review filed under no lane belongs to whoever asks, so every lane reads it.
@@ -790,6 +798,7 @@ export const useStore = create<State>()((set, getState) => {
       watchers.get(path)?.close();
       watchers.delete(path);
       for (const lid of lanes) {
+        closeTab(lid);
         follows.get(lid)?.close();
         follows.delete(lid);
         chats.get(lid)?.close();
@@ -890,6 +899,7 @@ export const useStore = create<State>()((set, getState) => {
     },
 
     closeLane(lid) {
+      closeTab(lid);
       const closing = getState().lanes[lid];
       const closingEp = closing && getState().projects[closing.project]?.endpoint;
       if (closingEp) void post(closingEp, "/api/chat/control", { lane: lid, method: "close" }).catch(() => undefined);

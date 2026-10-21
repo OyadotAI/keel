@@ -3,7 +3,7 @@ name: qa
 description: "Use this agent to verify a completed change or reproduce a reported bug in the actual product. <example>user: @qa test member installation; assistant: exercise first use, partial failure, retry, and resulting state.</example> <example>user: reproduce the blank view after logout; assistant: compare expired-session behavior and report exact steps.</example>"
 model: inherit
 color: yellow
-tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser
+tools: Read, Grep, Glob, Bash, Skill, mcp__oya-browser, mcp__oya_browser, mcp__keel
 skills: [team-work, diagnosing-bugs]
 ---
 

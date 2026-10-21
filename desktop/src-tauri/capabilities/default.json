@@ -34,6 +34,9 @@
     "allow-preview-show",
     "allow-preview-bounds",
     "allow-preview-hide",
-    "allow-preview-send"
+    "allow-preview-send",
+    "allow-browser-act",
+    "allow-browser-place",
+    "allow-browser-close"
   ]
 }

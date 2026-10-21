@@ -19,7 +19,7 @@ const PICKER: &str = include_str!("picker.js");
 static SHOWN: std::sync::Mutex<Option<Url>> = std::sync::Mutex::new(None);
 
 /// Where the panel's preview area is, in the window's logical pixels.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone, Copy)]
 pub struct Bounds {
     x: f64,
     y: f64,
@@ -28,12 +28,65 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    fn rect(&self) -> tauri::Rect {
+    pub(crate) fn rect(&self) -> tauri::Rect {
         tauri::Rect {
             position: LogicalPosition::new(self.x, self.y).into(),
             size: LogicalSize::new(self.width.max(1.0), self.height.max(1.0)).into(),
         }
     }
+
+}
+
+/// How far a child webview lands from where it is asked to go, learned on the first placement and
+/// kept: one window, one offset. Tauri's own sizes cannot give it — on macOS it reported the window's
+/// outer and inner heights as equal (868 pt) while a title bar was there, and wry turns `y` into
+/// AppKit's bottom-left origin against a parent view that is taller than the page: every child
+/// webview landed ~32 pt too high, the Browser tab over its own status row, the preview over the
+/// toolbar. So it is measured on the native views, not computed.
+static CORRECTION: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
+
+/// Put a child webview exactly over `bounds`, in the page's logical pixels.
+pub(crate) async fn place(view: &tauri::Webview, bounds: &Bounds) -> Result<(), String> {
+    let at = |dy: f64| Bounds { y: bounds.y + dy, ..*bounds }.rect();
+    let dy = *CORRECTION.lock().unwrap_or_else(|e| e.into_inner());
+    view.set_bounds(at(dy)).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Some(top) = measured_top(view).await {
+        let error = top - bounds.y;
+        if error.abs() > 0.5 {
+            let fixed = dy - error;
+            *CORRECTION.lock().unwrap_or_else(|e| e.into_inner()) = fixed;
+            view.set_bounds(at(fixed)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Where the view's top edge really is, in points below the top of the window's content.
+#[cfg(target_os = "macos")]
+async fn measured_top(view: &tauri::Webview) -> Option<f64> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // Runs on the main thread, after the `set_bounds` queued before it.
+    view.with_webview(move |platform| {
+        let _ = tx.send(top_of(platform.inner()));
+    })
+    .ok()?;
+    tokio::time::timeout(std::time::Duration::from_millis(250), rx).await.ok()?.ok()?
+}
+
+#[cfg(target_os = "macos")]
+fn top_of(webview: *mut std::ffi::c_void) -> Option<f64> {
+    use objc2_app_kit::NSView;
+    if webview.is_null() {
+        return None;
+    }
+    // Safety: wry's WKWebView, an NSView, handed to us on the main thread by `with_webview`.
+    let view: &NSView = unsafe { &*(webview as *const NSView) };
+    let content = view.window()?.contentView()?;
+    // Both in the window's base coordinates, origin at the bottom left.
+    let c = content.convertRect_toView(content.bounds(), None);
+    let v = view.convertRect_toView(view.bounds(), None);
+    Some((c.origin.y + c.size.height) - (v.origin.y + v.size.height))
 }
 
 /// Only the dev server on this machine: the child webview may reach `preview_msg`, and nothing
@@ -64,8 +117,19 @@ pub(crate) fn web_only(url: &Url) -> bool {
 #[tauri::command]
 pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) -> Result<(), String> {
     let url = local(&url)?;
-    let rect = bounds.rect();
-    // Held for the whole call: two shows at once both found no webview and both created one.
+    let (view, existing) = show_or_create(&app, url, &bounds)?;
+    place(&view, &bounds).await?;
+    if existing {
+        view.show().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The preview's webview, navigated to `url` or created there, and whether it already existed. A
+/// function of its own so the lock is released before `place` awaits: a held std guard cannot
+/// cross an await, and the placement does not need it.
+fn show_or_create(app: &tauri::AppHandle, url: Url, bounds: &Bounds) -> Result<(tauri::Webview, bool), String> {
+    // Held for the whole of this: two shows at once both found no webview and both created one.
     let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(view) = app.get_webview(LABEL) {
         // The URL Keel last loaded, not `view.url()`: wry unwraps WebKit's URL, which is nil
@@ -74,11 +138,11 @@ pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) ->
             view.navigate(url.clone()).map_err(|e| e.to_string())?;
             *shown = Some(url);
         }
-        view.set_bounds(rect).map_err(|e| e.to_string())?;
-        return view.show().map_err(|e| e.to_string());
+        return Ok((view, true));
     }
     let window = app.get_window("main").ok_or("The main window is gone.")?;
     *shown = Some(url.clone());
+    let rect = bounds.rect();
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url))
         .initialization_script_for_all_frames(PICKER)
         // On macOS this decides every frame, not only the top one, and a dev page's iframes are
@@ -87,18 +151,18 @@ pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) ->
         .on_navigation(|to| web_only(to) || matches!(to.scheme(), "about" | "blob" | "data"))
         // Nothing the page offers lands in ~/Downloads unasked.
         .on_download(|_, _| false);
-    window.add_child(builder, rect.position, rect.size).map_err(|e| e.to_string())?;
-    Ok(())
+    let view = window.add_child(builder, rect.position, rect.size).map_err(|e| e.to_string())?;
+    Ok((view, false))
 }
 
 /// Move the preview with the panel: a resize, a drag of the divider.
 #[tauri::command]
-pub fn preview_bounds(app: tauri::AppHandle, bounds: Bounds) -> Result<(), String> {
+pub async fn preview_bounds(app: tauri::AppHandle, bounds: Bounds) -> Result<(), String> {
     // Set the complete rectangle in one operation. Separate position/size calls
     // read native bounds back between updates; on macOS that can reflect the Y
     // coordinate and move the child over the toolbar.
     let Some(view) = app.get_webview(LABEL) else { return Ok(()) };
-    view.set_bounds(bounds.rect()).map_err(|e| e.to_string())
+    place(&view, &bounds).await
 }
 
 /// Out of the way: the tab was left, or a menu or dialog is open over it. A native webview draws

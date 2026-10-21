@@ -7,6 +7,8 @@ import { Git } from "./Git";
 import { Review } from "./Review";
 import { Jobs } from "./Jobs";
 import { Preview } from "./Preview";
+import { Browser } from "./Browser";
+import { useTab } from "../browser";
 import { Readiness } from "./Readiness";
 import { Icon } from "./icons";
 import { Chat } from "./Chat";
@@ -17,8 +19,9 @@ import { Tabs } from "./kit";
 
 const Terminal = lazy(() => import("./Terminal").then((m) => ({ default: m.Terminal })));
 
-export type Tab = "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context";
-export const TABS: Tab[] = ["turns", "git", "review", "jobs", "preview", "readiness", "context"];
+export type Tab = "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context" | "browser";
+// The Browser tab last: ⌥1–7 are pinned by position, so it takes ⌥8 rather than renumbering them.
+export const TABS: Tab[] = ["turns", "git", "review", "jobs", "preview", "readiness", "context", "browser"];
 
 /// Every lane opened this session, its agent running in its own terminal. Only the active one is
 /// shown; the rest stay mounted (hidden, not unmounted), because a terminal that closes ends the
@@ -80,12 +83,16 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
     const p = s.lanes[lane]?.project;
     return p ? s.readiness[p] : undefined;
   });
-  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Review", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context" };
+  const turnRunning = useStore((s) => !!s.lanes[lane]?.running);
+  const browsing = !!useTab(lane)?.browsing && turnRunning;
+  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Review", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context", browser: "Browser" };
   // Counts as badges, so a tab says there is something there without being opened.
   const badge: Partial<Record<Tab, ReactNode>> = {
     git: changed ? <span className="tab-count">{changed}</span> : null,
     jobs: running ? <span className="tab-badge live">{running}</span> : null,
     readiness: ready?.open ? <span className={`tab-badge${ready.critical ? " critical" : ""}`}>{ready.open}</span> : null,
+    // While the agent acts in the page; the tab never comes forward by itself.
+    browser: browsing ? <span className="busy-dot tab-dot" role="img" aria-label="Agent is browsing" /> : null,
   };
 
   return (
@@ -103,7 +110,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
         }))} value={tab} onChange={setTab}>
       </Tabs>
       <div className="tab-body" onKeyDown={walkFiles}>
-        {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : tab === "context" ? <Context key={lane} lane={lane} /> : <Readiness lane={lane} />}
+        {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : tab === "context" ? <Context key={lane} lane={lane} /> : tab === "browser" ? <Browser lane={lane} /> : <Readiness lane={lane} />}
       </div>
     </aside>
   );

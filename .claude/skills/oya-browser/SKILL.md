@@ -5,6 +5,11 @@ description: "This skill should be used when opening a website, researching curr
 
 # Oya Browser
 
+Inside Keel, Oya's tools are withheld and the lane's Browser tab is the browser: use the
+`browser_*` tools on server `keel` (`browser_open`, `browser_read` for text and numbered elements,
+`browser_click`, `browser_type`, `browser_key`, `browser_scroll`, `browser_back`) wherever this
+skill says Oya. It has none of the person's logins, reads text only and the top frame only.
+
 Use the connected `oya_browser` MCP tools for all browser work. Never use browser-use, another
 browser provider, Playwright, Puppeteer, Selenium, a headless harness, or a separately launched
 Chrome/Chromium instance. Direct CDP is allowed only when it demonstrably controls Oya Browser.
