@@ -47,6 +47,19 @@ fn local(url: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+/// Where a child webview may go once it is open: the web, and never Keel's own page. The dev
+/// server's page runs the project's dependencies, and `location = "tauri://localhost/"` (or
+/// `http://tauri.localhost/` on Windows) would put it at the app's origin inside the main window —
+/// where, before capabilities were scoped by webview, it could call `open_project` and read back
+/// the daemon's port and token. A link the page follows to another site is still a page.
+pub(crate) fn web_only(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && !matches!(
+            url.host_str(),
+            Some("tauri.localhost" | "ipc.localhost" | "asset.localhost")
+        )
+}
+
 /// Show the preview at `url` over `bounds`, creating it the first time.
 #[tauri::command]
 pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) -> Result<(), String> {
@@ -66,7 +79,14 @@ pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) ->
     }
     let window = app.get_window("main").ok_or("The main window is gone.")?;
     *shown = Some(url.clone());
-    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url)).initialization_script_for_all_frames(PICKER);
+    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url))
+        .initialization_script_for_all_frames(PICKER)
+        // On macOS this decides every frame, not only the top one, and a dev page's iframes are
+        // often `about:blank`, `about:srcdoc`, `data:` or `blob:` — none of which is Keel's
+        // origin. Windows asks for the top frame only; there the capability scoping is the wall.
+        .on_navigation(|to| web_only(to) || matches!(to.scheme(), "about" | "blob" | "data"))
+        // Nothing the page offers lands in ~/Downloads unasked.
+        .on_download(|_, _| false);
     window.add_child(builder, rect.position, rect.size).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -244,5 +264,49 @@ mod tests {
         odd["pin"]["sources"] = serde_json::json!([{"kind":"curl|sh"}]);
         assert!(serde_json::from_value::<Msg>(odd).unwrap().bounded().is_err());
         assert!(serde_json::from_value::<Msg>(serde_json::json!({"type":"eval","js":"x"})).is_err());
+    }
+
+    /// The top frame of a child webview never navigates to Keel's own page, whichever spelling the
+    /// platform uses. (A subframe on Windows is not asked about; the capabilities are the wall there.)
+    #[test]
+    fn a_child_webview_stays_on_the_web() {
+        let go = |u: &str| web_only(&u.parse().unwrap());
+        for ok in ["http://localhost:3000/a", "https://127.0.0.1:5173/", "https://example.com/x"] {
+            assert!(go(ok), "refused {ok}");
+        }
+        for no in [
+            "tauri://localhost/",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "http://ipc.localhost/open_project",
+            "asset://localhost/x",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,hi",
+            "about:blank",
+        ] {
+            assert!(!go(no), "allowed {no}");
+        }
+    }
+
+    /// A capability granted by window reaches every child webview in it: the preview, which runs
+    /// the project's dependencies, inherited `open_project` and the daemon's token that way. Each
+    /// file is read from disk, so a new one is covered without a list to keep.
+    #[test]
+    fn no_capability_reaches_a_child_webview_by_its_window() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut read = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let cap: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            read += 1;
+            assert!(cap.get("windows").is_none(), "{} grants by window; grant by webview label", path.display());
+            let webviews = cap["webviews"].as_array().expect("a capability names its webviews");
+            assert!(!webviews.is_empty(), "{} names no webview", path.display());
+        }
+        assert!(read >= 2, "read {read} capability files from {}", dir.display());
     }
 }
