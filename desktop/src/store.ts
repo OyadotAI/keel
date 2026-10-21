@@ -152,6 +152,11 @@ export interface Lane {
   models?: { value?: string; id?: string; displayName?: string; display_name?: string; name?: string }[];
   commands?: string[];
   managed?: boolean;
+  /// A terminal turn the follower saw open live and has not seen close. Claude Code's pid file is
+  /// the other witness, and it can be wrong: 2.1.306 left a session `idle` through a whole turn
+  /// typed after an interruption, and the lane, the status bar and Turns all read idle while the
+  /// agent ran commands. Only a live open counts, and the session ending clears it.
+  transcriptOpen?: boolean;
   cursor?: number;
   submitting?: boolean;
   disconnected?: boolean;
@@ -353,9 +358,9 @@ export const useStore = create<State>()((set, getState) => {
     for (const lid of lanesOf(path)) {
       const l = getState().lanes[lid];
       const s = l && list.find((x) => x.id === l.session);
-      const busy = !!s && s.live && s.busy;
+      const busy = !!s && s.live && (s.busy || !!l.transcriptOpen);
       // A session that ended took its background agents with it.
-      if (l && s && !s.live && l.conv.background) lane(lid, (now) => ({ conv: { turns: now.conv.turns } }));
+      if (l && s && !s.live) forgetEnded(lid, l);
       if (!l || (l.managed && l.interface !== "terminal") || l.submitting || (l.running === busy && (!s || l.known))) continue;
       // Idle again: whatever it was asking is no longer being waited on — Esc in the terminal,
       // or the hook's own wait ran out — and what was queued goes next.
@@ -526,6 +531,27 @@ export const useStore = create<State>()((set, getState) => {
 
   const follows = new Map<string, Stream>();
   const retries = new Map<string, number>();
+  /// What a live batch of a terminal lane's transcript says about whether it is working: a turn
+  /// that opened is running whatever Claude Code's pid file says, and one that closed is idle
+  /// unless the pid file says busy — a file that never said busy sends no event to say idle.
+  function transcriptSays(l: Lane, frames: Frame[]): { patch: Partial<Lane>; settled: boolean } {
+    const ops = frames.map((f) => f.op);
+    if (ops.includes("close")) {
+      const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
+      if (s?.busy) return { patch: { transcriptOpen: false }, settled: false };
+      return { patch: { transcriptOpen: false, running: false, pending: [] }, settled: l.running };
+    }
+    if (ops.includes("open")) return { patch: { transcriptOpen: true, running: true }, settled: false };
+    return { patch: {}, settled: false };
+  }
+
+  /// A session that ended took its background agents with it, and has no turn open whatever its
+  /// transcript was last seen doing.
+  function forgetEnded(lid: string, l: Lane) {
+    if (l.conv.background) lane(lid, (now) => ({ conv: { turns: now.conv.turns } }));
+    if (l.transcriptOpen) lane(lid, { transcriptOpen: false });
+  }
+
   /// A turn that ended while it was being watched: its lane, how long, and what the checks said.
   /// Nothing for a turn the person stopped — they were there.
   function announceEnd(lid: string, key: string | null) {
@@ -584,14 +610,21 @@ export const useStore = create<State>()((set, getState) => {
       url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt }),
       ep.token,
       (events) =>
-        { const ended: (string | null)[] = []; lane(lid, (l) => {
+        { const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
           // A replay starts over: what an earlier stream folded is let go once this one speaks,
           // not before, so a retry that fails does not blank the turns on screen.
           let conv = fresh && events.some((e) => e.event === "turn") ? empty : l.conv;
           if (conv === empty) fresh = false;
           let patch: Partial<Lane> = {};
           for (const e of events) {
-            if (e.event === "turn") conv = applyFrames(conv, e.data as Frame[]);
+            if (e.event === "turn") {
+              conv = applyFrames(conv, e.data as Frame[]);
+              if (live) {
+                const said = transcriptSays(l, e.data as Frame[]);
+                patch = { ...patch, ...said.patch };
+                settled ||= said.settled;
+              }
+            }
             else if (e.event === "fact") {
               conv = applyFact(conv, e.data as Fact);
               if (live && (e.data as Fact).kind === "turn.ended") ended.push((e.data as Fact).turn);
@@ -609,7 +642,7 @@ export const useStore = create<State>()((set, getState) => {
             }
           }
           return { ...patch, conv };
-        }); for (const key of ended) announceEnd(lid, key); },
+        }); for (const key of ended) announceEnd(lid, key); if (settled) { gitSoon(lid); drain(lid); } },
       (error) => {
         if (follows.get(lid) !== stream) return;
         follows.delete(lid);
