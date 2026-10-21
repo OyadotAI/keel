@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Codex, historyFrames, script } from './codex.mjs';
+import { Codex, appServerArgs, historyFrames, script } from './codex.mjs';
 
 test('streamed text is not duplicated by the completed item', async () => {
   const events = [];
@@ -153,4 +153,38 @@ test('a sandboxed command is asked of Keel first, unwrapped, and its answer is f
   assert.deepEqual(asked[0].slice(0, 2), ['Bash', { command: 'git status' }]);
   assert.equal(asked[0][3], 'codex');
   assert.deepEqual(sent.at(-1), { id: 7, result: { decision: 'accept' } });
+});
+
+test('the App Server is started with Keel\'s overrides before its own arguments', () => {
+  assert.deepEqual(appServerArgs({ codexArgs: ['-c', 'mcp_servers.keel.url="u"'] }), ['-c', 'mcp_servers.keel.url="u"', 'app-server', '--stdio']);
+  assert.deepEqual(appServerArgs({}), ['app-server', '--stdio']);
+});
+
+test('a Codex subagent is an Agent row named for it and works until it finishes', async () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push(...(event === 'turn' ? data : [])), () => {});
+  c.thread = 'main';
+  const sub = (kind, id) => ({ method: 'item/completed', params: { threadId: 'main', item: { type: 'subAgentActivity', id, kind, agentThreadId: 'A1', agentPath: '/root/pm' } } });
+  await c.message({ method: 'item/started', params: { threadId: 'main', item: { type: 'subAgentActivity', id: 'call_1', kind: 'started', agentThreadId: 'A1', agentPath: '/root/pm' } } });
+  await c.message(sub('started', 'call_1'));
+  assert.ok(events.some((o) => o.op === 'call' && o.tool === 'Agent' && o.input.subagent_type === 'pm'));
+  assert.ok(events.some((o) => o.op === 'background' && o.id === 'A1' && o.agent === 'pm' && o.running));
+  assert.equal(events.filter((o) => o.op === 'call').length, 1, 'started and completed items of one start are one row');
+  await c.message(sub('completed', 'subagent-completed-x'));
+  assert.ok(events.some((o) => o.op === 'background' && o.id === 'A1' && o.running === false));
+});
+
+test('a subagent still working when the App Server exits stops working', () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push(...(event === 'turn' ? data : [])), () => {});
+  c.agents.add('A1');
+  c.fail(new Error('gone'));
+  assert.ok(events.some((o) => o.op === 'background' && o.id === 'A1' && o.running === false));
+});
+
+test('an MCP call is named the way Claude Code names one', () => {
+  const events = [];
+  const c = new Codex((event, data) => events.push(...(event === 'turn' ? data : [])), () => {});
+  c.item({ type: 'mcpToolCall', id: 'x', server: 'keel', tool: 'browser_read', status: 'completed', result: {} }, true);
+  assert.equal(events.find((o) => o.op === 'call').tool, 'mcp__keel__browser_read');
 });

@@ -866,9 +866,51 @@ pub async fn chat(
         } else {
             None
         };
+        // Keel's browser for an agy turn, in a folder of Keel's own per lane. Its hook (above)
+        // already decides each call, so the server does not ask again.
+        let agy_mcp = if provider == "antigravity" {
+            let lane = query.lane.clone();
+            let made = crate::serve::blocking(
+                move || crate::askmcp::agy_dir(port, lane.as_deref(), true),
+                Err("the browser could not be prepared".into()),
+            )
+            .await;
+            match made {
+                Ok(dir) => dir,
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(said(
+                            "fatal",
+                            format!("Keel could not give Antigravity its Browser tab ({e}), so the turn did not start."),
+                        )))
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            camino::Utf8PathBuf::new()
+        };
+        // Keel's browser for a Codex turn, and the other browsers taken away for it.
+        let codex_mcp = if provider == "codex" {
+            let (dir, lane) = (cwd.clone(), query.lane.clone());
+            let made = crate::serve::blocking(
+                move || crate::askmcp::codex_args(&dir, port, lane.as_deref()),
+                Err("the browser could not be prepared".into()),
+            )
+            .await;
+            match made {
+                Ok(args) => args,
+                Err(e) => {
+                    let _ = tx.send(Ok(said("fatal", e))).await;
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let mut command = if provider == "codex" {
             let mut command = Command::new(crate::permissions::program("codex"));
-            command.current_dir(&cwd).arg("exec");
+            command.current_dir(&cwd).arg("exec").args(&codex_mcp);
             // The sandbox and the directory on *both* branches. They used to be on the first
             // turn only, so every Codex turn after it ran with codex's own defaults: no `--cd`,
             // so a lane's turn ran outside the lane's checkout, and no `--sandbox`, so `mode`
@@ -924,6 +966,8 @@ pub async fn chat(
                 })
                 .arg("--add-dir")
                 .arg(hooks)
+                .arg("--add-dir")
+                .arg(&agy_mcp)
                 .env("KEEL_AGY_PORT", port.to_string())
                 .env("KEEL_AGY_LANE", query.lane.as_deref().unwrap_or(""))
                 .env("KEEL_AGY_MODE", mode);
@@ -1611,15 +1655,13 @@ pub(crate) fn interactive(
         // Its id is learned once the CLI writes the conversation (`discover`), and from then its
         // rollout is followed like Claude's transcript (`keel_workspace::follow`).
         "codex" => {
-            let mut args = vec!["--cd".to_string(), cwd.to_string()];
+            // Keel's browser, and the other browsers taken away — the same as a chat turn. First,
+            // as global options, rather than trusting them to parse after `resume <id>`.
+            let mut args = crate::askmcp::codex_args(cwd, port, lane)?;
             if resume {
-                args = vec![
-                    "resume".into(),
-                    session.to_string(),
-                    "--cd".into(),
-                    cwd.to_string(),
-                ];
+                args.extend(["resume".into(), session.to_string()]);
             }
+            args.extend(["--cd".into(), cwd.to_string()]);
             Ok((crate::permissions::program("codex"), args))
         }
         // The CLI as it is, in its own default mode: it asks its own permission questions in the
@@ -1627,14 +1669,20 @@ pub(crate) fn interactive(
         // Its conversation id is learned from disk (`discover`) and its database followed
         // (`keel_workspace::antigravity`).
         // Quarantine above still ran, because a repository's `.agents/` hooks run unasked.
-        "antigravity" => Ok((
-            crate::permissions::program("agy"),
+        // Keel's browser comes in a folder of Keel's own, and Keel's card asks before each action
+        // as it does for Codex. A terminal `agy` asks its own question too (measured on 1.4.4), but
+        // its "always allow" covers a click or a keystroke in a signed-in site, which Keel's trust
+        // never does — so a click is asked twice here rather than not at all.
+        "antigravity" => {
+            let mut args = vec![
+                "--add-dir".to_string(),
+                crate::askmcp::agy_dir(port, lane, false)?.to_string(),
+            ];
             if resume {
-                vec!["--conversation".into(), session.to_string()]
-            } else {
-                Vec::new()
-            },
-        )),
+                args.extend(["--conversation".into(), session.to_string()]);
+            }
+            Ok((crate::permissions::program("agy"), args))
+        }
         other => Err(format!("unknown agent `{other}`")),
     }
 }

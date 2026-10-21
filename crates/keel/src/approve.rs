@@ -974,7 +974,12 @@ pub(crate) fn drives_another_browser(tool: &str) -> bool {
         return false;
     };
     let server = server.to_ascii_lowercase();
-    server != "keel" && (server.contains("browser") || server.contains("chrome"))
+    // Computer use drives the whole desktop, the person's signed-in browser with it.
+    server != "keel"
+        && (server.contains("browser")
+            || server.contains("chrome")
+            || server.contains("computer-use")
+            || server.contains("computer_use"))
 }
 
 /// The checkout a `gh pr create` run in `cwd` would open from — the project or one of its lanes —
@@ -1706,6 +1711,8 @@ pub(crate) mod tests {
             "mcp__oya-browser-on-mac__open_tab",
             "mcp__plugin_tools_chrome__click",
             "mcp__claude-in-chrome__navigate",
+            "mcp__computer-use__screenshot",
+            "mcp__computer_use__click",
         ] {
             assert!(drives_another_browser(other), "{other}");
         }

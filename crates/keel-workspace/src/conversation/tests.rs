@@ -665,3 +665,21 @@ fn a_background_agent_works_until_its_notification() {
         ]
     );
 }
+
+/// A Codex chat turn's MCP call is a row named like Claude Code's, with its result — measured on
+/// codex 0.163 calling Keel's `browser_read`.
+#[test]
+fn a_codex_mcp_call_is_a_row_named_like_claudes() {
+    let mut d = Decoder::new(Provider::Codex, Source::Chat);
+    let now = std::time::Instant::now();
+    let started = r#"{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"keel","tool":"browser_read","arguments":{"description":"Read the current page"},"result":null,"error":null,"status":"in_progress"}}"#;
+    let done = r#"{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"keel","tool":"browser_read","arguments":{"description":"Read the current page"},"result":{"content":[{"type":"text","text":"No Keel window is open."}],"structured_content":null},"error":null,"status":"failed"}}"#;
+    let mut frames = d.feed(started, None, now);
+    frames.extend(d.feed(done, None, now));
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(&f.op, Op::Call { tool, .. } if tool == "mcp__keel__browser_read"))
+    );
+    assert!(frames.iter().any(|f| matches!(&f.op, Op::Result { id, state: CallState::Failed, output, .. } if id == "item_1" && output == "No Keel window is open.")));
+}

@@ -23,6 +23,9 @@ use crate::approve::{Decision, HookInput};
 /// subagent tools, whose effects all arrive here on their own. Nothing here changes the machine.
 pub const LOCAL_ALLOW: &[&str] = &[
     "view_file",
+    // agy 1.4.4 calls its file read `read_file` though its tool list still says `view_file`;
+    // refused as an unknown tool, every Antigravity chat lane could read no file at all.
+    "read_file",
     "list_dir",
     "grep_search",
     "find_by_name",
@@ -35,7 +38,21 @@ pub const LOCAL_ALLOW: &[&str] = &[
     // conversation (measured: its `run_command` was refused here). `send_message` is how it
     // reports back to the turn that started it.
     "send_message",
+    // How a 1.4.4 turn waits on its subagents and keeps its task list — a timer, the agent's own
+    // list, its own subagents (measured in a subagent run). None of them touches a file or the
+    // machine, and refused, a turn could start a subagent and never wait for it.
+    "schedule",
+    "manage_subagents",
 ];
+
+/// `manage_task` actions that only look at or stop a running command. `send_input` types into
+/// one, and is not here: into a REPL somebody approved once — `python3`, `psql` — it would run
+/// anything with no card.
+const TASK_LOOKS: &[&str] = &["status", "list", "kill"];
+
+pub const TASK_INPUT: &str = "Keel does not let a lane type into a running command, so this was \
+    refused: input sent to a shell or a REPL would run with nobody asked. Run what you need as its \
+    own command instead, non-interactively.";
 
 pub const UNREACHABLE: &str = "Keel's approval service is not reachable, so this call was refused \
     without asking the person. Do not retry it or work around it with another tool. Stop and tell \
@@ -49,8 +66,9 @@ pub const UNANSWERED: &str = "The person did not answer the approval request in 
 pub const PLANNING: &str = "This lane is in plan mode, so files cannot be changed. Do not try \
     another way to write. Finish the plan in your reply; the person switches out of plan mode to \
     apply it.";
-pub const QUESTION: &str = "Keel cannot show ask_question to the person. Ask your question in your \
-    reply as plain text and end your turn — their next message is the answer.";
+pub const QUESTION: &str = "Keel shows questions through its own tool, not ask_question. Call \
+    ask_user on the keel MCP server with your question and its options; it waits for the person's \
+    answer and returns it.";
 pub const UNSUPPORTED: &str = "Keel does not support this tool in Antigravity lanes yet, so it was \
     refused. Do not work around it with another tool. Do what you can with commands and file edits, \
     or tell the person what you needed it for.";
@@ -134,12 +152,31 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
         // `branch` or `share` workspace is another checkout, where nothing says the hook loads.
         "invoke_subagent" if inherits(args) => Route::Allow,
         "invoke_subagent" => Route::Deny(WORKSPACE),
-        // An MCP tool's effects are unknown, so a planning lane does not call one.
+        // A question is not a permission: Keel's own card asks it, on any project, in any mode.
+        "call_mcp_tool" if keel_tool(args) == Some(crate::askmcp::TOOL) => Route::Allow,
+        // Keel's Browser tab writes nothing in the tree, so a planning lane may use it, asked the
+        // way any lane is — as a Claude lane in plan mode can.
+        "call_mcp_tool" if plan && keel_tool(args).is_some_and(crate::browser::is_tool) => {
+            mcp_call(args)
+        }
+        // Any other MCP tool's effects are unknown, so a planning lane does not call one.
         "call_mcp_tool" if plan => Route::Deny(PLANNING),
         "call_mcp_tool" => mcp_call(args),
         // A sed script is a program: `w` writes any file, `e` runs a command. Nothing here can
         // read one safely, and replace_file_content does the same edit as data.
         "sed_file" => Route::Deny(SED),
+        "manage_task"
+            if args["Action"]
+                .as_str()
+                .is_some_and(|a| TASK_LOOKS.contains(&a)) =>
+        {
+            Route::Allow
+        }
+        "manage_task" => Route::Deny(TASK_INPUT),
+        // agy's own browser — `open_browser_url`, `read_browser_page`, `browser_click_element` and
+        // the rest in 1.4.4 — is another browser than the lane's, which is what a Keel lane is
+        // never given; the refusal says where the lane's browser is, as it does for Claude.
+        t if t.contains("browser") => Route::Deny(crate::approve::OTHER_BROWSER),
         _ => Route::Deny(UNSUPPORTED),
     }
 }
@@ -222,6 +259,11 @@ fn mcp_call(args: &Value) -> Route {
         },
         _ => Route::Deny(UNREADABLE),
     }
+}
+
+/// The tool an MCP call names on Keel's own server, if it is one of Keel's.
+fn keel_tool(args: &Value) -> Option<&str> {
+    (args["ServerName"] == crate::askmcp::SERVER).then(|| args["ToolName"].as_str())?
 }
 
 /// Whether every subagent asked for runs in this turn's own workspace.
@@ -459,6 +501,72 @@ mod tests {
         assert_eq!(
             route("brand_new_tool", &json!({}), false),
             Route::Deny(UNSUPPORTED)
+        );
+    }
+
+    /// Measured on agy 1.4.4: it reads a file as `read_file`, waits on subagents with `schedule`
+    /// and `manage_subagents`, and has a browser of its own — which is refused the way Claude's
+    /// other browsers are, pointing at the lane's Browser tab.
+    #[test]
+    fn agy_1_4_4_reads_files_waits_on_subagents_and_keeps_its_own_browser_away() {
+        for t in ["read_file", "schedule", "manage_subagents"] {
+            assert_eq!(route(t, &json!({}), true), Route::Allow, "{t}");
+        }
+        // Looking at a running command is allowed; typing into one is not.
+        for a in ["status", "list", "kill"] {
+            assert_eq!(
+                route("manage_task", &json!({"Action": a}), true),
+                Route::Allow,
+                "{a}"
+            );
+        }
+        for a in [
+            json!({"Action": "send_input", "Input": "import os"}),
+            json!({}),
+        ] {
+            assert_eq!(route("manage_task", &a, false), Route::Deny(TASK_INPUT));
+        }
+        for t in [
+            "open_browser_url",
+            "read_browser_page",
+            "browser_click_element",
+            "browser_subagent",
+            "capture_browser_screenshot",
+        ] {
+            assert_eq!(
+                route(t, &json!({}), false),
+                Route::Deny(crate::approve::OTHER_BROWSER),
+                "{t}"
+            );
+        }
+    }
+
+    /// A planning lane may use Keel's Browser tab, asked as any lane is, and its question tool —
+    /// a question is not a permission — but no other MCP tool, whose effects are unknown.
+    #[test]
+    fn a_planning_lane_can_use_keels_browser_and_ask_but_no_other_mcp_tool() {
+        let mcp = |server: &str, tool: &str| json!({"ServerName": server, "ToolName": tool, "Arguments": {}});
+        assert!(
+            matches!(route("call_mcp_tool", &mcp("keel", "browser_open"), true), Route::Ask(t, _) if t == "mcp__keel__browser_open")
+        );
+        assert!(
+            matches!(route("call_mcp_tool", &mcp("keel", "browser_click"), true), Route::Ask(t, _) if t == "mcp__keel__browser_click")
+        );
+        assert_eq!(
+            route("call_mcp_tool", &mcp("keel", "ask_user"), true),
+            Route::Allow
+        );
+        assert_eq!(
+            route("call_mcp_tool", &mcp("keel", "ask_user"), false),
+            Route::Allow
+        );
+        assert_eq!(
+            route("call_mcp_tool", &mcp("github", "create_issue"), true),
+            Route::Deny(PLANNING)
+        );
+        assert_eq!(
+            route("call_mcp_tool", &mcp("keelx", "browser_open"), true),
+            Route::Deny(PLANNING)
         );
     }
 

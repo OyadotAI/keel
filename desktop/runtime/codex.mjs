@@ -5,7 +5,7 @@ import { ContextInspector } from './context.mjs';
 
 // App Server owns thread state; this adapter maps its items to Keel's ordered conversation ops.
 export class Codex {
-  constructor(emit, ask, decide) { this.emit = emit; this.ask = ask; this.decide = decide; this.requests = new Map(); this.next = 0; this.text = new Set(); }
+  constructor(emit, ask, decide) { this.emit = emit; this.ask = ask; this.decide = decide; this.requests = new Map(); this.next = 0; this.text = new Set(); this.agents = new Set(); }
   write(value) { this.child.stdin.write(JSON.stringify(value) + '\n'); }
   rpc(method, params, timeoutMs) {
     const id = ++this.next;
@@ -19,7 +19,9 @@ export class Codex {
   async start(q, done) {
     this.done = done; this.mode = q.mode;
     if (!this.child) {
-      this.child = spawn(q.executable, ['app-server', '--stdio'], { cwd: q.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      // Keel's overrides first (`askmcp::codex_args`): its browser for this lane, Codex's own
+      // approval off for it, and the person's other browsers switched off for this process.
+      this.child = spawn(q.executable, appServerArgs(q), { cwd: q.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       createInterface({ input: this.child.stdout }).on('line', (line) => {
         try { void this.message(JSON.parse(line)).catch((error) => this.emit('fatal', String(error))); }
         catch (error) { this.emit('fatal', `Invalid App Server message: ${error}`); }
@@ -67,6 +69,9 @@ export class Codex {
   fail(error) {
     for (const pending of this.requests.values()) pending.reject(error);
     this.requests.clear(); this.child = undefined;
+    // The App Server took its subagents with it.
+    for (const id of this.agents) this.ops({ op: 'background', id, running: false });
+    this.agents.clear();
     this.emit('fatal', String(error)); this.emit('end', { code: 1 }); this.done?.();
   }
   async message(message) {
@@ -140,14 +145,38 @@ export class Codex {
       return;
     }
     if (type === 'userMessage') return;
-    const tool = { commandExecution: 'Bash', fileChange: 'Edit', mcpToolCall: item.tool, webSearch: 'Web search', collabAgentToolCall: 'Subagent' }[type] ?? type;
+    if (type === 'subAgentActivity') return this.subagent(item, complete);
+    // An MCP call is named the way Claude Code names one, so the Browser tab's badge and activity
+    // line read a Codex lane's like a Claude lane's.
+    const mcp = item.server ? `mcp__${item.server}__${item.tool}` : item.tool;
+    const tool = { commandExecution: 'Bash', fileChange: 'Edit', mcpToolCall: mcp, webSearch: 'Web search', collabAgentToolCall: 'Subagent' }[type] ?? type;
     this.ops({ op: 'call', id: item.id, tool, subject: item.command ?? item.query ?? item.tool ?? type, input: item, writes: (item.changes ?? []).map((c) => c.path) });
     if (complete) this.ops({ op: 'result', id: item.id, state: item.status === 'failed' || item.status === 'declined' ? 'failed' : 'ok', output: item.aggregatedOutput ?? JSON.stringify(item.result ?? item.changes ?? ''), cut: 0 });
+  }
+  /// A subagent, drawn the way Claude's are: an `Agent` row named for it (`/root/pm` is `pm`) and a
+  /// background agent until Codex says it finished. Measured on the 0.163 App Server: a
+  /// `subAgentActivity` item, started and then completed, keyed by the agent's own thread.
+  subagent(item, complete) {
+    if (!complete || !item.agentThreadId) return;
+    const id = item.agentThreadId;
+    const name = (item.agentPath ?? '').split('/').filter(Boolean).pop() ?? 'subagent';
+    if (item.kind === 'started') {
+      this.agents.add(id);
+      this.ops({ op: 'call', id, tool: 'Agent', subject: name, input: { subagent_type: name, description: item.agentPath } },
+        { op: 'background', id, agent: name, running: true });
+    } else if (item.kind === 'completed' || item.kind === 'interrupted') {
+      this.agents.delete(id);
+      this.ops({ op: 'result', id, state: item.kind === 'completed' ? 'ok' : 'failed', output: '', cut: 0 },
+        { op: 'background', id, running: false });
+    }
   }
   interrupt() { return this.turn ? this.rpc('turn/interrupt', { threadId: this.thread, turnId: this.turn }) : Promise.resolve(); }
   steer(prompt) { return this.rpc('turn/steer', { threadId: this.thread, expectedTurnId: this.turn, input: [{ type: 'text', text: prompt }] }); }
   close() { this.child?.kill(); }
 }
+
+/// The App Server's arguments: Keel's `-c` overrides first, as global options, then the subcommand.
+export const appServerArgs = (q) => [...(q.codexArgs ?? []), 'app-server', '--stdio'];
 
 /// The command Codex will run, without the shell it wraps every command in. Codex sends
 /// `/bin/zsh -lc 'git status'` (or its argv); read whole, the program is `zsh`, no saved rule ever

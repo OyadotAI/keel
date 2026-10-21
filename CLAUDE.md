@@ -646,11 +646,24 @@ alike. A `claude` the person types themselves in a shell keeps them.
 - **What decides an action is the hook**, like `WebFetch`: the tools are in the `PreToolUse`
   matcher (`permissions::BROWSER_TOOLS`), trust allows them, an untrusted project asks once for
   `mcp__keel`. Opening an address is reach outward, and page text is untrusted input.
+- **Every agent gets it, and the same decision** (`askmcp.rs`). Claude through `--mcp-config`;
+  Codex through `-c` overrides for that run alone (`codex_args`: Keel's server, Codex's own
+  approval off for it — it refused a call it would have had to approve itself — its 60 s tool
+  timeout raised past a card's wait, and every browser it has switched off, its built-in CDP ones
+  included); agy through a folder of Keel's own per lane passed with `--add-dir` (`agy_dir`).
+  Claude's hook and a chat `agy`'s hook decide before a call arrives, and their addresses carry
+  the daemon's secret `hooked` mark; for Codex, which asks nothing, and a terminal `agy` — whose
+  own "always allow" would cover a click — the `/mcp` handler makes the same `approve::ask`
+  decision itself (`gated`). **Not yet:** a terminal `agy` keeps its own built-in browser and any
+  browser server in `~/.gemini/config/mcp_config.json` — taking them away needs a hook in front of
+  the terminal, and whether agy still asks its own question after a hook says allow is unmeasured. The default is to ask: a launcher that forgets the mark
+  costs one extra card, never a missing one. Measured on codex 0.163: `codex exec` called
+  `browser_read` with no approval of its own at all.
 - **Logins are per project**: a WebKit data store keyed by the project path on macOS (which is why
   the minimum is macOS 14), a data directory on Windows. None are shared with the person's own
   browser, and Google's sign-in refuses embedded webviews.
 - **Limits, said in the tool descriptions rather than discovered**: text only (neither platform's
-  webview offers Tauri a snapshot), the top frame only, synthetic input, Claude lanes only for now.
+  webview offers Tauri a snapshot), the top frame only, synthetic input.
   When the agent opens a page in the lane on screen, or starts working in the browser after 30 s
   of quiet, the workspace panel opens on the Browser tab — the first version waited for ⌥8 and was
   reported as "it didn't open the browser". Not on every action of a run, so the person can look

@@ -460,10 +460,22 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         &cwd,
     ))
     .map_err(|e| e.to_string())?;
+    // Keel's browser for a Codex lane, and the other browsers taken away (`askmcp::codex_args`).
+    let codex_args = if provider == "codex" {
+        let (dir, lane, port) = (cwd.clone(), lane.to_string(), state.port());
+        crate::serve::blocking(
+            move || crate::askmcp::codex_args(&dir, port, Some(&lane)),
+            Err("the browser could not be prepared".into()),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     r.send(json!({"method":"start", "query": {
         "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":q.prompt, "session":q.session,
         "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings, "port":state.port(),
-        "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy()
+        "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy(),
+        "codexArgs":codex_args
     }})).await?;
     let mut session = q.session.clone();
     let mut usage = None;

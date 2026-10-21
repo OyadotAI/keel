@@ -18,19 +18,236 @@ use std::sync::Arc;
 pub const TOOL: &str = "ask_user";
 pub const SERVER: &str = "keel";
 
-/// The `--mcp-config` argument for one turn: this daemon, this lane.
+/// The `--mcp-config` argument for one Claude turn: this daemon, this lane. Claude's hook decides
+/// each call before it arrives, so the address says so (`hooked`).
 pub fn config(port: u16, lane: Option<&str>) -> String {
-    let url = match lane {
-        Some(l) => format!("http://127.0.0.1:{port}/mcp?lane={l}"),
-        None => format!("http://127.0.0.1:{port}/mcp"),
-    };
-    json!({ "mcpServers": { SERVER: { "type": "http", "url": url } } }).to_string()
+    json!({ "mcpServers": { SERVER: { "type": "http", "url": url(port, lane, true) } } })
+        .to_string()
 }
 
 #[derive(Deserialize)]
 pub struct McpQuery {
     #[serde(default)]
     pub lane: Option<String>,
+    /// Set by a launcher whose agent has a Keel hook in front of its calls — Claude, and `agy` in a
+    /// chat lane — so this server does not ask again. Absent, it asks: a launcher that forgets the
+    /// mark costs one extra card, never a missing one.
+    #[serde(default)]
+    pub hooked: Option<String>,
+}
+
+/// The decision Claude's hook makes before a browser action, made here for an agent with no hook
+/// in front of its calls. Measured on codex 0.163: `codex exec` called `browser_read` with no
+/// approval at all, so without this a Codex lane would have clicked and typed in the Browser tab
+/// unasked. It is the same path the hook takes (`approve::ask`), so the card, the trust and the
+/// rules are the same ones — click, type and a key always ask — and as a caller nothing checks
+/// after (`CODEX`), a `defer` is never read as yes.
+async fn gated(
+    state: &Arc<AppState>,
+    q: &McpQuery,
+    name: &str,
+    args: &Value,
+) -> Result<(), String> {
+    if q.hooked.as_deref().is_some_and(hooked_by_keel) {
+        return Ok(());
+    }
+    let lane = q.lane.clone().unwrap_or_default();
+    let hook = crate::approve::HookInput {
+        tool_name: format!("mcp__{SERVER}__{name}"),
+        tool_input: args.clone(),
+        tool_use_id: {
+            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            format!(
+                "mcp-{}",
+                N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            )
+        },
+        // The lane's conversation, when its turn is known, so "allow for this session" has one.
+        session_id: state.lane_session(&lane).unwrap_or_default(),
+        lane,
+        cwd: String::new(),
+        provider: crate::approve::CODEX.into(),
+    };
+    match crate::approve::ask(State(state.clone()), Json(hook)).await {
+        Ok(Json(d)) if d.decision == "allow" => Ok(()),
+        Ok(Json(d)) => Err(d.reason),
+        Err((_, why)) => Err(why),
+    }
+}
+
+/// The address of this server for one lane. The lane is escaped: it lands in a URL, in a TOML
+/// string on Codex's command line and in a JSON file, and a `&` or a `"` in it would add a
+/// parameter or end the string.
+pub fn url(port: u16, lane: Option<&str>, hooked: bool) -> String {
+    let mut url = format!("http://127.0.0.1:{port}/mcp");
+    let mut sep = '?';
+    if let Some(l) = lane {
+        url.push_str(&format!("{sep}lane={}", escaped(l)));
+        sep = '&';
+    }
+    if hooked {
+        url.push_str(&format!("{sep}hooked={}", hooked_mark()));
+    }
+    url
+}
+
+/// The mark a launcher puts on the address when something in front of its agent already asks.
+/// A secret of this daemon's, not `1`: `/mcp` is open to anything on loopback, and a process the
+/// agent started — or a page in the Preview — that could write the mark itself would skip the
+/// card. Only Keel's own launchers know it; anything else is asked.
+fn hooked_mark() -> &'static str {
+    static MARK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        let mut buf = [0u8; 24];
+        // No randomness from the system means no mark that could be trusted: one that matches
+        // nothing, so every call is asked.
+        if getrandom::fill(&mut buf).is_err() {
+            return String::from("unmatched");
+        }
+        buf.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
+/// Whether `given` is this daemon's mark, compared over its whole length.
+fn hooked_by_keel(given: &str) -> bool {
+    let mark = hooked_mark();
+    mark != "unmatched"
+        && given.len() == mark.len()
+        && given
+            .bytes()
+            .zip(mark.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
+/// Percent-encoding of everything but the unreserved characters.
+fn escaped(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Codex's built-in browser features, switched off for a Keel run.
+const CODEX_BROWSERS: &[&str] = &[
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "in_app_browser",
+    "browser_annotation_api",
+    // Not browsers by name, but they drive the person's desktop — their signed-in Chrome with it.
+    "computer_use",
+    "in_app_local_automation",
+];
+
+/// How long `codex mcp list` may take. Measured at 10 ms; a Codex that hangs here must not
+/// hold a turn.
+const CODEX_LIST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The `-c` overrides that give a Codex run Keel's server and take the other browsers away, for
+/// that run alone and without touching the person's config. Blocking: it asks Codex what it has.
+///
+/// Three things measured on 0.163 shape it. Codex refuses an MCP call it would have to approve
+/// itself ("requires approval, but approval policy is never"), so Keel's server is `approve` —
+/// Keel's own card is the question (`gated`). Its tool timeout is 60 s, under a card's four
+/// minutes, so it is raised past them, or an answer would land in nothing. And `enabled=false`
+/// for a server that is not configured fails the whole CLI, so only browsers Codex has are named.
+/// A Codex that cannot list its own servers is not started: the browsers it has would be live.
+pub fn codex_args(
+    cwd: &camino::Utf8Path,
+    port: u16,
+    lane: Option<&str>,
+) -> Result<Vec<String>, String> {
+    Ok(codex_args_for(&codex_servers(cwd)?, port, lane))
+}
+
+/// [`codex_args`] for the servers Codex said it has.
+fn codex_args_for(configured: &[String], port: u16, lane: Option<&str>) -> Vec<String> {
+    let secs = tool_timeout().parse::<u64>().unwrap_or(300_000) / 1000;
+    let mut args = vec![
+        "-c".to_string(),
+        format!("mcp_servers.{SERVER}.url=\"{}\"", url(port, lane, false)),
+        "-c".to_string(),
+        format!("mcp_servers.{SERVER}.default_tools_approval_mode=\"approve\""),
+        "-c".to_string(),
+        format!("mcp_servers.{SERVER}.tool_timeout_sec={secs}"),
+    ];
+    // Codex's own browsers too: `browser_use_external` and `browser_use_full_cdp_access` drive a
+    // Chrome over CDP — the person's, signed in — which is what a Keel lane is never given.
+    // Listed by `codex features list` on 0.163, and switching them off keeps the CLI starting.
+    for feature in CODEX_BROWSERS {
+        args.extend(["-c".to_string(), format!("features.{feature}=false")]);
+    }
+    // The same rule Claude's hook applies, not a list: any server whose name says it drives a
+    // browser, however it is spelled.
+    for name in configured {
+        if name != SERVER && crate::approve::drives_another_browser(&format!("mcp__{name}__tool")) {
+            args.extend([
+                "-c".to_string(),
+                format!("mcp_servers.{name}.enabled=false"),
+            ]);
+        }
+    }
+    args
+}
+
+/// The MCP servers Codex has configured for `cwd`, by name: its own `codex mcp list --json`.
+fn codex_servers(cwd: &camino::Utf8Path) -> Result<Vec<String>, String> {
+    const CANNOT: &str = "Keel could not ask Codex which MCP servers it has, so it cannot take the \
+                          other browsers away from this turn; the turn did not start";
+    let mut command = std::process::Command::new(crate::permissions::program("codex"));
+    command
+        .args(["mcp", "list", "--json"])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let child = command.spawn().map_err(|e| format!("{CANNOT} ({e})"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let out = match rx.recv_timeout(CODEX_LIST_WAIT) {
+        Ok(Ok(out)) if out.status.success() => out,
+        _ => return Err(CANNOT.into()),
+    };
+    let listed: Vec<Value> = serde_json::from_slice(&out.stdout).map_err(|_| CANNOT.to_string())?;
+    Ok(listed
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(str::to_string))
+        .collect())
+}
+
+/// A folder of Keel's own, per lane and per surface, holding `.agents/mcp_config.json` with this
+/// server: `agy` loads MCP servers from a folder passed with `--add-dir` (measured on 1.4.4), and
+/// the lane is in the address, so one folder cannot serve two lanes. Named by a hash of the lane,
+/// so no two lanes can share one — stripping odd characters made `a.b` and `ab` the same folder,
+/// and one lane's clicks would have landed in the other's tab. Never the repository's `.agents/`.
+pub fn agy_dir(port: u16, lane: Option<&str>, hooked: bool) -> Result<camino::Utf8PathBuf, String> {
+    use sha2::Digest;
+    let hash = sha2::Sha256::digest(lane.unwrap_or("").as_bytes());
+    let name: String = hash.iter().take(12).map(|b| format!("{b:02x}")).collect();
+    let dir = crate::permissions::permissions_dir()?
+        .with_file_name("antigravity-mcp")
+        .join(format!("{name}-{}", if hooked { "chat" } else { "term" }));
+    let file = dir.join(".agents").join("mcp_config.json");
+    let body = serde_json::to_vec_pretty(&json!({
+        "mcpServers": { SERVER: { "serverUrl": url(port, lane, hooked) } }
+    }))
+    .map_err(|e| e.to_string())?;
+    for p in [dir.clone(), dir.join(".agents"), file.clone()] {
+        if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{p} is a link, so Keel will not write through it"));
+        }
+    }
+    if std::fs::read(&file).ok().as_deref() != Some(body.as_slice()) {
+        crate::writes::replace(file.as_std_path(), &body)?;
+    }
+    Ok(dir)
 }
 
 fn tool_schema() -> Value {
@@ -144,7 +361,7 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
 
 /// Streamable HTTP: one POST per JSON-RPC message, JSON back. Notifications get 202.
 pub async fn post(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(q): Query<McpQuery>,
     Json(msg): Json<Value>,
 ) -> (
@@ -185,7 +402,10 @@ pub async fn post(
                 .cloned()
                 .unwrap_or(json!({}));
             let answered = if crate::browser::is_tool(name) {
-                Some(crate::browser::call(q.lane.as_deref(), name, &args).await)
+                Some(match gated(&state, &q, name, &args).await {
+                    Ok(()) => crate::browser::call(q.lane.as_deref(), name, &args).await,
+                    Err(why) => Err(why),
+                })
             } else if name == TOOL {
                 Some(ask(q.lane.as_deref(), &args).await)
             } else {
@@ -284,5 +504,161 @@ mod tests {
             waiters().locked().is_empty()
                 || !waiters().locked().values().any(|(_, l)| l == "lane-gone")
         );
+    }
+}
+
+#[cfg(test)]
+mod browser_gate_tests {
+    use super::*;
+
+    /// Codex gets Keel's server — Codex's own approval off for it, its timeout past a card's wait —
+    /// and loses every browser it has by the rule Claude's hook uses, and nothing else.
+    #[test]
+    fn a_codex_run_gets_keels_browser_and_loses_the_ones_it_has() {
+        let configured = [
+            "oya-browser".to_string(),
+            "chrome-devtools".to_string(),
+            "github".to_string(),
+        ];
+        let args = codex_args_for(&configured, 7777, Some("lane-1"));
+        assert_eq!(
+            args[..2],
+            [
+                "-c",
+                "mcp_servers.keel.url=\"http://127.0.0.1:7777/mcp?lane=lane-1\""
+            ]
+        );
+        assert!(
+            args.contains(&"mcp_servers.keel.default_tools_approval_mode=\"approve\"".to_string())
+        );
+        let secs: u64 = args
+            .iter()
+            .find_map(|a| a.strip_prefix("mcp_servers.keel.tool_timeout_sec="))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            secs > crate::approve::WAIT.as_secs() + 45,
+            "past the card and a page load"
+        );
+        assert!(args.contains(&"mcp_servers.oya-browser.enabled=false".to_string()));
+        assert!(args.contains(&"mcp_servers.chrome-devtools.enabled=false".to_string()));
+        assert!(
+            !args.iter().any(|a| a.contains("github")),
+            "a server that is not a browser stays"
+        );
+        assert!(
+            args.contains(&"features.browser_use_external=false".to_string()),
+            "nor Codex's own"
+        );
+    }
+
+    /// The address asks unless a launcher with a hook marks it; a lane id cannot add a parameter.
+    #[test]
+    fn an_address_without_the_hooked_mark_is_gated() {
+        assert_eq!(url(1, Some("a"), false), "http://127.0.0.1:1/mcp?lane=a");
+        assert!(
+            config(1, Some("a")).contains(&format!("lane=a&hooked={}", hooked_mark())),
+            "Claude's hook asks for it"
+        );
+        assert_eq!(
+            url(1, Some("x&hooked=1\""), false),
+            "http://127.0.0.1:1/mcp?lane=x%26hooked%3D1%22"
+        );
+    }
+
+    /// agy's folder is Keel's own, per lane and per surface, and no two lanes can share one.
+    #[test]
+    fn an_agy_lane_gets_its_own_folder_naming_keels_server() {
+        let terminal = agy_dir(7777, Some("lane-t"), false).unwrap();
+        let chat = agy_dir(7777, Some("lane-c"), true).unwrap();
+        let read = |d: &camino::Utf8Path| {
+            std::fs::read_to_string(d.join(".agents/mcp_config.json")).unwrap()
+        };
+        assert!(read(&terminal).contains("http://127.0.0.1:7777/mcp?lane=lane-t\""));
+        assert!(read(&chat).contains(&format!(
+            "http://127.0.0.1:7777/mcp?lane=lane-c&hooked={}",
+            hooked_mark()
+        )));
+        assert_ne!(
+            agy_dir(1, Some("a.b"), false).unwrap(),
+            agy_dir(1, Some("ab"), false).unwrap()
+        );
+        assert!(
+            !agy_dir(1, Some("../../x"), false)
+                .unwrap()
+                .as_str()
+                .contains("..")
+        );
+    }
+
+    /// An agent with no hook is asked before the Browser tab acts — by the rules Claude's hook
+    /// applies: a click always asks, reading follows trust — and one whose hook asked is not
+    /// asked again.
+    #[tokio::test]
+    async fn a_hookless_agent_is_asked_before_the_browser_acts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let q = |hooked: bool| McpQuery {
+            lane: Some("gate-test".into()),
+            hooked: hooked.then(|| hooked_mark().to_string()),
+        };
+        let asked = |name: &'static str, hooked: bool| {
+            let (state, q) = (state.clone(), q(hooked));
+            async move {
+                let call = tokio::spawn(async move { gated(&state, &q, name, &json!({})).await });
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                let finished = call.is_finished();
+                call.abort();
+                let card = crate::approve::queue()
+                    .locked()
+                    .iter()
+                    .any(|p| p.lane == "gate-test" && p.tool == format!("mcp__keel__{name}"));
+                crate::approve::queue()
+                    .locked()
+                    .retain(|p| p.lane != "gate-test");
+                (finished, card)
+            }
+        };
+        assert_eq!(
+            asked("browser_read", false).await,
+            (false, true),
+            "untrusted: reading asks"
+        );
+        crate::permissions::set_trusted(&root, true).unwrap();
+        assert_eq!(
+            asked("browser_click", true).await,
+            (true, false),
+            "its hook already asked"
+        );
+        assert_eq!(
+            asked("browser_read", false).await,
+            (true, false),
+            "trusted: reading needs no card"
+        );
+        assert_eq!(
+            asked("browser_click", false).await,
+            (false, true),
+            "a click always asks"
+        );
+        // A mark anyone on loopback could write is not Keel's: it is asked.
+        let forged = McpQuery {
+            lane: Some("gate-test".into()),
+            hooked: Some("1".into()),
+        };
+        let st = state.clone();
+        let call =
+            tokio::spawn(async move { gated(&st, &forged, "browser_click", &json!({})).await });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(
+            !call.is_finished(),
+            "a forged mark waits on a card like no mark"
+        );
+        call.abort();
+        crate::approve::queue()
+            .locked()
+            .retain(|p| p.lane != "gate-test");
     }
 }

@@ -909,6 +909,36 @@ impl Decoder {
                     Some("subagent_activity") if kind == "item.completed" => {
                         self.subagent(item, None, out);
                     }
+                    // An MCP call, named the way Claude Code names one (`mcp__<server>__<tool>`),
+                    // so the Browser tab's badge and activity line read Codex's like Claude's.
+                    Some("mcp_tool_call") => {
+                        let tool = format!(
+                            "mcp__{}__{}",
+                            item["server"].as_str().unwrap_or("?"),
+                            item["tool"].as_str().unwrap_or("?")
+                        );
+                        let input = Some(item["arguments"].clone()).filter(Value::is_object);
+                        self.begin(&id, &tool, input, None, None, out);
+                        if kind == "item.completed" {
+                            let failed = item["status"] == "failed" || !item["error"].is_null();
+                            let text = |v: &Value| {
+                                v["content"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|b| b["text"].as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            };
+                            let output = match &item["error"] {
+                                Value::Null => text(&item["result"]),
+                                e => e["message"]
+                                    .as_str()
+                                    .map_or_else(|| e.to_string(), str::to_string),
+                            };
+                            self.finish(&id, output, failed, None, out);
+                        }
+                    }
                     Some("command_execution") if kind == "item.started" => {
                         let input = serde_json::json!({
                             "command": item["command"].as_str().unwrap_or_default(),
@@ -1360,7 +1390,7 @@ pub fn antigravity_tool(name: &str, args: &Value) -> (String, Value) {
         "replace_file_content" | "sed_file" => ("Edit", vec![("file_path", path)]),
         "multi_replace_file_content" => ("MultiEdit", vec![("file_path", path)]),
         "notebook_edit" => ("NotebookEdit", vec![("notebook_path", path)]),
-        "view_file" => ("Read", vec![("file_path", path)]),
+        "view_file" | "read_file" => ("Read", vec![("file_path", path)]),
         "list_dir" => ("LS", vec![("path", first(&["DirectoryPath", "Path"]))]),
         "grep_search" => (
             "Grep",
