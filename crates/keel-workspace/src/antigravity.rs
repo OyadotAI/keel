@@ -235,7 +235,22 @@ impl Fields {
 /// How deep a message is walked. agy's deepest field read here is three levels down.
 const MAX_DEPTH: usize = 10;
 
+/// Parse `b` as a message at `path`, or report that it is not one. `path` is left as it was on
+/// every way out: an early return from a blob that is not a message left a field number on it,
+/// and every field read after that was filed under the wrong path.
 fn walk(b: &[u8], path: &mut Vec<u32>, out: &mut Vec<(Vec<u32>, Field)>, depth: usize) -> bool {
+    let n = path.len();
+    let ok = walk_fields(b, path, out, depth);
+    path.truncate(n);
+    ok
+}
+
+fn walk_fields(
+    b: &[u8],
+    path: &mut Vec<u32>,
+    out: &mut Vec<(Vec<u32>, Field)>,
+    depth: usize,
+) -> bool {
     let mut i = 0;
     let mut found = Vec::new();
     while i < b.len() {
@@ -263,23 +278,25 @@ fn walk(b: &[u8], path: &mut Vec<u32>, out: &mut Vec<(Vec<u32>, Field)>, depth: 
                     return false;
                 };
                 i += n;
-                let Some(chunk) = b.get(i..i + len as usize) else {
+                // A length near `u64::MAX` from a malformed blob overflows the index otherwise.
+                let Some(end) = usize::try_from(len).ok().and_then(|l| i.checked_add(l)) else {
                     return false;
                 };
-                i += len as usize;
+                let Some(chunk) = b.get(i..end) else {
+                    return false;
+                };
+                i = end;
+                // Kept as bytes *and* walked into: the wire cannot say whether a length-delimited
+                // field is text or a message, and a message whose bytes all happen to be printable
+                // read as text lost every field inside it. Lookups are by exact path, so text that
+                // also parses as a message adds paths nothing asks for.
+                found.push((path.clone(), Field::Bytes(chunk.to_vec())));
                 let mut inner = Vec::new();
-                // Text that happens to parse as a message stays text when it is readable: a
-                // prompt is a string, and walked into it reads as noise.
-                let readable = std::str::from_utf8(chunk)
-                    .is_ok_and(|s| !s.chars().any(|c| c.is_control() && !c.is_whitespace()));
                 if depth < MAX_DEPTH
                     && !chunk.is_empty()
-                    && !readable
                     && walk(chunk, path, &mut inner, depth + 1)
                 {
                     found.extend(inner);
-                } else {
-                    found.push((path.clone(), Field::Bytes(chunk.to_vec())));
                 }
             }
             _ => return false,
@@ -348,7 +365,20 @@ pub(crate) fn key(idx: i64) -> String {
 /// it too — agy writes nothing after one, and waits for the person.
 pub(crate) fn ends(v: &Value) -> bool {
     v["status"] == CANCELLED
+        || denied_by_the_person(v)
         || (v["step"] == RESPONSE && (v["status"] != DONE || v["call"].is_null()))
+}
+
+/// A tool the person refused at agy's own permission question. agy marks it failed and writes
+/// nothing after it, unlike a refusal by Keel's hook, after which it carries on — so it is the
+/// error, not the status, that says the turn is over. Measured as the last step of four local
+/// conversations.
+fn denied_by_the_person(v: &Value) -> bool {
+    v["step"] == TOOL
+        && v["status"] == FAILED
+        && v["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("user denied permission"))
 }
 
 /// Whether a step was cancelled.
@@ -481,6 +511,29 @@ mod tests {
         let cancelled =
             json!({"agy":6,"step":132,"status":6,"call":{"name":"run_command"}}).to_string();
         assert_eq!(kind_of(&cancelled), Kind::TurnEnd);
+        // Refused at agy's own question: over. Refused by Keel's hook: agy carries on.
+        let denied = json!({"agy":7,"step":132,"status":7,"error":"permission check failed for unsandboxed \"rm x\": user denied permission to run command"}).to_string();
+        assert_eq!(kind_of(&denied), Kind::TurnEnd);
+        let hooked =
+            json!({"agy":7,"step":132,"status":7,"error":"tool call denied by pre-tool hook: no"})
+                .to_string();
+        assert_eq!(kind_of(&hooked), Kind::Other);
+    }
+
+    /// A length that would run past the end, or overflow, is a malformed message, never a panic;
+    /// and a nested message whose bytes are all printable is still walked into.
+    #[test]
+    fn a_malformed_or_printable_message_is_read_safely() {
+        let mut huge = vec![0x0a];
+        huge.extend([0xff; 9]);
+        huge.push(0x01);
+        assert!(Fields::parse(&huge).0.is_empty());
+        let inner = msg(&[(1, S("hi there, this is printable text!"))]);
+        let f = Fields::parse(&msg(&[(20, M(inner))]));
+        assert_eq!(
+            f.text(&[20, 1]).as_deref(),
+            Some("hi there, this is printable text!")
+        );
     }
 
     fn database(path: &Utf8Path, rows: &[(i64, i64, i64, Vec<u8>)]) {

@@ -73,7 +73,7 @@ impl Decoder {
                     r["output"].as_str().unwrap_or_default()
                 };
                 self.finish(&id, output.replace("\r\n", "\n"), bad, at, out);
-                if cancelled(r) {
+                if ends(r) {
                     out.extend(self.close(Ending::Stopped));
                 }
             }
