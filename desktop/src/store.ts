@@ -352,11 +352,16 @@ export const useStore = create<State>()((set, getState) => {
       const l = getState().lanes[lid];
       const s = l && list.find((x) => x.id === l.session);
       const busy = !!s && s.live && s.busy;
+      // A session that ended took its background agents with it.
+      if (l && s && !s.live && l.conv.background) lane(lid, (now) => ({ conv: { turns: now.conv.turns } }));
       if (!l || (l.managed && l.interface !== "terminal") || l.submitting || (l.running === busy && (!s || l.known))) continue;
       // Idle again: whatever it was asking is no longer being waited on — Esc in the terminal,
       // or the hook's own wait ran out — and what was queued goes next.
       lane(lid, { running: busy, known: l.known || !!s, ...(!busy && l.running ? { pending: [] } : {}) });
       save(getState());
+      // Followed from the moment it works, not from the moment it is opened: the lane list says
+      // what a terminal is doing, and it can only say what the transcript has been read for.
+      if (busy) void follow(lid);
       if (!busy && l.running) {
         void notify(l.title, "The agent is waiting for you.");
         gitSoon(lid);
@@ -395,7 +400,9 @@ export const useStore = create<State>()((set, getState) => {
       trust(path, ep);
       setup(path, ep);
       void poll(path);
-      void get<Session[]>(ep, "/api/sessions").then((sessions) => project(path, { sessions }), () => undefined);
+      // Through `sessionsChanged`, not straight into the project: what ended in the gap — a turn,
+      // a session and the background agents it took with it — is what a reconnect is for.
+      void get<Session[]>(ep, "/api/sessions").then((sessions) => sessionsChanged(path, sessions), () => undefined);
       for (const lid of lanesOf(path)) {
         lane(lid, (l) => ({ reviewRevision: (l.reviewRevision ?? 0) + 1 }));
         gitSoon(lid);
@@ -539,6 +546,10 @@ export const useStore = create<State>()((set, getState) => {
             else if (e.event === "fatal") missing = true;
             else if (e.event === "caught-up") {
               patch = { ...patch, loaded: true, known: true, error: undefined };
+              // A replay rebuilds the background agents from the transcript; a session that has
+              // ended wrote no notification for the ones it took with it.
+              const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
+              if (s && !s.live && conv.background) conv = { turns: conv.turns };
               // Back to a healthy stream: the next blip waits a second, not the ceiling.
               retries.delete(lid);
             }

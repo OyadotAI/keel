@@ -391,10 +391,16 @@ fn followable(record: &Value) -> bool {
     if record["isSidechain"].as_bool() == Some(true) {
         return false;
     }
-    matches!(
-        record["type"].as_str(),
-        Some("assistant" | "user" | "result" | "system")
-    )
+    match record["type"].as_str() {
+        Some("assistant" | "user" | "result" | "system") => true,
+        // Most background subagents finish while the agent is busy, and Claude Code then writes
+        // their notification only to its queue: 86 of 123 measured here. Dropped, the agent read
+        // as working for as long as the session stayed open.
+        Some("queue-operation") => record["content"]
+            .as_str()
+            .is_some_and(|c| c.contains("<task-notification>")),
+        _ => false,
+    }
 }
 
 /// Claude Code's directory name for a working directory.
@@ -1183,6 +1189,41 @@ mod tests {
             let (lines, _) = tail(Utf8Path::new("/repo"), &home, "huge-1", next).unwrap();
             assert_eq!(lines.len(), 1, "the record after it is read");
             assert!(lines[0].contains("after the giant"));
+        }
+
+        /// A background agent's notification that only reached Claude Code's queue — the usual
+        /// case, while the agent is busy — still reaches the follower and ends the agent.
+        #[test]
+        fn a_queued_task_notification_is_followed() {
+            let (_d, home) = home_with("-repo", "q-1.jsonl", "");
+            let path = home.join("projects").join("-repo").join("q-1.jsonl");
+            let note = "<task-notification>\n<tool-use-id>c1</tool-use-id>\n<status>completed</status>\n</task-notification>";
+            let queued = serde_json::json!({"type": "queue-operation", "operation": "enqueue", "content": note});
+            let other = serde_json::json!({"type": "queue-operation", "operation": "enqueue", "content": "hello"});
+            std::fs::write(&path, format!("{queued}\n{other}\n")).unwrap();
+            let (lines, _) = tail(Utf8Path::new("/repo"), &home, "q-1", 0).unwrap();
+            assert_eq!(
+                lines.len(),
+                1,
+                "only the notification, not the person's queued text"
+            );
+            let mut d = crate::conversation::Decoder::new(
+                crate::conversation::Provider::Claude,
+                crate::conversation::Source::Transcript,
+            );
+            let ops: Vec<_> = d
+                .feed(&lines[0], None, std::time::Instant::now())
+                .into_iter()
+                .map(|f| f.op)
+                .collect();
+            assert_eq!(
+                ops,
+                vec![crate::conversation::Op::Background {
+                    id: "c1".into(),
+                    agent: None,
+                    running: false
+                }]
+            );
         }
 
         #[test]

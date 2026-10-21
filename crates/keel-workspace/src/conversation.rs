@@ -172,6 +172,15 @@ pub enum Op {
     },
     /// Files written by something that is not a call (Codex's `file_change`).
     Wrote { paths: Vec<String> },
+    /// A subagent started in the background, or finished. Lane-level, like `Session`: the call
+    /// that launched it answers at once, and the agent works on across turns until Claude Code's
+    /// `<task-notification>` for that call says it stopped.
+    Background {
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        running: bool,
+    },
     /// What the turn has spent so far. Assigned, never added: `final` is the run's own total.
     Usage {
         context: u64,
@@ -205,6 +214,19 @@ pub enum Op {
         #[serde(skip_serializing_if = "is_zero")]
         raw_dropped: usize,
     },
+}
+
+/// The call a `<task-notification>` reports the end of, when it reports an end: the
+/// `<tool-use-id>` of the call that launched it, with a `<status>` other than running.
+fn notified(line: &str) -> Option<String> {
+    let tag = |name: &str| {
+        let open = format!("<{name}>");
+        let start = line.find(&open)? + open.len();
+        let end = line[start..].find(&format!("</{name}>"))?;
+        Some(line[start..start + end].trim().to_string())
+    };
+    let status = tag("status")?;
+    (status != "running").then(|| tag("tool-use-id")).flatten()
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -364,6 +386,30 @@ impl Decoder {
                 self.raw(&mut out, line, Stream::Out, false, None);
                 return out;
             }
+            // Only where Claude Code delivers one — its queue, or a prompt it typed itself — so
+            // a tool's output that quotes a notification does not end an agent.
+            let delivered = matches!(
+                record["type"].as_str(),
+                Some("queue-operation" | "attachment")
+            ) || (record["type"] == "user"
+                && record["message"]["content"].is_string());
+            if delivered
+                && line.contains("<task-notification>")
+                && let Some(id) = notified(line)
+            {
+                self.push(
+                    &mut out,
+                    Op::Background {
+                        id,
+                        agent: None,
+                        running: false,
+                    },
+                );
+            }
+            // Claude Code's queue says nothing else a turn is made of.
+            if delivered && record["type"] != "user" {
+                return out;
+            }
             // Between turns a transcript holds Claude Code's own bookkeeping — an away summary, a
             // scheduled task firing — which opened a turn with no prompt and nothing in it. Only
             // the agent itself speaking opens one: that is a real turn, started by a background
@@ -483,6 +529,29 @@ impl Decoder {
                     };
                     let failed = b["is_error"].as_bool() == Some(true);
                     self.finish(id, flat_text(&b["content"]), failed, at.clone(), out);
+                    // `toolUseResult` in a transcript, `tool_use_result` on the stream.
+                    let launched = ["toolUseResult", "tool_use_result"]
+                        .iter()
+                        .any(|k| r[*k]["status"] == "async_launched");
+                    if launched && !failed {
+                        let agent =
+                            self.turn
+                                .as_ref()
+                                .and_then(|t| t.calls.get(id))
+                                .and_then(|c| {
+                                    c.input.as_ref()?["subagent_type"]
+                                        .as_str()
+                                        .map(str::to_string)
+                                });
+                        self.push(
+                            out,
+                            Op::Background {
+                                id: id.to_string(),
+                                agent,
+                                running: true,
+                            },
+                        );
+                    }
                 }
             }
             "result" => self.result(r, out),

@@ -101,3 +101,18 @@ describe("terminal history handoff", () => {
     expect(restoreTranscript(restored, frames).turns).toEqual(restored.turns);
   });
 });
+
+describe("background agents", () => {
+  it("work across turns until their notification, and survive a fact", () => {
+    let c = applyFrames(empty, [
+      f("open", { prompt: "review" }, "u1"),
+      f("background", { id: "c1", agent: "pm", running: true }, "u1"),
+      f("close", { reason: "done" }, "u1"),
+    ]);
+    expect(c.background).toEqual({ c1: "pm" });
+    c = applyFact(c, { turn: "u1", kind: "turn.ended" });
+    expect(c.background).toEqual({ c1: "pm" });
+    c = applyFrames(c, [f("background", { id: "c1", running: false })]);
+    expect(c.background).toEqual({});
+  });
+});

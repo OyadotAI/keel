@@ -111,7 +111,11 @@ function Members({ project }: { project: string }) {
     const names = new Set<string>();
     for (const id of s.projects[project]?.lanes ?? []) {
       const lane = s.lanes[id];
-      if (!lane?.running || lane.pending.length) continue;
+      if (!lane) continue;
+      // A background agent works on after its turn ends, for as long as the session is alive.
+      const session = s.projects[project]?.sessions?.find((x) => x.id === lane.session);
+      if (session?.live !== false) for (const agent of Object.values(lane.conv.background ?? {})) if (agent) names.add(agent);
+      if (!lane.running || lane.pending.length) continue;
       const turn = lane.conv.turns.at(-1);
       for (const call of Object.values(turn?.calls ?? {})) {
         if (!/^(Agent|Task)$/.test(call.tool) || typeof call.input?.subagent_type !== "string") continue;
@@ -312,6 +316,13 @@ function LaneRow({ id }: { id: string }) {
   const active = useStore((s) => s.active === id);
   const failed = useStore((s) => s.lanes[id]?.conv.turns.at(-1)?.gate?.status === "failed");
   const subText = useStore((s) => s.lanes[id] ? lastWord(s.lanes[id]) : "");
+  // What it is doing, under the title while it is doing it; an idle lane stays one line.
+  // A string, not the object: a selector that builds a new object every call re-renders forever.
+  const now = useStore((s) => {
+    const a = s.lanes[id] ? activity(s.lanes[id]) : undefined;
+    return a && a.tone !== "idle" ? `${a.tone}\n${a.label}` : "";
+  });
+  const [tone, doing] = now ? now.split("\n") : ["", ""];
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   const root = useStore((s) => (l ? s.projects[l.project]?.path : undefined));
   if (!l) return null;
@@ -330,7 +341,10 @@ function LaneRow({ id }: { id: string }) {
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
-      <span className="lane-title" title={`${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>{l.title}</span>
+      <span className="lane-text" title={`${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
+        <span className="lane-title">{l.title}</span>
+        {doing && <span className={`lane-sub ${tone}`}>{doing}</span>}
+      </span>
       {asking > 0 && <span className="count-pill">{asking}</span>}
     </button>
     <button className="ghost lane-close" aria-label={`Close ${l.title}`} title={`Close lane (${label({ key: "w" })})`} onClick={() => ask("close")}>

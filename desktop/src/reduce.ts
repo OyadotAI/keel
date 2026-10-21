@@ -82,6 +82,9 @@ export interface Turn {
 
 export interface Conversation {
   turns: Turn[];
+  /// Subagents launched in the background and still working, by the call that launched them:
+  /// that call answered at once, and the agent runs on across turns until its notification.
+  background?: Record<string, string>;
 }
 
 export interface Frame {
@@ -129,7 +132,15 @@ function locate(turns: Turn[], key: string | null): number {
 export function applyFrames(conv: Conversation, frames: Frame[]): Conversation {
   if (frames.length === 0) return conv;
   const turns = conv.turns.slice();
+  let background = conv.background;
   for (const f of frames) {
+    if (f.op === "background") {
+      const id = f.id as string;
+      background = { ...background };
+      if (f.running) background[id] = (f.agent as string | undefined) ?? "";
+      else delete background[id];
+      continue;
+    }
     if (f.op === "open") {
       // A resumed replay sends the same turn again; it replaces, so a reconnect is idempotent.
       const prompt = (f.prompt as string | null) ?? null;
@@ -148,7 +159,7 @@ export function applyFrames(conv: Conversation, frames: Frame[]): Conversation {
     if (f.turn && !t.key) t.key = f.turn;
     turns[i] = op(t, f);
   }
-  return { turns };
+  return background ? { turns, background } : { turns };
 }
 
 function op(t: Turn, f: Frame): Turn {
@@ -286,7 +297,7 @@ export function applyFact(conv: Conversation, fact: Fact): Conversation {
       if (!learned) return conv;
   }
   turns[i] = t;
-  return { turns };
+  return { ...conv, turns };
 }
 
 /** Refresh provider history after a terminal handoff, retaining Keel's matching turn metadata. */

@@ -619,3 +619,49 @@ fn antigravity_tools_map_to_claude_names_and_keys() {
         ("browser_click_element", Some(3))
     );
 }
+
+/// A background subagent's call answers at once; the agent is working until the notification
+/// for that call arrives — after its turn has ended — and a tool output quoting one is not one.
+#[test]
+fn a_background_agent_works_until_its_notification() {
+    let mut launched: Value =
+        serde_json::from_str(&tool_result("c1", "Async agent launched")).unwrap();
+    launched["toolUseResult"] = json!({"status": "async_launched", "agentId": "a1"});
+    let note = "<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>c1</tool-use-id>\n<status>completed</status>\n</task-notification>";
+    let lines = [
+        opener("u-1", "review it"),
+        tool_use(
+            "m1",
+            "c1",
+            "Agent",
+            json!({"subagent_type": "pm", "prompt": "scope"}),
+        ),
+        launched.to_string(),
+        tool_result("c9", note),
+        json!({"type": "system", "subtype": "turn_duration", "durationMs": 5}).to_string(),
+        json!({"type": "queue-operation", "operation": "enqueue", "content": note}).to_string(),
+    ];
+    let mut d = Decoder::new(Provider::Claude, Source::Transcript);
+    let now = Instant::now();
+    let ops: Vec<Op> = lines
+        .iter()
+        .flat_map(|l| d.feed(l, None, now))
+        .map(|f| f.op)
+        .filter(|op| matches!(op, Op::Background { .. }))
+        .collect();
+    assert_eq!(
+        ops,
+        vec![
+            Op::Background {
+                id: "c1".into(),
+                agent: Some("pm".into()),
+                running: true
+            },
+            Op::Background {
+                id: "c1".into(),
+                agent: None,
+                running: false
+            },
+        ]
+    );
+}

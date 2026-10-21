@@ -22,10 +22,15 @@ const VERBS: [RegExp, string][] = [
 /// What the agent is doing now, in one place — ported from the Swift app's working bar. Read off
 /// the lane's open turn: a waiting question first, then the checks, then the call still running.
 /// Unprefixed, so the sidebar row can use it under the lane's own name.
+/// "pm", "pm and designer", "3 agents": the names of agents still working, or how many.
+const names = (agents: string[]) => agents.length > 2 ? `${agents.length} agents` : agents.map((a) => a || "an agent").join(" and ");
+
 export function activity(l: Lane): { label: string; since?: string; tone: "idle" | "live" | "warn" } {
   if (l.pending.length) return { label: l.pending.length > 1 ? `paused — ${l.pending.length} questions waiting` : "waiting for you", tone: "warn" };
   const t = l.conv.turns.at(-1);
   if (t?.gate?.status === "running") return { label: `Checking — ${t.gate.command ?? "the project's checks"}`, tone: "live" };
+  const background = Object.values(l.conv.background ?? {});
+  if (!l.running && background.length) return { label: `${names(background)} working in the background`, tone: "live" };
   if (!l.running) return { label: "idle", tone: "idle" };
   const call = t && Object.values(t.calls).reverse().find((c) => c.state === "running" && !c.parent);
   if (call) {
