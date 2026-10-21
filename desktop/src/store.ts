@@ -388,6 +388,15 @@ export const useStore = create<State>()((set, getState) => {
       }
       void poll(path, d?.lane);
     },
+    // A Codex or Antigravity terminal named its conversation: the lane resumes it from now on,
+    // and can switch to the chat view. Never a running Claude lane's — Keel chose that id.
+    "terminal.session": (path, _ep, data) => {
+      const d = (data as { data?: { lane?: string; session?: string } })?.data;
+      const l = d?.lane ? getState().lanes[d.lane] : undefined;
+      if (!d?.session || !l || l.project !== path || l.agent === "claude" || l.interface !== "terminal" || l.known) return;
+      lane(l.id, { session: d.session, known: true });
+      save(getState());
+    },
     "context.changed": (path, _ep, data) => {
       const d = (data as { data?: { lane: string; snapshot: import("./context").ContextSnapshot } })?.data;
       const current = d && getState().lanes[d.lane];
@@ -772,9 +781,10 @@ export const useStore = create<State>()((set, getState) => {
       const l = getState().lanes[lid];
       if (!l || l.interface === value) return;
       if (l.running || l.submitting || l.receipt) { lane(lid, { error: "Stop the active turn and resolve any unconfirmed submission before switching interfaces." }); return; }
-      // Codex and Antigravity terminals do not tell Keel their conversation id.
+      // Codex and Antigravity name their conversation on the first message; the daemon finds it
+      // on disk (`discover.rs`). Before that there is nothing for the chat view to resume.
       if (l.interface === "terminal" && l.agent !== "claude" && !l.known) {
-        lane(lid, { error: `This ${agentName(l.agent)} terminal does not expose its session ID. Choose Formatted chat in Settings and open a new lane; this terminal and its history will remain available.` }); return;
+        lane(lid, { error: `This ${agentName(l.agent)} terminal has no conversation yet. Send it a message, then switch.` }); return;
       }
       if (l.interface === "terminal" && l.agent !== "claude" && terminalConnected(lid)) {
         lane(lid, { submitting: true, error: undefined });

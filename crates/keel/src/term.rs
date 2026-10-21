@@ -271,6 +271,10 @@ async fn session(socket: WebSocket, cwd: String, launch: Launch) {
     let _ = spawned.join();
 }
 
+/// How often a terminal whose conversation is not yet named looks for it on disk: one folder
+/// listing, for as long as the CLI runs or until it is found.
+const LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Own the pty for the life of one session.
 fn pty_thread(
     cwd: &str,
@@ -289,6 +293,17 @@ fn pty_thread(
         return;
     };
 
+    // A Codex or Antigravity terminal names its conversation itself; see `discover`.
+    let mut unnamed = match &launch {
+        Launch::Agent {
+            agent,
+            resume: false,
+            lane: Some(lane),
+            ..
+        } if agent != "claude" => Some((agent.clone(), lane.clone(), std::time::SystemTime::now())),
+        _ => None,
+    };
+    let mut looked = std::time::Instant::now();
     let mut cmd = match launch {
         Launch::Shell => CommandBuilder::new(shell()),
         Launch::Agent {
@@ -432,6 +447,19 @@ fn pty_thread(
         if !announce(pair.master.as_ref(), &mut showing) {
             break;
         }
+        if unnamed.is_some() && looked.elapsed() >= LOOK_EVERY {
+            looked = std::time::Instant::now();
+            if let Some((agent, lane, since)) = &unnamed
+                && let Some(id) = crate::discover::started(agent, std::path::Path::new(cwd), *since)
+            {
+                crate::events::emit(
+                    "terminal.session",
+                    None,
+                    serde_json::json!({ "lane": lane, "session": id }),
+                );
+                unnamed = None;
+            }
+        }
     }
 
     // The agent's whole tree, not its top: `claude` with a `cargo test` under it is the ordinary
@@ -486,10 +514,19 @@ mod tests {
         // The agent's argv is never part of the script: positional parameters, untouched.
         assert_eq!(argv[3..], ["sh", "codex", "--resume", "a b"]);
         let out = std::process::Command::new("/bin/sh")
-            .args(["-c", "printf '%s|' \"$@\"", "sh", "--resume", "a b; echo pwned"])
+            .args([
+                "-c",
+                "printf '%s|' \"$@\"",
+                "sh",
+                "--resume",
+                "a b; echo pwned",
+            ])
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "--resume|a b; echo pwned|");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "--resume|a b; echo pwned|"
+        );
         assert!(install_line("claude", &[]).unwrap()[2].contains("https://claude.ai/install.sh"));
         assert_eq!(
             install_line("agy", &[]),

@@ -166,8 +166,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         params.set("agent", current.agent);
         params.set("session", current.session);
         params.set("lane", lane);
-        // Codex and Antigravity sessions have ids of their own, which Keel does not learn: their lanes start
-        // fresh each time rather than resuming something that is not there.
+        // Codex and Antigravity name their own conversations; until the daemon has found the id
+        // on disk (`terminal.session`), the lane starts fresh rather than resuming nothing.
         if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
       }

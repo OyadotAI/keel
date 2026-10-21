@@ -20,6 +20,7 @@ mod connect;
 mod context;
 mod denies;
 mod dev;
+mod discover;
 mod editor;
 mod events;
 mod fsops;

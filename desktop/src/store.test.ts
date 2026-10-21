@@ -147,12 +147,25 @@ describe("chat delivery", () => {
     expect(load).toHaveBeenCalledWith("test");
   });
 
+  it("a Codex terminal takes the conversation id the daemon found and can then switch", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ projects: { "/repo": { ...s.projects["/repo"], endpoint: undefined } } }));
+    store.getState().load("test"); await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/events"))).toBe(true));
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex", session: "keel-chosen" } } }));
+    const events = mocks.open.mock.calls.find(([u]) => u.includes("/api/events"))!;
+    events[2]([{ event: "terminal.session", data: { data: { lane: "other", session: "nope" } } }]);
+    expect(store.getState().lanes.test).toMatchObject({ session: "keel-chosen", known: false });
+    events[2]([{ event: "terminal.session", data: { data: { lane: "test", session: "codex-own" } } }]);
+    expect(store.getState().lanes.test).toMatchObject({ session: "codex-own", known: true });
+    expect(JSON.parse(localStorage.getItem("keel.layout.v1")!).lanes[0]).toMatchObject({ session: "codex-own", known: true });
+  });
+
   it("a Codex terminal without a session id retains its original view and history", async () => {
     const store = await fixture();
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex" } } }));
     await store.getState().switchInterface("test", "chat");
     expect(store.getState().lanes.test.interface).toBe("terminal");
-    expect(store.getState().lanes.test.error).toContain("does not expose its session ID");
+    expect(store.getState().lanes.test.error).toContain("has no conversation yet");
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });

@@ -1591,7 +1591,8 @@ pub(crate) fn interactive(
             }
             Ok((crate::permissions::program("claude"), args))
         }
-        // No transcript reader for Codex yet: its lane is the CLI and Keel's git panels.
+        // No transcript reader for Codex yet: its lane is the CLI and Keel's git panels. Its id is
+        // learned once the CLI writes the conversation; see `discover`.
         "codex" => {
             let mut args = vec!["--cd".to_string(), cwd.to_string()];
             if resume {
