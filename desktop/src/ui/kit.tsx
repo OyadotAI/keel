@@ -6,6 +6,11 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 /// A tab row with roving focus: only the selected tab is in the Tab order, ←/→ move between them.
 export function Tabs<T extends string>({ tabs, value, onChange, children, className }: { tabs: readonly { id: T; label: ReactNode; title?: string }[]; value: T; onChange: (id: T) => void; children?: ReactNode; className?: string }) {
+  // A strip wider than its panel scrolls; the tab that is showing is never the one cut off.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    strip.current?.querySelector<HTMLElement>(`[data-tab="${value}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [value]);
   const move = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
@@ -16,7 +21,7 @@ export function Tabs<T extends string>({ tabs, value, onChange, children, classN
     e.currentTarget.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)?.focus();
   };
   return (
-    <div className={`tabs${className ? ` ${className}` : ""}`} role="tablist" onKeyDown={move}>
+    <div ref={strip} className={`tabs${className ? ` ${className}` : ""}`} role="tablist" onKeyDown={move}>
       {tabs.map((t) => (
         <button key={t.id} data-tab={t.id} role="tab" aria-selected={t.id === value} tabIndex={t.id === value ? 0 : -1} title={t.title} onClick={() => onChange(t.id)}>
           {t.label}
