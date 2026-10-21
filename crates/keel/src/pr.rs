@@ -217,7 +217,7 @@ fn has_commits(repo: &camino::Utf8Path) -> bool {
         .unwrap_or(false)
 }
 
-fn uncommitted(repo: &camino::Utf8Path) -> String {
+pub(crate) fn uncommitted(repo: &camino::Utf8Path) -> String {
     let mut c = crate::git::command(repo);
     c.args(["status", "--porcelain"]);
     crate::git::output(c)

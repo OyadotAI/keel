@@ -30,8 +30,9 @@ pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers, user_mcp
 pub use follow::{Agent as Follows, Transcript};
 pub use plugins::{Plugin, discover_plugins};
 pub use sessions::{
-    Kind, MAX_READ, Session, Status, discover_sessions, kind_of, opener_of, opening_turn,
-    project_key, session_dirs, status, tail, tail_last, transcript_len, transcript_path,
+    Kind, MAX_READ, Session, Status, discover_sessions, interactive, kind_of, opener_of,
+    opening_turn, project_key, session_dirs, status, tail, tail_last, transcript_len,
+    transcript_path,
 };
 pub use skills::{Skill, discover_skills, plugin_skills};
 

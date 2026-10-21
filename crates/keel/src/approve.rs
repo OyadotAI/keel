@@ -541,7 +541,8 @@ async fn decide(
 
     // A background lifetime is not authorization to execute. Only hand the command to the
     // monitor after a local trust decision or an explicit approval of this invocation.
-    let background = is_background(&hook.tool_name, &hook.tool_input);
+    let background =
+        is_background(&hook.tool_name, &hook.tool_input) && !kept_by_its_terminal(&hook);
     // The monitor is Claude's. An agy command detached by hand would die with the turn unseen.
     if strict && background {
         return Ok(Json(Decision {
@@ -939,6 +940,23 @@ pub fn plain_shell(command: &str) -> bool {
 /// when the turn ends; nothing delivers its output to anyone.
 ///
 /// So both spellings ask the same question.
+/// A background command Claude Code itself keeps: one it was asked to run with
+/// `run_in_background`, in a session open interactively in a terminal. That `claude` keeps the
+/// shell after the turn and tells the agent when it finishes, so it is left to do so — handed to
+/// Keel's monitor, the agent's turn ended at every one and the result came back later as a prompt
+/// typed into the terminal (35 times in one measured session). A command that detaches itself
+/// (`nohup`, `&`) is still the monitor's: nothing tracks that one.
+fn kept_by_its_terminal(hook: &HookInput) -> bool {
+    keel_workspace::claude_home().is_some_and(|h| kept_by_its_terminal_in(hook, &h))
+}
+
+fn kept_by_its_terminal_in(hook: &HookInput, claude_home: &camino::Utf8Path) -> bool {
+    hook.provider.is_empty()
+        && hook.tool_input["run_in_background"] == true
+        && !hook.tool_input["command"].as_str().is_some_and(detaches)
+        && keel_workspace::interactive(claude_home, &hook.session_id)
+}
+
 pub fn is_background(tool: &str, input: &serde_json::Value) -> bool {
     if tool != "Bash" {
         return false;
@@ -1916,6 +1934,54 @@ pub(crate) mod tests {
                 "{p}: Claude Code reads them itself"
             );
         }
+    }
+
+    /// An interactive terminal's own background command is Claude Code's to keep; `claude -p`'s,
+    /// a chat lane's, and a command that detaches itself are still the monitor's.
+    #[test]
+    fn a_terminal_keeps_its_own_background_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = camino::Utf8Path::from_path(tmp.path()).unwrap();
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let me = std::process::id();
+        let file = |name: &str, kind: &str, id: &str| {
+            std::fs::write(
+                home.join("sessions").join(name),
+                serde_json::json!({"pid": me, "sessionId": id, "kind": kind}).to_string(),
+            )
+            .unwrap()
+        };
+        file("a.json", "interactive", "term");
+        file("b.json", "print", "headless");
+        let hook = |session: &str, provider: &str, input: serde_json::Value| HookInput {
+            tool_name: "Bash".into(),
+            tool_input: input,
+            tool_use_id: "b1".into(),
+            session_id: session.into(),
+            lane: "l".into(),
+            cwd: String::new(),
+            provider: provider.into(),
+        };
+        let tests =
+            serde_json::json!({"command": "npm run test:coverage", "run_in_background": true});
+        assert!(kept_by_its_terminal_in(
+            &hook("term", "", tests.clone()),
+            home
+        ));
+        assert!(
+            !kept_by_its_terminal_in(&hook("headless", "", tests.clone()), home),
+            "claude -p kills it at the turn's end"
+        );
+        assert!(
+            !kept_by_its_terminal_in(&hook("term", SDK, tests), home),
+            "a chat lane's SDK bridge"
+        );
+        let detached =
+            serde_json::json!({"command": "nohup pnpm dev &", "run_in_background": true});
+        assert!(
+            !kept_by_its_terminal_in(&hook("term", "", detached), home),
+            "nothing tracks a detached one"
+        );
     }
 
     /// The monitor keeps a job alive; the command's own detaching is what escaped it.

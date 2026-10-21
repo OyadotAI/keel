@@ -244,7 +244,11 @@ fn run(
 ) -> Done {
     let since = Instant::now();
     let cancelled = || none("cancelled", "The review was cancelled.".into(), since);
-    while state.writer_of(dir).is_some() {
+    // The review reads a commit in a scratch copy, never this tree, so the one thing worth waiting
+    // for is a turn's own commit: with nothing uncommitted there is none to come. Waiting for the
+    // tree to go quiet as well never ended in a terminal lane kept busy — measured, the agent's
+    // `gh pr create` started a review, the person typed "cont", and it sat waiting until it gave up.
+    while state.writer_of(dir).is_some() && !crate::pr::uncommitted(dir).is_empty() {
         if stop.load(Ordering::Relaxed) {
             return cancelled();
         }
@@ -680,6 +684,8 @@ mod tests {
         let ran = bin.join("ran");
         let program = stub(&bin, &format!("touch {ran}\n{SHIP}"));
         let state = Arc::new(AppState::new(root.clone()));
+        // The turn is mid-write: its change is not committed yet.
+        std::fs::write(root.join("b.txt"), "half\n").unwrap();
         let token = state.claim("writing", &root, true).unwrap();
         assert!(start_with(
             state.clone(),
@@ -695,11 +701,38 @@ mod tests {
             !ran.exists(),
             "nothing was reviewed while the turn held the tree"
         );
+        // Its commit lands, as the turn's own checkpoint does, and the turn lets go.
+        crate::git::run(&root, &["add", "-A"]).unwrap();
+        crate::git::run(&root, &["commit", "-qm", "the turn's commit"]).unwrap();
         state.release("writing", token);
         let done = outcome("wait-lane", Duration::from_secs(20)).expect("finished");
         assert_eq!(done["kind"], "verdict", "{done}");
         assert_eq!(done["verdict"], "ship");
         assert!(ran.exists());
+    }
+
+    /// A clean tree has no commit coming, so a lane kept busy — a terminal the person keeps typing
+    /// into — does not hold the review: it reads the commit in a copy of its own and starts at once.
+    #[test]
+    fn a_review_of_a_clean_tree_does_not_wait_for_a_busy_lane() {
+        let (_d, root) = project();
+        let bin = tempfile::tempdir().unwrap();
+        let bin = Utf8PathBuf::from_path_buf(bin.path().into()).unwrap();
+        let program = stub(&bin, SHIP);
+        let state = Arc::new(AppState::new(root.clone()));
+        let token = state.claim("writing", &root, true).unwrap();
+        assert!(start_with(
+            state.clone(),
+            "busy-lane",
+            root.clone(),
+            Opening::default(),
+            false,
+            program
+        ));
+        let done = outcome("busy-lane", Duration::from_secs(20))
+            .expect("finished while the lane was busy");
+        assert_eq!(done["verdict"], "ship", "{done}");
+        state.release("writing", token);
     }
 
     /// The branch's own git hooks never run. A husky `post-checkout` the agent wrote fired on the

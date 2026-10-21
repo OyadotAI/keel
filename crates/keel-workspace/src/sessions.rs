@@ -603,6 +603,34 @@ fn running(claude_home: &Utf8Path) -> std::collections::HashMap<String, Option<b
     out
 }
 
+/// Whether a live Claude Code process has `session` open interactively — a terminal, as Claude
+/// Code's own pid file says (`"kind": "interactive"`), rather than `claude -p` or the SDK. The
+/// difference matters to background commands: `claude -p` kills its background shells when the
+/// turn ends, so Keel's monitor has to keep them; an interactive one keeps them running and watches
+/// them itself, and taking them over ended its turn dozens of times in one session.
+pub fn interactive(claude_home: &Utf8Path, session: &str) -> bool {
+    if session.is_empty() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(claude_home.join("sessions")) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let Some(record) = std::fs::read_to_string(e.path())
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            return false;
+        };
+        record["sessionId"] == session
+            && record["kind"] == "interactive"
+            && record["pid"]
+                .as_i64()
+                .and_then(|p| i32::try_from(p).ok())
+                .is_some_and(pid_alive)
+    })
+}
+
 /// Transcripts parsed for a listing, newest first. Past this the list is history nobody scrolls
 /// to, and the cost — a `stat` each warm, a read each cold — is paid on every listing.
 const MAX_LISTED: usize = 300;
@@ -824,6 +852,36 @@ pub fn pid_alive(pid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A session is interactive when a live Claude Code says so in its pid file; `claude -p`, a
+    /// dead process, or another session's file is not.
+    #[test]
+    fn a_session_is_interactive_only_as_its_live_process_says() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = Utf8Path::from_path(tmp.path()).unwrap();
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let me = std::process::id();
+        let write = |name: &str, body: serde_json::Value| {
+            std::fs::write(home.join("sessions").join(name), body.to_string()).unwrap()
+        };
+        write(
+            "1.json",
+            serde_json::json!({"pid": me, "sessionId": "term", "kind": "interactive"}),
+        );
+        write(
+            "2.json",
+            serde_json::json!({"pid": me, "sessionId": "print", "kind": "print"}),
+        );
+        write(
+            "3.json",
+            serde_json::json!({"pid": 999_999_999u64, "sessionId": "dead", "kind": "interactive"}),
+        );
+        assert!(interactive(home, "term"));
+        assert!(!interactive(home, "print"));
+        assert!(!interactive(home, "dead"));
+        assert!(!interactive(home, "other"));
+        assert!(!interactive(home, ""));
+    }
+
     use super::*;
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
