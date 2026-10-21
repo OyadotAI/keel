@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
-import { get, post, url, type Endpoint } from "../api";
+import { get, post, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
-import { start, useRun } from "../runs";
+import { useRun } from "../runs";
 import { useStore } from "../store";
 import { SourceControl } from "./SourceControl";
 import { InlineDiff } from "./InlineDiff";
@@ -9,7 +9,9 @@ import { type GraphCommit } from "../commit-graph";
 import { CommitGraph } from "./CommitGraph";
 import { useIde } from "../ide";
 import { useGitCards } from "../git-cards";
-import { Count, Tabs } from "./kit";
+import { Banner, Count, Tabs } from "./kit";
+import { PreReview } from "./PreReview";
+import { clock, openPullRequest, prKey, refreshReview, startReview, useReview, type PrRun } from "../prereview";
 import { Icon } from "./icons";
 
 interface Commit {
@@ -154,7 +156,7 @@ function GitContent({ lane, ep, wt, act, section, log, branches, pending, runnin
     case "changes": return <SourceControl lane={lane} ep={ep} wt={wt} act={act} onOpenDiff={onOpenDiff} selection={selection} />;
     case "history": return <History lane={lane} ep={ep} wt={wt} log={log} act={act} />;
     case "branches": return <BranchList ep={ep} wt={wt} branches={branches} act={act} />;
-    case "pr": return <PullRequest ep={ep} wt={wt} />;
+    case "pr": return <PullRequest ep={ep} wt={wt} lane={lane} />;
     case "remotes": return <><RemoteActions ep={ep} wt={wt} current={branches?.local.find((b) => b.current)} running={running} pending={pending} act={act} remotes={branches?.remotes} /><LaneGitActions wt={wt} busy={running || pending} /></>;
   }
 }
@@ -321,40 +323,40 @@ function BranchList({ ep, wt, branches, act }: { ep: Endpoint; wt?: string; bran
   );
 }
 
-function PullRequest({ ep, wt }: { ep: Endpoint; wt?: string }) {
+function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string }) {
   const [title, setTitle] = useState("");
   const [draft, setDraft] = useState(false);
+  const [error, setError] = useState("");
   // Kept outside the panel: switching tabs mid-push must not offer a second pull request.
-  const key = `pr:${ep.port}:${wt ?? ""}`;
-  const run = useRun<{ lines: string[]; result?: "done" | "failed" }>(key);
+  const run = useRun<PrRun>(prKey(ep, wt));
+  const seen = useReview(lane);
+  useEffect(() => { void refreshReview(lane, ep, wt); }, [lane, ep, wt]);
   const lines = run?.state.lines ?? [];
   const state = run?.running ? "running" : (run?.state.result ?? "idle");
-  function open() {
-    start(
-      key,
-      url(ep, "/api/github/pr", { title, draft: draft ? "true" : undefined, wt }),
-      ep.token,
-      { lines: [] as string[] } as { lines: string[]; result?: "done" | "failed" },
-      (s, e) => ({
-        lines: e.event === "line" || e.event === "fatal" ? [...s.lines, String(e.data)].slice(-100) : s.lines,
-        result: e.event === "done" ? (e.data === "0" || e.data === 0 ? "done" : "failed") : e.event === "fatal" ? "failed" : s.result,
-      }),
-      (s) => ({ ...s, result: s.result ?? "failed" }),
-    );
+  const review = seen?.review;
+  const cancelled = review?.outcome?.kind === "none" && review.outcome.cause === "cancelled";
+  if ((review && !cancelled) || seen?.restarted) {
+    return <div style={{ padding: "10px 12px" }}><PreReview lane={lane} ep={ep} wt={wt} place="tab" />{lines.length > 0 && <pre className="code">{lines.join("\n")}</pre>}</div>;
   }
+  const first = () => { setError(""); startReview(lane, ep, wt, { title, draft }).catch((e) => setError(e instanceof Error ? e.message : String(e))); };
   const link = lines.map((l) => l.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)?.[0]).find(Boolean);
   return (
     <div style={{ padding: "10px 12px" }}>
+      {cancelled && review?.outcome?.kind === "none" && <Banner tone="note">Review cancelled after {clock(review.outcome.took)}.</Banner>}
+      {error && <Banner tone="error">{error}</Banner>}
       <p className="small muted" style={{ marginTop: 0 }}>
-        Pushes this branch and opens a pull request with <code>gh</code>. Leave the title empty to let it come from the commits.
+        Keel's team reviews this branch on this machine first. You open the pull request after, whether or not you fix what it finds. It pushes with <code>gh</code>; leave the title empty to let it come from the commits.
       </p>
       <input className="field" style={{ maxWidth: "none", width: "100%" }} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)" aria-label="Pull request title" />
       <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", margin: "6px 0" }}>
         <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Open as a draft
       </label>
-      <button className="primary" disabled={state === "running"} onClick={open}>
-        {state === "running" ? "Opening…" : "Open pull request"}
-      </button>
+      <div className="actions">
+        <button className="primary" disabled={state === "running"} onClick={first}>Review first</button>
+        <button disabled={state === "running"} onClick={() => openPullRequest(ep, wt, { title, draft })}>
+          {state === "running" ? "Opening…" : "Open without review"}
+        </button>
+      </div>
       {link && (
         <p>
           <a href={link}>{link}</a>

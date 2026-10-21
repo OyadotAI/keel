@@ -10,7 +10,7 @@ import { NewProject } from "./NewProject";
 import { Extensions } from "./Extensions";
 import { Agents, ShellDock, SidePanel, TABS, type Tab } from "./Lane";
 import { LaneHeader, Confirm, type Asking } from "./LaneHeader";
-import { ApprovalStrip } from "./Approvals";
+import { LaneDock } from "./PreReview";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
@@ -437,5 +437,5 @@ function Welcome() {
 
 function LaneComposer({ lane }: { lane: string }) {
   const surface = useStore((s) => s.lanes[lane]?.interface);
-  return surface === "terminal" ? <ApprovalStrip lane={lane} /> : <Composer lane={lane} />;
+  return surface === "terminal" ? <LaneDock lane={lane} /> : <Composer lane={lane} />;
 }

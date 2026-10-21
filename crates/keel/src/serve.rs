@@ -886,6 +886,19 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/github/repos", get(crate::connect::repos))
         .route("/api/github/pr", get(crate::pr::create))
+        .route("/api/prereview", get(crate::prereview::api_get))
+        .route(
+            "/api/prereview/start",
+            axum::routing::post(crate::prereview::api_start),
+        )
+        .route(
+            "/api/prereview/stop",
+            axum::routing::post(crate::prereview::api_stop),
+        )
+        .route(
+            "/api/prereview/dismiss",
+            axum::routing::post(crate::prereview::api_dismiss),
+        )
         .route("/api/plugins", get(crate::plugins::list))
         .route("/api/plugins/install", get(crate::plugins::install))
         .route("/api/plugins/action", get(crate::plugins::action))

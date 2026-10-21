@@ -43,6 +43,16 @@ pub struct Opts {
     pub model: Option<String>,
 }
 
+/// Where a review runs. `Ci` is a runner whose `~/.claude` is whatever ran there before, so it
+/// gets a scratch home and a key from the environment. `Local` is the person's own machine, before
+/// their pull request opens: their login is in their own home (the keychain entry is keyed to
+/// it), every chat turn already runs with that home, and the branch under review is theirs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Where {
+    Ci,
+    Local,
+}
+
 /// What the person sees the review say, and the exit code it becomes.
 #[derive(Debug, PartialEq)]
 enum Verdict {
@@ -52,8 +62,8 @@ enum Verdict {
     None(String),
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct Stage {
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct Stage {
     name: String,
     ran: bool,
     #[serde(default)]
@@ -142,8 +152,8 @@ struct ThreadVerdict {
     reply: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct Finding {
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct Finding {
     path: String,
     line: u32,
     severity: String,
@@ -385,7 +395,7 @@ fn review(
             } else {
                 ceiling
             };
-            let (verdict, answer, cost) = ask(
+            let (verdict, answer, cost, _) = ask(
                 &prepared,
                 program,
                 env,
@@ -393,6 +403,7 @@ fn review(
                 ceiling,
                 stop,
                 opts.replies_only,
+                Where::Ci,
             );
             Outcome {
                 verdict,
@@ -465,6 +476,93 @@ fn review(
     code
 }
 
+/// What a review on the person's machine came to, as the lane draws it.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum Done {
+    Verdict {
+        /// `ship` or `do not ship`.
+        verdict: String,
+        reason: String,
+        summary: String,
+        findings: Vec<Finding>,
+        stages: Vec<Stage>,
+        report: String,
+        took: u64,
+        cost: Option<f64>,
+    },
+    /// No verdict. `cause` is for the page to choose its words by — `auth`, `cancelled`,
+    /// `ceiling`, `start`, `prepare`, `other` — and `line` is the daemon's own sentence.
+    None {
+        cause: &'static str,
+        line: String,
+        took: u64,
+        cost: Option<f64>,
+    },
+}
+
+/// The team's review of `checkout` against `base`, before its pull request opens: the same
+/// `prepare` and `ask` CI runs, with the person's own login. `pr` is what the pull request will
+/// say — `title` and `body` — so the team reviews what the person is about to publish.
+pub(crate) fn local(
+    checkout: &Utf8Path,
+    base: &str,
+    pr: &serde_json::Value,
+    program: &OsStr,
+    env: &[(String, String)],
+    ceiling: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Done {
+    let started = Instant::now();
+    let took = || started.elapsed().as_secs();
+    let prepared = match prepare(checkout, base, pr, &[]) {
+        Ok(p) => p,
+        Err(why) => {
+            return Done::None {
+                cause: "prepare",
+                line: format!("Keel could not prepare the review: {why}"),
+                took: took(),
+                cost: None,
+            };
+        }
+    };
+    let (verdict, answer, cost, cause) = ask(
+        &prepared,
+        program,
+        env,
+        None,
+        ceiling,
+        stop,
+        false,
+        Where::Local,
+    );
+    match (verdict, answer) {
+        (Verdict::Ship | Verdict::Block(_), Some(a)) => Done::Verdict {
+            verdict: a.verdict,
+            reason: a.reason,
+            summary: a.summary,
+            findings: a.findings,
+            stages: a.stages,
+            report: a.report,
+            took: took(),
+            cost,
+        },
+        (Verdict::None(line), _) => Done::None {
+            cause: cause.unwrap_or("other"),
+            line,
+            took: took(),
+            cost,
+        },
+        // `ask` keeps an answer only beside a verdict; said rather than assumed.
+        (_, None) => Done::None {
+            cause: "other",
+            line: "The review finished without an answer Keel could read.".into(),
+            took: took(),
+            cost,
+        },
+    }
+}
+
 /// The scratch worktree the review runs in, and the evidence beside it. Removed on every exit.
 struct Prepared {
     repo: Utf8PathBuf,
@@ -480,7 +578,11 @@ impl Drop for Prepared {
     fn drop(&mut self) {
         let _ = crate::git::run(
             &self.repo,
-            &["worktree", "remove", "--force", self.tree.as_str()],
+            &[
+                crate::git::AUTOMATIC,
+                &["worktree", "remove", "--force", self.tree.as_str()],
+            ]
+            .concat(),
         );
     }
 }
@@ -620,15 +722,23 @@ fn prepare(
         // Links check out as files holding their target: the PR's checkout is its author's, and
         // `notes.txt -> /proc/self/environ` is a read of the API key by another name — or a
         // `docs -> /home/runner` that the writes below would follow.
+        //
+        // No hooks either (`AUTOMATIC`): `worktree add` fires `post-checkout`, and the hook is
+        // the branch's own — a husky `.husky/post-checkout` the agent wrote ran as the person,
+        // before the review had started, on a review the agent itself set off.
         &[
-            "-c",
-            "core.symlinks=false",
-            "worktree",
-            "add",
-            "--detach",
-            tree.as_str(),
-            &head,
-        ],
+            crate::git::AUTOMATIC,
+            &[
+                "-c",
+                "core.symlinks=false",
+                "worktree",
+                "add",
+                "--detach",
+                tree.as_str(),
+                &head,
+            ],
+        ]
+        .concat(),
     )?;
     let mut prepared = Prepared {
         repo: repo.to_owned(),
@@ -761,6 +871,8 @@ fn prepare(
     Ok(prepared)
 }
 
+// Each is one decision about this run; a struct of them would be built once and read once.
+#[allow(clippy::too_many_arguments)]
 fn ask(
     prepared: &Prepared,
     program: &OsStr,
@@ -769,7 +881,8 @@ fn ask(
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
     replies_only: bool,
-) -> (Verdict, Option<Answer>, Option<f64>) {
+    place: Where,
+) -> (Verdict, Option<Answer>, Option<f64>, Option<&'static str>) {
     // Said, because the agent cannot see it: on the first live run it flagged a checkout with no
     // `ref` as letting the PR rewrite its reviewers, which is exactly what this function undoes.
     let prompt = format!(
@@ -787,16 +900,34 @@ fn ask(
         prepared.base
     );
     let mut command = std::process::Command::new(program);
-    command
-        .current_dir(&prepared.tree)
-        .env_clear()
+    command.current_dir(&prepared.tree).env_clear();
+    match place {
         // A home of its own: the runner's `~/.claude` (hooks, agents, skills) is whatever ran on
         // this machine before — on a persistent runner, an earlier PR's CI.
-        .env("HOME", &prepared.home)
-        .env("CLAUDE_CONFIG_DIR", prepared.home.join(".claude"))
+        Where::Ci => {
+            command
+                .env("HOME", &prepared.home)
+                .env("CLAUDE_CONFIG_DIR", prepared.home.join(".claude"));
+        }
+        // The person's own home, or their subscription login is not found: it is in their
+        // keychain under their config folder. The team is still the base branch's and the tools
+        // still read-only; what this lets in is their user-level settings, as in any turn.
+        Where::Local => {
+            command.envs(
+                env.iter()
+                    .filter(|(k, v)| {
+                        matches!(k.as_str(), "CLAUDE_CONFIG_DIR" | "LOGNAME") && !v.is_empty()
+                    })
+                    .map(|(k, v)| (k, v)),
+            );
+        }
+    }
+    command
         .envs(
             env.iter()
-                .filter(|(k, v)| passed(k) && k != "HOME" && !v.is_empty())
+                .filter(|(k, v)| {
+                    passed(k) && (k != "HOME" || place == Where::Local) && !v.is_empty()
+                })
                 .map(|(k, v)| (k, v)),
         )
         .args(["-p", &prompt, "--output-format", "json", "--json-schema"])
@@ -847,6 +978,7 @@ fn ask(
                 Verdict::None("The job was cancelled, so the review was stopped.".into()),
                 None,
                 None,
+                Some("cancelled"),
             );
         }
         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
@@ -858,6 +990,7 @@ fn ask(
                 )),
                 None,
                 None,
+                Some("ceiling"),
             );
         }
         Err(e) => {
@@ -867,6 +1000,7 @@ fn ask(
                 )),
                 None,
                 None,
+                Some("start"),
             );
         }
     };
@@ -878,6 +1012,9 @@ fn ask(
         let said = format!("{stderr}\n{}", reply["result"].as_str().unwrap_or(""));
         let cause = crate::agent::classify(said.trim());
         let line = match cause {
+            "auth" if place == Where::Local => "Claude Code is not logged in on this machine. \
+                                                Run `claude` and log in, then review again."
+                .to_string(),
             "auth" => "Claude rejected the credentials. Check the anthropic-api-key, \
                        claude-code-oauth-token or api-proxy-token secret."
                 .to_string(),
@@ -891,7 +1028,8 @@ fn ask(
                 crate::agent::redact(said.trim())
             ),
         };
-        return (Verdict::None(line), None, cost);
+        let cause = if cause == "auth" { "auth" } else { "other" };
+        return (Verdict::None(line), None, cost, Some(cause));
     }
     // The verdict is the structured field and nothing else; `result` is never parsed for one.
     let answer = reply
@@ -899,11 +1037,12 @@ fn ask(
         .and_then(|v| serde_json::from_value::<Answer>(v.clone()).ok());
     if replies_only {
         return match answer {
-            Some(a) => (Verdict::Ship, Some(a), cost),
+            Some(a) => (Verdict::Ship, Some(a), cost, None),
             None => (
                 Verdict::None("The reply finished without an answer Keel could read.".into()),
                 None,
                 cost,
+                Some("other"),
             ),
         };
     }
@@ -932,7 +1071,8 @@ fn ask(
         _ => Verdict::None("The review finished without a verdict Keel could read.".into()),
     };
     let answer = answer.filter(|_| !matches!(verdict, Verdict::None(_)));
-    (verdict, answer, cost)
+    let cause = matches!(verdict, Verdict::None(_)).then_some("other");
+    (verdict, answer, cost, cause)
 }
 
 /// The open threads as the agent reads them: numbered, with every reply in order.
@@ -1455,6 +1595,70 @@ mod tests {
         let out = serde_json::json!({"is_error": false, "result": "Verdict: ship",
                                      "structured_output": answer, "total_cost_usd": 0.42});
         format!("cat <<'EOF'\n{out}\nEOF")
+    }
+
+    /// On the person's machine the review runs as them, with no key in the environment: their
+    /// subscription login is found through their own home. The team is still the base branch's.
+    #[test]
+    fn a_local_review_keeps_the_person_s_home_and_needs_no_key() {
+        let (_dir, root) = pr_repo();
+        let seen = root.join("env.txt");
+        let program = stub(&root, &format!("env > {seen}\n{}", reply("ship", "fine")));
+        let env = vec![
+            (
+                "PATH".to_string(),
+                std::env::var("PATH").unwrap_or_default(),
+            ),
+            ("HOME".into(), "/Users/someone".into()),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                "/Users/someone/.claude-work".into(),
+            ),
+            ("GITHUB_TOKEN".into(), "ghs_writetoken".into()),
+        ];
+        let done = local(
+            &root,
+            "main",
+            &serde_json::json!({"title": "t", "body": "b"}),
+            program.as_os_str(),
+            &env,
+            Duration::from_secs(60),
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert!(
+            matches!(&done, Done::Verdict { verdict, cost: Some(_), .. } if verdict == "ship"),
+            "{done:?}"
+        );
+        let seen = std::fs::read_to_string(seen).unwrap();
+        assert!(seen.contains("HOME=/Users/someone\n"), "{seen}");
+        assert!(seen.contains("CLAUDE_CONFIG_DIR=/Users/someone/.claude-work\n"));
+        assert!(!seen.contains("ghs_writetoken"), "never the write token");
+    }
+
+    /// A login that has expired says what to do on this machine, not which CI secret to check.
+    #[test]
+    fn a_local_auth_failure_says_log_in() {
+        let (_dir, root) = pr_repo();
+        let program = stub(
+            &root,
+            "echo 'Invalid API key · Please run /login' >&2\nexit 1",
+        );
+        let done = local(
+            &root,
+            "main",
+            &serde_json::Value::Null,
+            program.as_os_str(),
+            &env(&[]),
+            Duration::from_secs(60),
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        match done {
+            Done::None { cause, line, .. } => {
+                assert_eq!(cause, "auth", "{line}");
+                assert!(line.contains("not logged in on this machine"), "{line}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// The first live run: `pm` returned, the rest were "cut short", and the check failed on one

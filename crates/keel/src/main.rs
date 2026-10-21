@@ -39,6 +39,7 @@ mod plugins;
 mod policy;
 mod pr;
 mod prefs;
+mod prereview;
 mod project;
 mod render;
 mod repo;
@@ -573,6 +574,7 @@ fn watch_parent(stdin: bool) {
         monitor::stop_all();
         dev::stop_now();
         verify::stop_all();
+        prereview::stop_all();
         std::process::exit(0);
     };
     if stdin {
@@ -640,6 +642,7 @@ mod shutdown_tests {
             ("monitor", "monitor::stop_all()"),
             ("dev", "dev::stop_now()"),
             ("verify", "verify::stop_all()"),
+            ("prereview", "prereview::stop_all()"),
         ] {
             assert!(
                 path.contains(call),

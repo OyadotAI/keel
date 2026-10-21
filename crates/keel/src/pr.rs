@@ -27,6 +27,10 @@ pub struct PrQuery {
     /// Open it as a draft.
     #[serde(default)]
     pub draft: bool,
+    /// The branch to merge into: the one the review before it compared against, so the verdict
+    /// is about the diff the pull request shows. Empty means `gh`'s default.
+    #[serde(default)]
+    pub base: String,
 }
 
 fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
@@ -52,44 +56,28 @@ pub async fn create(
     // Three gits, read off the executor: one slow `git status` here held up every other request.
     let checked = {
         let repo = repo.clone();
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
-            // A branch with no commits on it is not a thing to open a pull request from, and it
-            // is the ordinary state right after `git init` — so it gets its own sentence rather
-            // than being folded into "not a git repository", which is both wrong and unactionable.
-            if !has_commits(&repo) {
-                return Err(
-                    "This repository has no commits yet. Make one first — a pull request is a \
-                            request to merge commits, and there are none."
-                        .into(),
-                );
-            }
-            // A pull request is a branch, and `main` is not one. Catching it here is the
-            // difference between a clear refusal and `gh` failing four steps in with something
-            // about a head ref.
-            let branch = branch_of(&repo).ok_or("Could not read the current branch.")?;
-            if matches!(branch.as_str(), "main" | "master" | "trunk") {
-                return Err(format!(
-                    "You are on `{branch}`. Make a branch for the change first — a pull request \
-                     needs somewhere to merge from."
-                ));
-            }
-            if !uncommitted(&repo).is_empty() {
-                return Err(
-                    "There are uncommitted changes. Commit them first — a pull request only \
-                            carries what is committed, and opening one now would leave the rest \
-                            behind."
-                        .into(),
-                );
-            }
-            Ok(branch)
-        })
-        .await
-        .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
+        tokio::task::spawn_blocking(move || precheck(&repo))
+            .await
+            .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
     };
     let branch = match checked {
         Ok(b) => b,
         Err(why) => return refuse(&why),
     };
+    // Opening one is the answer to the review before it, whichever way it was reached: "Open
+    // without review" while one is running stops it, for every window. After the checks, so a
+    // refused open leaves the review running.
+    crate::prereview::stop_for(&repo);
+    // A branch name or nothing: it becomes an argument to `gh`.
+    let base = q.base.trim().to_string();
+    if !base.is_empty()
+        && (base.starts_with('-')
+            || !base
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c)))
+    {
+        return refuse(&format!("{base} is not a branch name."));
+    }
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
     tokio::spawn(async move {
@@ -122,6 +110,10 @@ pub async fn create(
         if q.draft {
             args.push("--draft".into());
         }
+        if !base.is_empty() {
+            args.push("--base".into());
+            args.push(base);
+        }
 
         say(format!("$ gh {}", args.join(" "))).await;
         let mut create = Command::new("gh");
@@ -133,6 +125,38 @@ pub async fn create(
             .await;
     });
     Sse::new(ReceiverStream::new(rx))
+}
+
+/// Whether `repo` can have a pull request opened from it, and the branch it would be from. The
+/// review before a pull request asks the same question first, in the same words.
+pub fn precheck(repo: &camino::Utf8Path) -> Result<String, String> {
+    // A branch with no commits on it is not a thing to open a pull request from, and it is the
+    // ordinary state right after `git init` — so it gets its own sentence rather than being
+    // folded into "not a git repository", which is both wrong and unactionable.
+    if !has_commits(repo) {
+        return Err(
+            "This repository has no commits yet. Make one first — a pull request is a request to \
+             merge commits, and there are none."
+                .into(),
+        );
+    }
+    // A pull request is a branch, and `main` is not one. Catching it here is the difference
+    // between a clear refusal and `gh` failing four steps in with something about a head ref.
+    let branch = branch_of(repo).ok_or("Could not read the current branch.")?;
+    if matches!(branch.as_str(), "main" | "master" | "trunk") {
+        return Err(format!(
+            "You are on `{branch}`. Make a branch for the change first — a pull request needs \
+             somewhere to merge from."
+        ));
+    }
+    if !uncommitted(repo).is_empty() {
+        return Err(
+            "There are uncommitted changes. Commit them first — a pull request only carries what \
+             is committed, and opening one now would leave the rest behind."
+                .into(),
+        );
+    }
+    Ok(branch)
 }
 
 /// The current branch.

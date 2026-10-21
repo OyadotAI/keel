@@ -261,7 +261,7 @@ fn looks_like_a_program(name: &str) -> bool {
 /// Leading environment assignments and wrappers are stepped over rather than treated as the
 /// program — `sudo rm -rf /` is a request to approve `rm`, and the first version of this returned
 /// nothing at all for it, which reads as "no rule needed".
-fn program_of(segment: &str) -> Option<String> {
+pub(crate) fn program_of(segment: &str) -> Option<String> {
     let mut tokens = segment.split_whitespace();
     loop {
         let token = tokens.next()?;
@@ -504,6 +504,30 @@ async fn decide(
             decision: "deny".into(),
             reason,
         }));
+    }
+
+    // A pull request is reviewed by the project's team before it opens, so the agent's
+    // `gh pr create` starts that review instead of running — whatever the trust, because refusing
+    // has no effect on the machine and the review is what the person asked for. The person opens
+    // the pull request from the lane afterwards, fixed or not. After the meter: a review spends
+    // the person's usage, so a step the meter refuses does not start one.
+    if hook.tool_name == "Bash"
+        && let Some(command) = hook.tool_input["command"].as_str()
+        && crate::prereview::opens_pull_request(command)
+    {
+        let cwd = if hook.cwd.is_empty() {
+            repo.clone()
+        } else {
+            camino::Utf8PathBuf::from(&hook.cwd)
+        };
+        let root = repo.clone();
+        let checkout = crate::serve::blocking(move || pr_checkout(&root, &cwd), None).await;
+        if let Some(dir) = checkout {
+            return Ok(Json(Decision {
+                decision: "deny".into(),
+                reason: crate::prereview::refuse(state.clone(), &hook.lane, dir, command).into(),
+            }));
+        }
     }
 
     // An edit that leaves the repository is asked about whatever else is true, because every
@@ -891,6 +915,21 @@ fn detaches(command: &str) -> bool {
     false
 }
 
+/// The checkout a `gh pr create` run in `cwd` would open from — the project or one of its lanes —
+/// or `None` for anywhere else, which is left to the allowlist as before.
+fn pr_checkout(root: &camino::Utf8Path, cwd: &camino::Utf8Path) -> Option<camino::Utf8PathBuf> {
+    let top = crate::git::trimmed(cwd, &["rev-parse", "--show-toplevel"]).ok()?;
+    let real = |p: &camino::Utf8Path| std::fs::canonicalize(p).ok();
+    let (top, root) = (camino::Utf8PathBuf::from(top), root.to_owned());
+    let (t, r) = (real(&top)?, real(&root)?);
+    let lanes = r.join(crate::worktree::DIR);
+    if t == r {
+        return Some(root);
+    }
+    let name = t.strip_prefix(&lanes).ok()?.to_str()?;
+    (!name.contains('/')).then(|| root.join(crate::worktree::DIR).join(name))
+}
+
 /// The command with every heredoc's body taken out. A body is data the shell hands to a program,
 /// not shell: a Python script editing Rust (`&self`, `&[]`) was read as a detach and run as a
 /// background job, and the edit it made landed outside the turn. Before that, the same edits got
@@ -899,7 +938,7 @@ fn detaches(command: &str) -> bool {
 /// Only a `<<` the shell would read as one starts a body: not quoted, not inside `$((…))` where it
 /// is a shift, not after a `#`. And a body that never reaches its terminator line drops nothing —
 /// so the cheap way to hide a `nohup` from the scan, a `<<` that is not a heredoc, gets nothing.
-fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
     if !command.contains("<<") {
         return command.into();
     }

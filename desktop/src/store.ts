@@ -13,6 +13,7 @@ import { open as openStream, type Stream } from "./streams";
 import { notify } from "./notify";
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
+import { refreshReview } from "./prereview";
 import { inArea, prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
 export interface Pending {
@@ -407,7 +408,14 @@ export const useStore = create<State>()((set, getState) => {
         lane(lid, (l) => ({ reviewRevision: (l.reviewRevision ?? 0) + 1 }));
         gitSoon(lid);
         soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
+        void refreshReview(lid, ep, getState().lanes[lid]?.wt);
       }
+    },
+    // The review before a pull request: the daemon's record, re-read for the lane it names. A
+    // review filed under no lane belongs to whoever asks, so every lane reads it.
+    "reviews.changed": (path, ep, data) => {
+      const only = (data as { data?: { lane?: string } })?.data?.lane;
+      for (const lid of lanesOf(path)) if (!only || only === lid) void refreshReview(lid, ep, getState().lanes[lid]?.wt);
     },
     "monitors.changed": (path, _ep, data) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;

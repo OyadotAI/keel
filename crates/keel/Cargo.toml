@@ -42,6 +42,8 @@ futures-util = "0.3.34"
 trash = "5.2.6"
 # A skill is written into a temporary folder beside its destination and renamed into place.
 tempfile = "3"
+# The agent's `gh pr create` arguments, read as the shell would (prereview.rs). Already in the build.
+shlex = "2"
 
 [dev-dependencies]
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { get, url } from "../api";
 import { AGENT_NAME, useStore, type Lane } from "../store";
-import { ApprovalStrip } from "./Approvals";
+import { LaneDock } from "./PreReview";
 import { Working } from "./Working";
 import { activity } from "./StatusBar";
 import { Icon } from "./icons";
@@ -100,7 +100,7 @@ export function Composer({ lane }: { lane: string }) {
     finally { setUploading(false); }
   }
   return <div className="chat-dock">
-    <ApprovalStrip lane={lane} />
+    <LaneDock lane={lane} />
     {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">Queued</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
     {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt)}>Retry same message</button></div>}

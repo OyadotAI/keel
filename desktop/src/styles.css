@@ -622,6 +622,57 @@ button.link {
   flex-wrap: wrap;
   margin-top: 8px;
 }
+/* The review before a pull request. Docked like a question, but not waiting for an answer, so its
+   border is the ordinary line rather than the warning one. `review-row`, not `strip-row`: the
+   questions' focus shortcut looks for `.strip-row .actions button`. */
+.review-strip {
+  border-top-color: var(--line);
+}
+.review-row {
+  padding: 10px 16px;
+  animation: enter 340ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.review-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.review-head .num {
+  margin-left: auto;
+}
+.review-findings {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-finding {
+  font-size: var(--t-small);
+  user-select: text;
+}
+.review-finding .where {
+  display: block;
+  font: var(--t-tiny) var(--mono);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.review-finding .sev {
+  font: 600 var(--t-tiny) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking);
+}
+.review-finding .sev.blocking {
+  color: var(--del);
+}
+.review-finding .sev.warning {
+  color: var(--warn);
+}
+.review-finding .sev.note {
+  color: var(--faint);
+}
 kbd {
   font: var(--t-tiny) var(--mono);
   opacity: 0.7;
