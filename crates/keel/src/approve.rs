@@ -987,10 +987,11 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
                 // Spliced in without passing through the quote tracking above, so only when it
                 // cannot change what that tracking would say: no quote, escape, `$`, backtick or
                 // comment, and no second heredoc.
-                if !until.is_empty()
-                    || rest.contains("<<")
-                    || rest.contains(['\'', '"', '\\', '`', '$', '#'])
-                {
+                let after = rest.trim_start().strip_prefix(')').unwrap_or("");
+                let plain = after.chars().all(|ch| {
+                    ch.is_whitespace() || ch.is_ascii_alphanumeric() || ";&|-_./=".contains(ch)
+                });
+                if !until.is_empty() || !plain {
                     return command.into();
                 }
                 out.push_str(&rest);
