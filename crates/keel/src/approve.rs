@@ -974,13 +974,21 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
             } else {
                 text
             };
-            let closes = text == end
-                || (*inside
-                    && text
-                        .strip_prefix(end.as_str())
-                        .is_some_and(|rest| rest.trim_start().starts_with(')')));
-            if closes {
+            if text == end {
                 until.remove(0);
+            } else if *inside
+                && let Some(rest) = text
+                    .strip_prefix(end.as_str())
+                    .filter(|rest| rest.trim_start().starts_with(')'))
+            {
+                // `EOF) ; nohup …`: what follows the terminator is shell, and is read as shell.
+                let rest = rest.to_string();
+                until.remove(0);
+                if !until.is_empty() || rest.contains("<<") {
+                    return command.into();
+                }
+                out.push_str(&rest);
+                out.push('\n');
             }
             continue;
         }
@@ -1007,9 +1015,12 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
                     i += 2;
                     continue;
                 }
+                // After `)` whether it is a comment depends on what the `)` closed; neither reading
+                // is safe to drop a body on, so nothing is dropped.
+                '#' if arithmetic == 0 && i > 0 && c[i - 1] == ')' => return command.into(),
                 // A comment starts a word: after whitespace or an operator (`;#`, `|#`, `` `# ``).
                 '#' if arithmetic == 0
-                    && (i == 0 || c[i - 1].is_whitespace() || ";&|()<>`".contains(c[i - 1])) =>
+                    && (i == 0 || c[i - 1].is_whitespace() || ";&|(<>`".contains(c[i - 1])) =>
                 {
                     break;
                 }
@@ -1027,7 +1038,7 @@ pub(crate) fn without_heredocs(command: &str) -> std::borrow::Cow<'_, str> {
                     // message or a pull request body, and that body is prose with `&` in it.
                     let inside = c[..i].iter().collect::<String>().ends_with("$(cat ");
                     let shell = out.replace("$(cat <<", "");
-                    if ["${", "$'", "`", "$(", "$["]
+                    if ["${", "$'", "`", "$(", "$[", "<(", ">("]
                         .iter()
                         .any(|u| shell.contains(u))
                         || line.trim_end_matches('\n').ends_with('\\')
@@ -2048,6 +2059,11 @@ pub(crate) mod tests {
             "echo $(cat <<X\nbody\nX)\nnohup pnpm dev &\nX",
             "cat <<X\nX\r\n<<Y\nX\nnohup pnpm dev &\nY",
             "a=(1); echo $[a[0] << X ]\nnohup pnpm dev &\nX",
+            // And two from the automated review of that.
+            "echo $(cat <<X\nbody\nX) ; nohup pnpm dev &",
+            "echo $(cat <<X\nbody\nX)\nnohup pnpm dev &",
+            "(true)#<<X\nnohup pnpm dev &\nX",
+            "diff <(cat <<X\nbody\nX\n) b\nnohup pnpm dev &",
         ] {
             assert!(is_background("Bash", &bash(command)), "hidden: {command}");
         }
