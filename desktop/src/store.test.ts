@@ -181,6 +181,20 @@ describe("chat delivery", () => {
     expect(store.getState().lanes.test.conv.background).toBeUndefined();
   });
 
+  it.each(["codex", "antigravity", "claude"])("a %s terminal followed mid-turn reads as working until the turn closes", async (agent) => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: agent as Lane["agent"], known: true, session: "s" } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+    const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+    // The replay: one turn finished, and the one the terminal is running now, which the daemon
+    // leaves open only while something is still writing it.
+    tail[2]([{ event: "turn", data: [{ turn: "T0", op: "open", prompt: "earlier", replayed: true }, { turn: "T0", op: "close", reason: "done" }, { turn: "T1", op: "open", prompt: "deploy previews", replayed: true }] }, { event: "caught-up", data: "1" }]);
+    expect(store.getState().lanes.test).toMatchObject({ running: true, transcriptOpen: true });
+    tail[2]([{ event: "turn", data: [{ turn: "T1", op: "close", reason: "done" }] }]);
+    expect(store.getState().lanes.test.running).toBe(false);
+  });
+
   it("a Codex chat lane is not followed; its stream is Keel's own", async () => {
     const store = await fixture();
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "chat", agent: "codex", known: true, session: "c" } } }));

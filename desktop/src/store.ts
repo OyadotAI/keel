@@ -656,6 +656,12 @@ export const useStore = create<State>()((set, getState) => {
             else if (e.event === "caught-up") {
               live = true;
               patch = { ...patch, loaded: true, known: true, error: undefined };
+              // A turn the replay left open is running now. A Codex or Antigravity terminal names
+              // its conversation only once the first prompt is sent, so its follow always starts
+              // mid-turn, and the `open` arrived in the replay where nothing marks the lane busy.
+              // A process that died mid-turn is closed by the daemon, which ends this again.
+              const last = conv.turns.at(-1);
+              if (last && !last.closed) patch = { ...patch, transcriptOpen: true, running: true };
               // A replay rebuilds the background agents from the transcript; a session that has
               // ended wrote no notification for the ones it took with it.
               const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
