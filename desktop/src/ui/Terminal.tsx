@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { get, type Endpoint } from "../api";
+import { type Endpoint } from "../api";
 import { AGENT_NAME, useStore } from "../store";
 import { register } from "../typers";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
-import { isDark, onAppearance } from "../appearance";
+import { onTerminalTheme, terminalDark } from "../terminal-theme";
 
 /// A terminal over the daemon's PTY: the lane's agent itself (`agent`), or a shell in its checkout.
 ///
@@ -15,8 +15,8 @@ import { isDark, onAppearance } from "../appearance";
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"] as const;
 
 /// Keel's two terminal palettes: background, text and all sixteen ANSI colours, from the same
-/// tokens as the window. Fixed values rather than read from the page, because an agent's
-/// terminal follows the *CLI's* theme, not the window's.
+/// tokens as the window. Fixed values rather than read from the page, because the terminal's
+/// colours are a choice of their own (`terminal-theme`), which may differ from the window's.
 const PALETTES = {
   light: {
     background: "#fafaf8",
@@ -48,18 +48,6 @@ function theme(dark: boolean) {
     out[`bright${name[0].toUpperCase()}${name.slice(1)}`] = p.ansi[i + 8];
   });
   return out;
-}
-
-/// Claude Code's theme, asked once per daemon. It paints diffs with exact colours meant for its
-/// own background, so its terminal has to be that background.
-const cliThemes = new Map<number, Promise<boolean>>();
-function cliIsDark(ep: Endpoint): Promise<boolean> {
-  let p = cliThemes.get(ep.port);
-  if (!p) {
-    p = get<{ dark: boolean }>(ep, "/api/claude/theme").then((t) => t.dark, () => true);
-    cliThemes.set(ep.port, p);
-  }
-  return p;
 }
 
 /// `term::ELSEWHERE`: the close code for "this conversation is open in another process".
@@ -130,9 +118,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       await import("@xterm/xterm/css/xterm.css");
       if (disposed || !host.current) return;
       const css = getComputedStyle(document.documentElement);
-      // The agent's terminal is drawn for the CLI's theme; a shell follows the window.
-      const dark = agent && kindRef.current === "claude" ? await cliIsDark(ep) : isDark();
-      if (disposed || !host.current) return;
+      const dark = terminalDark();
       setBg(theme(dark).background);
       const term = new XTerm({
         // Readable whatever the program asks for: xterm lifts any colour that would fall under
@@ -152,13 +138,13 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       term.attachCustomKeyEventHandler((e) => !isKeel(e));
       wheelScrollsHistory(term);
       term.open(host.current);
-      // A shell follows the system's light and dark; an agent keeps its CLI's.
+      // Every terminal follows the choice, live. A running agent keeps the colours it started
+      // with until it next starts — Claude Code reads its theme once, at launch.
       const retheme = () => {
-        if (agent && kindRef.current === "claude") return;
-        term.options.theme = theme(isDark());
-        setBg(theme(isDark()).background);
+        term.options.theme = theme(terminalDark());
+        setBg(theme(terminalDark()).background);
       };
-      const untheme = onAppearance(retheme);
+      const untheme = onTerminalTheme(retheme);
       const current = useStore.getState().lanes[lane];
       const params = new URLSearchParams();
       if (wt) params.set("wt", wt);
@@ -170,6 +156,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         // on disk (`terminal.session`), the lane starts fresh rather than resuming nothing.
         if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
+        // Claude Code is started in the terminal's theme; Codex and agy ask the terminal itself.
+        params.set("theme", dark ? "dark" : "light");
       }
       // The token goes as a subprotocol: a page's WebSocket cannot set headers, and a URL is
       // somewhere it would be logged.

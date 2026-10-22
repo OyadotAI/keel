@@ -977,7 +977,6 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             "/api/license",
             get(crate::license::api_status).post(crate::license::api_install),
         )
-        .route("/api/claude/theme", get(api_claude_theme))
         .route("/api/claude/install", get(crate::clitools::install_claude))
         .route("/api/claude/login", get(crate::clitools::login_claude))
         .route("/api/cli", get(crate::clitools::status))
@@ -1757,26 +1756,6 @@ fn watch_session(
         );
     }
     Some(watcher)
-}
-
-/// Claude Code's own colour theme, from `~/.claude.json`: what the terminal a lane runs it in
-/// has to be drawn for. Claude Code paints diffs with exact colours meant for its theme's
-/// background, so a dark-theme CLI on a light terminal was black-green slabs and invisible dim
-/// text. Absent means Claude Code's default, which is dark.
-async fn api_claude_theme() -> Json<serde_json::Value> {
-    let theme = blocking(
-        || {
-            let path = keel_workspace::home()?.join(".claude.json");
-            let raw = std::fs::read(&path).ok()?;
-            let json: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-            json["theme"].as_str().map(str::to_string)
-        },
-        None,
-    )
-    .await
-    .unwrap_or_else(|| "dark".into());
-    let dark = !theme.starts_with("light");
-    Json(serde_json::json!({ "theme": theme, "dark": dark }))
 }
 
 async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {

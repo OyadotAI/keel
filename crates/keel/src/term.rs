@@ -83,6 +83,9 @@ pub struct TermQuery {
     /// The person chose "Take over here": resume even though another process has it open.
     #[serde(default)]
     takeover: bool,
+    /// The terminal's colours, `light` or `dark`: Claude Code is started in the matching theme,
+    /// because it paints for its own theme and never asks the terminal (Codex and agy do).
+    theme: Option<String>,
 }
 
 /// The close code that says "this conversation is open in another process": the page shows
@@ -99,6 +102,7 @@ enum Launch {
         session: String,
         resume: bool,
         lane: Option<String>,
+        theme: Option<String>,
     },
 }
 
@@ -127,6 +131,7 @@ pub async fn ws(
             session,
             resume: q.resume,
             lane: q.lane.filter(|l| !l.is_empty()),
+            theme: q.theme,
         },
         (Some(_), _) => {
             return (
@@ -389,6 +394,7 @@ fn pty_thread(
             session,
             resume,
             lane,
+            theme,
         } => {
             // Two agents may share a tree: one reading or planning beside one editing is the
             // point of a shared lane. What must not happen is two *turns* writing it at once,
@@ -406,7 +412,15 @@ fn pty_thread(
                 resume,
                 lane.as_deref(),
             ) {
-                Ok((program, args)) => {
+                Ok((program, mut args)) => {
+                    // Only Claude's arguments carry `--settings`; Codex and agy ask the terminal.
+                    if let Some(v) = args
+                        .iter()
+                        .position(|a| a == "--settings")
+                        .and_then(|i| args.get_mut(i + 1))
+                    {
+                        *v = crate::agent::themed(std::mem::take(v), theme.as_deref());
+                    }
                     let mut c = match install_first(&program, &args) {
                         Some(argv) => CommandBuilder::from_argv(
                             argv.into_iter().map(std::ffi::OsString::from).collect(),

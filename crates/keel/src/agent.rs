@@ -1600,6 +1600,24 @@ pub(crate) const INHERITED: &[&str] = &[
     "CLAUDE_PID",
 ];
 
+/// Claude Code's settings with the terminal's theme in them, so its colours are drawn for the
+/// background Keel gives it — measured: `--settings '{"theme":"light"}'` overrides a person's
+/// `"theme": "dark"`. Anything but `light` or `dark` leaves their own theme alone.
+// ponytail: plain light/dark, so a daltonized or ANSI theme is replaced while a choice is set;
+// keep its suffix if someone who uses one asks.
+pub(crate) fn themed(settings: String, theme: Option<&str>) -> String {
+    let Some(theme) = theme.filter(|t| matches!(*t, "light" | "dark")) else {
+        return settings;
+    };
+    match serde_json::from_str::<serde_json::Value>(&settings) {
+        Ok(serde_json::Value::Object(mut m)) => {
+            m.insert("theme".into(), theme.into());
+            serde_json::Value::Object(m).to_string()
+        }
+        _ => settings,
+    }
+}
+
 /// What a lane's terminal runs when it is the agent itself rather than a shell: Claude Code's own
 /// interactive interface, with everything a Keel turn gets — the approval hook, `ask_user`, the
 /// system prompt, the lane's checkout and access to the project root — and a session id Keel
@@ -2540,5 +2558,26 @@ mod subagent_tests {
             subagent_item(r#"{"type":"event_msg","payload":{"type":"token_count"}}"#),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::themed;
+
+    /// Claude Code is started in the terminal's theme; no choice, or a value that is not one,
+    /// leaves the person's own theme and Keel's settings exactly as they were.
+    #[test]
+    fn a_terminal_theme_reaches_claudes_settings_and_nothing_else_does() {
+        let settings = r#"{"hooks":{"PreToolUse":[]}}"#.to_string();
+        let light: serde_json::Value =
+            serde_json::from_str(&themed(settings.clone(), Some("light"))).unwrap();
+        assert_eq!(light["theme"], "light");
+        assert!(
+            light["hooks"]["PreToolUse"].is_array(),
+            "Keel's hook is kept"
+        );
+        assert_eq!(themed(settings.clone(), None), settings);
+        assert_eq!(themed(settings.clone(), Some("\"},{\"x")), settings);
     }
 }
