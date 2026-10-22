@@ -189,13 +189,21 @@ fn codex_servers(cwd: &camino::Utf8Path) -> Result<Vec<String>, String> {
 /// the lane is in the address, so one folder cannot serve two lanes. Named by a hash of the lane,
 /// so no two lanes can share one — stripping odd characters made `a.b` and `ab` the same folder,
 /// and one lane's clicks would have landed in the other's tab. Never the repository's `.agents/`.
-pub fn agy_dir(port: u16, lane: Option<&str>) -> Result<camino::Utf8PathBuf, String> {
+pub fn agy_dir(
+    port: u16,
+    lane: Option<&str>,
+    terminal: bool,
+) -> Result<camino::Utf8PathBuf, String> {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(lane.unwrap_or("").as_bytes());
     let name: String = hash.iter().take(12).map(|b| format!("{b:02x}")).collect();
     let dir = crate::permissions::permissions_dir()?
         .with_file_name("antigravity-mcp")
-        .join(name);
+        .join(if terminal {
+            format!("{name}-term")
+        } else {
+            name
+        });
     let file = dir.join(".agents").join("mcp_config.json");
     let body = serde_json::to_vec_pretty(&json!({
         "mcpServers": { SERVER: { "serverUrl": url(port, lane) } }
@@ -208,6 +216,13 @@ pub fn agy_dir(port: u16, lane: Option<&str>) -> Result<camino::Utf8PathBuf, Str
     }
     if std::fs::read(&file).ok().as_deref() != Some(body.as_slice()) {
         crate::writes::replace(file.as_std_path(), &body)?;
+    }
+    // A terminal `agy` has no Keel gate in front of it, so its folder carries the one hook that
+    // takes the person's other browsers away (`antigravity::run_terminal`); a chat lane has Keel's
+    // whole gate in a folder of its own.
+    if terminal {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        crate::antigravity::write_terminal_hooks(&dir, &exe)?;
     }
     Ok(dir)
 }
@@ -531,14 +546,19 @@ mod browser_gate_tests {
     /// agy's folder is Keel's own, per lane, and no two lanes can share one.
     #[test]
     fn an_agy_lane_gets_its_own_folder_naming_keels_server() {
-        let one = agy_dir(7777, Some("lane-t")).unwrap();
+        let one = agy_dir(7777, Some("lane-t"), false).unwrap();
         let read = std::fs::read_to_string(one.join(".agents/mcp_config.json")).unwrap();
         assert!(read.contains("http://127.0.0.1:7777/mcp?lane=lane-t\""));
         assert_ne!(
-            agy_dir(1, Some("a.b")).unwrap(),
-            agy_dir(1, Some("ab")).unwrap()
+            agy_dir(1, Some("a.b"), false).unwrap(),
+            agy_dir(1, Some("ab"), false).unwrap()
         );
-        assert!(!agy_dir(1, Some("../../x")).unwrap().as_str().contains(".."));
+        assert!(
+            !agy_dir(1, Some("../../x"), false)
+                .unwrap()
+                .as_str()
+                .contains("..")
+        );
     }
 
     /// Every Browser tab call is decided once: by the hook in front of the agent when there is one

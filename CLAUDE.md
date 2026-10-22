@@ -654,9 +654,12 @@ alike. A `claude` the person types themselves in a shell keeps them.
   Claude's hook and a chat `agy`'s hook decide before a call arrives, and their addresses carry
   the daemon's secret `hooked` mark; for Codex, which asks nothing, and a terminal `agy` — whose
   own "always allow" would cover a click — the `/mcp` handler makes the same `approve::ask`
-  decision itself (`gated`). **Not yet:** a terminal `agy` keeps its own built-in browser and any
-  browser server in `~/.gemini/config/mcp_config.json` — taking them away needs a hook in front of
-  the terminal, and whether agy still asks its own question after a hook says allow is unmeasured. The default is to ask: a launcher that forgets the mark
+  decision itself (`gated`). A terminal `agy`'s folder also carries a hook
+  (`antigravity-hook --terminal`, `antigravity::run_terminal`) that refuses its built-in browser —
+  `/browser` runs a subagent that drives the person's Chrome through `mcp_chrome_devtools_new_page`
+  — and any other browser server, and says nothing about the rest, so agy's own question still
+  decides commands and edits (measured on 1.4.4: a hook that allows does not remove it). It never
+  calls the daemon, so it cannot wait on one. The default is to ask: a launcher that forgets the mark
   costs one extra card, never a missing one. Measured on codex 0.163: `codex exec` called
   `browser_read` with no approval of its own at all.
 - **Logins are per project**: a WebKit data store keyed by the project path on macOS (which is why

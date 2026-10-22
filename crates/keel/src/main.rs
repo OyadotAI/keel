@@ -346,7 +346,13 @@ fn main() -> Result<()> {
     // One line on stderr is the difference between an hour and never.
     // Before clap, so nothing about this binary's arguments can make the gate print nothing.
     if args.get(1).is_some_and(|a| a == "antigravity-hook") {
-        antigravity::run();
+        // A terminal `agy`'s hook: read by position here too, so it can never be an argument clap
+        // refuses — the failure that once blocked every call.
+        if args.get(2).is_some_and(|a| a == "--terminal") {
+            antigravity::run_terminal();
+        } else {
+            antigravity::run();
+        }
         return Ok(());
     }
     let cli = match Cli::try_parse_from(&args) {

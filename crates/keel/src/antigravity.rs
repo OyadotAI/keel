@@ -189,10 +189,7 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
             Route::Allow
         }
         "manage_subagents" => Route::Deny(SUBAGENT_ACTION),
-        // agy's own browser — `open_browser_url`, `read_browser_page`, `browser_click_element` and
-        // the rest in 1.4.4 — is another browser than the lane's, which is what a Keel lane is
-        // never given; the refusal says where the lane's browser is, as it does for Claude.
-        t if t.contains("browser") => Route::Deny(crate::approve::OTHER_BROWSER),
+        t if other_browser(t) => Route::Deny(crate::approve::OTHER_BROWSER),
         _ => Route::Deny(UNSUPPORTED),
     }
 }
@@ -330,6 +327,51 @@ pub fn run() {
     println!("{}", output(&decision));
 }
 
+/// The hook a terminal `agy` runs: it takes the person's own browser away and nothing else. A
+/// terminal `agy` asks its own question before every command and edit, in the terminal — measured
+/// on 1.4.4, a hook that printed nothing (agy's "allow") still left "Run this command?" on screen —
+/// so this decides only what Keel must: agy's built-in browser and any MCP server that drives
+/// another browser are refused, as they are in every Keel lane. It never asks the daemon, so it
+/// cannot wait on one; anything it cannot read is left to agy's own question, which still stands.
+pub fn run_terminal() {
+    let mut raw = String::new();
+    let _ = std::io::Read::read_to_string(
+        &mut std::io::Read::take(std::io::stdin(), STDIN_CAP + 1),
+        &mut raw,
+    );
+    if let Some(d) = terminal_decision(&raw) {
+        println!("{}", output(&d));
+    }
+}
+
+/// What the terminal hook says about one call: a refusal for another browser, else nothing.
+pub(crate) fn terminal_decision(raw: &str) -> Option<Decision> {
+    let call: Value = serde_json::from_str(raw).ok()?;
+    let tool = call["toolCall"]["name"].as_str()?;
+    let args = &call["toolCall"]["args"];
+    let server = args["ServerName"].as_str().unwrap_or_default();
+    let other = (tool != "call_mcp_tool" && other_browser(tool))
+        || (tool == "call_mcp_tool"
+            && crate::approve::drives_another_browser(&format!("mcp__{server}__tool")));
+    other.then(|| deny(crate::approve::OTHER_BROWSER))
+}
+
+/// agy's own browser, which is another browser than the lane's, which is what a Keel lane is never
+/// given: `open_browser_url`, `browser_click_element` and the rest in 1.4.4, and — measured once
+/// `/browser` is on — a browser subagent driving the person's Chrome through its built-in
+/// `mcp_chrome_devtools_new_page`, a name with no "browser" in it.
+fn other_browser(tool: &str) -> bool {
+    tool.contains("browser")
+        || tool
+            .strip_prefix("mcp_")
+            .is_some_and(|rest| crate::approve::drives_another_browser(&format!("mcp__{rest}__")))
+}
+
+/// Write the terminal hook into `dir`'s `.agents/hooks.json`, beside Keel's MCP server there.
+pub fn write_terminal_hooks(dir: &camino::Utf8Path, exe: &std::path::Path) -> Result<(), String> {
+    write_hooks_running(dir, exe, "antigravity-hook --terminal")
+}
+
 type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
 type Ask<'a> = &'a dyn Fn(u16, HookInput) -> Option<Decision>;
 
@@ -409,6 +451,14 @@ pub fn hooks_dir(exe: &std::path::Path) -> Result<Utf8PathBuf, String> {
 }
 
 fn write_hooks(dir: &camino::Utf8Path, exe: &std::path::Path) -> Result<(), String> {
+    write_hooks_running(dir, exe, "antigravity-hook")
+}
+
+fn write_hooks_running(
+    dir: &camino::Utf8Path,
+    exe: &std::path::Path,
+    subcommand: &str,
+) -> Result<(), String> {
     let file = dir.join(".agents").join("hooks.json");
     let exe = exe.to_str().ok_or("Keel's own path is not UTF-8")?;
     // `sh -c` on Unix; on Windows agy uses `cmd /c`, which takes double quotes.
@@ -422,7 +472,7 @@ fn write_hooks(dir: &camino::Utf8Path, exe: &std::path::Path) -> Result<(), Stri
     let body = serde_json::to_vec_pretty(&serde_json::json!({
         "keel": { "PreToolUse": [{ "matcher": "*", "hooks": [{
             "type": "command",
-            "command": format!("{exe} antigravity-hook"),
+            "command": format!("{exe} {subcommand}"),
             "timeout": timeout,
         }]}]}
     }))
@@ -493,6 +543,70 @@ mod tests {
         }
     }
 
+    /// A terminal `agy` keeps everything but the person's other browsers: its own built-in browser
+    /// and a browser MCP server are refused; a command, an edit and Keel's own Browser tab get no
+    /// word from the hook, so agy's own question decides them (measured: it still asks).
+    #[test]
+    fn a_terminal_agy_loses_only_its_other_browsers() {
+        let call =
+            |name: &str, args: Value| json!({"toolCall": {"name": name, "args": args}}).to_string();
+        for (name, args) in [
+            ("open_browser_url", json!({"Url": "https://x"})),
+            ("browser_click_element", json!({})),
+            ("mcp_chrome_devtools_new_page", json!({"url": "https://x"})),
+            (
+                "call_mcp_tool",
+                json!({"ServerName": "oya-browser", "ToolName": "open_tab"}),
+            ),
+            (
+                "call_mcp_tool",
+                json!({"ServerName": "claude-in-chrome", "ToolName": "navigate"}),
+            ),
+        ] {
+            let d = terminal_decision(&call(name, args)).expect(name);
+            assert_eq!(d.decision, "deny");
+            assert_eq!(d.reason, crate::approve::OTHER_BROWSER);
+        }
+        for (name, args) in [
+            ("run_command", json!({"CommandLine": "echo hi"})),
+            ("mcp_github_create_issue", json!({})),
+            ("write_to_file", json!({"TargetFile": "/r/a"})),
+            (
+                "call_mcp_tool",
+                json!({"ServerName": "keel", "ToolName": "browser_open"}),
+            ),
+            (
+                "call_mcp_tool",
+                json!({"ServerName": "github", "ToolName": "create_issue"}),
+            ),
+        ] {
+            assert!(terminal_decision(&call(name, args)).is_none(), "{name}");
+        }
+        assert!(
+            terminal_decision("not json").is_none(),
+            "agy's own question still stands"
+        );
+    }
+
+    /// The terminal hook file runs this binary's terminal mode, quoted, with a ceiling.
+    #[test]
+    fn the_terminal_hook_file_runs_the_terminal_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = camino::Utf8Path::from_path(tmp.path()).unwrap();
+        write_terminal_hooks(dir, std::path::Path::new("/opt/my keel/keel")).unwrap();
+        let file: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(".agents/hooks.json")).unwrap())
+                .unwrap();
+        let cmd = file["keel"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.ends_with(" antigravity-hook --terminal"), "{cmd}");
+        assert!(
+            cmd.contains("'/opt/my keel/keel'") || cmd.contains("\"/opt/my keel/keel\""),
+            "{cmd}"
+        );
+    }
+
     /// Every tool agy 1.4.2 offers has a route, and a tool nobody has seen yet is refused.
     #[test]
     fn every_tool_agy_offers_is_routed_and_new_ones_are_refused() {
@@ -561,6 +675,7 @@ mod tests {
             "browser_click_element",
             "browser_subagent",
             "capture_browser_screenshot",
+            "mcp_chrome_devtools_new_page",
         ] {
             assert_eq!(
                 route(t, &json!({}), false),

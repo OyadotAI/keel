@@ -871,7 +871,7 @@ pub async fn chat(
         let agy_mcp = if provider == "antigravity" {
             let lane = query.lane.clone();
             let made = crate::serve::blocking(
-                move || crate::askmcp::agy_dir(port, lane.as_deref()),
+                move || crate::askmcp::agy_dir(port, lane.as_deref(), false),
                 Err("the browser could not be prepared".into()),
             )
             .await;
@@ -1676,7 +1676,7 @@ pub(crate) fn interactive(
         "antigravity" => {
             let mut args = vec![
                 "--add-dir".to_string(),
-                crate::askmcp::agy_dir(port, lane)?.to_string(),
+                crate::askmcp::agy_dir(port, lane, true)?.to_string(),
             ];
             if resume {
                 args.extend(["--conversation".into(), session.to_string()]);
