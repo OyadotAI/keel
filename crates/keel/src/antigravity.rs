@@ -282,15 +282,21 @@ fn keel_tool(args: &Value) -> Option<&str> {
 /// Whether every subagent asked for runs in this turn's own workspace.
 fn inherits(args: &Value) -> bool {
     // Fails closed: every entry an object, its workspace absent or exactly "inherit".
-    args["Subagents"].as_array().is_some_and(|a| {
-        a.iter().all(|s| {
-            s.is_object()
-                && match s.get("Workspace") {
-                    None | Some(Value::Null) => true,
-                    Some(w) => w.as_str() == Some("inherit"),
-                }
-        })
-    })
+    let inherited = |s: &Value| {
+        s.is_object()
+            && match s.get("Workspace") {
+                None | Some(Value::Null) => true,
+                Some(w) => w.as_str() == Some("inherit"),
+            }
+    };
+    if let Some(a) = args["Subagents"].as_array() {
+        !a.is_empty() && a.iter().all(inherited)
+    } else {
+        args["TypeName"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty())
+            && inherited(args)
+    }
 }
 
 /// Arguments larger than a card can honestly show, or not an object at all, are refused: the
@@ -369,7 +375,7 @@ fn other_browser(tool: &str) -> bool {
 
 /// Write the terminal hook into `dir`'s `.agents/hooks.json`, beside Keel's MCP server there.
 pub fn write_terminal_hooks(dir: &camino::Utf8Path, exe: &std::path::Path) -> Result<(), String> {
-    write_hooks_running(dir, exe, "antigravity-hook --terminal")
+    write_hooks_running(dir, exe, "antigravity-hook")
 }
 
 type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -404,7 +410,12 @@ fn decide(raw: &str, env: Env, ask: Ask) -> Decision {
         tool_use_id: format!("agy:{conversation}:{step}"),
         session_id: conversation.to_string(),
         lane: env("KEEL_AGY_LANE").unwrap_or_default(),
-        provider: "antigravity".into(),
+        provider: if env("KEEL_AGY_TERMINAL").as_deref() == Some("1") {
+            crate::approve::AGY_TERMINAL
+        } else {
+            "antigravity"
+        }
+        .into(),
     };
     match ask(port, hook) {
         None => deny(UNREACHABLE),
@@ -543,6 +554,51 @@ mod tests {
         }
     }
 
+    /// Both supported delegation shapes stay in the inherited workspace; malformed calls do not.
+    #[test]
+    fn direct_and_array_subagents_require_the_inherited_workspace() {
+        for args in [
+            json!({"TypeName":"pm"}),
+            json!({"TypeName":"pm","Workspace":"inherit"}),
+            json!({"Subagents":[{"TypeName":"pm"}]}),
+        ] {
+            assert_eq!(route("invoke_subagent", &args, false), Route::Allow);
+        }
+        for args in [
+            json!({}),
+            json!({"TypeName":"pm","Workspace":"branch"}),
+            json!({"Subagents":[]}),
+            json!({"Subagents":[null]}),
+        ] {
+            assert_eq!(
+                route("invoke_subagent", &args, false),
+                Route::Deny(WORKSPACE)
+            );
+        }
+    }
+
+    /// The terminal gate identifies its stronger approval requirement and denies lost services.
+    #[test]
+    fn terminal_calls_keep_their_identity_and_fail_closed() {
+        let raw = call("run_command", json!({"CommandLine":"echo fixture"}));
+        let vars = |k: &str| {
+            if k == "KEEL_AGY_TERMINAL" {
+                Some("1".into())
+            } else {
+                env("acceptEdits")(k)
+            }
+        };
+        let allowed = decide(&raw, &vars, &|_, hook| {
+            assert_eq!(hook.provider, crate::approve::AGY_TERMINAL);
+            assert_eq!(hook.lane, "lane-1");
+            Some(allow())
+        });
+        assert_eq!(allowed.decision, "allow");
+        let unavailable = decide(&raw, &vars, &|_, _| None);
+        assert_eq!(unavailable.decision, "deny");
+        assert_eq!(unavailable.reason, UNREACHABLE);
+    }
+
     /// A terminal `agy` keeps everything but the person's other browsers: its own built-in browser
     /// and a browser MCP server are refused; a command, an edit and Keel's own Browser tab get no
     /// word from the hook, so agy's own question decides them (measured: it still asks).
@@ -588,7 +644,7 @@ mod tests {
         );
     }
 
-    /// The terminal hook file runs this binary's terminal mode, quoted, with a ceiling.
+    /// New terminals install the full fail-closed gate before native prompts are suppressed.
     #[test]
     fn the_terminal_hook_file_runs_the_terminal_mode() {
         let tmp = tempfile::tempdir().unwrap();
@@ -600,7 +656,7 @@ mod tests {
         let cmd = file["keel"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
-        assert!(cmd.ends_with(" antigravity-hook --terminal"), "{cmd}");
+        assert!(cmd.ends_with(" antigravity-hook"), "{cmd}");
         assert!(
             cmd.contains("'/opt/my keel/keel'") || cmd.contains("\"/opt/my keel/keel\""),
             "{cmd}"

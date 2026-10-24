@@ -1392,6 +1392,7 @@ async fn api_session_tail(
         let mut alive = session_status(agent, &home, &query.id, false).is_some();
         let mut last_bytes = std::time::Instant::now();
         let mut said_ended = false;
+        let mut observation = None;
         loop {
             if tx.is_closed() {
                 break;
@@ -1566,6 +1567,24 @@ async fn api_session_tail(
                 last_bytes = std::time::Instant::now();
                 said_ended = false;
             }
+            // Display state has its own cursor: an unsettled timer can precede later responses.
+            // It never drives the follower's checks, commits, or completion decisions.
+            let reader = t.clone();
+            if let Some(current) = blocking(move || reader.observation(), None).await {
+                let current =
+                    terminal_observation(current, crate::term::live_since(&query.id).as_deref());
+                if observation.as_ref() != Some(&current) {
+                    let json = serde_json::to_string(&current).expect("observation");
+                    if tx
+                        .send(Ok(Event::default().event("observation").data(json)))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    observation = Some(current);
+                }
+            }
             if first {
                 first = false;
                 // A replay that ends inside a turn nobody is still writing: that turn is over,
@@ -1707,6 +1726,19 @@ fn session_status(
 /// been said, so the "gone and quiet" edge can still fire once the quiet is up.
 fn still_alive(was: bool, now: bool, said_ended: bool) -> bool {
     now || (was && !said_ended)
+}
+
+/// Preserve reported usage after process exit while discarding activity from its old lifetime.
+fn terminal_observation(
+    mut current: keel_workspace::Observation,
+    since: Option<&str>,
+) -> keel_workspace::Observation {
+    current.running &=
+        since.is_some_and(|since| current.at.as_deref().is_some_and(|at| at >= since));
+    if since.is_none() {
+        current.background.clear();
+    }
+    current
 }
 
 /// Whether the turn a replay ended inside is still being written. Claude Code's pid file says.
@@ -2750,6 +2782,27 @@ mod tests {
         assert!(!still_alive(true, false, true), "said");
         assert!(still_alive(false, true, true), "back again");
         assert!(!still_alive(false, false, false));
+    }
+
+    /// Closed decoders still have independent children; exit clears them without losing totals.
+    #[test]
+    fn terminal_observations_ignore_stale_parent_work_and_clear_children_on_exit() {
+        let observed = keel_workspace::Observation {
+            running: true,
+            at: Some("2026-10-24T12:00:00.000Z".into()),
+            background: [("c".into(), Some("pm".into()))].into(),
+            usage: Some(keel_workspace::ReportedUsage {
+                input: 100,
+                ..Default::default()
+            }),
+            truncated: false,
+        };
+        assert!(terminal_observation(observed.clone(), Some("2026-10-24T11:00:00.000Z")).running);
+        assert!(!terminal_observation(observed.clone(), Some("2026-10-24T13:00:00.000Z")).running);
+        let ended = terminal_observation(observed.clone(), None);
+        assert!(!ended.running);
+        assert!(ended.background.is_empty());
+        assert_eq!(ended.usage, observed.usage);
     }
 
     /// A resumed Codex terminal is live and idle: the turn its last process died in is over, and

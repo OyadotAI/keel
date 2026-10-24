@@ -11,6 +11,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 
 use crate::Kind;
+pub use crate::antigravity::{Observation, ReportedUsage};
 use crate::conversation::{Decoder, Provider, Source};
 
 /// An agent whose terminal session Keel can follow.
@@ -65,6 +66,7 @@ pub struct Transcript {
     /// Antigravity's subagents seen so far and whether each has finished, shared by every clone
     /// so a stream says each one finished exactly once.
     children: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, bool>>>,
+    observation: std::sync::Arc<std::sync::Mutex<crate::antigravity::ObservationReader>>,
 }
 
 impl Transcript {
@@ -74,6 +76,7 @@ impl Transcript {
             agent,
             path,
             children: Default::default(),
+            observation: Default::default(),
         }
     }
 
@@ -83,6 +86,18 @@ impl Transcript {
 
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Current Antigravity display state, even when a pending step holds back the transcript.
+    /// Other providers already supply ordered live activity and have no supplemental snapshot.
+    pub fn observation(&self) -> Option<Observation> {
+        if self.agent != Agent::Antigravity {
+            return None;
+        }
+        self.observation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(&self.path)
     }
 
     fn keep(&self) -> fn(&Value) -> bool {

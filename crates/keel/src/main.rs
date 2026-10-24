@@ -53,6 +53,7 @@ mod skills;
 mod snapshot;
 mod team;
 mod term;
+mod terminal_attention;
 mod tree;
 mod turns;
 mod verify;

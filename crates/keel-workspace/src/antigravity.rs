@@ -19,6 +19,11 @@ use serde_json::{Value, json};
 
 use crate::{Kind, Real};
 
+mod observation;
+pub(crate) use observation::ObservationReader;
+pub(crate) use observation::subagent;
+pub use observation::{Observation, ReportedUsage};
+
 /// Step types, from agy's own `step_type` column.
 const USER_INPUT: i64 = 14;
 const RESPONSE: i64 = 15;
@@ -176,8 +181,10 @@ fn line(idx: i64, kind: i64, status: i64, payload: &[u8]) -> Value {
                 });
             }
             let n = |i: u32| f.int(&[5, 9, i]).unwrap_or(0);
-            v["usage"] =
-                json!({ "input": n(2), "output": n(3), "thinking": n(9), "cache_read": n(5) });
+            if [2, 3, 5].iter().any(|i| f.int(&[5, 9, *i]).is_some()) {
+                v["usage"] =
+                    json!({ "input": n(2), "output": n(3), "thinking": n(9), "cache_read": n(5) });
+            }
         }
         TOOL => {
             v["call"] = json!({

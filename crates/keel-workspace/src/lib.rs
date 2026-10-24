@@ -27,7 +27,7 @@ mod skills;
 pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use codex::{codex_home, rollout};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers, user_mcp_entry};
-pub use follow::{Agent as Follows, Transcript};
+pub use follow::{Agent as Follows, Observation, ReportedUsage, Transcript};
 pub use plugins::{Plugin, discover_plugins};
 pub use sessions::{
     Kind, MAX_READ, Session, Status, discover_sessions, interactive, kind_of, opener_of,

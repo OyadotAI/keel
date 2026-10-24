@@ -1,3 +1,4 @@
+//! Decoder contracts through the frames each provider exposes to the desktop.
 use super::*;
 use serde_json::json;
 
@@ -482,6 +483,38 @@ fn codex_commands_and_messages() {
     assert_eq!(t.calls["i1"].state, Some(CallState::Ok));
     assert_eq!(t.steps.last().unwrap().0, "say");
     assert_eq!(t.text["codex:i2"], "done");
+}
+
+/// Codex's chat input includes cached tokens; canonical fresh input must not include them too.
+#[test]
+fn codex_chat_input_and_cache_are_disjoint() {
+    let mut d = Decoder::new(Provider::Codex, Source::Chat);
+    for (input, cached, fresh) in [(100, 70, 30), (10, 20, 0)] {
+        let frames = d.feed(&json!({"type":"turn.completed","usage":{"input_tokens":input,"cached_input_tokens":cached,"output_tokens":5}}).to_string(), None, Instant::now());
+        assert!(frames.iter().any(|f| matches!(&f.op, Op::Usage { input, cache_read, output: 5, .. } if *input == fresh && *cache_read == cached)));
+    }
+}
+
+/// Claude's final result replaces message totals; cache categories are already disjoint.
+#[test]
+fn claude_result_replaces_reported_usage() {
+    let mut d = Decoder::new(Provider::Claude, Source::Chat);
+    let now = Instant::now();
+    d.feed(&json!({"type":"assistant","message":{"id":"m","content":[],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":20,"cache_creation_input_tokens":30}}}).to_string(), None, now);
+    let result = json!({"type":"result","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":20,"cache_creation_input_tokens":30}}).to_string();
+    for _ in 0..2 {
+        let frames = d.feed(&result, None, now);
+        assert!(frames.iter().any(|f| matches!(
+            &f.op,
+            Op::Usage {
+                input: 10,
+                output: 5,
+                cache_read: 20,
+                cache_write: 30,
+                ..
+            }
+        )));
+    }
 }
 
 /// The wire shape a client reads.

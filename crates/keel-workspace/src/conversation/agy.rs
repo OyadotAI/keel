@@ -10,7 +10,7 @@ use std::time::Instant;
 use serde_json::Value;
 
 use super::{Decoder, Ending, Frame, Op, Stream, TextKind, Tokens, antigravity_tool, usage};
-use crate::antigravity::{cancelled, children, ends, failed, key};
+use crate::antigravity::{cancelled, children, ends, failed, key, subagent};
 
 impl Decoder {
     pub(super) fn agy_transcript(&mut self, r: &Value, out: &mut Vec<Frame>, now: Instant) {
@@ -84,14 +84,9 @@ impl Decoder {
                 // Each subagent it created works on in a conversation of its own until the reader
                 // says it finished.
                 if !bad && r["call"]["name"] == "invoke_subagent" {
-                    let subs = r["call"]["args"]["Subagents"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default();
                     for (i, child) in children(output).into_iter().enumerate() {
-                        let agent = subs
-                            .get(i)
-                            .and_then(|s| s["TypeName"].as_str())
+                        let agent = subagent(&r["call"]["args"], i)["TypeName"]
+                            .as_str()
                             .map(str::to_string);
                         self.push(
                             out,
@@ -126,7 +121,7 @@ impl Decoder {
         *t = Tokens {
             context: n("input") + n("cache_read"),
             input: t.input + n("input"),
-            output: t.output + n("output") + n("thinking"),
+            output: t.output + n("output"),
             cache_read: t.cache_read + n("cache_read"),
             cache_write: 0,
         };
@@ -141,11 +136,7 @@ pub(super) fn tool_of(name: &str, args: &Value) -> (String, Value) {
     if name == "invoke_subagent" {
         // The database records `{"Subagents": [..]}`; the chat stream gives the one subagent's
         // fields directly.
-        let first = if args["Subagents"].is_array() {
-            &args["Subagents"][0]
-        } else {
-            args
-        };
+        let first = subagent(args, 0);
         let input = serde_json::json!({
             "subagent_type": first["TypeName"].as_str().unwrap_or("subagent"),
             "description": first["Role"],
@@ -267,7 +258,7 @@ mod tests {
             o,
             Op::Usage {
                 input: 120,
-                output: 10,
+                output: 7,
                 cache_read: 90,
                 complete: true,
                 ..
@@ -318,6 +309,16 @@ mod tests {
         assert!(
             matches!(ops.last(), Some(Op::Background { id, running: false, .. }) if id == "577da446-ebaa")
         );
+    }
+
+    /// Version 1.4.6 records one child's TypeName directly, rather than under Subagents.
+    #[test]
+    fn a_direct_agy_subagent_retains_its_member_identity() {
+        let frames = decode(&[
+            json!({"agy":0,"step":14,"status":3,"prompt":"run the pm"}),
+            json!({"agy":1,"step":132,"status":3,"call":{"id":"c","name":"invoke_subagent","args":{"TypeName":"pm","Role":"Product Manager"}},"output":"Created the following subagent:\n{\"conversationId\": \"child\"}"}),
+        ]);
+        assert!(frames.iter().any(|f| matches!(&f.op, Op::Background { id, agent: Some(a), running: true } if id == "child" && a == "pm")));
     }
 
     /// Measured on agy 1.4.4's `-p` stream: `invoke_subagent` ends as a `subagent` step naming

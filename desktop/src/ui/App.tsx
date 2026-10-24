@@ -1,4 +1,6 @@
+// The main workspace composes lanes and shared waiting indicators without taking terminal input.
 import { UpdateButton } from "./UpdateButton";
+import { waiting as waitingForYou } from "../activity";
 import { restoreZoom, zoom } from "../zoom";
 import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { Sidebar, pickProject } from "./Sidebar";
@@ -131,7 +133,7 @@ export function App() {
   // Where each lane's Browser tab page is, as its webview reports it.
   useEffect(listenPages, []);
   // The dock says how many lanes are waiting on the person, and clears as they are answered.
-  const waiting = useStore((s) => Object.values(s.lanes).filter((l) => l.pending.length > 0).length);
+  const waiting = useStore((s) => Object.values(s.lanes).filter((l) => waitingForYou(l) > 0).length);
   useEffect(() => badge(waiting), [waiting]);
   useEffect(() => {
     for (const [name, px] of [["--sidebar-w", 240], ["--panel-w", 380], ["--ide-chat-w", 400], ["--coding-sidebar-w", 320], ["--shell-h", 300]] as const) document.documentElement.style.setProperty(name, `${remembered(name, String(px))}px`);

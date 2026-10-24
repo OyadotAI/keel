@@ -443,6 +443,9 @@ pub fn edit_is_inside(repo: &camino::Utf8Path, input: &serde_json::Value) -> boo
 pub const SDK: &str = "claude-sdk";
 /// A Codex lane's command approval: its sandbox refused and nothing else decides after this.
 pub const CODEX: &str = "codex";
+/// Terminal Antigravity has no native permission gate underneath Keel; unlike accept-edits chat,
+/// an untrusted terminal edit must ask, including when trust was withdrawn after launch.
+pub const AGY_TERMINAL: &str = "antigravity-terminal";
 
 /// Whether this caller takes the answer as final: nothing checks the call after Keel does. Such a
 /// caller only reaches Keel because its own gate already declined, so `allow` is said only where
@@ -451,7 +454,7 @@ pub const CODEX: &str = "codex";
 /// with no Claude Code after it to read them. The MCP gate was left out when it got its own name,
 /// and a deny rule on a Browser tab tool stopped holding for Codex lanes.
 fn reads_the_persons_denies(provider: &str) -> bool {
-    matches!(provider, "antigravity" | CODEX | MCP_GATE)
+    matches!(provider, "antigravity" | AGY_TERMINAL | CODEX | MCP_GATE)
 }
 
 fn is_final(provider: &str) -> bool {
@@ -528,7 +531,7 @@ pub async fn ask(
     // Anything on loopback can post here and mint that yes, and a `defer` for a click only comes
     // back on a trusted project. There the forger is already code running as the person — which
     // trust lets an agent be, and which can read the Browser tab's own login store off the disk.
-    // "A click always asks" guards an honest agent's mistake; it is not a wall against that.
+    // The standing trust grant covers these browser actions, subject to explicit deny/ask rules.
     let answered = decision.decision == "allow" || (!last && decision.decision == "defer");
     if answered && let Some(call) = call {
         note_hook_yes(&call);
@@ -541,7 +544,7 @@ async fn decide(
     hook: HookInput,
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     let repo = state.repo();
-    let strict = hook.provider == "antigravity";
+    let strict = matches!(hook.provider.as_str(), "antigravity" | AGY_TERMINAL);
     let sdk = is_final(&hook.provider);
     // Keel's own Browser tab tools are decided whole here, for every caller (`keel_decides`), so
     // the person's deny rules are read here for them too.
@@ -718,17 +721,13 @@ async fn decide(
     // Trust covers MCP tools too: it is "stop asking whether it may do things here", and a
     // browser server is thirty tools that asked one card at a time on a trusted project. An MCP
     // call is `allow`ed rather than deferred, because no allowlist rule names every server.
-    // Not the Browser tab's actions: they act inside whatever the person signed into there, which
-    // `WebFetch` (no cookies) never could, so trust does not cover clicking, typing or a key —
-    // those ask, and are allowed one tool at a time. Opening, reading, scrolling and back follow it.
-    let mcp = hook.tool_name.starts_with("mcp__") && !acts_in_the_browser(&hook.tool_name);
+    // The standing grant explicitly includes Browser tab actions; denies and explicit ask rules
+    // were checked above. Untrusted projects still ask for each effectful browser action.
+    let mcp = hook.tool_name.starts_with("mcp__");
     // A final caller asks about `Read` outside the workspace, a path its gate protects, or an `ask`
     // rule of the person's — none of which trust is about. Only what trust covers is answered.
-    // Trust is never a yes to a click, a key or typing in the Browser tab — for any caller. Claude
-    // Code's own hook got a `defer` for one on a trusted project, and a terminal Claude then asked
-    // in the terminal instead of on Keel's card.
-    let trust_covers = !acts_in_the_browser(&hook.tool_name)
-        && (!sdk || mcp || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str()));
+    let trust_covers =
+        !sdk || mcp || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str());
     if !is_question && !leaves_the_project && trusted && !unsure && trust_covers {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
@@ -745,7 +744,12 @@ async fn decide(
     }
 
     // Not for a final caller: its gate already declined this edit (plan mode, a protected path).
-    if is_edit(&hook.tool_name) && !leaves_the_project && !unsure && !sdk {
+    if is_edit(&hook.tool_name)
+        && !leaves_the_project
+        && !unsure
+        && !sdk
+        && hook.provider != AGY_TERMINAL
+    {
         // Inside the repository is what `acceptEdits` already covers; nothing to ask.
         return Ok(Json(Decision {
             decision: "defer".into(),
@@ -1067,14 +1071,6 @@ pub const OTHER_BROWSER: &str = "Not run: this drives the person's own browser, 
 fn keel_decides(tool: &str) -> bool {
     tool.strip_prefix("mcp__keel__")
         .is_some_and(crate::browser::is_tool)
-}
-
-/// A Browser tab tool that acts in the page as the person: click, type, a key.
-fn acts_in_the_browser(tool: &str) -> bool {
-    matches!(
-        tool,
-        "mcp__keel__browser_click" | "mcp__keel__browser_type" | "mcp__keel__browser_key"
-    )
 }
 
 /// A server other than Keel's that drives a browser — the person's own, signed in. Withheld from
@@ -1811,9 +1807,7 @@ pub(crate) mod tests {
         assert_eq!(unanswered(true, false).unwrap().decision, "deny");
     }
 
-    /// The Browser tab's tools are allowed one at a time, and acting in a page — as the person,
-    /// once they signed in there — is never something trust answers alone. Every other browser
-    /// server is the person's own, whatever its name.
+    /// Untrusted browser rules name one tool at a time; other browser servers remain isolated.
     #[test]
     fn the_browser_tab_is_asked_about_tool_by_tool() {
         assert_eq!(
@@ -1825,14 +1819,17 @@ pub(crate) mod tests {
             "mcp__keel__browser_type",
             "mcp__keel__browser_key",
         ] {
-            assert!(acts_in_the_browser(acting), "{acting}");
+            assert_eq!(
+                rules_for(acting, &serde_json::json!({})),
+                vec![acting.to_string()]
+            );
         }
         for reading in [
             "mcp__keel__browser_open",
             "mcp__keel__browser_read",
             "mcp__keel__ask_user",
         ] {
-            assert!(!acts_in_the_browser(reading), "{reading}");
+            assert!(!drives_another_browser(reading), "{reading}");
         }
         for other in [
             "mcp__browseros-neo__navigate",
@@ -1968,7 +1965,7 @@ pub(crate) mod tests {
     /// The person's deny rules hold wherever no Claude Code reads them after Keel.
     #[test]
     fn every_caller_with_nothing_after_keel_reads_the_persons_denies() {
-        for p in ["antigravity", CODEX, MCP_GATE] {
+        for p in ["antigravity", AGY_TERMINAL, CODEX, MCP_GATE] {
             assert!(reads_the_persons_denies(p), "{p}");
         }
         for p in ["", SDK] {
@@ -1979,11 +1976,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// A click from Claude Code's own hook — a terminal lane — is asked on Keel's card even on a
-    /// trusted project, and a saved rule answers it with a yes from Keel, never a `defer` that a
-    /// terminal Claude, whose allowlist was fixed at its start, would ask about again itself.
+    /// Trust and saved rules answer browser actions with allow, never a defer that asks again.
     #[tokio::test]
-    async fn a_terminal_lanes_click_is_asked_on_keels_card_and_never_deferred() {
+    async fn terminal_browser_calls_follow_trust_and_never_defer() {
         // The queue is shared: the tests that clear it hold this too.
         let _guard = lock().await;
         let dir = tempfile::tempdir().unwrap();
@@ -2015,15 +2010,21 @@ pub(crate) mod tests {
                 out
             }
         };
-        assert_eq!(
-            decided(hook("mcp__keel__browser_click")).await,
-            None,
-            "a card, not a defer"
-        );
+        for provider in ["", CODEX, MCP_GATE, AGY_TERMINAL] {
+            let mut click = hook("mcp__keel__browser_click");
+            click.provider = provider.into();
+            assert_eq!(decided(click).await.as_deref(), Some("allow"), "{provider}");
+        }
         assert_eq!(
             decided(hook("mcp__keel__browser_read")).await.as_deref(),
             Some("allow"),
             "reading follows trust"
+        );
+        crate::permissions::set_trusted(&root, false).unwrap();
+        assert_eq!(
+            decided(hook("mcp__keel__browser_click")).await,
+            None,
+            "untrusted: a card, not a defer"
         );
         crate::permissions::remember(&root, "mcp__keel__browser_click", "project", None).unwrap();
         assert_eq!(
@@ -2238,6 +2239,16 @@ pub(crate) mod tests {
                 serde_json::json!({"url": "https://example.com"}),
                 "defer",
             ),
+            (
+                "mcp__keel__browser_type",
+                serde_json::json!({"element":1,"text":"fixture"}),
+                "allow",
+            ),
+            (
+                "mcp__keel__browser_click",
+                serde_json::json!({"element":1}),
+                "allow",
+            ),
         ] {
             let d = ask(State(state.clone()), Json(hook(tool, input)))
                 .await
@@ -2268,6 +2279,53 @@ pub(crate) mod tests {
         .await;
         assert!(question.is_err(), "a question waits for the person");
         queue().locked().retain(|p| p.lane != "trusted");
+    }
+
+    /// Terminal edits have no native allowlist underneath: withdrawal must restore the card.
+    #[tokio::test]
+    async fn terminal_antigravity_edits_follow_current_trust_without_restart() {
+        let _guard = lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let state = Arc::new(AppState::new(root.clone()));
+        let hook = |id: &str| HookInput {
+            provider: AGY_TERMINAL.into(),
+            tool_name: "Edit".into(),
+            tool_input: serde_json::json!({"file_path":root.join("fixture.rs")}),
+            tool_use_id: id.into(),
+            session_id: "agy-terminal-trust".into(),
+            lane: "agy-terminal-trust".into(),
+            cwd: root.to_string(),
+        };
+        crate::permissions::set_trusted(&root, true).unwrap();
+        assert_eq!(
+            ask(State(state.clone()), Json(hook("yes")))
+                .await
+                .unwrap()
+                .decision,
+            "allow"
+        );
+        crate::permissions::set_trusted(&root, false).unwrap();
+        let waiting = tokio::spawn(ask(State(state.clone()), Json(hook("ask"))));
+        settled(&waiting, |p| p.lane == "agy-terminal-trust").await;
+        assert!(!waiting.is_finished());
+        assert!(
+            queue()
+                .locked()
+                .iter()
+                .any(|p| p.lane == "agy-terminal-trust")
+        );
+        waiting.abort();
+        queue().locked().retain(|p| p.lane != "agy-terminal-trust");
+        crate::permissions::set_trusted(&root, true).unwrap();
+        assert_eq!(
+            ask(State(state), Json(hook("yes-again")))
+                .await
+                .unwrap()
+                .decision,
+            "allow"
+        );
     }
 
     #[tokio::test]

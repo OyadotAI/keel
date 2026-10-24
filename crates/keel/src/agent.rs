@@ -1682,19 +1682,16 @@ pub(crate) fn interactive(
             args.extend(["--cd".into(), cwd.to_string()]);
             Ok((crate::permissions::program("codex"), args))
         }
-        // The CLI as it is, in its own default mode: it asks its own permission questions in the
-        // terminal and the person answers them there, so it needs none of the chat lane's gate.
-        // Its conversation id is learned from disk (`discover`) and its database followed
-        // (`keel_workspace::antigravity`).
-        // Quarantine above still ran, because a repository's `.agents/` hooks run unasked.
-        // Keel's browser comes in a folder of Keel's own, and Keel's card asks before each action
-        // as it does for Codex. A terminal `agy` asks its own question too (measured on 1.4.4), but
-        // its "always allow" covers a click or a keystroke in a signed-in site, which Keel's trust
-        // never does — so a click is asked twice here rather than not at all.
+        // The native permission gate is replaced only after the fail-closed hook is installed.
+        // That hook reads current project trust on every call, including after it is withdrawn.
+        // The PTY supplies its port, lane and mode environment to this process and its children.
         "antigravity" => {
             let mut args = vec![
                 "--add-dir".to_string(),
                 crate::askmcp::agy_dir(port, lane, true)?.to_string(),
+                "--dangerously-skip-permissions".into(),
+                "--mode".into(),
+                "accept-edits".into(),
             ];
             if resume {
                 args.extend(["--conversation".into(), session.to_string()]);

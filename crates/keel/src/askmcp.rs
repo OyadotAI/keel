@@ -33,7 +33,7 @@ pub struct McpQuery {
 /// in front of its calls. Measured on codex 0.163: `codex exec` called `browser_read` with no
 /// approval at all, so without this a Codex lane would have clicked and typed in the Browser tab
 /// unasked. It is the same path the hook takes (`approve::ask`), so the card, the trust and the
-/// rules are the same ones — click, type and a key always ask — and as a caller nothing checks
+/// rules are the same ones — current project trust covers permitted actions — and nothing checks
 /// after (`MCP_GATE`), a `defer` is never read as yes.
 async fn gated(
     state: &Arc<AppState>,
@@ -217,9 +217,8 @@ pub fn agy_dir(
     if std::fs::read(&file).ok().as_deref() != Some(body.as_slice()) {
         crate::writes::replace(file.as_std_path(), &body)?;
     }
-    // A terminal `agy` has no Keel gate in front of it, so its folder carries the one hook that
-    // takes the person's other browsers away (`antigravity::run_terminal`); a chat lane has Keel's
-    // whole gate in a folder of its own.
+    // A terminal carries the full fail-closed gate here before its native prompts are suppressed.
+    // A chat lane already has the same gate in its own separate folder.
     if terminal {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         crate::antigravity::write_terminal_hooks(&dir, &exe)?;
@@ -563,8 +562,7 @@ mod browser_gate_tests {
 
     /// Every Browser tab call is decided once: by the hook in front of the agent when there is one
     /// — its yes to that exact call lets it through — and by Claude's rules here when there is
-    /// not: a click always asks, reading follows trust. Anything claiming a yes it was not given
-    /// is asked.
+    /// not. Current trust covers permitted actions; untrusted calls require an exact approval.
     #[tokio::test]
     async fn a_browser_action_is_asked_once_by_whoever_is_in_front() {
         // The approval queue is shared: the tests that clear it hold this too.
@@ -614,8 +612,18 @@ mod browser_gate_tests {
         );
         assert_eq!(
             asked("browser_click", json!({"element": 1})).await,
+            (true, false),
+            "trusted: clicking needs no card"
+        );
+        assert_eq!(
+            asked("browser_type", json!({"element":1,"text":"fixture"})).await,
+            (true, false)
+        );
+        crate::permissions::set_trusted(&root, false).unwrap();
+        assert_eq!(
+            asked("browser_click", json!({"element":1})).await,
             (false, true),
-            "a click always asks"
+            "withdrawal restores the card without restarting the agent"
         );
 
         // Claude's hook in front asked about this exact click on Keel's card, and the person said

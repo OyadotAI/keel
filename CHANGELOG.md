@@ -2,6 +2,18 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.35] - 2026-10-24
+
+### Fixed
+- Restored Antigravity lane and team-member activity through independent child work, restarts,
+  and pending timers without changing turn execution or transcript ordering.
+- Corrected cached input and Antigravity output accounting, refreshed reported usage past pending
+  steps, and explained parent-only totals and latest-context snapshots in the footer and inspector.
+- Reported native Codex approval and question states in lane indicators, waiting badges, and
+  background notifications, with reconnects restoring requests quietly.
+- Applied project trust to Antigravity terminal permissions and permitted MCP browser actions
+  across agents, while preserving explicit denies, ask rules, and browser isolation.
+
 ## [0.4.10] - 2026-10-16
 
 ### Added

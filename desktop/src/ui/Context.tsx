@@ -10,6 +10,7 @@ import { count } from "./Turn";
 import { Icon } from "./icons";
 import "./Context.css";
 import { ContextUsage } from "./ContextUsage";
+import { usageSummary } from "../session-usage";
 
 const amount = (n?: number | null) => n == null ? "—" : count(n);
 const time = (at?: string | null) => at && Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not reported";
@@ -137,13 +138,19 @@ function MemoryActivity({ snapshot }: { snapshot: ContextSnapshot }) {
   </details>;
 }
 
+/** The footer's exact same definitions and totals, readable without hovering. */
+function ReportedUsage({ lane }: { lane: string }) {
+  const detail = useStore((s) => s.lanes[lane] ? usageSummary(s.lanes[lane]).detail : "");
+  return <details className="context-section"><summary>Reported usage</summary><div className="context-section-body">{detail.split("\n").slice(1).map((line) => <p className="context-note" key={line}>{line}</p>)}</div></details>;
+}
+
 export function Context({ lane }: { lane: string }) {
   const { l, ep, snapshot, wt, busy, error, refresh } = useSessionContext(lane);
   if (!l) return null;
   return <div className="context-panel">
     <header className="context-heading"><div><h2>Context</h2><p>{AGENT_NAME[l.agent ?? "claude"]}{snapshot?.model && <> · {snapshot.model}</>}</p></div><button className="ghost" disabled={busy || !ep} onClick={() => void refresh(true)} title="Refresh context without sending a message">{busy ? <span className="busy-dot" /> : <Icon name="rewind" size={15} />}<span>Refresh</span></button></header>
     {error && <p className="context-error" role="alert">{error}</p>}
-    {l.agent === "antigravity" && <p className="context-note">Antigravity doesn't report context usage to Keel.</p>}
+    <ReportedUsage lane={lane} />
     <ContextUsage snapshot={snapshot} busy={busy} disconnected={!!l.disconnected} />
     <details className="context-section" open><summary><span>Memory & instructions</span><span className="context-section-count">{snapshot?.memory.length ?? 0}</span></summary><div className="context-section-body">
       {snapshot?.memory.length && ep ? snapshot.memory.map((s) => <ContextSourceView key={s.path} source={s} ep={ep} snapshot={snapshot} wt={wt} />) : <p className="context-note">No memory sources were reported. This does not establish that the session has no memory.</p>}

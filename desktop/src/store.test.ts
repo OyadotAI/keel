@@ -1,10 +1,11 @@
+// Store-stream contracts for delivery, terminal lifecycle ordering, and supplemental observations.
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { Lane } from "./store";
 
-const mocks = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn(), open: vi.fn(), invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn(), open: vi.fn(), invoke: vi.fn(), needsYou: vi.fn() }));
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), post: mocks.post, get: mocks.get }));
 vi.mock("./streams", () => ({ open: mocks.open }));
-vi.mock("./notify", () => ({ notify: vi.fn() }));
+vi.mock("./notify", () => ({ notify: vi.fn(), needsYou: mocks.needsYou }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 const ep = { port: 12345, token: "fixture" };
 
@@ -167,6 +168,77 @@ describe("chat delivery", () => {
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "antigravity", known: true, session: "agy-1" } } }));
     store.getState().load("test");
     await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail") && u.includes("agent=antigravity") && u.includes("agy-1"))).toBe(true));
+  });
+
+  it("native Codex requests notify once live and restore quietly without replaying older events", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "codex" } }, projects: { "/repo": { ...s.projects["/repo"], endpoint: undefined } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/events"))).toBe(true));
+    const events = mocks.open.mock.calls.find(([u]) => u.includes("/api/events"))!;
+    const request = { id: "old", kind: "permission" };
+    events[2]([{ event: "terminal.attention.snapshot", data: { data: { revision: 5, lanes: { test: request } } } }]);
+    expect(store.getState().lanes.test.attention).toEqual(request);
+    expect(mocks.needsYou).not.toHaveBeenCalled();
+    events[2]([{ event: "terminal.attention", data: { data: { lane: "test", attention: null, revision: 4 } } }]);
+    expect(store.getState().lanes.test.attention).toEqual(request);
+    const attention = { id: "next", kind: "permission" };
+    const live = { event: "terminal.attention", data: { data: { lane: "test", attention, revision: 6 } } };
+    events[2]([live, live]);
+    expect(mocks.needsYou).toHaveBeenCalledExactlyOnceWith("Test is waiting for you", "Codex needs approval in its terminal.");
+    events[2]([{ event: "terminal.attention.snapshot", data: { data: { revision: 6, lanes: { test: attention } } } }]);
+    expect(mocks.needsYou).toHaveBeenCalledOnce();
+    events[2]([{ event: "terminal.attention", data: { data: { lane: "test", attention: null, revision: 7 } } }]);
+    expect(store.getState().lanes.test.attention).toBeUndefined();
+    events[2]([{ event: "terminal.attention", data: { data: { lane: "test", attention: { id: "question", kind: "question" }, revision: 8 } } }]);
+    expect(mocks.needsYou).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])("terminal parent activity follows the last lifecycle operation: open=%s", async (open) => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "antigravity", known: true, session: "agy" } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+    const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+    tail[2]([{ event: "caught-up", data: "0" }]);
+    const lifecycle = [{ turn: "t", op: "open" }, { turn: "t", op: "close", reason: "done" }];
+    if (open) lifecycle.push({ turn: "next", op: "open" });
+    tail[2]([{ event: "turn", data: lifecycle }]);
+    expect(store.getState().lanes.test).toMatchObject({ running: open, transcriptOpen: open });
+  });
+
+  it("display observations never drain queued work and process exit clears them even after parent close", async () => {
+    const store = await fixture();
+    const queued = [{ id: "q", text: "next", attachments: [] }];
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "antigravity", known: true, session: "agy", queued } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+    const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+    const observation = { running: true, background: { child: "pm" }, usage: { input: 10, output: 20, cache_read: 30, cache_write: 0 }, truncated: false };
+    tail[2]([{ event: "observation", data: observation }, { event: "caught-up", data: "1" }]);
+    expect(store.getState().lanes.test).toMatchObject({ running: false, queued, observation });
+    tail[2]([{ event: "ended", data: "gone" }]);
+    expect(store.getState().lanes.test.observation).toEqual({ ...observation, running: false, background: {} });
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable transcript clears observed activity but preserves usage until reconnect recovers", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "terminal", agent: "antigravity", known: true, session: "agy", conv: { turns: [], background: { old: "qa" } } } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+    const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+    const observation = { running: true, background: { child: "pm" }, usage: { input: 10, output: 20, cache_read: 30, cache_write: 0 }, truncated: false };
+    tail[2]([{ event: "observation", data: observation }, { event: "caught-up", data: "1" }]);
+    tail[2]([{ event: "fatal", data: "that session's transcript is not on this machine" }]);
+    expect(store.getState().lanes.test.observation).toEqual({ ...observation, running: false, background: {} });
+    expect(store.getState().lanes.test.conv.background).toBeUndefined();
+    tail[3]();
+    await vi.advanceTimersByTimeAsync(2000);
+    const retry = mocks.open.mock.calls.filter(([u]) => u.includes("/api/session/tail")).at(-1)!;
+    expect(retry).not.toBe(tail);
+    retry[2]([{ event: "observation", data: observation }, { event: "caught-up", data: "1" }]);
+    expect(store.getState().lanes.test.observation).toEqual(observation);
   });
 
   it("a terminal whose process ended stops showing its subagents as working", async () => {

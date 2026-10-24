@@ -11,6 +11,12 @@ import { type Endpoint, get, post, url } from "./api";
 import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
 import { endBanner, needsYou, notify } from "./notify";
+import type { Observation } from "./session-usage";
+
+/// Keep reported totals while removing activity that a lost reader or exited process cannot vouch for.
+function inactiveObservation(observed: Observation | undefined): Observation | undefined {
+  return observed ? { ...observed, running: false, background: {} } : undefined;
+}
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
 import { refreshReview } from "./prereview";
@@ -103,6 +109,10 @@ function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachmen
 }
 
 export interface Lane {
+  /// Native CLI prompts are answered in its terminal, never through a synthetic approval card.
+  attention?: { id: string; kind: "permission" | "question" };
+  attentionSeen?: string;
+  attentionRevision?: number;
   /// Invalidate manual verification when this checkout receives a filesystem or git change.
   reviewRevision?: number;
   context?: import("./context").ContextSnapshot;
@@ -142,6 +152,9 @@ export interface Lane {
   queued: QueuedMessage[];
   attachments?: Attachment[];
   conv: Conversation;
+  /// Display-only current state; does not authorize queued submissions or finish turns.
+  observation?: Observation;
+  historyTruncated?: boolean;
   running: boolean;
   loaded: boolean;
   error?: string;
@@ -379,8 +392,25 @@ export const useStore = create<State>()((set, getState) => {
       }
     }
   }
+  /// A reconnect restores waiting quietly; only a new live native request asks for attention.
+  function nativeAttention(path: string, lid: string, attention: Lane["attention"], revision: number, live: boolean) {
+    const l = getState().lanes[lid];
+    if (!l || l.project !== path || l.agent !== "codex" || l.interface !== "terminal") return;
+    if (live && revision <= (l.attentionRevision ?? -1)) return;
+    lane(lid, { attention, attentionRevision: revision, ...(attention ? { attentionSeen: attention.id } : {}) });
+    if (live && attention && l.attentionSeen !== attention.id) void needsYou(`${l.title} is waiting for you`, attention.kind === "permission" ? "Codex needs approval in its terminal." : "Codex asked a question in its terminal.");
+  }
+
   /// What each daemon event means here — one entry per event, so adding one is a line.
   const on: Record<string, (path: string, ep: Endpoint, data: unknown) => void> = {
+    "terminal.attention": (path, _ep, data) => {
+      const d = (data as { data?: { lane: string; attention?: Lane["attention"] | null; revision: number } })?.data;
+      if (d) nativeAttention(path, d.lane, d.attention ?? undefined, d.revision, true);
+    },
+    "terminal.attention.snapshot": (path, _ep, data) => {
+      const snapshot = (data as { data?: { revision: number; lanes: Record<string, Lane["attention"]> } })?.data;
+      if (snapshot) for (const lid of lanesOf(path)) nativeAttention(path, lid, snapshot.lanes[lid], snapshot.revision, false);
+    },
     pending: (path, _ep, data) => {
       const d = (data as { data?: { lane?: string; withdrawn?: string } })?.data;
       // The hook that asked is gone — stopped, or timed out — so its card is a question nobody
@@ -549,13 +579,13 @@ export const useStore = create<State>()((set, getState) => {
   /// that opened is running whatever Claude Code's pid file says, and one that closed is idle
   /// unless the pid file says busy — a file that never said busy sends no event to say idle.
   function transcriptSays(l: Lane, frames: Frame[]): { patch: Partial<Lane>; settled: boolean } {
-    const ops = frames.map((f) => f.op);
-    if (ops.includes("close")) {
+    const lifecycle = frames.filter((f) => f.op === "open" || f.op === "close").at(-1)?.op;
+    if (lifecycle === "close") {
       const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
       if (s?.busy) return { patch: { transcriptOpen: false }, settled: false };
       return { patch: { transcriptOpen: false, running: false, pending: [] }, settled: l.running };
     }
-    if (ops.includes("open")) return { patch: { transcriptOpen: true, running: true }, settled: false };
+    if (lifecycle === "open") return { patch: { transcriptOpen: true, running: true }, settled: false };
     return { patch: {}, settled: false };
   }
 
@@ -649,10 +679,20 @@ export const useStore = create<State>()((set, getState) => {
               conv = applyFact(conv, e.data as Fact);
               if (live && (e.data as Fact).kind === "turn.ended") ended.push((e.data as Fact).turn);
             }
-            else if (e.event === "fatal") missing = true;
+            else if (e.event === "fatal") {
+              missing = true;
+              conv = { turns: conv.turns };
+              patch.observation = inactiveObservation(patch.observation ?? l.observation);
+            }
             // The process is gone, and its subagents with it. Claude's lanes also hear this from
             // the session list; Codex's and Antigravity's have only this to say it.
-            else if (e.event === "ended" && conv.background) conv = { turns: conv.turns };
+            else if (e.event === "observation") patch.observation = e.data as Observation;
+            else if (e.event === "truncated") patch.historyTruncated = true;
+            else if (e.event === "ended") {
+              conv = { turns: conv.turns };
+              patch = { ...patch, running: false, transcriptOpen: false, pending: [] };
+              patch.observation = inactiveObservation(patch.observation ?? l.observation);
+            }
             else if (e.event === "caught-up") {
               live = true;
               patch = { ...patch, loaded: true, known: true, error: undefined };
@@ -823,7 +863,7 @@ export const useStore = create<State>()((set, getState) => {
       }
       follows.get(lid)?.close(); follows.delete(lid);
       chats.get(lid)?.close(); chats.delete(lid);
-      lane(lid, { interface: value, conv: empty, cursor: 0, loaded: false, error: undefined });
+      lane(lid, { interface: value, conv: empty, observation: undefined, attention: undefined, historyTruncated: undefined, cursor: 0, loaded: false, error: undefined });
       save(getState());
       getState().load(lid);
     },

@@ -1,3 +1,4 @@
+// Projects, lanes, and team members share the same observed activity indicators.
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -9,7 +10,7 @@ import { SetupBadge } from "./SetupWarnings";
 import { Icon } from "./icons";
 import { label } from "../keys";
 import { cycle } from "./App";
-import { activity } from "./StatusBar";
+import { activity, waiting, workingMembers } from "../activity";
 import { BrandMark } from "./BrandMark";
 import { MemberAvatar } from "./MemberAvatar";
 import { Working } from "./Working";
@@ -112,15 +113,8 @@ function Members({ project }: { project: string }) {
     for (const id of s.projects[project]?.lanes ?? []) {
       const lane = s.lanes[id];
       if (!lane) continue;
-      // A background agent works on after its turn ends, for as long as the session is alive.
       const session = s.projects[project]?.sessions?.find((x) => x.id === lane.session);
-      if (session?.live !== false) for (const agent of Object.values(lane.conv.background ?? {})) if (agent) names.add(agent);
-      if (!lane.running || lane.pending.length) continue;
-      const turn = lane.conv.turns.at(-1);
-      for (const call of Object.values(turn?.calls ?? {})) {
-        if (!/^(Agent|Task)$/.test(call.tool) || typeof call.input?.subagent_type !== "string") continue;
-        if (call.state === "running" || (turn?.children[call.id] ?? []).some((id) => turn?.calls[id]?.state === "running")) names.add(call.input.subagent_type);
-      }
+      if (session?.live !== false) for (const name of workingMembers(lane)) names.add(name);
     }
     return [...names].sort().join("\n");
   });
@@ -181,8 +175,8 @@ function Members({ project }: { project: string }) {
 
 function ProjectRow({ path }: { path: string }) {
   const p = useStore((s) => s.projects[path]);
-  const needs = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => (s.lanes[l]?.pending.length ?? 0) > 0).length);
-  const busy = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => s.lanes[l]?.running).length);
+  const needs = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => s.lanes[l] && waiting(s.lanes[l]) > 0).length);
+  const busy = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => s.lanes[l] && activity(s.lanes[l]).tone === "live").length);
   const [menu, setMenu] = useState<{ at: DOMRect; kind: "new" | "more" } | null>(null);
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   if (!p) return null;
@@ -326,7 +320,7 @@ function LaneRow({ id }: { id: string }) {
   const [ctx, setCtx] = useState<DOMRect | null>(null);
   const root = useStore((s) => (l ? s.projects[l.project]?.path : undefined));
   if (!l) return null;
-  const asking = l.pending.length;
+  const asking = waiting(l);
   const { select } = useStore.getState();
   // Merge, discard and close confirm for the active lane, so the menu selects this one first.
   const ask = (what: "merge" | "discard" | "close") => {
@@ -339,7 +333,7 @@ function LaneRow({ id }: { id: string }) {
     <div className="lane-row">
     <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => startRename(id)} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), startRename(id)) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
-        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : l.running ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
+        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
       <span className="lane-text" title={`${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
         <span className="lane-title">{l.title}</span>

@@ -385,6 +385,14 @@ fn pty_thread(
         _ => None,
     };
     let mut looked = std::time::Instant::now();
+    let attention = match &launch {
+        Launch::Agent {
+            agent,
+            lane: Some(lane),
+            ..
+        } if agent == "codex" => Some(crate::terminal_attention::Owner::new(lane)),
+        _ => None,
+    };
     let mut cmd = match launch {
         Launch::Shell => CommandBuilder::new(shell()),
         Launch::Agent {
@@ -433,6 +441,12 @@ fn pty_thread(
                     };
                     // A question asked through `ask_user` waits for the person, not for 60 s.
                     c.env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout());
+                    if agent == "antigravity" {
+                        c.env("KEEL_AGY_PORT", port.to_string());
+                        c.env("KEEL_AGY_LANE", lane.as_deref().unwrap_or(""));
+                        c.env("KEEL_AGY_MODE", "acceptEdits");
+                        c.env("KEEL_AGY_TERMINAL", "1");
+                    }
                     c
                 }
                 Err(why) => {
@@ -468,17 +482,27 @@ fn pty_thread(
     let mut writer = pair.master.take_writer().ok();
 
     // Reading is blocking and must not stall command handling.
+    let reading_attention = attention.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        let mut parser = crate::terminal_attention::Parser::default();
         loop {
             match std::io::Read::read(&mut reader, &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    if let Some(owner) = &reading_attention {
+                        for change in parser.feed(&buf[..n]) {
+                            owner.observe(change);
+                        }
+                    }
                     if out.blocking_send(Out::Bytes(buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
             }
+        }
+        if let Some(owner) = reading_attention {
+            owner.close();
         }
     });
 
@@ -554,6 +578,9 @@ fn pty_thread(
         }
     }
 
+    if let Some(owner) = attention {
+        owner.close();
+    }
     // The agent's whole tree, not its top: `claude` with a `cargo test` under it is the ordinary
     // shape, and killing the leader alone leaves the rest running.
     // Everything under the agent, taken while it is still alive to be walked from: its tool

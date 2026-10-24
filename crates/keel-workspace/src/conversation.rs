@@ -989,7 +989,7 @@ impl Decoder {
                 let n = |k: &str| u[k].as_u64().unwrap_or(0);
                 let t = Tokens {
                     context: n("context_tokens"),
-                    input: n("input_tokens"),
+                    input: n("input_tokens").saturating_sub(n("cached_input_tokens")),
                     output: n("output_tokens"),
                     cache_read: n("cached_input_tokens"),
                     cache_write: 0,

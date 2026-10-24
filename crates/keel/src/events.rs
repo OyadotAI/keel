@@ -116,6 +116,7 @@ pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response:
         // A broadcast does not replay: a window that connects after the watcher's first pass
         // would wait for the list to change. Ask for it to be said again.
         poke_sessions();
+        let _ = tx.send(Ok(attention_snapshot())).await;
         loop {
             let emitted = tokio::select! {
                 _ = tx.closed() => return,
@@ -126,6 +127,7 @@ pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response:
                         let _ = tx
                             .send(Ok(Event::default().event("lagged").data("{}")))
                             .await;
+                        let _ = tx.send(Ok(attention_snapshot())).await;
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => return,
@@ -144,6 +146,13 @@ pub async fn stream(State(_state): State<Arc<AppState>>) -> impl axum::response:
         }
     });
     Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
+}
+
+/// Reconcile native prompts on connect and overflow, before any older queued changes arrive.
+fn attention_snapshot() -> Event {
+    Event::default()
+        .event("terminal.attention.snapshot")
+        .data(serde_json::json!({ "data": crate::terminal_attention::snapshot() }).to_string())
 }
 
 /// What a mutating request changed, from the path it took.
@@ -692,6 +701,55 @@ fn inside(parts: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Overflow can drop a permission transition entirely; a new snapshot restores it even
+    /// though the native CLI stays quiet until the person answers.
+    #[tokio::test]
+    async fn lagged_streams_resnapshot_native_attention() {
+        use axum::response::IntoResponse;
+        use futures_util::StreamExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let owner = crate::terminal_attention::Owner::new("lagged-attention-fixture");
+        let response = stream(State(Arc::new(AppState::new(root))))
+            .await
+            .into_response();
+        let mut body = response.into_body().into_data_stream();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while let Some(data) = body.next().await {
+                if String::from_utf8_lossy(&data.unwrap())
+                    .contains("event: terminal.attention.snapshot")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        owner.observe(Some(crate::terminal_attention::Kind::Permission));
+        for _ in 0..BUS * 2 {
+            emit("attention-test-overflow", None, serde_json::json!({}));
+        }
+        let recovered = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut lagged = false;
+            while let Some(data) = body.next().await {
+                let data = data.unwrap();
+                let text = String::from_utf8_lossy(&data);
+                lagged |= text.contains("event: lagged");
+                if lagged
+                    && text.contains("event: terminal.attention.snapshot")
+                    && text.contains("lagged-attention-fixture")
+                {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap();
+        assert!(recovered);
+        owner.close();
+    }
 
     /// A save is the checkout it is in; build output, git's object store and Keel's own records
     /// are nobody's, or a `cargo build` would be a `git status` every 300 ms.
