@@ -565,7 +565,7 @@ fn pty_thread(
             looked = std::time::Instant::now();
             if let Some((agent, lane, since, started)) = &unnamed
                 && let Some(id) =
-                    crate::discover::started(agent, std::path::Path::new(cwd), *since, live)
+                    crate::discover::started(agent, std::path::Path::new(cwd), *since, live, leader)
             {
                 _live = Some(Live::since(&id, started.clone()));
                 crate::events::emit(

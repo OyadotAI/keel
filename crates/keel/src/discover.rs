@@ -17,11 +17,13 @@ const HEAD_BYTES: u64 = 8 * 1024 * 1024;
 /// The conversation `agent` started in `cwd` at or after `since`, if one has appeared. `taken`
 /// says a conversation another terminal already runs: an older Codex in the same checkout writes
 /// its rollout on every turn, and a second terminal took the first one's id for its own.
+/// `holder` is the terminal's process group: an `agy` keeps its own conversation open.
 pub fn started(
     agent: &str,
     cwd: &Path,
     since: SystemTime,
     taken: fn(&str) -> bool,
+    holder: Option<u32>,
 ) -> Option<String> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     match agent {
@@ -33,6 +35,7 @@ pub fn started(
             &home.join(".gemini/antigravity-cli/conversations"),
             cwd,
             since,
+            holder.and_then(open_by),
         )
         .filter(|id| !taken(id)),
         _ => None,
@@ -76,10 +79,26 @@ fn codex(
 /// workspace in it as a protobuf string — the URI with its length in front. Matching that exact
 /// field means a conversation in `/repo/.keel/worktrees/x` is not taken for one in `/repo`. The
 /// first pages may still be in the write-ahead log, so that is read too.
-fn antigravity(dir: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
+/// Measured on 1.4.4, a terminal `agy`'s first prompt is not always the first conversation in
+/// its workspace after it started: an `agy -p` run beside it (another lane's, or a command an
+/// agent ran) began one five seconds after launch, and the lane followed that one — two steps,
+/// never written again — and read as idle for the whole session. Its subagents' conversations
+/// begin in the same workspace too. So when the files the terminal's own process group holds
+/// open are known (`open`), only those are candidates; when they cannot be read, the rule falls
+/// back to the earliest.
+fn antigravity(
+    dir: &Path,
+    cwd: &Path,
+    since: SystemTime,
+    open: Option<Vec<PathBuf>>,
+) -> Option<String> {
     let needle = field(&format!("file://{}", cwd.display()));
     let mut found: Vec<(SystemTime, String)> = entries(dir)
         .filter(|p| p.extension().is_some_and(|e| e == "db") && begun_since(p, since))
+        .filter(|p| {
+            open.as_ref()
+                .is_none_or(|held| held.iter().any(|h| h.file_name() == p.file_name()))
+        })
         .filter(|p| {
             let wal = p.with_extension("db-wal");
             [p.as_path(), wal.as_path()]
@@ -93,6 +112,28 @@ fn antigravity(dir: &Path, cwd: &Path, since: SystemTime) -> Option<String> {
     // earliest, and look at the launch order if that ever turns up.
     found.sort();
     found.into_iter().next().map(|(_, id)| id)
+}
+
+/// The files process group `pgid` has open, from `lsof`; `None` when that cannot be asked (no
+/// `lsof`, as on Windows), which is not the same answer as "none".
+fn open_by(pgid: u32) -> Option<Vec<PathBuf>> {
+    let out = std::process::Command::new("lsof")
+        .args(["-w", "-Fn", "-g", &pgid.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    // `lsof` exits 1 when the group holds nothing it can list, which is still an answer.
+    Some(held(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The paths in `lsof -Fn` output: one field per line, a path's line starting with `n`.
+fn held(fields: &str) -> Vec<PathBuf> {
+    fields
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// A protobuf length-delimited string's bytes: the varint length, then the text.
@@ -231,16 +272,52 @@ mod tests {
         let with =
             |path: &str| [b"junk".as_slice(), &field(&format!("file://{path}")), b"j"].concat();
         std::fs::write(dir.join("wt.db"), with("/repo/.keel/worktrees/x")).unwrap();
-        assert_eq!(antigravity(dir, Path::new("/repo"), since), None);
+        assert_eq!(antigravity(dir, Path::new("/repo"), since, None), None);
         std::fs::write(dir.join("conv-1.db"), b"SQLite format 3").unwrap();
         std::fs::write(dir.join("conv-1.db-wal"), with("/repo")).unwrap();
         assert_eq!(
-            antigravity(dir, Path::new("/repo"), since).as_deref(),
+            antigravity(dir, Path::new("/repo"), since, None).as_deref(),
             Some("conv-1")
         );
         assert_eq!(
-            antigravity(dir, Path::new("/repo/.keel/worktrees/x"), since).as_deref(),
+            antigravity(dir, Path::new("/repo/.keel/worktrees/x"), since, None).as_deref(),
             Some("wt")
+        );
+    }
+
+    /// Measured on agy 1.4.4: an `agy -p` beside the terminal began a conversation in the same
+    /// workspace before the person's first prompt, and the lane took it. What the terminal's own
+    /// process holds open decides; when that cannot be read, the earliest still does.
+    #[test]
+    fn antigravity_takes_the_conversation_its_terminal_holds_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let since = SystemTime::now() - std::time::Duration::from_secs(1);
+        let here = [b"j".as_slice(), &field("file:///repo")].concat();
+        std::fs::write(dir.join("beside.db"), &here).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.join("mine.db"), &here).unwrap();
+        let open = |name: &str| Some(vec![dir.join(name), dir.join(format!("{name}-wal"))]);
+        assert_eq!(
+            antigravity(dir, Path::new("/repo"), since, open("mine.db")).as_deref(),
+            Some("mine")
+        );
+        assert_eq!(
+            antigravity(dir, Path::new("/repo"), since, Some(vec![])),
+            None,
+            "not yet open"
+        );
+        assert_eq!(
+            antigravity(dir, Path::new("/repo"), since, None).as_deref(),
+            Some("beside"),
+            "no lsof: the earliest, as before"
+        );
+        assert_eq!(
+            held("p123\nfcwd\nn/Users/x/conversations/mine.db\nf9\nn/dev/ttys001\n"),
+            [
+                PathBuf::from("/Users/x/conversations/mine.db"),
+                PathBuf::from("/dev/ttys001")
+            ]
         );
     }
 
