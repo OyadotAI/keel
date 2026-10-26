@@ -93,6 +93,9 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   repository rather than from the user's own configuration.
 
 ### Fixed
+- Kept Codex terminal session discovery working across date-folder changes and selected the
+  earliest eligible unclaimed conversation across the launch window.
+- Skipped already claimed Antigravity conversations before selecting a terminal session.
 - App-launched daemons no longer initialize a separate reporting client that bypasses the native
   Privacy switch. Reporting copy no longer describes persistent usage identifiers as anonymous.
 - Project trust and approval rules now stay in private machine-local storage; repository-supplied
