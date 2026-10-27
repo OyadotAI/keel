@@ -27,7 +27,7 @@ pub struct Prefs {
 }
 
 /// `~/.keel`. Keel's own directory, deliberately separate from `~/.claude`: Keel reads Claude
-/// Code's state and must never be a reason for it to change.
+/// Code's conversation content stays separate; explicit renames change naming metadata only.
 pub fn dir() -> Option<Utf8PathBuf> {
     let home = keel_workspace::home()
         .map(String::from)

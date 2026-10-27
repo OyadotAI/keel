@@ -2,6 +2,14 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [0.4.36] - 2026-10-27
+
+### Fixed
+- Synchronized Claude Code, Codex, and Antigravity lane names with their native session names,
+  including terminal renames and names entered before session discovery.
+- Retained named, Keel-known sessions in provider-aware History across close, resume, and restart,
+  with serialized saves and revisions preventing stale refreshes from undoing newer names.
+
 ## [0.4.35] - 2026-10-24
 
 ### Fixed

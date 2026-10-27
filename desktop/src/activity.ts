@@ -1,5 +1,5 @@
 // Shared display-only lane activity. Independent children do not change parent execution flags.
-import type { Lane } from "./store";
+import type { Lane, Session } from "./store";
 
 /** Native prompts and Keel cards share one lane's waiting treatment without duplicate badges. */
 export function waiting(l: Lane): number { return l.pending.length || (l.attention ? 1 : 0); }
@@ -29,7 +29,8 @@ export function activity(l: Lane): { label: string; since?: string; tone: "idle"
 }
 
 /** Member identities come from lifecycle metadata; unnamed children still contribute to activity. */
-export function workingMembers(l: Lane): string[] {
+export function workingMembers(l: Lane, session?: Session): string[] {
+  if (sessionEnded(l, session)) return [];
   const names = new Set(Object.values(l.observation?.background ?? l.conv.background ?? {}).filter((a): a is string => !!a));
   if (!(l.observation?.running ?? l.running) || waiting(l)) return [...names];
   const turn = l.conv.turns.at(-1);
@@ -39,4 +40,9 @@ export function workingMembers(l: Lane): string[] {
     if (call.state === "running" || (turn?.children[call.id] ?? []).some((id) => turn?.calls[id]?.state === "running")) names.add(call.input.subagent_type);
   }
   return [...names];
+}
+
+/** Only Claude History carries a process-liveness signal; other adapters report activity separately. */
+export function sessionEnded(lane: Lane, session?: Session): boolean {
+  return (lane.agent ?? "claude") === "claude" && session?.live === false;
 }

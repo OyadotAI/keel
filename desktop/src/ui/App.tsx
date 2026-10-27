@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type S
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
-import { useStore } from "../store";
+import { useStore, agentName } from "../store";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
 import { Extensions } from "./Extensions";
@@ -309,14 +309,14 @@ function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?
 }
 
 function LaneError({ lane }: { lane: string }) {
-  const error = useStore((s) => s.lanes[lane]?.error);
+  const error = useStore((s) => s.lanes[lane]?.nameError ?? s.lanes[lane]?.error);
   const agent = useStore((s) => s.lanes[lane]?.agent);
   if (!error) return null;
   return (
     <div className="banner error" role="alert">
       {error}{" "}
       {agent !== "antigravity" && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
-      <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined } } }))}>
+      <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined, nameError: undefined } } }))}>
         Dismiss
       </button>
     </div>
@@ -385,7 +385,7 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
       const x = s.lanes[id];
       if (x) out.push({ id: `go-${id}`, title: `Go to lane: ${x.title}`, detail: p.name, keys: i < 9 && l?.project === pid ? label({ key: String(i + 1) }) : undefined, run: () => s.select(id) });
     });
-    for (const ses of (p?.sessions ?? []).slice(0, 30)) out.push({ id: `resume-${ses.id}`, title: `Resume: ${ses.title || "Untitled session"}`, detail: p.name, run: () => s.resume(pid, ses) });
+    for (const ses of (p?.sessions ?? []).slice(0, 30)) out.push({ id: `resume-${pid}-${ses.provider ?? "claude"}-${ses.id}`, title: `Resume: ${ses.title || "Untitled session"}`, detail: `${p.name} · ${agentName(ses.provider)}`, run: () => s.resume(pid, ses) });
   }
   if (l) {
     if (useIde.getState().layout === "ide") {

@@ -1,128 +1,115 @@
-//! Renaming a session.
-//!
-//! A session's title is written by Claude Code into its own transcript. Keel does not edit that
-//! file — it reads Claude Code's state and must never be a reason for it to change — so a rename
-//! is an override stored beside it, keyed by session id.
-//!
-//! Its own file rather than a field in `prefs.json`: a rename rewrites this and nothing else, and
-//! losing a set of nicknames to a half-written prefs file would be a bad trade for one fewer path.
-
-use axum::{Json, http::StatusCode};
-use camino::Utf8PathBuf;
+//! One durable name across lanes, native provider metadata, and History.
+use axum::{Json, extract::State, http::StatusCode};
+use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
-fn path() -> Option<Utf8PathBuf> {
-    Some(crate::prefs::dir()?.join("session-names.json"))
+mod codex_api;
+mod repository;
+#[cfg(test)]
+mod tests;
+use repository::{Identity, Repository};
+
+const MAX_NAME_CHARS: usize = 80;
+const MAX_SESSION_ID_CHARS: usize = 128;
+
+/// A provider session in a checkout chosen through the project's normal worktree guard.
+#[derive(Deserialize)]
+pub struct RegisterBody {
+    pub id: String,
+    #[serde(default = "claude")]
+    pub provider: String,
+    pub wt: Option<String>,
+}
+fn claude() -> String {
+    "claude".into()
 }
 
-pub fn load() -> BTreeMap<String, String> {
-    path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
-fn save(map: &BTreeMap<String, String>) -> Result<(), String> {
-    let (Some(dir), Some(path)) = (crate::prefs::dir(), path()) else {
-        return Err("no home directory".into());
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
-    crate::writes::replace(path.as_std_path(), body.as_bytes())
-}
-
-/// Apply the overrides to a discovered list.
-pub fn apply(sessions: &mut [keel_workspace::Session]) {
-    let names = load();
-    if names.is_empty() {
-        return;
-    }
-    for session in sessions {
-        if let Some(name) = names.get(&session.id) {
-            session.title = Some(name.clone());
-        }
-    }
-}
-
+/// Rename the native session, or durably defer it until the conversation exists.
 #[derive(Deserialize)]
 pub struct RenameBody {
-    pub id: String,
-    /// Empty restores the title Claude Code gave it.
+    #[serde(flatten)]
+    pub session: RegisterBody,
     pub name: String,
+    /// Legacy local labels never replace an already explicit native name during migration.
+    #[serde(default)]
+    pub legacy: bool,
 }
 
+/// Keep the original rename response field while returning authoritative session metadata.
 #[derive(Serialize)]
 pub struct Renamed {
-    pub name: String,
+    name: String,
+    #[serde(flatten)]
+    session: keel_workspace::Session,
 }
 
-pub async fn rename(Json(body): Json<RenameBody>) -> Result<Json<Renamed>, (StatusCode, String)> {
-    crate::serve::in_blocking(move || {
-        let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+/// Register an opened conversation so closing its lane leaves a provider-aware History entry.
+pub async fn register(
+    State(state): State<Arc<crate::serve::AppState>>,
+    Json(body): Json<RegisterBody>,
+) -> Result<Json<keel_workspace::Session>, (StatusCode, String)> {
+    let identity = identity(&state, &body).map_err(bad)?;
+    crate::serve::in_blocking(move || Repository::local()?.register(identity))
+        .await
+        .map(Json)
+        .map_err(bad)
+}
 
-        // The id is a map key here rather than a path, but it is the same id that becomes a filename
-        // elsewhere and the same rule keeps both honest.
-        if body.id.is_empty()
-            || !body
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
-            return Err(bad("that is not a session id"));
-        }
-        let name = body.name.trim();
-        if name.chars().count() > 80 {
-            return Err(bad("keep it under 80 characters"));
-        }
-        if name.contains('\n') {
-            return Err(bad("a name is one line"));
-        }
-
-        // One rename at a time, across every daemon on this HOME: load, change, save is a
-        // read-modify-write, and two at once each saved the list without the other's name.
-        let file = path().ok_or_else(|| bad("no home directory"))?;
-        crate::writes::locked(file.as_std_path(), || {
-            let mut names = load();
-            if name.is_empty() {
-                names.remove(&body.id);
-            } else {
-                names.insert(body.id.clone(), name.to_string());
-            }
-            save(&names)
+/// Persist the requested name before provider I/O, keeping failures retryable across restarts.
+pub async fn rename(
+    State(state): State<Arc<crate::serve::AppState>>,
+    Json(body): Json<RenameBody>,
+) -> Result<Json<Renamed>, (StatusCode, String)> {
+    let identity = identity(&state, &body.session).map_err(bad)?;
+    let name = body.name.trim().to_owned();
+    if name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {
+        return Err(bad(
+            "A session name must be one line and at most 80 characters".into(),
+        ));
+    }
+    let requested = name.clone();
+    crate::serve::in_blocking(move || Repository::local()?.rename(identity, &name, body.legacy))
+        .await
+        .map(|session| {
+            Json(Renamed {
+                name: requested,
+                session,
+            })
         })
-        .and_then(|r| r)
-        .map_err(|e| bad(&e))?;
-
-        Ok(Json(Renamed {
-            name: name.to_string(),
-        }))
+        .map_err(bad)
+}
+fn bad(error: String) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, error)
+}
+fn identity(state: &crate::serve::AppState, body: &RegisterBody) -> Result<Identity, String> {
+    keel_workspace::Follows::from_query(Some(&body.provider)).map_err(str::to_owned)?;
+    if body.id.len() > MAX_SESSION_ID_CHARS
+        || body.id.is_empty()
+        || !body
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("That is not a session id".into());
+    }
+    Ok(Identity {
+        provider: body.provider.clone(),
+        id: body.id.clone(),
+        repo: state.repo().to_string(),
+        cwd: state.checkout(body.wt.as_deref())?.to_string(),
+        wt: body.wt.clone(),
     })
-    .await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An override replaces the title and nothing else; a session with no override keeps the one
-    /// Claude Code wrote.
-    #[test]
-    fn overrides_apply_only_where_they_exist() {
-        let names: BTreeMap<String, String> =
-            [("aaa".to_string(), "my nickname".to_string())].into();
-
-        let titled = |id: &str, title: &str| -> Option<String> {
-            names.get(id).cloned().or_else(|| Some(title.to_string()))
-        };
-
-        assert_eq!(
-            titled("aaa", "written by claude").as_deref(),
-            Some("my nickname")
-        );
-        assert_eq!(
-            titled("bbb", "also written by claude").as_deref(),
-            Some("also written by claude")
-        );
+/// Every session-list transport uses this resolver, including native rename and deferred intent.
+pub fn discover(repo: &Utf8Path, home: &Utf8Path) -> Vec<keel_workspace::Session> {
+    let raw = keel_workspace::discover_sessions(repo, home);
+    match Repository::local().and_then(|store| store.list(repo, raw.clone())) {
+        Ok(list) => list,
+        Err(_) => {
+            tracing::warn!("Could not refresh session names");
+            raw
+        }
     }
 }

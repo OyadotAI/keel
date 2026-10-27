@@ -747,6 +747,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/state", get(api_state))
         .route("/api/events", get(crate::events::stream))
         .route("/api/sessions", get(api_sessions))
+        .route(
+            "/api/session/register",
+            axum::routing::post(crate::names::register),
+        )
         .route("/api/tree", get(api_tree))
         .route(
             "/api/file",
@@ -2156,7 +2160,7 @@ async fn api_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<keel_works
     let sessions = blocking(
         move || {
             let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
-            keel_workspace::discover_sessions(&repo, &home)
+            crate::names::discover(&repo, &home)
         },
         Vec::new(),
     )
@@ -2209,9 +2213,16 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Json<StateResponse> {
         keel_workspace::Workspace::default(),
     );
     let (scan, mut workspace) = tokio::join!(scan, workspace);
-    // A session someone renamed in Keel keeps that name, without Claude Code's transcript being
-    // touched to achieve it.
-    crate::names::apply(&mut workspace.sessions);
+    // Resolve the same native names and pending intents as History polling and SSE.
+    let naming_repo = repo.clone();
+    workspace.sessions = blocking(
+        move || {
+            let home = keel_workspace::claude_home().unwrap_or_else(|| "/nonexistent".into());
+            crate::names::discover(&naming_repo, &home)
+        },
+        Vec::new(),
+    )
+    .await;
 
     Json(StateResponse {
         repo: repo.to_string(),

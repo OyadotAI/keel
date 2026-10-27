@@ -1,21 +1,31 @@
+//! Claude session summaries and bounded transcript reads for history and live followers.
+
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-/// One Claude Code conversation, summarised from its transcript.
+/// One provider conversation, summarized without exposing its message bodies.
 ///
 /// Message bodies are deliberately absent. A session list needs to be scannable, and a transcript
 /// contains everything the user has ever said in that repository.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Session {
+    /// Provider identity travels with History so resuming cannot launch the wrong CLI.
+    pub provider: String,
+    /// A Keel worktree, when this session was registered from an isolated lane.
+    pub wt: Option<String>,
     /// The session UUID, which is what `claude --resume` takes.
     pub id: String,
     /// Where it was found relative to the repository: `here`, `above` (a parent directory),
     /// or `below` (a subdirectory). Claude Code keys transcripts by the directory it was
     /// launched from, and people launch it from the folder above as often as not.
     pub scope: String,
-    /// Claude Code's own generated title, when it has produced one.
+    /// The resolved native session name, with explicit names preferred over generated titles.
     pub title: Option<String>,
+    /// Explicit names survive regenerated titles; clients use the source to avoid stale resets.
+    pub title_source: Option<&'static str>,
+    /// Number of valid explicit rename records, so an older list cannot undo a newer rename.
+    pub title_revision: u64,
     pub cwd: Option<String>,
     pub branch: Option<String>,
     /// ISO-8601, so lexicographic ordering is chronological ordering.
@@ -43,6 +53,27 @@ pub struct Session {
 }
 
 impl Session {
+    /// A known provider conversation starts with metadata only; its adapter supplies the name.
+    pub fn known(provider: &str, id: &str, cwd: &str) -> Self {
+        Self {
+            provider: provider.into(),
+            wt: None,
+            id: id.into(),
+            scope: "here".into(),
+            title: None,
+            title_source: None,
+            title_revision: 0,
+            cwd: Some(cwd.into()),
+            branch: None,
+            started: None,
+            last_active: None,
+            messages: 0,
+            version: None,
+            entrypoint: None,
+            live: false,
+            busy: false,
+        }
+    }
     /// What to show when Claude Code never generated a title.
     pub fn display_title(&self) -> String {
         self.title
@@ -83,10 +114,23 @@ pub fn transcript_path(repo: &Utf8Path, claude_home: &Utf8Path, id: &str) -> Opt
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
+    // Naming already knows a session's recorded checkout; avoid walking every project for each id.
+    let direct = claude_home
+        .join("projects")
+        .join(project_key(repo))
+        .join(format!("{id}.jsonl"));
+    if direct.is_file() {
+        return Some(direct);
+    }
     session_dirs(repo, claude_home)
         .into_iter()
         .map(|(dir, scope)| project_dir(&dir, claude_home, scope).join(format!("{id}.jsonl")))
         .find(|path| path.exists())
+}
+
+/// Read one existing session through the same scope guard and summary cache as History.
+pub fn session_summary(repo: &Utf8Path, home: &Utf8Path, id: &str) -> Option<Session> {
+    parse_session(&transcript_path(repo, home, id)?)
 }
 
 /// How long the transcript is right now, or `None` if there is no such session.
@@ -729,9 +773,13 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
     let id = path.file_stem()?.to_string();
 
     let mut session = Session {
+        provider: "claude".into(),
+        wt: None,
         id,
         scope: "here".into(),
         title: None,
+        title_source: None,
+        title_revision: 0,
         cwd: None,
         branch: None,
         started: None,
@@ -743,6 +791,7 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
         busy: false,
     };
 
+    let mut custom_title = None;
     for line in contents.lines() {
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -757,6 +806,13 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
                     .get("aiTitle")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                session.title_source = session.title.as_ref().map(|_| "generated");
+            }
+            "custom-title" if record["sessionId"].as_str() == Some(&session.id) => {
+                if let Some(name) = record["customTitle"].as_str() {
+                    session.title_revision += 1;
+                    custom_title = (!name.trim().is_empty()).then(|| name.to_owned());
+                }
             }
             "user" | "assistant" => {
                 session.messages += 1;
@@ -775,6 +831,11 @@ fn parse_session(path: &Utf8Path) -> Option<Session> {
             }
             _ => {}
         }
+    }
+
+    if let Some(name) = custom_title {
+        session.title = Some(name);
+        session.title_source = Some("explicit");
     }
 
     cache().put(path, stamp, &session);
@@ -934,6 +995,20 @@ mod tests {
             !json.contains("secret"),
             "message bodies must never leave the transcript"
         );
+    }
+
+    /// A terminal rename is explicit and survives later generated titles in History.
+    #[test]
+    fn explicit_session_titles_win_over_generated_titles() {
+        let transcript = concat!(
+            "{\"type\":\"user\",\"cwd\":\"/repo\",\"message\":{\"content\":\"hi\"}}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Generated\"}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"My session\",\"sessionId\":\"abc-1\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Generated later\"}\n",
+        );
+        let (_dir, home) = home_with("-repo", "abc-1.jsonl", transcript);
+        let sessions = discover_sessions(Utf8Path::new("/repo"), &home);
+        assert_eq!(sessions[0].title.as_deref(), Some("My session"));
     }
 
     /// 143 transcripts in this repository, 118 of them `sdk-py`: one `/security-review` run per

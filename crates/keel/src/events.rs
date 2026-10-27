@@ -56,7 +56,17 @@ fn next_seq() -> u64 {
 /// Say that something changed. Cheap enough to call from a drain loop: a clone of an `Arc` per
 /// subscriber, and nothing at all when nobody is listening.
 pub fn emit(kind: &'static str, wt: Option<&str>, data: serde_json::Value) {
-    let _ = bus().send(Arc::new(Emitted {
+    emit_on(bus(), kind, wt, data);
+}
+
+/// Inject the transport for hermetic event tests; production always uses the shared bus.
+fn emit_on(
+    tx: &broadcast::Sender<Arc<Emitted>>,
+    kind: &'static str,
+    wt: Option<&str>,
+    data: serde_json::Value,
+) {
+    let _ = tx.send(Arc::new(Emitted {
         seq: next_seq(),
         kind,
         wt: wt.map(str::to_string),
@@ -207,7 +217,7 @@ pub async fn after_mutation(
         p if p.starts_with("/api/monitors") => {
             emit("monitors.changed", None, serde_json::Value::Null)
         }
-        "/api/session/rename" => poke_sessions(),
+        "/api/session/rename" | "/api/session/register" => poke_sessions(),
         "/api/license" => emit("state.changed", None, serde_json::Value::Null),
         // A skill or subagent is written to the project root and, for a skill, maybe committed.
         p if p.starts_with("/api/skills") || p.starts_with("/api/agents") => {
@@ -315,15 +325,13 @@ async fn watch_sessions(state: Arc<AppState>) {
                 }
             }
             let (r, h) = (repo.clone(), home.clone());
-            let now = crate::serve::blocking(
-                move || keel_workspace::discover_sessions(&r, &h),
-                Vec::new(),
-            )
-            .await;
+            let now =
+                crate::serve::blocking(move || crate::names::discover(&r, &h), Vec::new()).await;
             let again = SAY_AGAIN.swap(false, std::sync::atomic::Ordering::Relaxed);
             hold_terminal_claims(
                 &state,
                 now.iter()
+                    .filter(|s| s.provider == "claude")
                     .map(|s| (s.id.as_str(), s.cwd.as_deref(), s.live, s.busy)),
             );
             // A session writing its transcript changes its count and timestamp on every record,
@@ -359,14 +367,24 @@ const SESSIONS_DRIFT: std::time::Duration = std::time::Duration::from_secs(30);
 /// What changes the list as a person reads it: which sessions, their titles and branches, and
 /// whether each is running.
 /// (id, title, branch, live, busy)
-type Shape<'a> = (&'a str, Option<&'a str>, Option<&'a str>, bool, bool);
+type Shape<'a> = (
+    &'a str,
+    &'a str,
+    Option<&'a str>,
+    u64,
+    Option<&'a str>,
+    bool,
+    bool,
+);
 
 fn sessions_shape(list: &[keel_workspace::Session]) -> Vec<Shape<'_>> {
     list.iter()
         .map(|s| {
             (
                 s.id.as_str(),
+                s.provider.as_str(),
                 s.title.as_deref(),
+                s.title_revision,
                 s.branch.as_deref(),
                 s.live,
                 s.busy,
@@ -863,10 +881,11 @@ mod tests {
     /// Every subscriber gets every event, in order, and the sequence climbs.
     #[tokio::test]
     async fn two_subscribers_each_get_every_event() {
-        let mut a = subscribe();
-        let mut b = subscribe();
-        emit("git.changed", Some("lane"), serde_json::Value::Null);
-        emit("tree.changed", None, serde_json::json!({ "n": 1 }));
+        // The attention-lag test intentionally floods the global bus in another test thread.
+        let (tx, mut a) = broadcast::channel(BUS);
+        let mut b = tx.subscribe();
+        emit_on(&tx, "git.changed", Some("lane"), serde_json::Value::Null);
+        emit_on(&tx, "tree.changed", None, serde_json::json!({ "n": 1 }));
         for rx in [&mut a, &mut b] {
             let first = rx.recv().await.unwrap();
             let second = rx.recv().await.unwrap();

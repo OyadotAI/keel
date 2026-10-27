@@ -12,6 +12,8 @@ import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact
 import { open as openStream, type Stream } from "./streams";
 import { endBanner, needsYou, notify } from "./notify";
 import type { Observation } from "./session-usage";
+import { sessionEnded } from "./activity";
+import { createLaneNames, restoredNaming, sessionForLane, type Naming } from "./lane-names";
 
 /// Keep reported totals while removing activity that a lost reader or exited process cannot vouch for.
 function inactiveObservation(observed: Observation | undefined): Observation | undefined {
@@ -56,6 +58,10 @@ export interface Job {
 
 export interface Session {
   id: string;
+  provider?: Agent;
+  wt?: string | null;
+  title_source?: string | null;
+  title_revision?: number;
   title?: string | null;
   branch?: string | null;
   last_active?: string | null;
@@ -120,6 +126,10 @@ export interface Lane {
   project: string;
   interface?: ChatInterface;
   title: string;
+  naming?: Naming;
+  nameSaving?: boolean;
+  nameLocked?: boolean;
+  nameError?: string;
   /// The conversation, chosen by Keel when the lane is made so the transcript to follow is known
   /// before anything is typed.
   session?: string;
@@ -222,7 +232,8 @@ interface State {
   prepare(lane: string): Promise<{ ep: Endpoint; wt?: string } | undefined>;
   /// The lane's terminal is connected: type whatever was waiting for it.
   connected(lane: string): void;
-  closeLane(lane: string): void;
+  closeLane(lane: string): Promise<void>;
+  renameLane(lane: string, name: string): Promise<boolean>;
   refreshGit(lane: string): Promise<void>;
   openDiff(lane: string, path?: string, staged?: boolean): Promise<void>;
   merge(lane: string): Promise<void>;
@@ -251,7 +262,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
+  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
   active?: string;
 }
 
@@ -264,7 +275,7 @@ function load(): Pick<State, "order" | "projects" | "lanes" | "active"> {
     const lanes: Record<string, Lane> = {};
     for (const l of s.lanes) {
       // A lane saved before lanes were the CLI has no session of its own yet; it gets one.
-      lanes[l.id] = { ...l, interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: l.queued ?? [], conv: empty, running: false, loaded: !l.session, pending: [] };
+      lanes[l.id] = { ...l, naming: restoredNaming(l.title, l.naming), interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: l.queued ?? [], conv: empty, running: false, loaded: !l.session, pending: [] };
     }
     return { order: s.order.filter((p) => projects[p]), projects, lanes, active: s.active };
   } catch {
@@ -272,17 +283,19 @@ function load(): Pick<State, "order" | "projects" | "lanes" | "active"> {
   }
 }
 
-function save(s: State) {
+function save(s: State): boolean {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, session, isolated, wt, agent, known, interface: surface, attachments, queued, draft, model, mode, managed, receipt }) => ({ id, project, title, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), draft, model, mode, managed, receipt })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, queued, draft, model, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), draft, model, mode, managed, receipt })),
     active: s.active,
   };
   try {
     localStorage.setItem(SAVED, JSON.stringify(out));
+    return true;
   } catch {
-    // Storage full or blocked: the layout is a convenience, the work is in git.
+    // Most layout writes are best effort; naming must know whether pending intent is durable.
+    return false;
   }
 }
 
@@ -304,6 +317,7 @@ export const useStore = create<State>()((set, getState) => {
   const project = (path: string, patch: Partial<Project>) =>
     set((s) => (s.projects[path] ? { projects: { ...s.projects, [path]: { ...s.projects[path], ...patch } } } : s));
 
+  const names = createLaneNames({ read: getState, lane, project, endpoint, persist: () => save(getState()), label: agentName });
   const starting = new Map<string, Promise<Endpoint>>();
 
   /// The daemon for a project, started on first use. One start per project at a time: two
@@ -367,13 +381,14 @@ export const useStore = create<State>()((set, getState) => {
   };
   /// Whether a lane is working is Claude Code's own word for it, from its pid file.
   function sessionsChanged(path: string, list: Session[]) {
+    list = names.reconcile(path, list);
     project(path, { sessions: list });
     for (const lid of lanesOf(path)) {
       const l = getState().lanes[lid];
       // Claude's list says nothing about a Codex lane, and read as "not busy" it set a working
       // one idle every few seconds and drained its queue mid-turn. Its transcript says instead.
       if (l && (l.agent ?? "claude") !== "claude") continue;
-      const s = l && list.find((x) => x.id === l.session);
+      const s = l && list.find((x) => (x.provider ?? "claude") === "claude" && x.id === l.session);
       const busy = !!s && s.live && (s.busy || !!l.transcriptOpen);
       // A session that ended took its background agents with it.
       if (l && s && !s.live) forgetEnded(lid, l);
@@ -428,6 +443,7 @@ export const useStore = create<State>()((set, getState) => {
       const l = d?.lane ? getState().lanes[d.lane] : undefined;
       if (!d?.session || !l || l.project !== path || l.agent === "claude" || l.interface !== "terminal" || l.known) return;
       lane(l.id, { session: d.session, known: true });
+      void names.register(l.id);
       save(getState());
       // Followed now, whichever lane is on screen: the sidebar says what it is doing.
       void follow(l.id);
@@ -450,6 +466,7 @@ export const useStore = create<State>()((set, getState) => {
       // Whatever happened in the gap is gone: read everything this daemon owns, once.
       trust(path, ep);
       setup(path, ep);
+      for (const lid of lanesOf(path)) void names.register(lid);
       void poll(path);
       // Through `sessionsChanged`, not straight into the project: what ended in the gap — a turn,
       // a session and the background agents it took with it — is what a reconnect is for.
@@ -581,7 +598,7 @@ export const useStore = create<State>()((set, getState) => {
   function transcriptSays(l: Lane, frames: Frame[]): { patch: Partial<Lane>; settled: boolean } {
     const lifecycle = frames.filter((f) => f.op === "open" || f.op === "close").at(-1)?.op;
     if (lifecycle === "close") {
-      const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
+      const s = sessionForLane(l, getState().projects[l.project]?.sessions);
       if (s?.busy) return { patch: { transcriptOpen: false }, settled: false };
       return { patch: { transcriptOpen: false, running: false, pending: [] }, settled: l.running };
     }
@@ -704,8 +721,8 @@ export const useStore = create<State>()((set, getState) => {
               if (last && !last.closed) patch = { ...patch, transcriptOpen: true, running: true };
               // A replay rebuilds the background agents from the transcript; a session that has
               // ended wrote no notification for the ones it took with it.
-              const s = getState().projects[l.project]?.sessions?.find((x) => x.id === l.session);
-              if (s && !s.live && conv.background) conv = { turns: conv.turns };
+              const s = sessionForLane(l, getState().projects[l.project]?.sessions);
+              if (sessionEnded(l, s) && conv.background) conv = { turns: conv.turns };
               // Back to a healthy stream: the next blip waits a second, not the ceiling.
               retries.delete(lid);
             }
@@ -751,6 +768,7 @@ export const useStore = create<State>()((set, getState) => {
       let caughtUp = false;
       const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
         let idle = false;
+        const previousSession = getState().lanes[lid]?.session;
         // Only what arrives after `caught-up` is news; the backlog before it was already seen. Each
         // is kept with whether it arrived live, and sorted out once the batch is folded.
         const seen: { live: boolean; card?: Pending; fact?: Fact; fatal?: string }[] = [];
@@ -812,6 +830,7 @@ export const useStore = create<State>()((set, getState) => {
         });
         announce(lid, seen.filter((x) => x.live));
         const now = getState().lanes[lid];
+        if (now?.known && now.session !== previousSession) void names.register(lid);
         if (now?.managed) { follows.get(lid)?.close(); follows.delete(lid); }
         if (idle || events.some((e) => e.event === "record" && ["accepted", "capabilities"].includes((e.data as { event: string }).event))) save(getState());
         if (idle && caughtUp) { gitSoon(lid); drain(lid); }
@@ -926,6 +945,7 @@ export const useStore = create<State>()((set, getState) => {
     },
 
     async closeProject(path) {
+      for (const lid of lanesOf(path)) if (!await names.flush(lid)) return;
       const lanes = getState().projects[path]?.lanes ?? [];
       set((s) => {
         const projects = { ...s.projects };
@@ -965,7 +985,7 @@ export const useStore = create<State>()((set, getState) => {
       set((s) => ({
         lanes: {
           ...s.lanes,
-          [lid]: { id: lid, project, interface: surface ?? getState().chatInterface, session: id(), agent, known: false, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
+          [lid]: { id: lid, project, interface: surface ?? getState().chatInterface, session: id(), agent, known: false, naming: { revision: 0 }, title: isolated ? "New branch" : "New lane", isolated, jobs: [], queued: [], conv: empty, running: false, loaded: true, pending: [] },
         },
         projects: { ...s.projects, [project]: { ...s.projects[project], lanes: [...s.projects[project].lanes, lid], collapsed: false } },
       }));
@@ -1041,15 +1061,18 @@ export const useStore = create<State>()((set, getState) => {
 
     resume(path, session) {
       // Already open in a lane: go there. Running somewhere else: follow it, start nothing.
-      const open = Object.values(getState().lanes).find((l) => l.project === path && l.session === session.id);
+      const open = Object.values(getState().lanes).find((l) => l.project === path && (l.agent ?? "claude") === (session.provider ?? "claude") && l.session === session.id);
       if (open) return getState().select(open.id);
-      const lid = getState().newLane(path);
-      lane(lid, { session: session.id, known: true, elsewhere: session.live, title: session.title || "Untitled session", loaded: false });
+      const lid = getState().newLane(path, !!session.wt, session.provider ?? "claude");
+      lane(lid, { session: session.id, wt: session.wt ?? undefined, known: true, naming: { revision: session.title_revision ?? 0, source: session.title_source }, elsewhere: session.live, title: session.title || "Untitled session", loaded: false });
+      void names.register(lid);
       save(getState());
       getState().select(lid);
     },
 
-    closeLane(lid) {
+    renameLane: (lid, name) => names.rename(lid, name),
+    async closeLane(lid) {
+      if (!await names.flush(lid)) return;
       closeTab(lid);
       const closing = getState().lanes[lid];
       const closingEp = closing && getState().projects[closing.project]?.endpoint;
@@ -1114,19 +1137,20 @@ export const useStore = create<State>()((set, getState) => {
     async merge(lid) {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
-      if (!ep || !l.wt) return;
+      if (!ep || !l.wt || !await names.flush(lid)) return;
+      lane(lid, { nameLocked: true });
       try {
         // `--no-ff` into the branch the lane was cut from; a dirty project or a conflict refuses
         // and leaves the lane as it was.
         await post(ep, "/api/worktree/finish", { name: l.wt, message: l.title });
-        getState().closeLane(lid);
+        await getState().closeLane(lid);
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e);
         // The checkout is already gone — merged and then a branch delete refused, or removed by
         // hand. Nothing is left to merge, and the lane must not be stuck in the sidebar for good.
-        if (/^no lane /.test(why)) return getState().closeLane(lid);
+        if (/^no lane /.test(why)) return await getState().closeLane(lid);
         lane(lid, { error: why });
-      }
+      } finally { lane(lid, { nameLocked: false }); }
     },
 
     async discard(lid, force) {
@@ -1134,21 +1158,22 @@ export const useStore = create<State>()((set, getState) => {
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!l) return;
       if (!l.wt) {
-        getState().closeLane(lid);
+        await getState().closeLane(lid);
         return;
       }
-      if (!ep) return;
+      if (!ep || !await names.flush(lid)) return;
+      lane(lid, { nameLocked: true });
       try {
         await post(ep, "/api/worktree/discard", { name: l.wt, force });
-        getState().closeLane(lid);
+        await getState().closeLane(lid);
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e);
-        if (/^no lane /.test(why)) return getState().closeLane(lid);
+        if (/^no lane /.test(why)) return await getState().closeLane(lid);
         // The daemon refuses a discard that would lose work and says what; that becomes the
         // question. A forced one that still fails is an error, not the same question again.
         if (force) lane(lid, { confirmDiscard: undefined, error: why });
         else lane(lid, { confirmDiscard: why });
-      }
+      } finally { lane(lid, { nameLocked: false }); }
     },
 
     load(lid) {

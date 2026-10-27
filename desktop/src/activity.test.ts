@@ -41,3 +41,9 @@ describe("observed activity", () => {
     expect(activity(lane({ agent, conv: { turns: [], background: { a: "qa" } } })).tone).toBe("live");
   });
 });
+
+it.each(["codex", "antigravity"] as const)("keeps %s members active when History has no native liveness signal", (agent) => {
+  const l = lane({ agent, session: "s1", observation: { running: true, background: { a: "pm" }, truncated: false } });
+  expect(workingMembers(l, { id: "s1", provider: agent, live: false, busy: false, messages: 1 })).toEqual(["pm"]);
+  expect(workingMembers({ ...l, agent: "claude" }, { id: "s1", provider: "claude", live: false, busy: false, messages: 1 })).toEqual([]);
+});

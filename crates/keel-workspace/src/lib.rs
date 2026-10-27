@@ -21,6 +21,7 @@ mod config;
 pub mod conversation;
 mod follow;
 mod plugins;
+mod session_names;
 mod sessions;
 mod skills;
 
@@ -29,10 +30,11 @@ pub use codex::{codex_home, rollout};
 pub use config::{Hook, McpServer, discover_hooks, discover_mcp_servers, user_mcp_entry};
 pub use follow::{Agent as Follows, Observation, ReportedUsage, Transcript};
 pub use plugins::{Plugin, discover_plugins};
+pub use session_names::{NativeName, SessionNames};
 pub use sessions::{
     Kind, MAX_READ, Session, Status, discover_sessions, interactive, kind_of, opener_of,
-    opening_turn, project_key, session_dirs, status, tail, tail_last, transcript_len,
-    transcript_path,
+    opening_turn, project_key, session_dirs, session_summary, status, tail, tail_last,
+    transcript_len, transcript_path,
 };
 pub use skills::{Skill, discover_skills, plugin_skills};
 

@@ -2,6 +2,7 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { resumeCommand, sessionForLane } from "../lane-names";
 import { AGENT_NAME, useStore, type Agent, type Session } from "../store";
 import { get, type Endpoint } from "../api";
 import { Floating } from "./Menu";
@@ -113,8 +114,8 @@ function Members({ project }: { project: string }) {
     for (const id of s.projects[project]?.lanes ?? []) {
       const lane = s.lanes[id];
       if (!lane) continue;
-      const session = s.projects[project]?.sessions?.find((x) => x.id === lane.session);
-      if (session?.live !== false) for (const name of workingMembers(lane)) names.add(name);
+      const session = sessionForLane(lane, s.projects[project]?.sessions);
+      for (const name of workingMembers(lane, session)) names.add(name);
     }
     return [...names].sort().join("\n");
   });
@@ -335,7 +336,7 @@ function LaneRow({ id }: { id: string }) {
       <span className="marker">
         {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
-      <span className="lane-text" title={`${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
+      <span className="lane-text" title={`${l.title} — ${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
         <span className="lane-title">{l.title}</span>
         {doing && <span className={`lane-sub ${tone}`}>{doing}</span>}
       </span>
@@ -385,13 +386,13 @@ function LaneRow({ id }: { id: string }) {
 function History({ path, sessions }: { path: string; sessions?: Session[] }) {
   const resume = useStore((s) => s.resume);
   // A string, so the selector's answer compares equal when nothing changed.
-  const openKey = useStore((s) => (s.projects[path]?.lanes ?? []).map((l) => s.lanes[l]?.session ?? "").join(","));
+  const openKey = useStore((s) => (s.projects[path]?.lanes ?? []).map((id) => `${s.lanes[id]?.agent ?? "claude"}:${s.lanes[id]?.session ?? ""}`).join(","));
   const openIds = useMemo(() => new Set(openKey.split(",")), [openKey]);
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const [ctx, setCtx] = useState<{ at: DOMRect; session: Session } | null>(null);
   if (!sessions) return null;
-  const list = [...sessions].filter((s) => !openIds.has(s.id)).sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
+  const list = [...sessions].filter((s) => !openIds.has(`${s.provider ?? "claude"}:${s.id}`)).sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
   if (!list.length) return null;
   const shown = all ? list : list.slice(0, 5);
   return (
@@ -403,11 +404,11 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
       </button>
       {open &&
         shown.map((s) => (
-          <button key={s.id} className="lane" onClick={() => resume(path, s)} onContextMenu={(e) => (e.preventDefault(), setCtx({ at: pointer(e), session: s }))} title={`Resume — ${s.messages} messages${s.branch ? ` · ${s.branch}` : ""}`}>
+          <button key={`${s.provider ?? "claude"}:${s.id}`} className="lane" onClick={() => resume(path, s)} onContextMenu={(e) => (e.preventDefault(), setCtx({ at: pointer(e), session: s }))} aria-label={`Resume ${AGENT_NAME[s.provider ?? "claude"]}: ${s.title || "Untitled session"}`} title={`${AGENT_NAME[s.provider ?? "claude"]} — ${s.title || "Untitled session"} — ${s.messages} messages${s.branch ? ` · ${s.branch}` : ""}`}>
             <span className="marker">{s.busy && <span className="busy-dot" />}</span>
             <span className="lane-title faint">{s.title || "Untitled session"}</span>
-            <span className="mono faint" style={{ fontSize: 10 }}>
-              {ago(s.last_active)}
+            <span className="mono faint" style={{ fontSize: 10, whiteSpace: "nowrap" }}>
+              {AGENT_NAME[s.provider ?? "claude"]} · {ago(s.last_active)}
             </span>
           </button>
         ))}
@@ -416,7 +417,7 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
           <button onClick={() => (setCtx(null), resume(path, ctx.session))}>
             <Icon name="terminal" size={14} /> Resume in a lane
           </button>
-          <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(`claude --resume ${ctx.session.id}`))}>
+          <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(resumeCommand(ctx.session)))}>
             <Icon name="copy" size={14} /> Copy resume command
           </button>
         </Floating>

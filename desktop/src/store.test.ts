@@ -383,3 +383,72 @@ describe("Codex terminal handoff", () => {
     expect(load).not.toHaveBeenCalled(); unregister();
   });
 });
+
+// Use the real store actions so provider-aware History resumes cannot silently create Claude lanes.
+describe("session name and History integration", () => {
+  it.each(["claude", "codex", "antigravity"] as const)("keeps the %s session name through rename, close, and resume", async (provider) => {
+    const store = await fixture();
+    const session = { id: "s1", provider, title: "My named session", title_source: "explicit", title_revision: 2, messages: 1, live: false, busy: false };
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, agent: provider, session: "s1", known: true, naming: { revision: 0 } } } }));
+    mocks.post.mockImplementation(async (_ep, path) => path === "/api/session/rename" || path === "/api/session/register" ? session : {});
+    expect(await store.getState().renameLane("test", session.title)).toBe(true);
+    await store.getState().closeLane("test");
+    expect(store.getState().lanes.test).toBeUndefined();
+    const history = store.getState().projects["/repo"].sessions![0];
+    expect(history.title).toBe(session.title);
+    store.getState().resume("/repo", history);
+    const resumed = store.getState().lanes[store.getState().active!];
+    expect(resumed).toMatchObject({ agent: provider, session: "s1", title: session.title, known: true });
+  });
+  it("a native Claude rename updates a managed lane even when its activity did not change", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ projects: { "/repo": { ...s.projects["/repo"], endpoint: undefined } }, lanes: { test: { ...s.lanes.test, session: "s1", managed: true, known: true, naming: { revision: 0 } } } }));
+    store.getState().load("test");
+    await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/events"))).toBe(true));
+    const events = mocks.open.mock.calls.find(([u]) => u.includes("/api/events"))!;
+    events[2]([{ event: "sessions", data: { data: [{ id: "s1", provider: "claude", title: "Terminal renamed", title_source: "explicit", title_revision: 1, messages: 1, live: false, busy: false }] } }]);
+    expect(store.getState().lanes.test.title).toBe("Terminal renamed");
+  });
+});
+
+it("reports blocked storage before accepting a name with no discovered provider session", async () => {
+  const store = await fixture();
+  store.setState((s) => ({ lanes: { test: { ...s.lanes.test, agent: "codex", known: false, naming: { revision: 0 } } } }));
+  vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => { throw new Error("storage full"); } });
+  expect(await store.getState().renameLane("test", "Cannot persist")).toBe(false);
+  expect(mocks.post).not.toHaveBeenCalled();
+  expect(store.getState().lanes.test).toMatchObject({ title: "Cannot persist", naming: { pending: "Cannot persist" }, nameSaving: false });
+  expect(store.getState().lanes.test.nameError).toContain("Rename again to retry");
+});
+
+it.each(["codex", "antigravity"] as const)("keeps %s background replay when its History entry lacks Claude liveness", async (agent) => {
+  const store = await fixture();
+  store.setState((s) => ({ projects: { "/repo": { ...s.projects["/repo"], sessions: [{ id: "s1", provider: agent, live: false, busy: false, messages: 1 }] } }, lanes: { test: { ...s.lanes.test, interface: "terminal", agent, known: true, session: "s1" } } }));
+  store.getState().load("test");
+  await vi.waitFor(() => expect(mocks.open.mock.calls.some(([u]) => u.includes("/api/session/tail"))).toBe(true));
+  const tail = mocks.open.mock.calls.find(([u]) => u.includes("/api/session/tail"))!;
+  tail[2]([{ event: "turn", data: [{ turn: "T1", op: "open", prompt: "run pm", replayed: true }, { turn: "T1", op: "background", id: "A1", agent: "pm", running: true }] }, { event: "caught-up", data: "1" }]);
+  expect(store.getState().lanes.test.conv.background).toEqual({ A1: "pm" });
+});
+
+it.each(["merge", "discard"] as const)("%s never removes a checkout before resolving its pending session name", async (action) => {
+  const store = await fixture();
+  store.setState((s) => ({ lanes: { test: { ...s.lanes.test, agent: "codex", known: false, isolated: true, wt: "feature", naming: { revision: 0, pending: "Early name", edit: "pending" } } } }));
+  if (action === "merge") await store.getState().merge("test");
+  else await store.getState().discard("test", true);
+  expect(mocks.post).not.toHaveBeenCalled();
+  expect(store.getState().lanes.test).toMatchObject({ wt: "feature", title: "Test" });
+  expect(store.getState().lanes.test.nameError).toContain("Start this conversation");
+});
+
+it("locks renaming while a checkout removal is awaiting its result", async () => {
+  const store = await fixture(); let finish!: (value: object) => void;
+  store.setState((s) => ({ lanes: { test: { ...s.lanes.test, known: true, isolated: true, wt: "feature", naming: { revision: 1, source: "explicit" } } } }));
+  mocks.post.mockImplementation(async (_ep, path) => path === "/api/worktree/discard" ? new Promise((resolve) => { finish = resolve; }) : {});
+  const discarding = store.getState().discard("test", true);
+  await vi.waitFor(() => expect(store.getState().lanes.test.nameLocked).toBe(true));
+  expect(await store.getState().renameLane("test", "Too late")).toBe(false);
+  expect(mocks.post.mock.calls.filter(([, path]) => path === "/api/session/rename")).toEqual([]);
+  finish({}); await discarding;
+  expect(store.getState().lanes.test).toBeUndefined();
+});

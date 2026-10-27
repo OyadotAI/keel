@@ -1,3 +1,5 @@
+// Lane naming and actions share the store's durable session-name flow.
+import { SESSION_NAME_LIMIT } from "../lane-names";
 import { UpdateButton } from "./UpdateButton";
 import { useEffect, useRef, useState } from "react";
 import { AGENT_NAME, useStore } from "../store";
@@ -27,7 +29,8 @@ function Rename({ lane, title }: { lane: string; title: string }) {
     if (done.current) return;
     done.current = true;
     const t = name?.trim();
-    useStore.setState((s) => ({ renaming: null, ...(t ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], title: t } } } : {}) }));
+    useStore.setState({ renaming: null });
+    if (t) void useStore.getState().renameLane(lane, t);
     requestAnimationFrame(() => restoreFocus(back));
   };
   return (
@@ -37,6 +40,8 @@ function Rename({ lane, title }: { lane: string; title: string }) {
       defaultValue={title}
       className="field lane-rename"
       aria-label="Lane name"
+      title="Also renames this session in History."
+      maxLength={SESSION_NAME_LIMIT}
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => finish(e.target.value)}
       onKeyDown={(e) => (e.key === "Enter" ? finish(e.currentTarget.value) : e.key === "Escape" && (e.stopPropagation(), finish(null)))}
@@ -46,6 +51,7 @@ function Rename({ lane, title }: { lane: string; title: string }) {
 
 export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleShell: () => void; shell: boolean }) {
   const title = useStore((s) => s.lanes[lane]?.title);
+  const nameSaving = useStore((s) => s.lanes[lane]?.nameSaving);
   const isolated = useStore((s) => s.lanes[lane]?.isolated);
   const wt = useStore((s) => s.lanes[lane]?.wt);
   const agent = useStore((s) => s.lanes[lane]?.agent);
@@ -56,6 +62,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
   return (
     <header className="lane-header">
       <div className="lane-heading">
+        {nameSaving && <span className="sr-only" role="status">Saving session name…</span>}
         {renaming ? (
           <Rename lane={lane} title={title ?? ""} />
         ) : (
