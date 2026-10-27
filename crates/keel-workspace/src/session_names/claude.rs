@@ -51,7 +51,7 @@ fn append(path: &Utf8Path, id: &str, name: &str) -> Result<(), String> {
         file.seek(SeekFrom::End(-1)).map_err(|e| e.to_string())?;
         let mut end = [0];
         file.read_exact(&mut end).map_err(|e| e.to_string())?;
-        if end != [b'\n'] {
+        if end != *b"\n" {
             return Err("The transcript is still being written; rename again to retry".into());
         }
     }

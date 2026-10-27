@@ -2,7 +2,7 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
-## [0.4.36] - 2026-10-27
+## [0.4.37] - 2026-10-27
 
 ### Fixed
 - Synchronized Claude Code, Codex, and Antigravity lane names with their native session names,
