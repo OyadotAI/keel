@@ -55,7 +55,8 @@ jobs:
 
   macos:
     needs: draft
-    runs-on: macos-15
+    # The explicit Intel pool avoids ARM capacity failures; the bundle still targets both CPUs.
+    runs-on: macos-15-intel
     timeout-minutes: 90
     env:
       APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
