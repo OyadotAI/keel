@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
-import { clear, useRun } from "../runs";
 import { useStore } from "../store";
 import { SourceControl } from "./SourceControl";
 import { InlineDiff } from "./InlineDiff";
@@ -10,9 +9,8 @@ import { type GraphCommit } from "../commit-graph";
 import { CommitGraph } from "./CommitGraph";
 import { useIde } from "../ide";
 import { useGitCards } from "../git-cards";
-import { Banner, Count, Tabs } from "./kit";
-import { PreReview, PrLink } from "./PreReview";
-import { clock, openPullRequest, prKey, prLink, refreshReview, startReview, useReview, type PrRun } from "../prereview";
+import { Count, Tabs } from "./kit";
+import { PullRequest } from "./PullRequest";
 import { Icon } from "./icons";
 import { BranchList } from "./Branches";
 import { GitCardSplitter } from "./GitCardSplitter";
@@ -279,53 +277,4 @@ function CommitFile({ file }: { file: Prepared }) {
     {open && <InlineDiff rows={file.rows} path={file.path} />}
     {file.note && <div className="small faint">{file.note}</div>}
   </details>;
-}
-
-function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string }) {
-  const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState(false);
-  const [error, setError] = useState("");
-  // Kept outside the panel: switching tabs mid-push must not offer a second pull request.
-  const run = useRun<PrRun>(prKey(ep, wt));
-  const seen = useReview(lane);
-  useEffect(() => { void refreshReview(lane, ep, wt); }, [lane, ep, wt]);
-  const lines = run?.state.lines ?? [];
-  const state = run?.running ? "running" : (run?.state.result ?? "idle");
-  const review = seen?.review;
-  const cancelled = review?.outcome?.kind === "none" && review.outcome.cause === "cancelled";
-  if ((review && !cancelled) || seen?.restarted) {
-    return <div style={{ padding: "10px 12px" }}><PreReview lane={lane} ep={ep} wt={wt} place="tab" />{lines.length > 0 && <pre className="code">{lines.join("\n")}</pre>}</div>;
-  }
-  const first = () => { setError(""); startReview(lane, ep, wt, { title, draft }).catch((e) => setError(e instanceof Error ? e.message : String(e))); };
-  const link = prLink(run);
-  return (
-    <div style={{ padding: "10px 12px" }}>
-      {cancelled && review?.outcome?.kind === "none" && <Banner tone="note">Review cancelled after {clock(review.outcome.took)}.</Banner>}
-      {error && <Banner tone="error">{error}</Banner>}
-      <p className="small muted" style={{ marginTop: 0 }}>
-        Keel's team reviews this branch on this machine first. You open the pull request after, whether or not you fix what it finds. It pushes with <code>gh</code>; leave the title empty to let it come from the commits.
-      </p>
-      <input className="field" style={{ maxWidth: "none", width: "100%" }} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)" aria-label="Pull request title" />
-      <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", margin: "6px 0" }}>
-        <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Open as a draft
-      </label>
-      {/* Once a pull request exists, nothing offers to open another: a second click made one. */}
-      {link ? (
-        <div className="review-pr">
-          <Icon name="check-circle" size={14} style={{ color: "var(--add)" }} />
-          <span>{state === "failed" ? "Already open:" : "Opened"}</span>
-          <PrLink link={link} />
-          <button className="link small" onClick={() => clear(prKey(ep, wt))}>Start another pull request</button>
-        </div>
-      ) : (
-        <div className="actions">
-          <button className="primary" disabled={state === "running"} onClick={first}>Review first</button>
-          <button disabled={state === "running"} onClick={() => openPullRequest(ep, wt, { title, draft })}>
-            {state === "running" ? "Opening…" : "Open without review"}
-          </button>
-        </div>
-      )}
-      {lines.length > 0 && <pre className="code">{lines.join("\n")}</pre>}
-    </div>
-  );
 }

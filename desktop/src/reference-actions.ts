@@ -4,8 +4,9 @@ import { sameCheckout, sameReference, type FileReference } from "./chat-files";
 import { requestChatFocus } from "./chat-focus";
 import type { Lane } from "./store";
 import { MAX_FILE_REFERENCES } from "./chat-constants";
+import { insertTerminalFile, type TerminalReferenceDependencies } from "./terminal-file-reference";
 
-interface Dependencies {
+interface Dependencies extends TerminalReferenceDependencies {
   read(): { lanes: Record<string, Lane> };
   patch(id: string, patch: Partial<Lane> | ((lane: Lane) => Partial<Lane>)): void;
   endpoint(project: string): Promise<Endpoint>;
@@ -23,6 +24,7 @@ function available(lane: Lane | undefined, reference: FileReference): string | u
 /** A single ownership boundary prevents delayed validation from attaching to another checkout. */
 export function createReferenceActions(deps: Dependencies) {
   async function referenceFile(id: string, reference: FileReference): Promise<boolean> {
+    if (deps.read().lanes[id]?.interface === "terminal") return insertTerminalFile(deps, id, reference);
     const lane = deps.read().lanes[id];
     const error = available(lane, reference);
     if (error) { deps.patch(id, { referenceError: error }); return false; }

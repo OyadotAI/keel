@@ -27,6 +27,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+mod control;
+pub(crate) use control::cancel_for_open;
+pub use control::{api_dismiss, api_stop};
 
 /// How long a review waits for the turn writing its tree to end.
 const WAIT: Duration = Duration::from_secs(15 * 60);
@@ -52,6 +55,9 @@ pub struct Opening {
 
 #[derive(Serialize)]
 pub struct Review {
+    /// A worker and a delayed client response can change only the review they started with.
+    pub id: String,
+    pub revision: u64,
     pub lane: String,
     pub wt: Option<String>,
     /// The commit under review, once the tree has settled; empty before.
@@ -91,7 +97,7 @@ fn now() -> u64 {
 fn find<'a>(all: &'a mut [Entry], lane: &str, dir: &Utf8Path) -> Option<&'a mut Entry> {
     let at = all
         .iter()
-        .rposition(|e| e.review.lane == lane)
+        .rposition(|e| e.review.lane == lane && e.dir == dir)
         .or_else(|| {
             all.iter()
                 .rposition(|e| e.review.lane.is_empty() && e.dir == dir)
@@ -104,14 +110,15 @@ fn running(e: &Entry) -> bool {
 }
 
 /// Change the lane's record and say so.
-fn set(lane: &str, change: impl FnOnce(&mut Review)) {
-    let wt = {
+fn set(id: &str, dir: &Utf8Path, change: impl FnOnce(&mut Review)) {
+    let (lane, wt) = {
         let mut all = reviews().locked();
-        let Some(e) = all.iter_mut().rev().find(|e| e.review.lane == lane) else {
+        let Some(e) = all.iter_mut().find(|e| e.review.id == id && e.dir == dir) else {
             return;
         };
         change(&mut e.review);
-        e.review.wt.clone()
+        e.review.revision += 1;
+        (e.review.lane.clone(), e.review.wt.clone())
     };
     crate::events::emit(
         "reviews.changed",
@@ -146,26 +153,29 @@ fn start_with(
     by_agent: bool,
     program: std::ffi::OsString,
 ) -> bool {
+    let Ok(_registration) = crate::checkout_activity::hold(&dir, false) else {
+        return false;
+    };
     let root = state.repo();
     let wt = dir
         .strip_prefix(root.join(crate::worktree::DIR))
         .ok()
         .map(|n| n.as_str().to_string());
     let stop = Arc::new(AtomicBool::new(false));
+    let id = crate::context::request_id();
     {
         let mut all = reviews().locked();
-        if let Some(e) = all
-            .iter_mut()
-            .find(|e| running(e) && (e.review.lane == lane || e.dir == dir))
-        {
+        if let Some(e) = all.iter_mut().find(|e| running(e) && e.dir == dir) {
             // The agent asked while the person's review ran: what it would have opened is kept,
             // so Open uses its words rather than `--fill`.
             if by_agent && e.review.opening == Opening::default() {
-                e.review.opening = opening;
+                let id = e.review.id.clone();
+                drop(all);
+                set(&id, &dir, |r| r.opening = opening);
             }
             return false;
         }
-        all.retain(|e| e.review.lane != lane);
+        all.retain(|e| e.review.lane != lane || e.dir != dir);
         while all.len() >= KEPT {
             let Some(oldest) = all.iter().position(|e| !running(e)) else {
                 break;
@@ -174,6 +184,8 @@ fn start_with(
         }
         all.push(Entry {
             review: Review {
+                id: id.clone(),
+                revision: 0,
                 lane: lane.to_string(),
                 wt: wt.clone(),
                 sha: String::new(),
@@ -193,13 +205,13 @@ fn start_with(
         wt.as_deref(),
         serde_json::json!({ "lane": lane }),
     );
-    let lane = lane.to_string();
     // Its own thread, not the blocking pool: it lives for minutes, mostly waiting. A thread that
     // cannot start ends the record at once, or it would sit at "waiting" with nothing behind it.
-    let ended = lane.clone();
+    let ended = id.clone();
+    let ended_dir = dir.clone();
     let spawned = std::thread::Builder::new().spawn(move || {
         let opening = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run(&state, &lane, &dir, wt.as_deref(), &program, &stop)
+            run(&state, &id, &dir, wt.as_deref(), &program, &stop)
         }));
         let done = opening.unwrap_or_else(|_| Done::None {
             cause: "other",
@@ -207,13 +219,13 @@ fn start_with(
             took: 0,
             cost: None,
         });
-        set(&lane, |r| {
+        set(&id, &dir, |r| {
             r.phase = "done";
             r.outcome = Some(done);
         });
     });
     if let Err(e) = spawned {
-        set(&ended, |r| {
+        set(&ended, &ended_dir, |r| {
             r.phase = "done";
             r.outcome = Some(none(
                 "start",
@@ -236,7 +248,7 @@ fn none(cause: &'static str, line: String, since: Instant) -> Done {
 
 fn run(
     state: &AppState,
-    lane: &str,
+    id: &str,
     dir: &Utf8Path,
     wt: Option<&str>,
     program: &std::ffi::OsStr,
@@ -264,7 +276,7 @@ fn run(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    set(lane, |r| r.phase = "checking");
+    set(id, dir, |r| r.phase = "checking");
     // Never the agent's `--base`: it could point the review at a branch with nothing on it and
     // get "Ship" over an empty diff, while Open opens against the default. The lane's own base,
     // or the remote's default — where the pull request will actually go.
@@ -277,7 +289,7 @@ fn run(
         return none("refused", why, since);
     }
     let sha = crate::git::trimmed(dir, &["rev-parse", "HEAD"]).unwrap_or_default();
-    set(lane, |r| {
+    set(id, dir, |r| {
         r.phase = "fetching";
         r.sha = sha;
         r.base = branch.clone();
@@ -307,7 +319,7 @@ fn run(
             since,
         );
     };
-    set(lane, |r| {
+    set(id, dir, |r| {
         r.phase = "reviewing";
         r.base = base.clone();
     });
@@ -316,7 +328,7 @@ fn run(
         let opening = all
             .iter()
             .rev()
-            .find(|e| e.review.lane == lane)
+            .find(|e| e.review.id == id && e.dir == dir)
             .map(|e| e.review.opening.clone())
             .unwrap_or_default();
         serde_json::json!({ "title": opening.title, "body": opening.body })
@@ -337,38 +349,11 @@ pub(crate) fn remote_default(dir: &Utf8Path) -> String {
     .unwrap_or_else(|| "main".into())
 }
 
-/// Stop the lane's review.
+/// Stop the lane's review in offline worker tests without depending on HTTP extraction.
+#[cfg(test)]
 pub fn stop(lane: &str, dir: &Utf8Path) {
     if let Some(e) = find(&mut reviews().locked(), lane, dir).filter(|e| running(e)) {
         e.stop.store(true, Ordering::Relaxed);
-    }
-}
-
-/// Put away the lane's finished review, for every window: the form comes back, and a reconnect
-/// does not bring the review back with it.
-pub fn dismiss(lane: &str, dir: &Utf8Path) {
-    let wt = {
-        let mut all = reviews().locked();
-        let Some(at) = all.iter().rposition(|e| {
-            !running(e) && (e.review.lane == lane || (e.review.lane.is_empty() && e.dir == dir))
-        }) else {
-            return;
-        };
-        all.remove(at).review.wt
-    };
-    crate::events::emit(
-        "reviews.changed",
-        wt.as_deref(),
-        serde_json::json!({ "lane": lane }),
-    );
-}
-
-/// Stop whatever review is running in `dir`: opening its pull request answers it.
-pub fn stop_for(dir: &Utf8Path) {
-    for e in reviews().locked().iter().filter(|e| running(e)) {
-        if e.dir == dir {
-            e.stop.store(true, Ordering::Relaxed);
-        }
     }
 }
 
@@ -557,25 +542,58 @@ pub struct StartBody {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub body: String,
+    #[serde(default)]
     pub draft: bool,
 }
 
-/// The lane's review, and where its checkout stands now, so a moved HEAD reads as stale.
+fn target_metadata(
+    state: &AppState,
+    dir: &Utf8Path,
+    require_head: bool,
+) -> Result<serde_json::Value, String> {
+    let wt = dir
+        .strip_prefix(state.repo().join(crate::worktree::DIR))
+        .ok();
+    let base = wt
+        .map(|w| crate::worktree::base_of(&state.repo(), w.as_str()))
+        .unwrap_or_else(|| remote_default(dir));
+    let head = crate::git::trimmed(dir, &["rev-parse", "HEAD"]);
+    if require_head && head.is_err() {
+        return Err(
+            "Could not confirm the reviewed commit. Refresh the checkout status before continuing."
+                .into(),
+        );
+    }
+    let branch = crate::git::trimmed(dir, &["branch", "--show-current"])?;
+    Ok(serde_json::json!({"head":head.unwrap_or_default(), "branch":branch, "base":base}))
+}
+
+/// Last-known results are not confirmed when the checkout's current commit cannot be read.
 pub async fn api_get(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Checkout(dir): Checkout,
     Query(q): Query<LaneQuery>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let review = {
         let mut all = reviews().locked();
-        find(&mut all, &q.lane, &dir).and_then(|e| serde_json::to_value(&e.review).ok())
+        find(&mut all, &q.lane, &dir).and_then(|e| {
+            let mut value = serde_json::to_value(&e.review).ok()?;
+            value["cancel_requested"] =
+                serde_json::json!(running(e) && e.stop.load(Ordering::Relaxed));
+            Some(value)
+        })
     };
-    let head = crate::serve::blocking(
-        move || crate::git::trimmed(&dir, &["rev-parse", "HEAD"]).unwrap_or_default(),
-        String::new(),
+    let require_head = review.is_some();
+    let target = crate::serve::blocking(
+        move || target_metadata(&state, &dir, require_head),
+        Err("Could not read the review target.".into()),
     )
-    .await;
-    Json(serde_json::json!({ "review": review, "head": head }))
+    .await
+    .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(Json(
+        serde_json::json!({ "review": review, "head": target["head"], "target": target }),
+    ))
 }
 
 pub async fn api_start(
@@ -586,35 +604,23 @@ pub async fn api_start(
     // no-blocking: inserts a record and spawns the thread that does the work.
     let opening = Opening {
         title: q.title,
+        body: q.body,
         draft: q.draft,
         ..Opening::default()
     };
-    if start(state, &q.lane, dir, opening, false) {
-        Ok(Json(serde_json::json!({ "started": true })))
+    if start(state, &q.lane, dir.clone(), opening, false) {
+        let mut all = reviews().locked();
+        let review = find(&mut all, &q.lane, &dir)
+            .map(|e| serde_json::json!({"id":e.review.id,"revision":e.review.revision}));
+        Ok(Json(
+            serde_json::json!({ "started": true, "id":review.as_ref().map(|r| &r["id"]),"revision":review.as_ref().map(|r| &r["revision"]) }),
+        ))
     } else {
         Err((
             StatusCode::CONFLICT,
-            "A review of this branch is already running.".into(),
+            "A review or Git operation is already using this checkout. Refresh its status and try again.".into(),
         ))
     }
-}
-
-pub async fn api_stop(
-    Checkout(dir): Checkout,
-    Json(q): Json<LaneQuery>,
-) -> Json<serde_json::Value> {
-    // no-blocking: sets a flag the review's own thread reads.
-    stop(&q.lane, &dir);
-    Json(serde_json::json!({ "stopped": true }))
-}
-
-pub async fn api_dismiss(
-    Checkout(dir): Checkout,
-    Json(q): Json<LaneQuery>,
-) -> Json<serde_json::Value> {
-    // no-blocking: removes a record from memory.
-    dismiss(&q.lane, &dir);
-    Json(serde_json::json!({ "dismissed": true }))
 }
 
 // Unix, as `ci.rs`'s are: the stub `claude` is a shell script.

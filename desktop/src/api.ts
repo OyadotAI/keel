@@ -37,7 +37,7 @@ export function url(ep: Endpoint, path: string, params?: Params): string {
   return `http://127.0.0.1:${ep.port}${path}${query(params)}`;
 }
 
-async function request<T>(ep: Endpoint, method: string, path: string, params?: Params, body?: unknown): Promise<T> {
+async function request<T>(ep: Endpoint, method: string, path: string, params?: Params, body?: unknown, timeout = ORDINARY): Promise<T> {
   const response = await fetch(url(ep, path, params), {
     method,
     headers: {
@@ -45,7 +45,7 @@ async function request<T>(ep: Endpoint, method: string, path: string, params?: P
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(ORDINARY),
+    signal: AbortSignal.timeout(timeout),
   });
   const text = await response.text();
   // The daemon answers a failure in plain text that says what went wrong; that is the message.
@@ -53,9 +53,9 @@ async function request<T>(ep: Endpoint, method: string, path: string, params?: P
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-export const get = <T>(ep: Endpoint, path: string, params?: Params) => request<T>(ep, "GET", path, params);
-export const post = <T>(ep: Endpoint, path: string, body?: unknown, params?: Params) =>
-  request<T>(ep, "POST", path, params, body);
+export const get = <T>(ep: Endpoint, path: string, params?: Params, timeout = ORDINARY) => request<T>(ep, "GET", path, params, undefined, timeout);
+export const post = <T>(ep: Endpoint, path: string, body?: unknown, params?: Params, timeout = ORDINARY) =>
+  request<T>(ep, "POST", path, params, body, timeout);
 
 export async function getBlob(ep: Endpoint, path: string, params?: Params): Promise<Blob> {
   const response = await fetch(url(ep, path, params), { headers: { Authorization: `Bearer ${ep.token}` }, signal: AbortSignal.timeout(ORDINARY) });

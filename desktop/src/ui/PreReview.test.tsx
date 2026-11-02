@@ -12,7 +12,7 @@ import { prLabel, prLink, type Review } from "../prereview";
 const ep = { port: 1, token: "t" };
 const base = { lane: "l", ep, place: "dock" as const };
 const review = (outcome?: Review["outcome"]): Review => ({
-  lane: "l", sha: "abc1234def", base: "origin/main", started: 0, phase: "reviewing",
+  id: "review-l", revision: 1, lane: "l", sha: "abc1234def", base: "origin/main", started: 0, phase: "reviewing",
   opening: { title: "", body: "", draft: false, base: "main" }, by_agent: false, outcome,
 });
 const url = "https://github.com/OyadotAI/oya-browser/pull/44";
@@ -65,4 +65,11 @@ describe("the review dock", () => {
     expect(prLink({ state: { lines: ["a pull request for branch x already exists:", url], result: "failed" } })).toBe(url);
     expect(prLink({ state: { lines: ["nothing"] } })).toBeUndefined();
   });
+});
+
+it("a recovered newer PR head is distinct from the requested or reviewed commit", () => {
+  const run = { running: false, state: { lines: [], link: url, existing: true, actualHead: "fffffff111", target: { branch: "feature", head: "abc1234def", base: "main" } } };
+  const html = renderToStaticMarkup(<PullRequestLine {...base} run={run} r={review()} />);
+  expect(html).toContain("Pull request head fffffff");
+  expect(html).toContain("Requested commit abc1234");
 });

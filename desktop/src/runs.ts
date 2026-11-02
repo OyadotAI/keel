@@ -17,10 +17,14 @@ const runs = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((l) => l());
 
+/** Shared action guards inspect the same running owner as the panel, without a second lock. */
+export function runOf<T>(key: string): { state: T; running: boolean } | undefined { return runs.get(key) as { state: T; running: boolean } | undefined; }
+
 /// A run's state and whether it is still going; `undefined` when nothing ran under this key.
 export function useRun<T>(key: string): { state: T; running: boolean } | undefined {
   return useSyncExternalStore(
     (l) => (listeners.add(l), () => listeners.delete(l)),
+    () => runs.get(key) as { state: T; running: boolean } | undefined,
     () => runs.get(key) as { state: T; running: boolean } | undefined,
   );
 }

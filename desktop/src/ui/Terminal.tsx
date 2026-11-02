@@ -7,6 +7,7 @@ import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
+import { TerminalFileSurface } from "./TerminalFileFeedback";
 
 /// A terminal over the daemon's PTY: the lane's agent itself (`agent`), or a shell in its checkout.
 ///
@@ -79,9 +80,22 @@ function setElsewhere(lane: string, elsewhere: boolean) {
   useStore.setState((s) => (s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], elsewhere } } } : s));
 }
 
+// Visibility belongs to a socket registration, so an old cleanup cannot invalidate its replacement.
+function providerInput(lane: string, ws: WebSocket, term: import("@xterm/xterm").Terminal, visible: () => boolean, alive: () => boolean) {
+  const encoder = new TextEncoder();
+  const connection = register(lane, (text) => {
+    if (!alive() || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(encoder.encode(text)); return true;
+  }, { visible: visible(), focus: () => term.focus() });
+  const refresh = () => connection.visible(visible());
+  const unwatch = useStore.subscribe((state, before) => { if (state.active !== before.active) refresh(); });
+  return { refresh, close: () => { unwatch(); connection(); } };
+}
+
 export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane: string; agent?: boolean; hidden?: boolean; onExit?: () => void }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => {});
+  const visibilityRef = useRef<() => void>(() => {});
   const [title, setTitle] = useState("");
   const [state, setState] = useState<"starting" | "open" | "closed">("starting");
   const [generation, setGeneration] = useState(0);
@@ -200,7 +214,9 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       let unregister = () => {};
       ws.addEventListener("open", () => {
         if (!agent) return;
-        unregister = register(lane, (text) => ws.send(encoder.encode(text)));
+        const connection = providerInput(lane, ws, term, () => !hiddenRef.current && useStore.getState().active === lane, () => !disposed);
+        visibilityRef.current = connection.refresh;
+        unregister = () => { connection.close(); if (visibilityRef.current === connection.refresh) visibilityRef.current = () => {}; };
         useStore.getState().connected(lane);
       });
       ws.addEventListener("close", () => unregister());
@@ -233,6 +249,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
   useEffect(() => {
+    visibilityRef.current();
     if (hidden) {
       // A hidden xterm that keeps focus still takes keystrokes — into a lane nobody can see.
       if (host.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
@@ -248,7 +265,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const name = agent ? (kind === "claude" ? "Claude Code" : AGENT_NAME[kind]) : "Shell";
   if (elsewhere)
     return (
-      <div className={`terminal ${hidden ? "hidden" : ""}`} aria-hidden={hidden}>
+      <TerminalFileSurface lane={lane} agent={agent} hidden={hidden}>
         <div className="panel-empty" style={{ margin: "auto" }}>
           <h3>This conversation is running in another terminal</h3>
           <p>Keel is following it: each turn appears on the right as it happens. Starting it here too would be two agents writing one conversation.</p>
@@ -263,10 +280,10 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
             Take over here
           </button>
         </div>
-      </div>
+      </TerminalFileSurface>
     );
   return (
-    <div className={`terminal ${hidden ? "hidden" : ""}`} aria-hidden={hidden}>
+    <TerminalFileSurface lane={lane} agent={agent} hidden={hidden}>
       {state !== "open" && (
         <div className="terminal-state small">
           {error ? (
@@ -297,6 +314,6 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       )}
       {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
       <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
-    </div>
+    </TerminalFileSurface>
   );
 }

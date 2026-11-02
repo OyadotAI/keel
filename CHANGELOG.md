@@ -4,6 +4,12 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Enabled validated Explorer file-path insertion into active Claude Code, Codex, and Antigravity
+  terminals without submitting prompts, with visible rejection and connection-change protection.
+- Preserved PR review forms and results through errors, confirmed cancellation and findings
+  delivery, and reconciled existing pull requests before retrying creation.
+
 ## [0.4.40] - 2026-11-02
 
 ### Added

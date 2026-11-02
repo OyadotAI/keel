@@ -1,138 +1,26 @@
-//! Opening a pull request from the Changes panel.
-//!
-//! Driven through `gh`, the same as cloning: Keel never holds a long-lived GitHub token of its
-//! own, and `gh` already knows how to authenticate, find the remote and pick a base branch.
-//!
-//! Three steps, streamed, and each is announced before it runs — a button that goes quiet for
-//! twenty seconds while it pushes is a button people press twice.
-
-use axum::{
-    extract::Query,
-    response::sse::{Event, Sse},
-};
+//! Pull-request creation captures an immutable target and reconciles existing PRs before retries.
+mod github;
+mod opening;
+mod repository;
+mod target;
+pub use opening::create;
 use serde::Deserialize;
-use std::convert::Infallible;
-use tokio::process::Command;
-use tokio_stream::wrappers::ReceiverStream;
 
-use crate::serve::Checkout;
-
-#[derive(Deserialize)]
+/// User intent is separate from the commit/branch guards captured before a push.
+#[derive(Deserialize, Default)]
 pub struct PrQuery {
-    /// Title. Empty means let `gh` fill it from the commits.
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub body: String,
-    /// Open it as a draft.
     #[serde(default)]
     pub draft: bool,
-    /// The branch to merge into: the one the review before it compared against, so the verdict
-    /// is about the diff the pull request shows. Empty means `gh`'s default.
     #[serde(default)]
     pub base: String,
-}
-
-fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    let (tx, rx) = tokio::sync::mpsc::channel(4);
-    let message = message.to_string();
-    tokio::spawn(async move {
-        let _ = tx
-            .send(Ok(Event::default().event("fatal").data(message)))
-            .await;
-        let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
-    });
-    Sse::new(ReceiverStream::new(rx))
-}
-
-pub async fn create(
-    Checkout(repo): Checkout,
-    Query(q): Query<PrQuery>,
-) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    if !repo.join(".git").exists() {
-        return refuse("This is not a git repository. Initialise one from Changes first.");
-    }
-
-    // Three gits, read off the executor: one slow `git status` here held up every other request.
-    let checked = {
-        let (repo, asked) = (repo.clone(), q.base.trim().to_string());
-        tokio::task::spawn_blocking(move || {
-            // The base `gh` will open against: the one asked for, else the remote's default.
-            let base = if asked.is_empty() {
-                crate::prereview::remote_default(&repo)
-            } else {
-                asked
-            };
-            precheck(&repo, &base)
-        })
-        .await
-        .unwrap_or_else(|_| Err("The checks before a pull request failed to run.".into()))
-    };
-    let branch = match checked {
-        Ok(b) => b,
-        Err(why) => return refuse(&why),
-    };
-    // Opening one is the answer to the review before it, whichever way it was reached: "Open
-    // without review" while one is running stops it, for every window. After the checks, so a
-    // refused open leaves the review running.
-    crate::prereview::stop_for(&repo);
-    // A branch name or nothing: it becomes an argument to `gh`.
-    let base = q.base.trim().to_string();
-    if !base.is_empty()
-        && (base.starts_with('-')
-            || !base
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c)))
-    {
-        return refuse(&format!("{base} is not a branch name."));
-    }
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
-    tokio::spawn(async move {
-        let say = |text: String| {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(Ok(Event::default().event("line").data(text))).await;
-            }
-        };
-
-        say(format!("$ git push -u origin {branch}")).await;
-        let mut push = crate::git::tokio_command(&repo);
-        push.args(["push", "-u", "origin", &branch]);
-        if crate::plugins::pipe(&mut push, &tx).await != 0 {
-            let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
-            return;
-        }
-
-        let mut args: Vec<String> = vec!["pr".into(), "create".into()];
-        if q.title.trim().is_empty() {
-            // `--fill` writes the title and body from the commits, which is the right default:
-            // the commit messages are already the description someone wrote.
-            args.push("--fill".into());
-        } else {
-            args.push("--title".into());
-            args.push(q.title.clone());
-            args.push("--body".into());
-            args.push(q.body.clone());
-        }
-        if q.draft {
-            args.push("--draft".into());
-        }
-        if !base.is_empty() {
-            args.push("--base".into());
-            args.push(base);
-        }
-
-        say(format!("$ gh {}", args.join(" "))).await;
-        let mut create = Command::new("gh");
-        create.current_dir(&repo).args(&args);
-        let code = crate::plugins::pipe(&mut create, &tx).await;
-
-        let _ = tx
-            .send(Ok(Event::default().event("done").data(code.to_string())))
-            .await;
-    });
-    Sse::new(ReceiverStream::new(rx))
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub branch: String,
 }
 
 /// Whether `repo` can have a pull request opened from it, and the branch it would be from. The

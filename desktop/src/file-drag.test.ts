@@ -50,7 +50,7 @@ it.each(["Escape", "pointercancel", "blur"])("%s cancels without a drop or accid
   expect(draggedClick(element)).toBe(false);
 });
 
-it("a terminal or header has no drop target", () => {
+it("a header has no drop target", () => {
   dropTarget = undefined; begin(); pointer("pointermove", 20); pointer("pointerup", 20);
   expect(fixture.state.referenceFile).not.toHaveBeenCalled();
 });

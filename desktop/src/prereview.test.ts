@@ -1,7 +1,9 @@
+// Legacy facade contracts remain stable while status ownership and recovery are strengthened.
 import { describe, expect, it, vi } from "vitest";
 
 const answers: unknown[] = [];
-vi.mock("./api", () => ({
+vi.mock("./api", async (original) => ({
+  ...await original<typeof import("./api")>(),
   get: vi.fn(async () => answers.shift()),
   post: vi.fn(async () => undefined),
   url: () => "",
@@ -12,7 +14,7 @@ vi.mock("./runs", () => ({ start: vi.fn() }));
 import { fixPrompt, navigable, refreshReview, reviewOf, sorted, type Finding, type Review } from "./prereview";
 
 const ep = { port: 1, token: "t" };
-const review = (outcome: Review["outcome"]): Review => ({ lane: "l", wt: "fix", sha: "abc1234def", base: "origin/main", started: 0, phase: outcome ? "done" : "reviewing", opening: { title: "", body: "", draft: false, base: "" }, by_agent: false, outcome });
+const review = (outcome: Review["outcome"]): Review => ({ id: "review-l", revision: 1, lane: "l", wt: "fix", sha: "abc1234def", base: "origin/main", started: 0, phase: outcome ? "done" : "reviewing", opening: { title: "", body: "", draft: false, base: "" }, by_agent: false, outcome });
 const finding = (severity: string, title: string): Finding => ({ path: "src/a.ts", line: 3, severity, title, body: "" });
 
 describe("the review before a pull request", () => {

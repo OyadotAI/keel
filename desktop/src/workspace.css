@@ -142,6 +142,20 @@ body { background: var(--workspace-bg); }
 .chat-composer:focus-within { box-shadow: 0 0 0 1px var(--line-strong), 0 5px 24px #202b3b0b; }
 .lane-chat-actions { display: flex; align-items: center; flex: none; gap: 4px; }
 .chat-composer.reference-over { outline: 2px solid var(--accent); background: var(--tint); }
+.terminal.reference-over { outline: 2px solid var(--accent); outline-offset: -2px; }
+.terminal-file-feedback { flex: none; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.terminal-file-feedback > span { flex: 1; min-width: 0; }
+.terminal-file-feedback > button { flex: none; }
+.pr-workflow { min-width: 0; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-target { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.pr-workflow .field { display: block; width: 100%; max-width: none; margin-top: 4px; }
+.pr-draft { display: flex; align-items: center; gap: 6px; }
+.pr-workflow > p { margin: 0; }
+.pr-workflow .review-row { padding-left: 0; }
+.review-error { padding: 8px 0; overflow-wrap: anywhere; }
+.review-error > strong { color: var(--del); }
+.review-error .code, .pr-workflow .code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.pr-workflow .actions > button { max-width: 100%; white-space: normal; }
 .reference-drop-hint, .reference-status { padding: 8px 14px 0; }
 .reference-drop-hint { color: var(--accent); font-size: 12px; }
 .file-reference-drag { position: fixed; z-index: 1000; pointer-events: none; display: flex; align-items: center; gap: 6px; max-width: min(420px, 80vw); padding: 7px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-sm); font-size: 12px; }

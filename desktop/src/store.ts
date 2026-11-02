@@ -26,7 +26,7 @@ function inactiveObservation(observed: Observation | undefined): Observation | u
 }
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
-import { refreshReview } from "./prereview";
+import { bindReview, refreshReview } from "./prereview";
 import { closeTab, onBrowser, type Op as BrowserOp } from "./browser";
 import { inArea, prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
@@ -323,7 +323,7 @@ export function basename(path: string): string {
 
 const id = () => crypto.randomUUID();
 
-export const useStore = create<State>()((set, getState) => {
+export const useStore = create<State>()((set, getState, api) => {
   const lane = (lid: string, patch: Partial<Lane> | ((l: Lane) => Partial<Lane>)) =>
     set((s) => {
       const l = s.lanes[lid];
@@ -336,7 +336,7 @@ export const useStore = create<State>()((set, getState) => {
     set((s) => (s.projects[path] ? { projects: { ...s.projects, [path]: { ...s.projects[path], ...patch } } } : s));
 
   const names = createLaneNames({ read: getState, lane, project, endpoint, persist: () => save(getState()), label: agentName });
-  const references = createReferenceActions({ read: getState, patch: lane, endpoint, persist: () => save(getState()) });
+  const references = createReferenceActions({ read: getState, patch: lane, endpoint, persist: () => save(getState()), subscribe: api.subscribe });
   const questionActions = createQuestionActions({ read: getState, patch: lane, persist: () => save(getState()), draft: (id, text) => getState().draft(id, text) });
   const starting = new Map<string, Promise<Endpoint>>();
 
@@ -500,6 +500,7 @@ export const useStore = create<State>()((set, getState) => {
         lane(lid, (l) => ({ reviewRevision: (l.reviewRevision ?? 0) + 1 }));
         gitSoon(lid);
         soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
+        bindReview(lid, ep, getState().lanes[lid]?.wt);
         void refreshReview(lid, ep, getState().lanes[lid]?.wt);
       }
     },
@@ -514,7 +515,7 @@ export const useStore = create<State>()((set, getState) => {
     // review filed under no lane belongs to whoever asks, so every lane reads it.
     "reviews.changed": (path, ep, data) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;
-      for (const lid of lanesOf(path)) if (!only || only === lid) void refreshReview(lid, ep, getState().lanes[lid]?.wt);
+      for (const lid of lanesOf(path)) if (!only || only === lid) void refreshReview(lid, ep, getState().lanes[lid]?.wt, true);
     },
     "monitors.changed": (path, _ep, data) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;

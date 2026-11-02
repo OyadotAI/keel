@@ -1,10 +1,10 @@
 // Internal pointer dragging works alongside Tauri's native Windows OS-file drop handler.
 import { create } from "zustand";
 import { FILE_DRAG_THRESHOLD } from "./chat-constants";
-import { fileReference, sameCheckout } from "./chat-files";
+import { fileReference, sameCheckout, type FileReference } from "./chat-files";
 import { useStore } from "./store";
 
-interface Drag { path: string; x: number; y: number; target?: string }
+interface Drag { path: string; reference: FileReference; x: number; y: number; target?: string }
 /** Read-only drag presentation never changes the editor selection or sends a message. */
 export const useFileDrag = create<{ drag?: Drag }>(() => ({}));
 const suppressed = new WeakSet<EventTarget>();
@@ -52,7 +52,7 @@ export function startFileDrag(lane: string, path: string, event: Pick<PointerEve
     if (!dragging && Math.hypot(next.clientX - origin.x, next.clientY - origin.y) < FILE_DRAG_THRESHOLD) return;
     if (!dragging) { dragging = true; suppressed.add(element); element.setPointerCapture?.(event.pointerId); }
     next.preventDefault();
-    useFileDrag.setState({ drag: { path, x: next.clientX, y: next.clientY, target: targetAt(next.clientX, next.clientY) } });
+    useFileDrag.setState({ drag: { path, reference, x: next.clientX, y: next.clientY, target: targetAt(next.clientX, next.clientY) } });
   }
   function release(next: PointerEvent) {
     if (next.pointerId !== event.pointerId) return;
