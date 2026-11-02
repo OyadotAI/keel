@@ -1,5 +1,6 @@
 //! Scratch repositories verify recorded metadata, remote selection, and safe refusal paths.
 use super::*;
+use keel_workspace::Real;
 fn repository() -> (tempfile::TempDir, camino::Utf8PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
@@ -24,16 +25,17 @@ fn metadata_distinguishes_unborn_detached_and_other_worktrees_without_fetching()
     git_run(&root, &["worktree", "add", path.as_str(), "other"]).unwrap();
     let data = git_branches(&root).unwrap();
     assert!(data.local.iter().all(|b| b.when.is_some()));
+    let other = data
+        .local
+        .iter()
+        .find(|b| b.name == "other")
+        .unwrap()
+        .worktree
+        .as_ref()
+        .unwrap();
     assert_eq!(
-        data.local
-            .iter()
-            .find(|b| b.name == "other")
-            .unwrap()
-            .worktree
-            .as_ref()
-            .unwrap()
-            .path,
-        keel_workspace::Real::real(path.as_path()).unwrap().as_str()
+        Utf8Path::new(&other.path).real().unwrap(),
+        path.real().unwrap()
     );
     assert!(
         git_branch_target(&root, "checkout", "other", Some("local"))

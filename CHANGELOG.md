@@ -4,7 +4,7 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
-## [0.4.38] - 2026-11-02
+## [0.4.39] - 2026-11-02
 
 ### Added
 - Added searchable local and remote branches, latest-commit sorting, pinned current-branch
