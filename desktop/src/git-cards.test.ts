@@ -34,3 +34,13 @@ it("still toggles when storage is unavailable", async () => {
   useGitCards.getState().setOpen("graph", true);
   expect(useGitCards.getState().graph).toBe(true);
 });
+
+it("persists the split independently and retains an extreme valid share instead of resetting it", async () => {
+  const saved = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value) });
+  const { useGitCards } = await import("./git-cards");
+  useGitCards.getState().setShare(.98); useGitCards.getState().setOpen("graph", false);
+  vi.resetModules(); const restored = (await import("./git-cards")).useGitCards;
+  expect(restored.getState()).toMatchObject({ share: .98, graph: false });
+  restored.getState().setOpen("graph", true); expect(restored.getState().share).toBe(.98);
+});

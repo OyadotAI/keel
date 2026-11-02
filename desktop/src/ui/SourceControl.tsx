@@ -6,7 +6,7 @@ import { Diff } from "./Changes";
 import { Icon } from "./icons";
 import { MAC } from "../keys";
 
-type Act = (message: string, run: () => Promise<unknown>) => Promise<void>;
+type Act = (message: string, run: () => Promise<unknown>) => Promise<unknown>;
 interface Actions { lane: string; ep: Endpoint; wt?: string; act: Act; disabled: boolean; onOpenDiff?: (path: string, staged: boolean) => void; selection?: { path?: string; staged?: boolean } }
 const NONE: Change[] = [];
 const commitDrafts = new Map<string, string>();

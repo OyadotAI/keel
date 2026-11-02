@@ -268,7 +268,7 @@ pub(crate) fn private_lock(name: &str) -> Result<std::fs::File, String> {
         return Err("The lock directory must be a private, user-owned directory.".into());
     }
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(false).write(true);
+    options.create(true).truncate(false).read(true).write(true);
     private::no_follow(&mut options);
     let file = options.open(dir.join(name)).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;

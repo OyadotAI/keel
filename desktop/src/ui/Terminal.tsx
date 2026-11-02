@@ -1,7 +1,9 @@
+// Native agent and shell terminals retain their process and input ownership across lane switches.
 import { useEffect, useRef, useState } from "react";
 import { type Endpoint } from "../api";
 import { AGENT_NAME, useStore } from "../store";
 import { register } from "../typers";
+import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
@@ -174,6 +176,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         setState("open");
         resize();
         if (!hiddenRef.current) term.focus();
+        if (agent && !hiddenRef.current) consumeChatFocus(lane, term);
       };
       ws.onmessage = (e) => {
         // A text frame is the tab title, never output: writing it to the screen printed `zsh`

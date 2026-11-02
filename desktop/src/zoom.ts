@@ -3,6 +3,7 @@
 // Kept in localStorage like the chat interface choice: a per-machine preference, not project state.
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { createWindowZoom } from "./window-zoom";
 
 const APP = { key: "keel.zoom", min: 0.5, max: 2, step: 0.1, base: 1 };
 const FONT = { key: "keel.terminal-font", min: 9, max: 28, step: 1, base: 13 };
@@ -13,7 +14,7 @@ const clamp = (r: Range, v: number) => Math.round(Math.min(r.max, Math.max(r.min
 function read(r: Range): number {
   try {
     const v = Number(localStorage.getItem(r.key));
-    return v ? clamp(r, v) : r.base;
+    return v && Number.isFinite(v) ? clamp(r, v) : r.base;
   } catch {
     return r.base;
   }
@@ -38,12 +39,21 @@ export function onTerminalFont(f: (size: number) => void): () => void {
   return () => fonts.delete(f);
 }
 
-const applyApp = (level: number) => void getCurrentWebview().setZoom(level).catch(() => undefined);
+const windowZoom = createWindowZoom({ range: APP, apply: (level) => getCurrentWebview().setZoom(level), persist: (level) => write(APP, level), resized: () => { if (typeof window !== "undefined") window.dispatchEvent(new Event("resize")); } });
+/** Visible controls explicitly address the window, without changing a terminal's separate font. */
+export const zoomWindow = (direction: -1 | 0 | 1) => windowZoom.change(direction);
+/** A stable external snapshot keeps footer controls synchronized with keyboard changes. */
+export const windowZoomSnapshot = windowZoom.snapshot;
+/** Subscribers see applied native state, never an optimistic saved preference. */
+export const onWindowZoom = windowZoom.subscribe;
+/** Retry the failed native target without pretending the earlier attempt succeeded. */
+export const retryWindowZoom = windowZoom.retry;
+/** Clear local feedback without changing zoom or moving focus. */
+export const dismissZoomError = windowZoom.dismiss;
 
 /// The saved window zoom, once at launch.
 export function restoreZoom() {
-  const level = read(APP);
-  if (level !== APP.base) applyApp(level);
+  void windowZoom.restore(read(APP));
 }
 
 /// Whether focus is inside a terminal: the chord then sizes its font rather than the window.
@@ -55,9 +65,7 @@ export function zoom(dir: -1 | 0 | 1, focused: Element | null = document.activeE
     write(FONT, size);
     fonts.forEach((f) => f(size));
   } else {
-    const level = next(APP, read(APP), dir);
-    write(APP, level);
-    applyApp(level);
+    return zoomWindow(dir);
   }
 }
 
@@ -66,7 +74,7 @@ export const RANGES = { APP, FONT };
 /// The window's zoom, for anything native laid over the page: a child webview is placed in the
 /// window's own units, the page measures in its CSS pixels, and at any zoom but 100% the two
 /// drift apart — the Browser tab's page sat over its own address bar.
-export const appZoom = () => read(APP);
+export const appZoom = () => windowZoomSnapshot().level;
 
 /// A page rectangle in the window's units.
 export const toWindow = (r: DOMRect) => {

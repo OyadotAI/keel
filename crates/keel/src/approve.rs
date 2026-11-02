@@ -1689,25 +1689,35 @@ pub async fn answer(
         }
     };
 
-    match waiters().locked().remove(&body.id) {
-        Some((tx, lane)) => {
-            crate::turns::emit_for_lane(
-                &state,
-                &lane,
-                crate::turns::Fact::ApprovalAnswered {
-                    id: body.id.clone(),
-                    decision: decision.decision.clone(),
-                    answer: (!body.answer.is_empty()).then(|| body.answer.clone()),
-                },
+    let send = || {
+        let (tx, lane) = waiters().locked().remove(&body.id)?;
+        tx.send(decision.clone()).ok().map(|_| lane)
+    };
+    let (result, delivered_lane) = if body.answer.is_empty() {
+        let lane = send();
+        (serde_json::json!({"ok":lane.is_some()}), lane)
+    } else {
+        crate::answer_receipts::deliver(&body.id, &body.answer, send)
+    };
+    if let Some(lane) = delivered_lane {
+        if !body.answer.is_empty() {
+            crate::events::emit(
+                "pending",
+                None,
+                serde_json::json!({"lane":lane,"answered":body.id,"answer":body.answer}),
             );
-            let _ = tx.send(decision);
-            Ok(Json(serde_json::json!({ "ok": true })))
         }
-        // Already timed out, or answered twice. Not an error worth showing anyone.
-        None => Ok(Json(
-            serde_json::json!({ "ok": false, "reason": "no longer waiting" }),
-        )),
+        crate::turns::emit_for_lane(
+            &state,
+            &lane,
+            crate::turns::Fact::ApprovalAnswered {
+                id: body.id.clone(),
+                decision: decision.decision.clone(),
+                answer: (!body.answer.is_empty()).then(|| body.answer.clone()),
+            },
+        );
     }
+    Ok(Json(result))
 }
 
 /// Ask the Keel on this port, from inside the hook process.
@@ -1763,6 +1773,37 @@ pub(crate) async fn settled<T>(call: &tokio::task::JoinHandle<T>, card: impl Fn(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A disconnected question cannot accept an answer merely because its sender was queued.
+    #[tokio::test]
+    async fn a_closed_question_never_reports_the_answer_as_delivered() {
+        let _guard = lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        let state = Arc::new(AppState::new(root));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        drop(rx);
+        waiters()
+            .locked()
+            .insert("closed-question".into(), (tx, "lane".into()));
+        let Json(result) = answer(
+            State(state),
+            Json(Answer {
+                id: "closed-question".into(),
+                decision: "deny".into(),
+                session: None,
+                rules: Vec::new(),
+                scope: "session".into(),
+                answer: "My custom answer".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result["ok"], false,
+            "an answer sent into a closed channel was accepted"
+        );
+    }
 
     /// The allowlist's parser cannot see inside substitutions, so for agy it does not get the
     /// last word on them.

@@ -1,3 +1,4 @@
+// Coding Mode reads and edits checkout files while preserving independent conversation state.
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode, type RefObject } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { get } from "../api";
@@ -11,6 +12,7 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { Icon } from "./icons";
 import { FileTabs } from "./FileTabs";
 import { editorFileKey, useEditorFiles } from "../editor-files";
+import { startFileDrag, draggedClick, cancelFileDrag } from "../file-drag";
 const CodeEditor = lazy(() => import("./CodeEditor"));
 
 export function LayoutSwitch() {
@@ -35,6 +37,7 @@ function useCheckout(lane: string) {
 }
 
 export function Explorer({ lane, enabled, showCode }: { lane: string; enabled: boolean; showCode?: () => void }) {
+  useEffect(() => cancelFileDrag, [lane, enabled]);
   const { ep, wt, revision, ready, waiting } = useCheckout(lane);
   const l = useIde((s) => s.lanes[lane] ?? EMPTY_IDE);
   const projectName = useStore((s) => s.projects[s.lanes[lane]?.project]?.name);
@@ -96,7 +99,10 @@ export function Explorer({ lane, enabled, showCode }: { lane: string; enabled: b
       const descendant = n.dir && [...changed.keys()].some((p) => p.startsWith(n.path + "/"));
       return <button role="treeitem" aria-level={depth + 1} aria-expanded={n.dir ? l.expanded.includes(n.path) : undefined} aria-selected={l.selected === n.path}
         data-path={n.path} title={n.path + (status ? ` · ${status}` : "")} className={`ide-file${l.selected === n.path ? " selected" : ""}`} style={{ paddingLeft: 12 + depth * 14 }}
-        onClick={() => {
+        draggable={false} onDragStart={(e) => e.preventDefault()}
+        onPointerDown={n.dir ? undefined : (e) => startFileDrag(lane, n.path, e)}
+        onClick={(e) => {
+          if (draggedClick(e.currentTarget, e.detail)) return;
           if (n.dir) toggle(n.path);
           else { useIde.getState().open(lane, n.path, "code"); showCode?.(); }
         }}>

@@ -336,6 +336,17 @@ pub async fn send(
     let owner = state.clone();
     let accepted = tokio::task::spawn_blocking(move || {
         let mut h = held.locked();
+        // Existing receipts must remain idempotent even when their referenced file later changes.
+        let repeated = h
+            .records
+            .iter()
+            .filter(|r| r.event == "accepted")
+            .filter_map(|r| serde_json::from_str::<Value>(r.data.get()).ok())
+            .any(|r| r["id"] == receipt);
+        if !repeated {
+            crate::references::validate_query(&owner, &seed)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+        }
         // Always against the transcript, not only on a lane's first send: `seen` at this turn's
         // end vouches for the whole transcript, so turns taken in a terminal since must be in the
         // journal first. Unchanged costs one `stat`.

@@ -2,19 +2,22 @@
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { Codex } from './codex.mjs';
 import { ContextInspector } from './context.mjs';
+import { Requests } from './requests.mjs';
+import { ClaudeCompletion } from './claude-completion.mjs';
 
 const emit = (event, data) => process.stdout.write(JSON.stringify({ event, data }) + '\n');
-const pending = new Map();
+let completion;
+const requests = new Requests(emit, (event, id, fields) => { if (fields.provider === 'claude') completion?.callback(event, id, fields); });
 let provider;
 let claude;
 let codex;
 let session;
 let config;
 let busy = false;
+completion = new ClaudeCompletion((code) => { busy = false; emit('end', { code }); }, (reason) => requests.cancelAll(reason));
 let inspector;
 let contextRead;
 function contextSummary() {
@@ -34,10 +37,8 @@ async function* messages() {
     while (inputs.length) yield inputs.shift();
   }
 }
-function ask(tool, command, input, choices, kind = 'permission') {
-  const id = randomUUID();
-  emit('request', { id, tool, command, input, choices, kind, provider, session_id: session ?? '', lane: config.lane, rules: [] });
-  return new Promise((resolve) => pending.set(id, resolve)).finally(() => emit('resolved', { id }));
+function ask(tool, command, input, choices, kind = 'permission', signal, agentID) {
+  return requests.ask({ tool, command, input, choices, kind, provider, agentID, session_id: session ?? '', lane: config.lane, rules: [] }, signal);
 }
 // 'allow', a refusal ({reason}), or undefined when the daemon could not be asked — in which case
 // the local card asks instead, so this never fails open and never waits forever.
@@ -59,6 +60,8 @@ async function daemonDecision(tool, input, toolUseID, from = 'claude-sdk', threa
   return undefined;
 }
 async function startClaude(q) {
+  if (!claude) completion.processStart();
+  else completion.begin();
   if (!claude) {
     config = q;
     inspector = new ContextInspector('claude', q.cwd, emit);
@@ -85,8 +88,11 @@ async function startClaude(q) {
           if (decided === 'allow') return { behavior: 'allow', updatedInput: input };
           if (decided) return { behavior: 'deny', message: decided.reason || 'Not approved in Keel.' };
         }
-        const answer = await ask(tool, input.command ?? '', input,
-          [{ label: 'Allow once', value: 'allow' }, { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission');
+        let answer;
+        try {
+          answer = await ask(tool, input.command ?? '', input,
+            [{ label: 'Allow once', value: 'allow' }, { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission', options.signal, options.agentID);
+        } catch (error) { return { behavior: 'deny', message: error.message }; }
         if (question) return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers ?? {} }, toolUseID: options.toolUseID };
         return answer.decision === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: answer.reason || 'Denied by the user' };
       },
@@ -103,7 +109,6 @@ async function startClaude(q) {
             emit('capabilities', { commands, models });
           }
           if (message.type === 'result') {
-            busy = false; emit('end', { code: message.is_error ? 1 : 0 });
             const owner = inspector;
             void contextSummary().then((report) => {
               if (owner === inspector) { owner.report(report); owner.update({}, true); }
@@ -111,9 +116,10 @@ async function startClaude(q) {
               if (owner === inspector) { owner.limitation('This Claude version could not provide a context breakdown.'); owner.update({}, true); }
             });
           }
+          completion.message(message);
         }
       } catch (error) { emit('fatal', String(error)); }
-      finally { claude = undefined; if (busy) { busy = false; emit('end', { code: 1 }); } }
+      finally { completion.shutdown(); claude = undefined; }
     })();
   } else {
     await claude.setPermissionMode(q.mode === 'acceptEdits' ? 'acceptEdits' : 'plan');
@@ -142,9 +148,7 @@ async function command(message) {
     return;
   }
   if (message.method === 'answer') {
-    const resolve = pending.get(message.id);
-    if (!resolve) throw new Error('That request is no longer pending');
-    pending.delete(message.id); resolve(message.answer); return;
+    emit('answer_ack', { id: message.delivery, ...requests.answer(message.id, message.answer) }); return;
   }
   if (message.method === 'interrupt') { if (claude) await claude.interrupt(); if (codex) await codex.interrupt(); return; }
   if (message.method === 'steer') { if (!codex) throw new Error('Steering is not available in this session'); await codex.steer(message.prompt); return; }
@@ -156,11 +160,15 @@ async function command(message) {
   try {
     if (provider === 'claude') await startClaude(q);
     else if (provider === 'codex') {
-      codex ??= new Codex(emit, ask, daemonDecision);
+      codex ??= new Codex(emit, ask, daemonDecision, (reason, thread) => requests.cancelAll(reason, thread));
       await codex.start(q, () => { busy = false; });
     } else throw new Error(`Unsupported provider: ${provider}`);
-  } catch (error) { busy = false; emit('fatal', String(error)); emit('end', { code: 1 }); }
+  } catch (error) {
+    emit('fatal', String(error));
+    if (provider === 'claude') { claude?.close(); completion.shutdown('The provider could not start this turn.'); }
+    else { busy = false; emit('end', { code: 1 }); }
+  }
 }
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => { try { void command(JSON.parse(line)).catch((error) => emit('fatal', String(error))); } catch (error) { emit('fatal', String(error)); } });
-rl.on('close', () => { claude?.close(); codex?.close(); process.exit(0); });
+rl.on('close', () => { requests.cancelAll('The runtime closed.'); claude?.close(); codex?.close(); process.exit(0); });

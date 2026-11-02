@@ -10,6 +10,18 @@ export interface Endpoint {
 
 export const ORDINARY = 90_000;
 
+/** A rejected request is distinct from a lost response, so an unsent draft can be corrected. */
+export class HttpError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+const CLIENT_ERROR_START = 400;
+const SERVER_ERROR_START = 500;
+
+/** A client rejection confirms that the daemon did not accept this submission. */
+export function isRejected(error: unknown): error is HttpError {
+  return error instanceof HttpError && error.status >= CLIENT_ERROR_START && error.status < SERVER_ERROR_START;
+}
+
 type Params = Record<string, string | number | boolean | null | undefined>;
 
 /// A query string. `encodeURIComponent` writes `+` as `%2B`, which matters: the daemon reads a
@@ -37,7 +49,7 @@ async function request<T>(ep: Endpoint, method: string, path: string, params?: P
   });
   const text = await response.text();
   // The daemon answers a failure in plain text that says what went wrong; that is the message.
-  if (!response.ok) throw new Error(text || `${method} ${path}: ${response.status}`);
+  if (!response.ok) throw new HttpError(text || `${method} ${path}: ${response.status}`, response.status);
   return (text ? JSON.parse(text) : undefined) as T;
 }
 

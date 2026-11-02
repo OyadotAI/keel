@@ -53,6 +53,22 @@ pub fn read_file(root: &Utf8Path, requested: &str) -> Result<FileContent, String
     })
 }
 
+/// References use the preview's containment checks without loading file contents into memory.
+pub fn validate_reference(root: &Utf8Path, requested: &str) -> Result<(), String> {
+    let invalid = requested.is_empty()
+        || requested.contains('\0')
+        || Utf8Path::new(requested).is_absolute()
+        || requested.starts_with(['/', '\\'])
+        || requested.as_bytes().get(1) == Some(&b':')
+        || requested
+            .split(['/', '\\'])
+            .any(|part| matches!(part, ".." | "." | ""));
+    if invalid {
+        return Err("A checkout-relative file path is required.".into());
+    }
+    preview_path(root, requested).map(|_| ())
+}
+
 fn preview_path(
     root: &Utf8Path,
     requested: &str,
@@ -409,5 +425,38 @@ mod preview_tests {
         let nodes = tree(root);
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].name, ".github");
+    }
+
+    #[test]
+    fn references_require_existing_regular_relative_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::write(root.join("日本語 file.rs"), "data").unwrap();
+        assert!(validate_reference(root, "日本語 file.rs").is_ok());
+        for path in [
+            "../secret",
+            "sub/../日本語 file.rs",
+            "C:\\file.rs",
+            "/file.rs",
+            "",
+            ".",
+            "missing.rs",
+        ] {
+            assert!(validate_reference(root, path).is_err(), "{path}");
+        }
+        std::fs::create_dir(root.join("folder")).unwrap();
+        assert!(validate_reference(root, "folder").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn references_never_follow_a_symlink_outside_the_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(root.join("secret"), "private").unwrap();
+        std::os::unix::fs::symlink(root.join("secret"), repo.join("link")).unwrap();
+        assert!(validate_reference(&repo, "link").is_err());
     }
 }

@@ -2,6 +2,23 @@
 
 All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
+## [Unreleased]
+
+### Added
+- Added searchable local and remote branches, latest-commit sorting, pinned current-branch
+  status, and worktree-aware switching with exclusive checkout reservations.
+- Added visible window zoom controls and a persistent, keyboard-accessible Changes/Graph divider.
+- Added Explorer-to-chat file references with checkout validation, removable draft chips, and
+  queue and retry persistence across Claude Code, Codex, and Antigravity.
+- Added a New chat header action that preserved provider, interface, model, and isolation
+  settings while retaining the original conversation and its running work.
+
+### Fixed
+- Aligned SDK chat MCP question timeouts with Keel’s question lifetime, retained custom answers
+  across switching and cancellation, and required acknowledged, retry-safe answer delivery.
+- Kept background-agent questions and checkout protection active after a parent reply until
+  the provider completed its work or the session stopped.
+
 ## [0.4.37] - 2026-10-27
 
 ### Fixed

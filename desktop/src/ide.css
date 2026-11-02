@@ -129,7 +129,7 @@
 
 .git-add-remote { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 .git-add-remote .field { width: 100%; max-width: none; margin: 0; }
-.ide-layout .lane-header > button[aria-label="Close lane"] { order: 3; margin-left: auto; }
+.ide-layout .lane-header .lane-chat-actions { order: 3; margin-left: auto; }
 
 /* Coding Mode keeps working changes and repository topology visible together. */
 :root { --coding-sidebar-w: 320px; --graph-blue: #397ecb; --graph-purple: #a16bd0; --graph-orange: #bf781d; --graph-green: #349c74; --graph-pink: #d25795; --graph-cyan: #329cab; }
@@ -237,6 +237,14 @@
 .coding-git .coding-section-toggle { min-height: 32px; }
 .coding-git .scm-commit textarea, .coding-git .scm-filter, .coding-git .scm-commit-button { border-radius: 8px; }
 .coding-git .coding-branch-status { width: auto; margin: 0 6px 6px; border-radius: 8px; border: 1px solid var(--line); }
+.git-card-split { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px; margin-bottom: 6px; display: flex; flex-direction: column; }
+.git-card-slot { display: flex; flex-direction: column; min-height: 0; flex: none; }
+.coding-changes > [hidden] { display: none; }
+.coding-git .git-card-slot > .coding-changes, .coding-git .git-card-slot > .commit-graph { flex: 1; min-height: 0; margin: 0; }
+.git-card-handle { height: 10px; flex: none; cursor: ns-resize; touch-action: none; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+.git-card-handle::after { content: ""; width: 28px; height: 3px; background: var(--line-strong); border-radius: 3px; }
+.git-card-handle:hover::after, .git-card-handle:active::after { background: var(--accent); }
+.git-card-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ide-center, .shell-dock { border-radius: 14px; }
 
 /* A collapsed card keeps a full-width, keyboard-accessible handle for reopening it. */

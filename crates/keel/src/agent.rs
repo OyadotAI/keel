@@ -27,6 +27,9 @@ pub struct ChatQuery {
     pub prompt: String,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Validated paths in this checkout, kept separate from uploaded attachments and visible text.
+    #[serde(default)]
+    pub references: Vec<crate::references::FileReference>,
     /// `1` for decoded `turn` ops in place of raw `msg` records. See [`translate`].
     pub ops: Option<String>,
     /// Resume an existing conversation rather than starting a new one.
@@ -711,6 +714,23 @@ pub async fn chat(
     let stopper = state.clone();
 
     tokio::spawn(async move {
+        let (owner, request, checkout) = (stopper.clone(), query.clone(), cwd.clone());
+        let provider_prompt = match tokio::task::spawn_blocking(move || {
+            crate::references::provider_prompt(&owner, &request, &checkout)
+        })
+        .await
+        {
+            Ok(Ok(prompt)) => prompt,
+            result => {
+                let why = match result {
+                    Ok(Err(why)) => why,
+                    Err(why) => why.to_string(),
+                    _ => unreachable!(),
+                };
+                let _ = tx.send(Ok(said("fatal", why))).await;
+                return;
+            }
+        };
         // The lane, and the right to write its checkout, before anything is spawned.
         //
         // A caller with no lane of its own gets a key nothing else can collide with. It used to
@@ -833,8 +853,8 @@ pub async fn chat(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            Some(extra) => format!("{}\n\n{extra}\n\nTask:\n{}", base_system, query.prompt),
-            None => format!("{}\n\nTask:\n{}", base_system, query.prompt),
+            Some(extra) => format!("{}\n\n{extra}\n\nTask:\n{}", base_system, provider_prompt),
+            None => format!("{}\n\nTask:\n{}", base_system, provider_prompt),
         };
         // The gate, written before anything can run: an `agy` without it has no gate at all.
         let agy_hooks = if provider == "antigravity" {
@@ -932,7 +952,7 @@ pub async fn chat(
                 .arg("--cd")
                 .arg(&cwd);
             if let Some(session) = &query.session {
-                command.arg("resume").arg(session).arg(&query.prompt);
+                command.arg("resume").arg(session).arg(&provider_prompt);
             } else {
                 command.arg(&first_turn);
             }
@@ -951,7 +971,7 @@ pub async fn chat(
                 .current_dir(&cwd)
                 .arg("-p")
                 .arg(if query.session.is_some() {
-                    &query.prompt
+                    &provider_prompt
                 } else {
                     &first_turn
                 })
@@ -981,7 +1001,7 @@ pub async fn chat(
                 .current_dir(&cwd)
                 .env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout())
                 .arg("-p")
-                .arg(&query.prompt)
+                .arg(&provider_prompt)
                 .arg("--output-format")
                 .arg("stream-json")
                 .arg("--verbose")

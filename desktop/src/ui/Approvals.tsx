@@ -1,3 +1,4 @@
+// Permission cards and question recovery share the lane dock without hiding terminal prompts.
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore, type Pending } from "../store";
@@ -7,28 +8,24 @@ import { Dialog, focusTerminal } from "./kit";
 import { post } from "../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Markdown } from "./Markdown";
+import { Questions, QuestionRecoveries } from "./Questions";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
-
-interface Question {
-  id?: string;
-  question: string;
-  options?: { label: string; description?: string }[];
-  multiSelect?: boolean;
-}
 
 /// A refused command is a question, docked under the terminal so it neither hides the CLI's own
 /// pending-tool line nor lives in a panel that can be closed. Focus is never taken from the
 /// terminal: ⌘⇧A, ⌘⇧S and ⌘⇧D answer the oldest from anywhere, and ⌘⇧A focuses a question.
 export function ApprovalStrip({ lane }: { lane: string }) {
   const pending = useStore((s) => s.lanes[lane]?.pending);
-  if (!pending?.length) return null;
+  const saved = useStore((s) => !!Object.keys(s.lanes[lane]?.questionDrafts ?? {}).length);
+  if (!pending?.length && !saved) return null;
   return (
-    <div className="strip" role="region" aria-label="Waiting for your answer">
-      {pending.map((p, i) => (
+    <div className="strip" role="region" aria-label={pending?.length ? "Waiting for your answer" : "Saved question answers"}>
+      {pending?.map((p, i) => (
         <Row key={p.id} lane={lane} p={p} count={i === 0 ? pending.length : 0} />
       ))}
+      <QuestionRecoveries lane={lane} />
     </div>
   );
 }
@@ -127,86 +124,15 @@ function PlanApproval({ lane, p }: { lane: string; p: Pending }) {
   </div>;
 }
 
-function Questions({ lane, p }: { lane: string; p: Pending }) {
-  const answer = useStore((s) => s.answer);
-  const questions = (p.input.questions as Question[] | undefined) ?? [];
-  const [picked, setPicked] = useState<Record<number, string>>({});
-  const [selected, setSelected] = useState<Record<number, string[]>>({});
-  const complete = questions.length > 0 && questions.every((_, i) => !!picked[i]?.trim());
-  function send(chosen: Record<number, string>) {
-    if (p.provider) {
-      void runtimeAnswer(lane, p, { answers: Object.fromEntries(questions.map((q, i) => [p.provider === "codex" ? q.id ?? q.question : q.question, chosen[i]])) });
-      return;
-    }
-    void answer(lane, p, "deny", questions.map((q, i) => `${q.question}: ${chosen[i]}`).join("\n"));
-    after();
-  }
-  function pick(i: number, option: string) {
-    if (questions[i].multiSelect) {
-      const current = selected[i] ?? [];
-      const next = current.includes(option) ? current.filter((o) => o !== option) : [...current, option];
-      setSelected({ ...selected, [i]: next });
-      setPicked({ ...picked, [i]: next.join(", ") });
-      return;
-    }
-    const next = { ...picked, [i]: option };
-    setPicked(next);
-  }
-  // 1–9 pick from the first question still open; ←→ walk the options. Only while focus is here,
-  // so the digits never leave the terminal.
-  const open = questions.findIndex((_, i) => picked[i] === undefined);
-  function keys(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable=true]"))) return;
-    const n = Number(e.key);
-    const option = open >= 0 && n >= 1 ? questions[open].options?.[n - 1] : undefined;
-    if (option) return (e.preventDefault(), pick(open, option.label));
-    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-    const all = [...e.currentTarget.querySelectorAll<HTMLElement>(".actions button")];
-    const at = all.indexOf(document.activeElement as HTMLElement);
-    all[(at + (e.key === "ArrowRight" ? 1 : -1) + all.length) % all.length]?.focus();
-    e.preventDefault();
-  }
-  return (
-    <div className="strip-row" onKeyDown={keys}>
-      <div className="strip-title">
-        <Icon name="hand" className="hand" />
-        The agent is asking
-      </div>
-      {questions.map((q, i) => (
-        <div key={i} style={{ marginBottom: 8 }}>
-          <div style={{ fontWeight: 500 }}>{q.question}</div>
-          <div className="actions">
-            {(q.options ?? []).map((o, n) => (
-              <button
-                key={o.label}
-                title={o.description}
-                className={(q.multiSelect ? selected[i]?.includes(o.label) : picked[i] === o.label) ? "primary" : undefined}
-                aria-pressed={q.multiSelect ? !!selected[i]?.includes(o.label) : picked[i] === o.label}
-                onClick={() => pick(i, o.label)}
-              >
-                {i === open && n < 9 && <kbd>{n + 1}</kbd>}
-                {o.label}
-              </button>
-            ))}
-          </div>
-          <input className="field" aria-label={`Your answer: ${q.question}`} placeholder="Or write your own answer…" value={picked[i] ?? ""} onChange={(e) => { setSelected((old) => ({ ...old, [i]: [] })); setPicked((old) => ({ ...old, [i]: e.target.value })); }} />
-        </div>
-      ))}
-      {questions.length > 0 && (
-        <button className="primary" disabled={!complete} onClick={() => send(picked)}>
-          {complete ? "Send answers" : `Answer all ${questions.length} questions`}
-        </button>
-      )}
-    </div>
-  );
-}
-
 async function runtimeAnswer(lane: string, p: Pending, answer: unknown) {
   const s = useStore.getState();
   const l = s.lanes[lane];
   const ep = l && s.projects[l.project]?.endpoint;
   if (!ep) return;
-  try { await post(ep, "/api/chat/control", { lane, method: "answer", id: p.id, answer }); }
+  try {
+    const receipt = await post<{ ok: boolean; reason?: string }>(ep, "/api/chat/control", { lane, method: "answer", id: p.id, answer });
+    if (!receipt.ok) throw new Error(receipt.reason ?? "That request is no longer pending.");
+  }
   catch (error) { useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: `Could not deliver your answer: ${error}` } } })); }
 }
 

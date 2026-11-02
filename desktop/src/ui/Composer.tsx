@@ -1,3 +1,4 @@
+// Native chat composition keeps file references, uploads, and queued messages as separate intent.
 import { useEffect, useRef, useState } from "react";
 import { get, url } from "../api";
 import { AGENT_NAME, useStore, type Lane } from "../store";
@@ -5,6 +6,9 @@ import { LaneDock } from "./PreReview";
 import { Working } from "./Working";
 import { activity } from "./StatusBar";
 import { Icon } from "./icons";
+import { useFileDrag } from "../file-drag";
+import { consumeChatFocus } from "../chat-focus";
+import { FileReferences } from "./FileReferences";
 
 export function patchLane(lane: string, patch: Partial<Lane>) {
   useStore.setState((s) => s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], ...patch } } } : s);
@@ -21,6 +25,9 @@ export function Composer({ lane }: { lane: string }) {
   const mode = useStore((s) => s.lanes[lane]?.mode ?? "plan");
   const model = useStore((s) => s.lanes[lane]?.model ?? "");
   const attachments = useStore((s) => s.lanes[lane]?.attachments);
+  const references = useStore((s) => s.lanes[lane]?.references);
+  const checking = useStore((s) => !!s.lanes[lane]?.referencePending);
+  const dragOver = useFileDrag((s) => s.drag?.target === lane);
   const queued = useStore((s) => s.lanes[lane]?.queued);
   const models = useStore((s) => s.lanes[lane]?.models);
   const commands = useStore((s) => s.lanes[lane]?.commands);
@@ -31,6 +38,7 @@ export function Composer({ lane }: { lane: string }) {
   const [choice, setChoice] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (input.current) consumeChatFocus(lane, input.current); }, [lane]);
   const picker = useRef<HTMLInputElement>(null);
   const write = (text: string) => useStore.getState().draft(lane, text);
   const refreshSubagents = () => void readSubagents(lane).then(setSubagents, () => undefined);
@@ -53,8 +61,8 @@ export function Composer({ lane }: { lane: string }) {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [lane]);
-  const unavailable = uploading || submitting || disconnected || elsewhere;
-  const hasMessage = Boolean(draft.trim() || attachments?.length);
+  const unavailable = uploading || checking || submitting || disconnected || elsewhere;
+  const hasMessage = Boolean(draft.trim() || attachments?.length || references?.length);
   function choose(value: string) {
     const tagged = value.startsWith("@agent:");
     const insertion = tagged ? `@${value.slice(7)}` : value;
@@ -68,49 +76,33 @@ export function Composer({ lane }: { lane: string }) {
       write(""); return;
     }
     if (command === "/clear") {
-      const l = useStore.getState().lanes[lane];
-      const next = useStore.getState().newLane(l.project, l.isolated, l.agent);
-      useStore.getState().select(next); return;
+      useStore.getState().newConversationFrom(lane); return;
     }
-    const prompt = draft.trim() ? draft : "Please review the attached files.";
+    const prompt = draft.trim() ? draft : references?.length ? "Please review the referenced files." : "Please review the attached files.";
     const mentions = new Set(Array.from(prompt.matchAll(/(?:^|\s)@([a-z0-9-]+)(?=$|\s|[.,!?])/g), (match) => match[1]));
     const tagged = subagents.filter((agent) => mentions.has(agent.name));
     const system = tagged.length ? `The user explicitly tagged these Claude Code subagents: ${tagged.map((agent) => `\`${agent.name}\``).join(", ")}. Use the Agent tool (called Task in older versions) to delegate the requested work to each tagged subagent, using its exact name as subagent_type. Pass the request and relevant context, then integrate their results. A direct mention does not require unrelated pipeline stages. If a member cannot run, report the actual blocker. The visible user message is the request; the @name tokens identify the subagents.` : undefined;
-    void useStore.getState().send(lane, prompt, attachments, system);
+    void useStore.getState().send(lane, prompt, attachments, system, references);
   }
   async function upload(picked: File[]) {
-    const l = useStore.getState().lanes[lane];
-    if (!l || !picked.length) return;
     setUploading(true);
-    try {
-      const ready = await useStore.getState().prepare(lane);
-      if (!ready) throw new Error("Could not prepare the checkout");
-      for (const file of picked) {
-        if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} exceeds the 10 MB attachment limit.`);
-        const response = await fetch(url(ready.ep, "/api/attach", { name: file.name, wt: ready.wt }), {
-          method: "POST", headers: { Authorization: `Bearer ${ready.ep.token}`, "Content-Type": "application/octet-stream" }, body: file, signal: AbortSignal.timeout(90_000),
-        });
-        if (!response.ok) throw new Error(await response.text());
-        const attachment = await response.json() as { path: string };
-        const current = useStore.getState().lanes[lane]?.attachments ?? [];
-        patchLane(lane, { attachments: [...current, { path: attachment.path, name: file.name, mime: file.type, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined }] });
-        write(useStore.getState().lanes[lane]?.draft ?? "");
-      }
-    } catch (error) { patchLane(lane, { error: `Could not attach file: ${error}` }); }
+    try { await uploadFiles(lane, picked); } catch (error) { patchLane(lane, { error: `Could not attach file: ${error}` }); }
     finally { setUploading(false); }
   }
-  return <div className="chat-dock">
+  return <div className="chat-dock" data-reference-target={lane}>
     <LaneDock lane={lane} />
-    {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">Queued</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
+    {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
-    {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt)}>Retry same message</button></div>}
-    <div className="chat-composer">
+    {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Retry same message</button></div>}
+    <div className={`chat-composer${dragOver ? " reference-over" : ""}`}>
+      {dragOver && <div className="reference-drop-hint">Drop to reference this file.</div>}
       {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => {
         const agent = c.startsWith("@agent:") ? subagents.find((a) => a.name === c.slice(7)) : undefined;
         return <button id={`suggestion-${i}`} key={c} role="option" aria-selected={choice === i} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(c)}>{agent ? `@${agent.display_name || agent.name} · ${agent.name}` : c}</button>;
       })}</div>}
       <Attachments lane={lane} />
-      <textarea ref={input} value={draft} aria-label="Message the agent" placeholder="Ask, build, or explain…" spellCheck={false}
+      <FileReferences lane={lane} />
+      <textarea ref={input} data-chat-input={lane} value={draft} aria-label="Message the agent" placeholder="Ask, build, or explain…" spellCheck={false}
         aria-controls={candidates.length ? "composer-options" : undefined} aria-activedescendant={candidates.length ? `suggestion-${choice}` : undefined}
         onChange={(e) => { write(e.target.value); if (e.target.value.endsWith("@")) void refreshSubagents(); }}
         onPaste={(e) => { const images = Array.from(e.clipboardData.files); if (images.length) { e.preventDefault(); void upload(images); } }}
@@ -173,4 +165,21 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   const live = busy && !waiting && !disconnected && !elsewhere;
   const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan · Explore before making changes" : "Build · Changes stay in this lane’s checkout";
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span>{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;
+}
+
+async function uploadFiles(lane: string, picked: File[]) {
+  if (!picked.length || !useStore.getState().lanes[lane]) return;
+  const ready = await useStore.getState().prepare(lane);
+  if (!ready) throw new Error("Could not prepare the checkout");
+  for (const file of picked) {
+    if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} exceeds the 10 MB attachment limit.`);
+    const response = await fetch(url(ready.ep, "/api/attach", { name: file.name, wt: ready.wt }), {
+      method: "POST", headers: { Authorization: `Bearer ${ready.ep.token}`, "Content-Type": "application/octet-stream" }, body: file, signal: AbortSignal.timeout(90_000),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const attachment = await response.json() as { path: string };
+    const current = useStore.getState().lanes[lane]?.attachments ?? [];
+    patchLane(lane, { attachments: [...current, { path: attachment.path, name: file.name, mime: file.type, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined }] });
+  }
+
 }

@@ -1,5 +1,5 @@
 // The workspace footer shares reported usage and activity with the sidebar and Context panel.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AGENT_NAME, useStore, type Agent, type Lane } from "../store";
 import { count } from "./Turn";
 import { Icon } from "./icons";
@@ -9,6 +9,8 @@ import { until } from "./Settings";
 import type { Tab } from "./Lane";
 import { activity } from "../activity";
 import { usageSummary } from "../session-usage";
+import { useFooterHeight } from "../use-footer-height";
+import { WindowZoom } from "./WindowZoom";
 export { activity } from "../activity";
 
 const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
@@ -61,6 +63,8 @@ function branchLabel(lane: Lane): string {
 }
 
 export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar, layout }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void; layout?: ReactNode }) {
+  const footer = useRef<HTMLElement>(null);
+  useFooterHeight(footer);
   const lane = useStore((s) => s.active);
   const l = useStore((s) => (s.active ? s.lanes[s.active] : undefined));
   const project = useStore((s) => (l ? s.projects[l.project] : undefined));
@@ -76,7 +80,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
   }, [now.tone]);
   const git = l?.git;
   return (
-    <footer className="statusbar">
+    <footer ref={footer} className="statusbar">
       <div className="statusbar-details">
       <button className="sb-icon" onClick={toggleSidebar} aria-label={sidebar ? "Hide projects" : "Show projects"} aria-pressed={sidebar} title={`Toggle projects (${label({ key: "e", shift: true })})`}><Icon name="folder" size={15} /></button>
       {l && (
@@ -114,6 +118,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
         Shortcuts <kbd>{label({ key: "/" })}</kbd>
       </button>
       </div>
+      <WindowZoom />
       {layout}
       {l && (
         <button className="workspace-toggle" onClick={togglePanel} aria-label={panel ? "Close workspace" : "Open workspace"} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`${panel ? "Close" : "Open"} workspace · Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>

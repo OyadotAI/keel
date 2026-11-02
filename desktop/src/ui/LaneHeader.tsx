@@ -78,12 +78,11 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
       <button className="ghost shell-toggle" aria-pressed={shell} aria-label={shell ? "Close the terminal" : "Open a terminal"} title={`Terminal (${label({ key: "j" })})`} onClick={toggleShell}>
         <Icon name="terminal" />
       </button>
-      <button className="ghost" aria-label="Lane actions" title="Lane actions" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}>
-        <Icon name="more" />
-      </button>
-      <button className="ghost" aria-label="Close lane" title={`Close lane (${label({ key: "w" })})`} onClick={() => setAsking("close")}>
-        <Icon name="x" />
-      </button>
+      <div className="lane-chat-actions">
+        <button className="ghost" aria-label="New chat" title="New chat" onClick={() => useStore.getState().newConversationFrom(lane)}><Icon name="plus" /></button>
+        <button className="ghost" aria-label="Lane actions" title="Lane actions" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><Icon name="more" /></button>
+        <button className="ghost" aria-label="Close lane" title={`Close lane (${label({ key: "w" })})`} onClick={() => setAsking("close")}><Icon name="x" /></button>
+      </div>
       {menu && (
         <Floating anchor={menu} onClose={() => setMenu(null)}>
           <LaneViewSwitch lane={lane} menu onSwitch={() => setMenu(null)} />

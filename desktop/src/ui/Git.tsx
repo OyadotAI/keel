@@ -1,3 +1,4 @@
+// Source Control composes checkout mutations, branch discovery, and commit history.
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
@@ -13,6 +14,9 @@ import { Banner, Count, Tabs } from "./kit";
 import { PreReview, PrLink } from "./PreReview";
 import { clock, openPullRequest, prKey, prLink, refreshReview, startReview, useReview, type PrRun } from "../prereview";
 import { Icon } from "./icons";
+import { BranchList } from "./Branches";
+import { GitCardSplitter } from "./GitCardSplitter";
+import type { Branch, Branches, GitAction } from "../branches";
 
 interface Commit {
   sha: string;
@@ -21,21 +25,6 @@ interface Commit {
   files: number;
   pushed: boolean;
 }
-interface Branch {
-  name: string;
-  current: boolean;
-  upstream?: string | null;
-  ahead: number;
-  behind: number;
-}
-interface Branches {
-  current?: string | null;
-  local: Branch[];
-  remotes: string[];
-  staged: number;
-  unstaged: number;
-}
-
 /// The lane's daemon and checkout — two values that change about never. Selecting the lane itself
 /// re-rendered the whole panel on every batch of a streaming turn.
 function useLane(lane: string) {
@@ -55,17 +44,26 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
   const running = useStore((s) => !!s.lanes[lane]?.running);
   const [pending, setPending] = useState(false);
   const locked = useRef(false);
-  const [branches, setBranches] = useState<Branches>();
+  const [branchResult, setBranchResult] = useState<{ key: string; data: Branches }>();
   const [log, setLog] = useState<Commit[]>();
   const [error, setError] = useState<string>();
   const [readError, setReadError] = useState<string>();
+  const [branchError, setBranchError] = useState<string>();
+  const generation = useRef(0);
+  const identity = useRef("");
+  identity.current = `${ep?.port}:${ep?.token}:${wt ?? ""}`;
+  const branches = branchResult?.key === identity.current ? branchResult.data : undefined;
   const [note, setNote] = useState<string>();
   const [section, setSection] = useState<GitSection>("changes");
 
   const read = useCallback(async (e: Endpoint) => {
     // Settled, so a failed branch read keeps the history it has, and a good read clears the banner.
+    const ticket = ++generation.current;
+    const key = `${e.port}:${e.token}:${wt ?? ""}`;
     const [b, c] = await Promise.allSettled([get<Branches>(e, "/api/git/branches", { wt }), get<Commit[]>(e, "/api/git/log", { wt, n: 20 })]);
-    if (b.status === "fulfilled") setBranches(b.value);
+    if (ticket !== generation.current || identity.current !== key) return;
+    setBranchError(b.status === "rejected" ? String(b.reason) : undefined);
+    if (b.status === "fulfilled") setBranchResult({ key, data: b.value });
     if (c.status === "fulfilled") setLog(c.value);
     const failed = [b, c].find((r) => r.status === "rejected");
     setReadError(failed ? String((failed as PromiseRejectedResult).reason) : undefined);
@@ -77,22 +75,23 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
   }, [ep, read, git]);
 
   async function act(what: string, run: () => Promise<unknown>) {
-    if (locked.current) return;
+    if (locked.current) return false;
     locked.current = true;
     setPending(true);
     setError(undefined);
     setNote(undefined);
+    let ok = false;
     try {
       const r = await run();
+      ok = true;
       if (typeof r === "string" && r) setNote(r);
       else setNote(what);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-    await useStore.getState().refreshGit(lane);
-    if (ep) await read(ep);
-    setPending(false);
-    locked.current = false;
+    try { await useStore.getState().refreshGit(lane); if (ep) await read(ep); }
+    finally { setPending(false); locked.current = false; }
+    return ok;
   }
 
   if (!ep) return <div className="panel-empty">Starting Keel for this project…</div>;
@@ -107,7 +106,7 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
       </div>
     );
   const current = branches?.local.find((b) => b.current);
-  const content = <GitContent lane={lane} ep={ep} wt={wt} act={act} section={section} log={log} branches={branches} pending={pending} running={running} onOpenDiff={onOpenDiff} selection={selection} />;
+  const content = <GitContent lane={lane} ep={ep} wt={wt} act={act} section={section} log={log} branches={branches} pending={pending} running={running} onOpenDiff={onOpenDiff} selection={selection} branchError={branchError} retryBranches={() => void read(ep)} />;
   const feedback = <GitFeedback error={error || readError} note={note} retry={() => void read(ep)} />;
   if (onOpenDiff) return <CodingGit lane={lane} ep={ep} wt={wt} branches={branches} pending={pending} running={running} act={act} section={section} setSection={setSection} feedback={feedback} onOpenCommit={onOpenCommit}>{content}</CodingGit>;
   return (
@@ -148,14 +147,15 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
 
 type GitSection = "changes" | "history" | "branches" | "pr" | "remotes";
 interface GitContentProps {
+  branchError?: string; retryBranches?: () => void;
   lane: string; ep: Endpoint; wt?: string; act: Act; section: GitSection; log?: Commit[]; branches?: Branches; pending: boolean; running: boolean;
   onOpenDiff?: (path: string, staged: boolean) => void; selection?: { path?: string; staged?: boolean };
 }
-function GitContent({ lane, ep, wt, act, section, log, branches, pending, running, onOpenDiff, selection }: GitContentProps) {
+function GitContent({ lane, ep, wt, act, section, log, branches, pending, running, onOpenDiff, selection, branchError, retryBranches }: GitContentProps) {
   switch (section) {
     case "changes": return <SourceControl lane={lane} ep={ep} wt={wt} act={act} onOpenDiff={onOpenDiff} selection={selection} />;
     case "history": return <History lane={lane} ep={ep} wt={wt} log={log} act={act} />;
-    case "branches": return <BranchList ep={ep} wt={wt} branches={branches} act={act} />;
+    case "branches": return <BranchList lane={lane} ep={ep} wt={wt} branches={branches} act={act} pending={pending} running={running} error={branchError} retry={retryBranches} />;
     case "pr": return <PullRequest ep={ep} wt={wt} lane={lane} />;
     case "remotes": return <><RemoteActions ep={ep} wt={wt} current={branches?.local.find((b) => b.current)} running={running} pending={pending} act={act} remotes={branches?.remotes} /><LaneGitActions wt={wt} busy={running || pending} /></>;
   }
@@ -181,14 +181,13 @@ function CodingGit({ lane, ep, wt, branches, pending, running, act, section, set
       </div></>}
     </header>
     {feedback}
-    <section className={`coding-changes${changesOpen ? "" : " collapsed"}`} aria-label="Working changes">
+    <GitCardSplitter title={sectionTitle} upper={<section className={`coding-changes${changesOpen ? "" : " collapsed"}`} aria-label="Working changes">
       <button className="coding-section-toggle" title={`${changesOpen ? "Collapse" : "Expand"} ${sectionTitle}`} aria-controls={changesId} aria-expanded={changesOpen} onClick={() => setChangesOpen(!changesOpen)}><Icon name={changesOpen ? "chevron-down" : "chevron-right"} size={12} />{sectionTitle}<Count n={git?.changes.length} /></button>
       <div id={changesId} hidden={!changesOpen} className={section === "changes" ? "git-body" : "git-scroll"}>
         {section !== "changes" && <button className="link coding-back" onClick={() => setSection("changes")}>← Back to changes</button>}
         {children}
       </div>
-    </section>
-    <CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />
+    </section>} lower={<CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />} />
     <button className="coding-branch-status" title="Manage branches" onClick={() => { setSection("branches"); setChangesOpen(true); }}><Icon name="branch" size={13} /><span>{branches?.current ?? git?.branch ?? "No commits yet"}</span><small>{current?.behind ?? 0}↓ {current?.ahead ?? 0}↑</small></button>
   </div>;
 }
@@ -204,7 +203,7 @@ export function CommitReview({ ep, wt, commit }: { ep: Endpoint; wt?: string; co
   return <article className="commit-review" aria-label="Commit details"><header><h2>{commit.subject}</h2><p>{commit.author} · {new Date(commit.when * 1000).toLocaleString()}</p><code>{commit.sha}</code>{commit.parents.length > 1 && <p>Merge commit · comparing with its first parent</p>}</header><CommitDiff key={commit.sha} ep={ep} wt={wt} sha={commit.sha} /></article>;
 }
 
-type Act = (what: string, run: () => Promise<unknown>) => Promise<void>;
+type Act = GitAction;
 
 function RemoteActions({ ep, wt, current, running, pending, act, remotes }: { ep: Endpoint; wt?: string; current?: Branch; running: boolean; pending: boolean; act: Act; remotes?: string[] }) {
   const [remote, setRemote] = useState("");
@@ -280,47 +279,6 @@ function CommitFile({ file }: { file: Prepared }) {
     {open && <InlineDiff rows={file.rows} path={file.path} />}
     {file.note && <div className="small faint">{file.note}</div>}
   </details>;
-}
-
-function BranchList({ ep, wt, branches, act }: { ep: Endpoint; wt?: string; branches?: Branches; act: Act }) {
-  const [name, setName] = useState("");
-  if (!branches) return <div className="panel-empty">Reading branches…</div>;
-  const branch = (action: string, n: string, what: string) => act(what, () => post(ep, "/api/git/branch", { action, name: n }, { wt }));
-  return (
-    <div>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)", display: "flex", gap: 8 }}>
-        <input className="field" style={{ margin: 0, flex: 1, maxWidth: "none" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="new-branch-name" aria-label="New branch name" />
-        <button disabled={!name.trim()} onClick={() => (branch("create", name.trim(), `Created and switched to ${name.trim()}.`), setName(""))}>
-          Create
-        </button>
-      </div>
-      {branches.local.map((b) => (
-        <div key={b.name} className="change" style={{ alignItems: "center" }}>
-          <span className="marker">{b.current && <Icon name="check-circle" size={12} style={{ color: "var(--accent)" }} />}</span>
-          <span className="change-path" style={{ fontWeight: b.current ? 600 : 400 }}>
-            {b.name}
-          </span>
-          <span className="mono faint" style={{ fontSize: 10 }}>
-            {b.ahead ? `↑${b.ahead} ` : ""}
-            {b.behind ? `↓${b.behind}` : ""}
-          </span>
-          {!b.current && (
-            <>
-              {/* A lane's checkout is its branch: switching it would put the lane's commits on another branch. */}
-              {!wt && (
-                <button className="link small" onClick={() => branch("checkout", b.name, `Switched to ${b.name}.`)}>
-                  Switch
-                </button>
-              )}
-              <button className="ghost" aria-label={`Delete ${b.name}`} title="Delete (only if merged)" onClick={() => branch("delete", b.name, `Deleted ${b.name}.`)}>
-                <Icon name="x" size={12} />
-              </button>
-            </>
-          )}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string }) {

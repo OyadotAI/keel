@@ -1,5 +1,7 @@
 //! Persistent provider sessions. The helper hosts the official Claude SDK and Codex App Server;
 //! Rust keeps ownership of checkout claims, checkpoints, stop signals and verification.
+#[cfg(test)]
+mod tests;
 use crate::{
     agent::{ChatQuery, Said},
     lock::Locked,
@@ -54,6 +56,7 @@ pub fn stop_all() {
 }
 
 type Output = mpsc::Sender<Value>;
+const ANSWER_ACK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
 #[derive(Default)]
 pub(crate) struct Runtimes(Mutex<HashMap<String, Arc<Runtime>>>);
 type Inspections = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
@@ -71,8 +74,8 @@ struct Runtime {
     input: tokio::sync::Mutex<ChildStdin>,
     output: Arc<Mutex<Option<Output>>>,
     alive: Arc<AtomicBool>,
-    pending: Arc<Mutex<HashSet<String>>>,
     inspections: Inspections,
+    answers: Inspections,
     inspection_lock: tokio::sync::Mutex<()>,
 }
 
@@ -112,6 +115,22 @@ pub async fn inspect_context(state: &AppState, lane: &str) -> Result<Value, Stri
     .and_then(|v| v)
 }
 impl Runtime {
+    /// The helper must accept the answer into its live callback before HTTP can acknowledge it.
+    async fn answer(&self, id: &str, answer: Value) -> Result<Value, String> {
+        let delivery = crate::context::request_id();
+        let (tx, rx) = oneshot::channel();
+        self.answers.locked().insert(delivery.clone(), tx);
+        let _waiting = InspectionWait {
+            pending: self.answers.clone(),
+            id: delivery.clone(),
+        };
+        answer_ack(
+            self.send(json!({"method":"answer","id":id,"answer":answer,"delivery":delivery})),
+            rx,
+        )
+        .await
+    }
+
     async fn send(&self, value: Value) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
@@ -122,6 +141,40 @@ impl Runtime {
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+async fn answer_ack(
+    send: impl std::future::Future<Output = Result<(), String>>,
+    rx: oneshot::Receiver<Result<Value, String>>,
+) -> Result<Value, String> {
+    tokio::time::timeout(ANSWER_ACK_WAIT, async {
+        send.await?;
+        rx.await
+            .map_err(|_| "The runtime disconnected before acknowledging the answer.".to_string())?
+    })
+    .await
+    .map_err(|_| "Answer delivery was not confirmed. Retry the same answer.".to_string())?
+}
+
+fn runtime_command(
+    node: std::path::PathBuf,
+    helper: std::path::PathBuf,
+    cwd: &camino::Utf8Path,
+) -> Command {
+    let mut command = Command::new(node);
+    command
+        .arg(helper)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for name in crate::agent::INHERITED {
+        command.env_remove(name);
+    }
+    command.lead_group();
+    command.env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout());
+    command
 }
 
 fn helper_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
@@ -173,18 +226,16 @@ async fn runtime(
     let (node, helper) = tokio::task::spawn_blocking(helper_paths)
         .await
         .map_err(|e| e.to_string())??;
-    let mut command = Command::new(node);
-    command
-        .arg(helper)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    for name in crate::agent::INHERITED {
-        command.env_remove(name);
-    }
-    command.lead_group();
+    spawn_runtime(state, lane, cwd, runtime_command(node, helper, cwd)).await
+}
+
+// Keep process ownership and protocol forwarding identical for packaged helpers and offline tests.
+async fn spawn_runtime(
+    state: &AppState,
+    lane: &str,
+    cwd: &camino::Utf8Path,
+    mut command: Command,
+) -> Result<Arc<Runtime>, String> {
     let mut child = command
         .spawn()
         .map_err(|e| format!("Could not start the agent runtime: {e}"))?;
@@ -193,7 +244,6 @@ async fn runtime(
     let stderr = child.stderr.take().ok_or("Runtime stderr is missing")?;
     let alive = Arc::new(AtomicBool::new(true));
     let output: Arc<Mutex<Option<Output>>> = Default::default();
-    let pending = Arc::new(Mutex::new(HashSet::new()));
     let inspections = Arc::new(Mutex::new(HashMap::<
         String,
         oneshot::Sender<Result<Value, String>>,
@@ -203,10 +253,11 @@ async fn runtime(
         input: tokio::sync::Mutex::new(input),
         output: output.clone(),
         alive: alive.clone(),
-        pending: pending.clone(),
         inspections: inspections.clone(),
         inspection_lock: tokio::sync::Mutex::new(()),
+        answers: Default::default(),
     });
+    let answers = r.answers.clone();
     let pid = r.pid;
     processes().locked().insert(pid);
     state.runtimes.0.locked().insert(lane.into(), r.clone());
@@ -232,6 +283,15 @@ async fn runtime(
                 crate::context::receive(&context_repo, &context_lane, record["data"].clone());
                 continue;
             }
+            if record["event"] == "answer_ack" {
+                let data = &record["data"];
+                if let Some(id) = data["id"].as_str()
+                    && let Some(tx) = answers.locked().remove(id)
+                {
+                    let _ = tx.send(Ok(data.clone()));
+                }
+                continue;
+            }
             if record["event"] == "inspection" {
                 let data = &record["data"];
                 if let Some(id) = data["id"].as_str() {
@@ -246,20 +306,6 @@ async fn runtime(
                 }
                 continue;
             }
-            if let Some(id) = record["data"]["id"].as_str() {
-                match record["event"].as_str() {
-                    Some("request") => {
-                        pending.locked().insert(id.to_owned());
-                    }
-                    Some("resolved") => {
-                        pending.locked().remove(id);
-                    }
-                    _ => {}
-                }
-            }
-            if record["event"] == "end" {
-                pending.locked().clear();
-            }
             let tx = output.locked().clone();
             if let Some(tx) = tx {
                 let _ = tx.send(record).await;
@@ -268,6 +314,7 @@ async fn runtime(
         let status = child.wait().await;
         alive.store(false, Ordering::Release);
         inspections.locked().clear();
+        answers.locked().clear();
         processes().locked().remove(&pid);
         let tx = output.locked().take();
         if let Some(tx) = tx {
@@ -334,11 +381,12 @@ pub async fn control(
         }
         state.runtimes.0.locked().remove(&q.lane);
     } else {
-        if q.method == "answer" && !r.pending.locked().remove(&q.id) {
-            return Err((
-                StatusCode::CONFLICT,
-                "That request is no longer pending.".into(),
-            ));
+        if q.method == "answer" {
+            return r
+                .answer(&q.id, q.answer)
+                .await
+                .map(Json)
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e));
         }
         r.send(json!({"method":q.method, "id":q.id, "answer":q.answer, "prompt":q.prompt}))
             .await
@@ -383,6 +431,12 @@ pub async fn chat(state: Arc<AppState>, q: ChatQuery) -> axum::response::Respons
 async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> {
     let lane = q.lane.as_deref().ok_or("A lane is required")?;
     let cwd = state.checkout(q.wt.as_deref())?;
+    let (reference_state, reference_query, reference_cwd) = (state.clone(), q.clone(), cwd.clone());
+    let provider_prompt = tokio::task::spawn_blocking(move || {
+        crate::references::provider_prompt(&reference_state, &reference_query, &reference_cwd)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let repo = state.repo();
     let provider = q.provider.as_deref().unwrap_or("claude");
     if !["claude", "codex"].contains(&provider) {
@@ -472,7 +526,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         Vec::new()
     };
     r.send(json!({"method":"start", "query": {
-        "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":q.prompt, "session":q.session,
+        "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":provider_prompt, "session":q.session,
         "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings, "port":state.port(),
         "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy(),
         "codexArgs":codex_args

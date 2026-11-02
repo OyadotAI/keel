@@ -1,3 +1,4 @@
+// Translate App Server threads, items, and live requests without replacing provider state ownership.
 import { resolve, extname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -5,7 +6,7 @@ import { ContextInspector } from './context.mjs';
 
 // App Server owns thread state; this adapter maps its items to Keel's ordered conversation ops.
 export class Codex {
-  constructor(emit, ask, decide) { this.emit = emit; this.ask = ask; this.decide = decide; this.requests = new Map(); this.next = 0; this.text = new Set(); this.agents = new Set(); }
+  constructor(emit, ask, decide, cancelQuestions = () => {}) { this.emit = emit; this.ask = ask; this.decide = decide; this.cancelQuestions = cancelQuestions; this.requests = new Map(); this.next = 0; this.text = new Set(); this.agents = new Set(); }
   write(value) { this.child.stdin.write(JSON.stringify(value) + '\n'); }
   rpc(method, params, timeoutMs) {
     const id = ++this.next;
@@ -67,6 +68,7 @@ export class Codex {
     this.turn = result.turn.id;
   }
   fail(error) {
+    this.cancelQuestions('The provider session closed.');
     for (const pending of this.requests.values()) pending.reject(error);
     this.requests.clear(); this.child = undefined;
     // The App Server took its subagents with it.
@@ -110,6 +112,7 @@ export class Codex {
       this.write({ id: message.id, result }); return;
     }
     const method = message.method;
+    if (method === 'turn/completed') this.cancelQuestions('The turn ended before this request was answered.', p.threadId);
     // A spawned member's thread reports on this connection too. Its turn ending is not this
     // turn ending, and its words are not this agent's. Requests above stay answered whatever the
     // thread, or the member waits on an approval nobody can see.

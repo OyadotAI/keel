@@ -19,6 +19,7 @@ import { InterfaceSetting } from "./InterfaceSetting";
 import { Composer } from "./Composer";
 import { StatusBar } from "./StatusBar";
 import { Drop } from "./Drop";
+import { FileReferenceDrag } from "./FileReferenceDrag";
 import { Palette, type Command } from "./Palette";
 import { label, matches, type Chord } from "../keys";
 import { useIde } from "../ide";
@@ -226,6 +227,7 @@ export function App() {
       <WorkspaceMain lane={lane} overlay={overlay} showPanel={showPanel} expanded={expanded} ideActive={ideActive} shell={shell} setShell={setShell} closePanel={closePanel} workspace={workspace} conversation={conversation} setConversation={setConversation} showGit={showGit} />
       <StatusBar layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
       <Drop />
+      <FileReferenceDrag />
       {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
       {ideActive && navigation && lane && <FileNavigation key={`${lane}:${navigation}`} lane={lane} showCode={showCode} />}
       <Shortcuts />

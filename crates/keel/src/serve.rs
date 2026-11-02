@@ -80,6 +80,8 @@ struct Turn {
     /// daemons, so the in-memory map alone cannot enforce one writer. Closing the descriptor
     /// releases the lock, including on panic or daemon exit; no stale lock file remains.
     _writer_lock: Option<CheckoutWriter>,
+    _activity: crate::checkout_activity::Activity,
+    exclusive: bool,
     /// False for a plan turn, which writes nothing and may sit beside one that does.
     writes: bool,
     /// The conversation the turn is in, once the provider has said (`system/init`).
@@ -258,15 +260,32 @@ impl AppState {
     ///
     /// Returns the token that releases it.
     pub fn claim(&self, lane: &str, checkout: &Utf8Path, writes: bool) -> Result<u64, String> {
+        self.claim_kind(lane, checkout, writes, false)
+    }
+
+    /// A checkout switch excludes readers too; ordinary agent claims keep their existing concurrency.
+    pub fn reserve_checkout(&self, lane: &str, checkout: &Utf8Path) -> Result<u64, String> {
+        self.claim_kind(lane, checkout, true, true)
+    }
+
+    fn claim_kind(
+        &self,
+        lane: &str,
+        checkout: &Utf8Path,
+        writes: bool,
+        exclusive: bool,
+    ) -> Result<u64, String> {
         let checkout = self.claim_checkout(checkout)?;
         let mut map = self.running.locked();
         if map.contains_key(lane) {
             return Err("This feature already has a turn running.".into());
         }
-        if let Some((holder, _)) = map
-            .iter()
-            .find(|(_, t)| writes && t.writes && t.checkout == checkout)
-        {
+        if let Some((holder, turn)) = map.iter().find(|(_, t)| {
+            t.checkout == checkout && (exclusive || t.exclusive || (writes && t.writes))
+        }) {
+            if exclusive || turn.exclusive {
+                return Err("An agent or Git operation is using this checkout. Wait for it to finish or stop its turn before switching.".into());
+            }
             // Who holds it changes what the person can do about it: a lane can be finished, a
             // terminal session goes idle on its own.
             let who = if holder.starts_with("term:") {
@@ -285,6 +304,7 @@ impl AppState {
                  so this turn has not started. Give this one its own branch, or {wait}."
             ));
         }
+        let activity = crate::checkout_activity::hold(&checkout, exclusive)?;
         let writer_lock = if writes {
             let lock = writer_lock(&checkout)
                 .map_err(|e| format!("Could not reserve this working tree for editing: {e}"))?;
@@ -314,6 +334,8 @@ impl AppState {
                 finished: false,
                 checkout,
                 _writer_lock: writer_lock,
+                _activity: activity,
+                exclusive,
                 writes,
                 session: None,
                 key: None,
@@ -752,6 +774,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             axum::routing::post(crate::names::register),
         )
         .route("/api/tree", get(api_tree))
+        .route(
+            "/api/references/validate",
+            axum::routing::post(crate::references::check),
+        )
         .route(
             "/api/file",
             get(api_file)
@@ -1872,27 +1898,44 @@ async fn api_git_graph(
     .await
 }
 
-async fn api_git_branches(Checkout(repo): Checkout) -> Json<crate::repo::Branches> {
-    Json(
-        blocking(
-            move || crate::repo::git_branches(&repo),
-            crate::repo::Branches {
-                current: None,
-                local: Vec::new(),
-                remote: Vec::new(),
-                remotes: Vec::new(),
-                staged: 0,
-                unstaged: 0,
-            },
-        )
-        .await,
-    )
+async fn api_git_branches(
+    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
+) -> Result<Json<crate::repo::Branches>, (axum::http::StatusCode, String)> {
+    in_blocking(move || {
+        let mut branches = crate::repo::git_branches(&repo).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+        branches.restriction = if repo.real().ok() != state.repo().real().ok() {
+            Some("This lane owns its branch. Switch branches from a project-workspace lane.".into())
+        } else if crate::checkout_activity::hold(&repo, true).is_err() {
+            Some("An agent is using this checkout. Wait for it to finish or stop its turn before switching.".into())
+        } else { None };
+        Ok(Json(branches))
+    }).await
 }
 
 #[derive(serde::Deserialize)]
 struct BranchBody {
     action: String,
     name: String,
+    kind: Option<String>,
+}
+
+/// Offline lifecycle tests exercise the real branch handler without starting a listening daemon.
+#[cfg(test)]
+pub(crate) async fn fixture_switch_branch(
+    state: Arc<AppState>,
+    repo: Utf8PathBuf,
+) -> Result<Json<String>, (axum::http::StatusCode, String)> {
+    api_git_branch(
+        State(state),
+        Checkout(repo),
+        Json(BranchBody {
+            action: "checkout".into(),
+            name: "other".into(),
+            kind: Some("local".into()),
+        }),
+    )
+    .await
 }
 
 async fn api_git_branch(
@@ -1901,16 +1944,32 @@ async fn api_git_branch(
     Json(b): Json<BranchBody>,
 ) -> Result<Json<String>, (axum::http::StatusCode, String)> {
     // Switching the tree under a turn moves every file the agent is in the middle of.
-    if matches!(b.action.as_str(), "create" | "checkout") {
-        not_mid_turn(&state, &repo)?;
-    }
-    blocking(
-        move || crate::repo::git_branch_act(&repo, &b.action, &b.name),
-        Err("timed out".into()),
-    )
+    in_blocking(move || {
+        let _held = if matches!(b.action.as_str(), "create" | "checkout") {
+            if repo.real().ok() != state.repo().real().ok() {
+                return Err((
+                    axum::http::StatusCode::CONFLICT,
+                    "This lane owns its branch. Switch branches from a project-workspace lane."
+                        .into(),
+                ));
+            }
+            let key = format!("keel:branch:{repo}");
+            let token = state
+                .reserve_checkout(&key, &repo)
+                .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+            Some(Held::new(state.clone(), key, token))
+        } else {
+            None
+        };
+        let result = match b.kind.as_deref() {
+            None => crate::repo::git_branch_act(&repo, &b.action, &b.name),
+            kind => crate::repo::git_branch_target(&repo, &b.action, &b.name, kind),
+        };
+        result
+            .map(Json)
+            .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    })
     .await
-    .map(Json)
-    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(serde::Deserialize)]
@@ -2642,6 +2701,23 @@ mod tests {
         assert!(second.claim("detached-window", checkout, true).is_err());
         first.release("first-window", token);
         assert!(second.claim("detached-window", checkout, true).is_ok());
+    }
+
+    #[test]
+    fn a_branch_reservation_excludes_readers_and_writers_across_daemons_then_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let first = AppState::new(root.to_owned());
+        let second = AppState::new(root.to_owned());
+        let reader = first.claim("reader", root, false).unwrap();
+        assert!(second.reserve_checkout("switch", root).is_err());
+        first.release("reader", reader);
+        let exclusive = second.reserve_checkout("switch", root).unwrap();
+        assert!(first.claim("reader", root, false).is_err());
+        assert!(first.claim("writer", root, true).is_err());
+        second.release("switch", exclusive);
+        assert!(first.claim("reader", root, false).is_ok());
+        assert!(first.claim("writer", root, true).is_ok());
     }
 
     #[cfg(unix)]

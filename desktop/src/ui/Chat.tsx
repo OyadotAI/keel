@@ -1,3 +1,4 @@
+// The virtual conversation follows streaming output without taking control of manual scrolling.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shownTool } from "../browser";
 import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
@@ -68,11 +69,11 @@ export function Chat({ lane }: { lane: string }) {
     };
   }, [lane, scroller, stick]);
   const remember = () => list.current?.getState((state) => scrolls.set(lane, state));
-  if (!rows.length) return <div className="chat-empty"><div className="chat-empty-mark">{running ? <Working /> : <Icon name="chat" size={24} />}</div>
+  if (!rows.length) return <div className="chat-empty" data-reference-target={lane}><div className="chat-empty-mark">{running ? <Working /> : <Icon name="chat" size={24} />}</div>
     <h2>{!loaded ? "Opening your conversation…" : running ? "Starting your agent…" : "What are we building?"}</h2>
     <p>{loaded && !running ? `Work with ${AGENT_NAME[agent ?? "claude"]} in this lane. Ask a question, attach context, or start a task.` : "Your conversation and workspace stay together."}</p>
     {loaded && !running && <span className="small faint">@ for files · / for commands · Shift+Enter for a new line</span>}</div>;
-  return <div className="chat-transcript" aria-label="Conversation">
+  return <div className="chat-transcript" aria-label="Conversation" data-reference-target={lane}>
     <Virtuoso ref={list} scrollerRef={scrollerRef} data={rows} computeItemKey={(_, row) => row.key}
       {...(saved.current ? { restoreStateFrom: saved.current } : { initialTopMostItemIndex: rows.length - 1 })}
       rangeChanged={remember} isScrolling={(scrolling) => { if (!scrolling) remember(); }}

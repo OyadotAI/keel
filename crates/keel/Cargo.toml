@@ -1,3 +1,4 @@
+# Keel's daemon and its provider, repository, and desktop-runtime dependencies.
 [package]
 name = "keel"
 version.workspace = true
@@ -46,6 +47,7 @@ tempfile = "3"
 shlex = "2"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 # The project's identity on Windows (permissions.rs `private::identity`): the volume serial and
 # file index, which std keeps unstable.

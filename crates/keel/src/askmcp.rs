@@ -331,7 +331,7 @@ pub async fn ask(lane: Option<&str>, args: &Value) -> Result<String, String> {
             .map(|(_, a)| a.to_string())
             .unwrap_or(decision.reason)),
         // `_withdrawn` takes the card down and tells the window.
-        _ => Err("nobody answered within the time allowed; proceed with your best judgement and say what you assumed".into()),
+        _ => Err("This question closed without an answer. Silence is not a choice; do not treat it as permission or invent the person's response. Wait for their next message.".into()),
     }
 }
 
@@ -415,6 +415,37 @@ pub async fn get() -> axum::http::StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The client must allow the full Keel lifetime rather than abandoning a typed response.
+    #[tokio::test(start_paused = true)]
+    async fn a_question_accepts_an_answer_after_sixty_seconds() {
+        let _guard = crate::approve::tests::lock().await;
+        let asking = tokio::spawn(async {
+            ask(
+                Some("delayed-answer"),
+                &json!({"questions":[{"question":"Choose?"}]}),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        let id = queue()
+            .locked()
+            .iter()
+            .find(|p| p.lane == "delayed-answer")
+            .unwrap()
+            .id
+            .clone();
+        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+        assert!(!asking.is_finished());
+        waiters()
+            .locked()
+            .remove(&id)
+            .unwrap()
+            .0
+            .send(crate::approve::answered("My own answer"))
+            .unwrap();
+        assert_eq!(asking.await.unwrap().unwrap(), "My own answer");
+    }
 
     #[tokio::test]
     async fn a_question_is_queued_for_the_lane_and_the_answer_comes_back_as_text() {
