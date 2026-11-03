@@ -42,14 +42,31 @@ pub fn snapshot(root: &Utf8Path) -> Result<String, String> {
         // ignore rule. Seed from the real index so `add -A` retains Git's tracking decisions,
         // while recording the working copy without changing anything the user has staged.
         let real = root.join(git(root, None, &["rev-parse", "--git-path", "index"])?);
-        match std::fs::copy(real, index) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
+        seed(&real, index)?;
         git(root, Some(index), &["add", "-A", "--", "."])?;
         git(root, Some(index), &["write-tree"])
     })
+}
+
+/// Copy the real index, keeping its modification time. Git's guard against a file written in
+/// the index's own second ("racy git") compares the file's time with the index file's: a copy
+/// stamped now made such a file look safely unchanged, and `add -A` trusted its stat data and
+/// photographed the old content. `std::fs::copy` keeps the time on macOS and not on Linux, so a
+/// turn's same-second edit went unrecorded there — seen as a rewind that did nothing in Linux CI.
+fn seed(real: &Utf8Path, index: &Utf8Path) -> Result<(), String> {
+    match std::fs::copy(real, index) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    }
+    let stamp = std::fs::metadata(real)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    std::fs::File::options()
+        .write(true)
+        .open(index)
+        .and_then(|f| f.set_modified(stamp))
+        .map_err(|e| e.to_string())
 }
 
 fn with_temporary_index<T>(
@@ -231,6 +248,24 @@ mod tests {
         git(&root, None, &["add", "-A"]).unwrap();
         git(&root, None, &["commit", "--quiet", "-m", "seed"]).unwrap();
         (dir, root)
+    }
+
+    /// The throwaway index carries the real index's time, so git's same-second guard sees what
+    /// it would see in the real one.
+    #[test]
+    fn the_seeded_index_keeps_the_real_indexs_time() {
+        let (_d, root) = repo();
+        let real = root.join(".git/index");
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&real)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let copy = root.join(".git/seeded-index");
+        seed(&real, &copy).unwrap();
+        assert_eq!(std::fs::metadata(&copy).unwrap().modified().unwrap(), old);
     }
 
     /// Edit a tracked file, add a new one, then rewind: both come back, and an ignored file that
