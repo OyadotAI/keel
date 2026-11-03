@@ -20,11 +20,11 @@ on:
 permissions:
   contents: read
 
-# Two releases at once would race for the same tag in the feed. Queue instead of cancelling: a
-# half-published release is worse than a slow one.
-concurrency:
-  group: release
-  cancel-in-progress: false
+# No run-wide queue. It used to be one, so a tag pushed while the last release was still
+# building waited for it — 22 minutes measured — even when the new one replaced it. Builds of two
+# tags write two drafts and never meet; publishing is what races (the feed's `latest`, its README,
+# the review action), so only `publish` queues, and a superseded tag skips its builds and its
+# publish altogether.
 
 env:
   FEED: OyadotAI/keel-releases
@@ -33,6 +33,8 @@ jobs:
   draft:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      current: ${{ steps.newest.outputs.current }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # An updater never offers a version that is not higher than the installed one, so a tag
@@ -45,7 +47,16 @@ jobs:
             v="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
             [ "$tag" = "$v" ] || { echo "tag v$tag is not $f $v" >&2; exit 1; }
           done
+      # A newer tag already pushed makes this release one nobody would be offered: skip it, and
+      # let the newer one have the runners.
+      - name: This tag is still the newest
+        id: newest
+        run: |
+          newest="$(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)"
+          if [ "$newest" = "$GITHUB_REF_NAME" ]; then echo current=true >> "$GITHUB_OUTPUT"
+          else echo "superseded by $newest: skipping" >&2; echo current=false >> "$GITHUB_OUTPUT"; fi
       - name: Open a draft release on the feed
+        if: steps.newest.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
@@ -55,6 +66,7 @@ jobs:
 
   macos:
     needs: draft
+    if: needs.draft.outputs.current == 'true'
     # The explicit Intel pool avoids ARM capacity failures; the bundle still targets both CPUs.
     runs-on: macos-15-intel
     timeout-minutes: 90
@@ -84,8 +96,12 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # Warmed on `main` by release-cache.yml under this key. A tag cannot read another tag's
+      # cache, so saving one here would only spend the upload.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          shared-key: release-macos
+          save-if: false
           workspaces: |
             .
             desktop/src-tauri
@@ -174,6 +190,7 @@ jobs:
 
   windows:
     needs: draft
+    if: needs.draft.outputs.current == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -199,6 +216,8 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          shared-key: release-windows
+          save-if: false
           workspaces: |
             .
             desktop/src-tauri
@@ -228,6 +247,7 @@ jobs:
   # `libdbus-1-dev` is for `keyring`'s secret-service backend.
   linux-cli:
     needs: draft
+    if: needs.draft.outputs.current == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -244,6 +264,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release-linux
+          save-if: false
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - run: cargo build --release --locked -p keel
       - name: Upload to the draft
@@ -261,8 +284,19 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    # Two publishes at once would race for the feed. Queued, never cancelled: a half-published
+    # release is worse than a slow one.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A newer tag may have been pushed while this one built. Marking an older release `latest`
+      # would put the feed and its README a version behind, so it stops here as a draft.
+      - name: This tag is still the newest
+        run: |
+          newest="$(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)"
+          [ "$newest" = "$GITHUB_REF_NAME" ] || { echo "superseded by $newest: left as a draft" >&2; exit 1; }
       # The manifest the Tauri updater reads (tauri.conf.json `plugins.updater.endpoints`): one
       # entry per platform, each the archive's URL and its signature's text.
       - name: Write latest.json
