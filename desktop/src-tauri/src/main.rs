@@ -217,6 +217,17 @@ fn projects_dir() -> Result<String, String> {
     locations::projects()?.into_os_string().into_string().map_err(|_| "The workspace path is not text.".into())
 }
 
+/// Whether a folder is already inside the Keel workspace, both sides resolved: the offer to move
+/// a project is made only for one that is not, and a workspace that does not exist yet holds
+/// nothing. A `/tmp` or `~` spelled through a link still compares as the place it is.
+#[tauri::command]
+fn in_workspace(path: String) -> bool {
+    let (Ok(workspace), Ok(folder)) = (locations::projects(), std::fs::canonicalize(&path)) else {
+        return false;
+    };
+    std::fs::canonicalize(&workspace).is_ok_and(|ws| folder.starts_with(ws))
+}
+
 /// The device's review-packet key: made once, kept in the system's own credential store
 /// (Keychain, Windows Credential Manager), never in the page or on disk.
 fn signing_key() -> Result<ed25519_dalek::SigningKey, String> {
@@ -323,7 +334,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Daemons::default())
-        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, in_workspace, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("the window")
         .run(|app, event| {

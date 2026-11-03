@@ -99,6 +99,29 @@ impl Repository {
             records.insert(record.identity.key(), record.clone());
         })
     }
+    /// Point every session recorded in a project Keel moved at where it is now. The listing
+    /// matches a Codex or Antigravity session by its project, so without this a moved project's
+    /// History shows none of them.
+    pub fn relocate(&self, from: &[String], to: &Utf8Path) -> Result<(), String> {
+        let moved = |path: &str| {
+            from.iter().find_map(|f| {
+                Utf8Path::new(path)
+                    .strip_prefix(f)
+                    .ok()
+                    .map(|rest| to.join(rest).to_string())
+            })
+        };
+        self.change(|records| {
+            for known in records.values_mut() {
+                if let Some(repo) = moved(&known.identity.repo) {
+                    known.identity.repo = repo;
+                }
+                if let Some(cwd) = moved(&known.identity.cwd) {
+                    known.identity.cwd = cwd;
+                }
+            }
+        })
+    }
     /// Register a resumable identity and reconcile names under its cross-process lock.
     pub fn register(&self, identity: Identity) -> Result<Session, String> {
         self.serialized(&identity, || {

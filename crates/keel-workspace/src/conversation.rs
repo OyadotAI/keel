@@ -306,9 +306,13 @@ pub struct Decoder {
     /// Codex turns that have ended, which nothing written for them later may reopen. One id per
     /// turn of one stream's conversation.
     codex_closed: HashSet<String>,
-    /// Subagents a Codex or Antigravity chat turn started. Its process ends with the turn and
-    /// takes them with it, so `close` says each one stopped — or the sidebar showed `pm` working
-    /// for good.
+    /// Subagents a chat turn started and has not yet heard the end of. A chat turn is one
+    /// process (`claude -p`, `codex exec`, `agy`), and it takes its background agents with it
+    /// when it exits, so `close` says each one stopped — or the sidebar showed `pm` working for
+    /// good. Claude Code's own note that an agent finished reaches a transcript's queue, which a
+    /// chat stream never carries; measured on this repository, three agents that had finished
+    /// mid-turn spun until the next prompt. Kept in `push`, the one path every background op
+    /// takes, so no provider's launch can miss it.
     chat_agents: Vec<String>,
 }
 
@@ -1117,6 +1121,14 @@ impl Decoder {
     }
 
     fn push(&mut self, out: &mut Vec<Frame>, op: Op) {
+        if self.source == Source::Chat
+            && let Op::Background { id, running, .. } = &op
+        {
+            self.chat_agents.retain(|known| known != id);
+            if *running {
+                self.chat_agents.push(id.clone());
+            }
+        }
         let turn = self.turn.as_ref().and_then(|t| t.key.clone());
         out.push(Frame { turn, op });
     }

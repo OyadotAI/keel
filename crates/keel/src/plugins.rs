@@ -6,7 +6,7 @@
 
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, Sse};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::Infallible;
@@ -193,7 +193,22 @@ pub async fn list(
         let repo = q.repo.map(Utf8PathBuf::from);
         // Extensions asks without a repo; Keel installs at project scope, so "installed" is about
         // this daemon's project, or its own installs would read as missing.
-        let have = installed(Some(&repo.clone().unwrap_or_else(|| state.repo())));
+        let project = repo.clone().unwrap_or_else(|| state.repo());
+        axum::Json(catalog_for(repo.as_deref(), &project))
+    })
+    .await
+}
+
+/// The suggestions for `repo`, installed or not, as the setup chip and the automatic setup read
+/// them. Blocking: reads the catalog cache and the project's plugin index.
+pub(crate) fn suggested_for(repo: &Utf8Path) -> Vec<Plugin> {
+    catalog_for(Some(repo), repo).suggested
+}
+
+fn catalog_for(repo: Option<&Utf8Path>, project: &Utf8Path) -> CatalogResponse {
+    {
+        let repo = repo.map(Utf8Path::to_owned);
+        let have = installed(Some(project));
         let mut all = catalog();
         for p in &mut all {
             p.installed = have.contains(&p.name);
@@ -234,9 +249,8 @@ pub async fn list(
             })
             .collect();
 
-        axum::Json(CatalogResponse { suggested, all })
-    })
-    .await
+        CatalogResponse { suggested, all }
+    }
 }
 
 #[derive(Deserialize)]
@@ -479,9 +493,9 @@ pub async fn action(
             ".claude/settings.json",
             project,
             &args,
-            q.commit,
-            &message,
+            q.commit.then_some(message.as_str()),
             &tx,
+            None,
         )
         .await;
         let _ = tx
@@ -508,6 +522,7 @@ pub async fn refresh_marketplaces() -> Sse<ReceiverStream<Result<Event, Infallib
                 "update",
             ]),
             &tx,
+            None,
         )
         .await;
         let _ = tx
@@ -543,12 +558,42 @@ pub async fn install(
         return Sse::new(ReceiverStream::new(rx));
     }
 
+    tokio::spawn(async move {
+        let code = install_one(
+            &state,
+            &q.name,
+            &q.marketplace,
+            q.commit,
+            crate::team::By::Click,
+            &tx,
+            None,
+        )
+        .await;
+        let _ = tx
+            .send(Ok(Event::default().event("done").data(code.to_string())))
+            .await;
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+}
+
+/// One plugin, to its end: its marketplace added first when Keel knows one, then the install,
+/// both at project scope. Lines go to `tx`; the exit code comes back. The automatic setup and
+/// the `/api/plugins/install` handler share it, so a plugin installs the same way whoever asked.
+pub(crate) async fn install_one(
+    state: &Arc<crate::serve::AppState>,
+    name: &str,
+    marketplace: &str,
+    commit: bool,
+    by: crate::team::By,
+    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tap: Option<&tokio::sync::mpsc::Sender<String>>,
+) -> i32 {
     let add_source = SUGGESTED
         .iter()
-        .find(|s| s.name == q.name)
+        .find(|s| s.name == name)
         .and_then(|s| s.add_source);
-
-    tokio::spawn(async move {
+    {
         // Every suggestion names the marketplace it comes from, including the official one.
         // Assuming that one was already configured worked on a machine where it had been added at
         // some point and failed on a fresh one, with `claude` reporting a marketplace it had never
@@ -564,41 +609,45 @@ pub async fn install(
             let args: Vec<String> = ["plugin", "marketplace", "add", source, "--scope", "project"]
                 .map(String::from)
                 .to_vec();
-            let message = format!("Keel: add plugin marketplace {source}");
+            let message = crate::team::message(
+                by,
+                &format!("Keel: add plugin marketplace {source}"),
+                "Install",
+                &[("Files", &[".claude/settings.json".to_string()])],
+            );
             let _ = crate::vouched::run(
-                &state,
+                state,
                 ".claude/settings.json",
                 true,
                 &args,
-                q.commit,
-                &message,
-                &tx,
+                commit.then_some(message.as_str()),
+                tx,
+                tap,
             )
             .await;
         }
 
-        let id = format!("{}@{}", q.name, q.marketplace);
+        let id = format!("{name}@{marketplace}");
         let args: Vec<String> = ["plugin", "install", &id, "--scope", "project"]
             .map(String::from)
             .to_vec();
-        let message = format!("Keel: install plugin {id}");
-        let code = crate::vouched::run(
-            &state,
+        let message = crate::team::message(
+            by,
+            &format!("Keel: install plugin {id}"),
+            "Install",
+            &[("Files", &[".claude/settings.json".to_string()])],
+        );
+        crate::vouched::run(
+            state,
             ".claude/settings.json",
             true,
             &args,
-            q.commit,
-            &message,
-            &tx,
+            commit.then_some(message.as_str()),
+            tx,
+            tap,
         )
-        .await;
-
-        let _ = tx
-            .send(Ok(Event::default().event("done").data(code.to_string())))
-            .await;
-    });
-
-    Sse::new(ReceiverStream::new(rx))
+        .await
+    }
 }
 
 fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
@@ -616,6 +665,7 @@ fn refuse(message: &str) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
 pub(crate) async fn pipe(
     command: &mut Command,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tap: Option<&tokio::sync::mpsc::Sender<String>>,
 ) -> i32 {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let Ok(mut child) = command.spawn() else {
@@ -631,8 +681,8 @@ pub(crate) async fn pipe(
     // Shared with clitools: generic over the pipe type, because a closure monomorphises to
     // whichever of stdout/stderr is passed first.
     tokio::join!(
-        crate::clitools::pump(out, tx.clone()),
-        crate::clitools::pump(err, tx.clone())
+        crate::clitools::pump(out, tx.clone(), tap.cloned()),
+        crate::clitools::pump(err, tx.clone(), tap.cloned())
     );
     child
         .wait()

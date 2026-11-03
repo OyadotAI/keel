@@ -34,7 +34,7 @@ export function Drop() {
       if (target === "projects" || !lane) {
         // A file dropped here is not a project; open the folders and leave the rest alone.
         for (const path of p.paths) void invoke<boolean>("is_dir", { path }).then((dir) => {
-          if (dir) void useStore.getState().openProject(path);
+          if (dir) void useStore.getState().openProject(path, true);
         });
         return;
       }

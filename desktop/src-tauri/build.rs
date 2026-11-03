@@ -8,6 +8,7 @@ fn main() {
         "stop_all",
         "scratch_dir",
         "projects_dir",
+        "in_workspace",
         "sign_packet",
         "save_text",
         "is_dir",

@@ -15,7 +15,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 
-use crate::{Kind, Real};
+use crate::Kind;
 
 /// Codex's home, honouring `CODEX_HOME` as Codex does.
 pub fn codex_home() -> Option<Utf8PathBuf> {
@@ -35,7 +35,6 @@ pub fn rollout(sessions: &Utf8Path, cwd: &Utf8Path, id: &str) -> Option<Utf8Path
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
-    let want = cwd.real().unwrap_or_else(|_| cwd.to_owned());
     let suffix = format!("{id}.jsonl");
     let mut dirs = vec![(sessions.to_owned(), 0)];
     let mut count = 0;
@@ -62,8 +61,9 @@ pub fn rollout(sessions: &Utf8Path, cwd: &Utf8Path, id: &str) -> Option<Utf8Path
                 dirs.push((path, depth + 1));
             } else if ty.is_file()
                 && path.file_name().is_some_and(|n| n.ends_with(&suffix))
+                // This directory, or where it was before Keel moved it into its workspace.
                 && header(&path)
-                    .is_some_and(|(hid, hcwd)| hid == id && hcwd.real().unwrap_or(hcwd) == want)
+                    .is_some_and(|(hid, hcwd)| hid == id && crate::moved::same_place(&hcwd, cwd))
             {
                 return Some(path);
             }

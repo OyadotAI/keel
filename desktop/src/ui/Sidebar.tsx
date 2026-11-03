@@ -1,5 +1,6 @@
 // Projects, lanes, and team members share the same observed activity indicators.
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useOutsideWorkspace } from "./MoveProject";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { resumeCommand, sessionForLane } from "../lane-names";
@@ -48,7 +49,7 @@ function lastWord(l: Lane): string {
 
 export async function pickProject() {
   const path = await open({ directory: true, multiple: false, title: "Open a project" });
-  if (typeof path === "string") await useStore.getState().openProject(path);
+  if (typeof path === "string") await useStore.getState().openProject(path, true);
 }
 
 export function Sidebar({ explorer, showCode }: { explorer?: ReactNode; showCode?: () => void }) {
@@ -180,6 +181,7 @@ function ProjectRow({ path }: { path: string }) {
   const busy = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => s.lanes[l] && activity(s.lanes[l]).tone === "live").length);
   const [menu, setMenu] = useState<{ at: DOMRect; kind: "new" | "more" } | null>(null);
   const [ctx, setCtx] = useState<DOMRect | null>(null);
+  const outside = useOutsideWorkspace(path);
   if (!p) return null;
   const { newLane, select, closeProject } = useStore.getState();
   const toggle = () => useStore.setState((s) => (s.projects[path] ? { projects: { ...s.projects, [path]: { ...s.projects[path], collapsed: !s.projects[path].collapsed } } } : s));
@@ -248,6 +250,7 @@ function ProjectRow({ path }: { path: string }) {
       )}
       {menu?.kind === "more" && (
         <Floating anchor={menu.at} onClose={() => setMenu(null)}>
+          {outside && <><button onClick={() => (setMenu(null), void useStore.getState().offerMove(path))}><Icon name="arrow-right" size={14} /> Move into Keel workspace…</button><div className="sep" /></>}
           <button onClick={() => (setMenu(null), void closeProject(path))}>Close project (its daemon stops; branches stay)</button>
         </Floating>
       )}
@@ -272,6 +275,9 @@ function ProjectRow({ path }: { path: string }) {
           <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(path))}>
             <Icon name="copy" size={14} /> Copy path
           </button>
+          {outside && <button onClick={() => (setCtx(null), void useStore.getState().offerMove(path))}>
+            <Icon name="arrow-right" size={14} /> Move into Keel workspace…
+          </button>}
           <button onClick={() => (setCtx(null), toggle())}>
             <Icon name={p.collapsed ? "chevron-down" : "chevron-right"} size={14} /> {p.collapsed ? "Expand" : "Collapse"}
           </button>

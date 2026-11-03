@@ -309,6 +309,12 @@ pub(crate) fn owned_pid(lane: &str) -> Option<u32> {
     owners().locked().get(lane).copied()
 }
 
+/// How many conversations a Keel terminal is running right now.
+pub fn open_count() -> usize {
+    use crate::lock::Locked;
+    running().locked().len()
+}
+
 /// Whether a Keel terminal is running conversation `id`.
 pub fn live(id: &str) -> bool {
     use crate::lock::Locked;

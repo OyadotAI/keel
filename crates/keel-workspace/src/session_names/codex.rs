@@ -1,6 +1,5 @@
 //! Read Codex's native name/preview precedence; its App Server exclusively owns writes.
 use super::{NativeName, files};
-use crate::Real;
 use camino::Utf8Path;
 
 pub(super) fn read(
@@ -39,9 +38,7 @@ pub(super) fn read(
             Err(e) => return Err(e.to_string()),
         };
         let recorded = Utf8Path::new(&recorded);
-        if recorded.real().unwrap_or_else(|_| recorded.to_owned())
-            != cwd.real().unwrap_or_else(|_| cwd.to_owned())
-        {
+        if !crate::moved::same_place(recorded, cwd) {
             return Err("The Codex session belongs to another checkout".into());
         }
         let explicit = name.as_ref().is_some_and(|n| !n.is_empty());

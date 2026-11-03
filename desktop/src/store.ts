@@ -4,11 +4,13 @@
 // streamed token re-renders the one block it landed in. Updates arrive one batch per frame from
 // the stream worker, never one per event.
 
-import { readSetup, type Meter, type Readiness, type Warning } from "./setup";
+import { readSetup, readSetupRecord, type Meter, type Readiness, type SetupRecord, type Warning } from "./setup";
 import { childScope, disconnectedChildren, type ChildSnapshot } from "./subagents";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { type Endpoint, get, post, url, isRejected } from "./api";
+import { type Endpoint, get, post, url, isRejected, HttpError } from "./api";
+import { decline, declined, rekey, rekeyDrafts, structural, type Moved, type MovePlan, type Moving, type Refusal } from "./relocate";
+import { useEditorFiles } from "./editor-files";
 import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
 import { endBanner, needsYou, notify } from "./notify";
@@ -224,6 +226,8 @@ interface State {
   trusted: Record<string, boolean>;
   /// What is missing from each project's agent setup, for the warning that says so.
   setup: Record<string, Warning[]>;
+  /// What the daemon's automatic setup did or is doing per project: the chip's source when trusted.
+  setupRun: Record<string, SetupRecord>;
   /// The license in force. Machine-wide, so one value whichever project's daemon read it last.
   license?: Meter;
   /// Open readiness findings per project, for the tab's count.
@@ -236,7 +240,17 @@ interface State {
   panelTab?: "turns" | "git" | "review" | "jobs" | "preview" | "readiness" | "context" | "browser";
   /// The project's daemon, started if it is not running. For views that talk to it directly.
   ensure(project: string): Promise<Endpoint>;
-  openProject(path: string): Promise<void>;
+  /// Open a folder as a project. `offer`: from the folder picker or a drop, so a folder outside
+  /// the Keel workspace is offered a move first, once.
+  openProject(path: string, offer?: boolean): Promise<void>;
+  /// The move dialog, when one is showing.
+  moving: Moving | null;
+  /// Ask whether to move a project into the workspace (the project menu), or say why not.
+  offerMove(path: string): Promise<void>;
+  /// The person's answer to the move dialog: move it, or keep it where it is.
+  answerMove(move: boolean): Promise<void>;
+  /// Close the move dialog once it has said how it went.
+  closeMove(): void;
   closeProject(path: string): Promise<void>;
   newLane(project: string, isolated?: boolean, agent?: Agent, surface?: ChatInterface): string;
   adoptContinuation(source: string, continuation: import("./handoffs").Continuation): string;
@@ -394,6 +408,13 @@ export const useStore = create<State>()((set, getState, api) => {
       ),
     );
   const lanesOf = (path: string) => getState().projects[path]?.lanes ?? [];
+  /// Select the project's first lane, making one when it has none.
+  const openLane = (path: string) => {
+    if (!getState().projects[path]) return;
+    const lid = getState().projects[path].lanes[0] ?? getState().newLane(path);
+    getState().select(lid);
+    save(getState());
+  };
   /// Coarse on purpose: "this checkout changed, read it again". A `tree.changed` names its
   /// checkout — `wt` absent for the project's own tree — and only the lanes on it read.
   const checkoutChanged = (onlyTree: boolean) => (path: string, _ep: Endpoint, data: unknown) => {
@@ -496,10 +517,16 @@ export const useStore = create<State>()((set, getState, api) => {
     },
     "permissions.changed": (path, ep) => trust(path, ep),
     "state.changed": (path, ep) => setup(path, ep),
+    "setup.changed": (path, _ep, data) => {
+      const d = (data as { data?: SetupRecord })?.data;
+      if (d) set((s) => ({ setupRun: { ...s.setupRun, [path]: d } }));
+    },
     connected: (path, ep) => {
       // Whatever happened in the gap is gone: read everything this daemon owns, once.
       trust(path, ep);
       setup(path, ep);
+      // An older daemon has no record; the chip then reads the warnings alone, as before.
+      void readSetupRecord(ep).then((r) => set((s) => ({ setupRun: { ...s.setupRun, [path]: r } })), () => undefined);
       for (const lid of lanesOf(path)) void names.register(lid);
       void poll(path);
       // Through `sessionsChanged`, not straight into the project: what ended in the gap — a turn,
@@ -932,6 +959,8 @@ export const useStore = create<State>()((set, getState, api) => {
     extensions: false,
     trusted: {},
     setup: {},
+    setupRun: {},
+    moving: null,
     readiness: {},
     handed: {},
     opened: [],
@@ -969,17 +998,87 @@ export const useStore = create<State>()((set, getState, api) => {
     },
     ensure: (path) => endpoint(path),
 
-    async openProject(path) {
-      if (!getState().projects[path]) {
+    async openProject(path, offer = false) {
+      const fresh = !getState().projects[path];
+      if (fresh) {
         set((s) => ({
           order: [...s.order, path],
           projects: { ...s.projects, [path]: { path, name: basename(path), lanes: [] } },
         }));
       }
-      const lid = getState().projects[path].lanes[0] ?? getState().newLane(path);
-      getState().select(lid);
-      save(getState());
+      // Asked before any lane exists: a terminal lane starts its agent the moment it is selected,
+      // and an agent running in the folder is the one thing a move has to wait for.
+      // ponytail: one offer at a time; a second folder dropped while one is open opens where it is, and keeps the menu item.
+      if (offer && fresh && !getState().moving && !declined().includes(path) && !(await invoke<boolean>("in_workspace", { path }).catch(() => true))) {
+        save(getState());
+        const ep = await endpoint(path).catch(() => undefined);
+        const plan = ep && (await get<MovePlan>(ep, "/api/project/move").catch(() => undefined));
+        // A folder that can never move (a submodule, another disk) opens without a word.
+        if (plan && !plan.refusal) return set({ moving: { from: path, to: plan.to, phase: "offer", auto: true } });
+        if (plan?.refusal && !structural(plan.refusal)) return set({ moving: { from: path, to: plan.to, phase: "refused", refusal: plan.refusal, auto: true } });
+      }
+      openLane(path);
       await endpoint(path).catch(() => undefined);
+    },
+
+    async offerMove(path) {
+      const ep = await endpoint(path).catch(() => undefined);
+      if (!ep) return;
+      const plan = await get<MovePlan>(ep, "/api/project/move").catch((e) => ({ from: path, to: path, refusal: { code: "rename", error: String(e) } as Refusal }));
+      set({ moving: { from: path, to: plan.to, phase: plan.refusal ? "refused" : "offer", refusal: plan.refusal ?? undefined, auto: false } });
+    },
+
+    async answerMove(move) {
+      const m = getState().moving;
+      if (!m || m.phase !== "offer") return;
+      if (!move) {
+        decline(m.from);
+        set({ moving: null });
+        if (m.auto) openLane(m.from);
+        return;
+      }
+      set({ moving: { ...m, phase: "moving" } });
+      for (const lid of lanesOf(m.from)) await names.flush(lid);
+      const ep = await endpoint(m.from).catch(() => undefined);
+      let done: Moved | undefined;
+      let refusal: Refusal | undefined;
+      try {
+        if (!ep) throw new Error("Keel isn’t running for this project.");
+        done = await post<Moved>(ep, "/api/project/move");
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 409) {
+          try { refusal = JSON.parse(e.message) as Refusal; } catch { refusal = { code: "rename", error: e.message }; }
+        } else if (!(await invoke<boolean>("is_dir", { path: m.from }).catch(() => true)) && (await invoke<boolean>("is_dir", { path: m.to }).catch(() => false))) {
+          // The reply was lost but the folder moved: carry on from where it is.
+          done = { from: m.from, to: m.to, warnings: [{ step: "history", error: "Keel couldn’t confirm the steps after the move" }] };
+        } else refusal = { code: "rename", error: e instanceof Error ? e.message : String(e) };
+      }
+      if (!done) return set({ moving: { ...m, phase: "refused", refusal } });
+      decline(m.from, false);
+      // Nothing of the old daemon outlives its folder: its streams, its event watch, the process.
+      watchers.get(m.from)?.close();
+      watchers.delete(m.from);
+      for (const lid of lanesOf(m.from)) {
+        follows.get(lid)?.close(); follows.delete(lid);
+        chats.get(lid)?.close(); chats.delete(lid);
+        retries.delete(lid);
+      }
+      await invoke("close_project", { path: m.from }).catch(() => undefined);
+      set((s) => rekey(s, m.from, done.to));
+      useEditorFiles.setState((s) => ({ files: rekeyDrafts(s.files, m.from, done.to) as typeof s.files }));
+      save(getState());
+      set({ moving: { ...m, to: done.to, phase: "moved", warnings: done.warnings } });
+      const active = getState().active;
+      if (m.auto || !active || getState().lanes[active]?.project !== done.to) openLane(done.to);
+      else getState().select(active);
+      await endpoint(done.to).catch(() => undefined);
+    },
+
+    closeMove() {
+      const m = getState().moving;
+      set({ moving: null });
+      // Offered on open and not moved: the project opens where it is, as it would have.
+      if (m?.auto && m.phase === "refused") openLane(m.from);
     },
 
     async closeProject(path) {
@@ -993,6 +1092,7 @@ export const useStore = create<State>()((set, getState, api) => {
         return {
           trusted: drop(s.trusted),
           setup: drop(s.setup),
+          setupRun: drop(s.setupRun),
           readiness: drop(s.readiness),
           handed: drop(s.handed),
           order: s.order.filter((p) => p !== path),

@@ -5,7 +5,7 @@ use super::{
     json::{self, Cursor},
     observer::{Adapter, Context, Entries, insert, update},
 };
-use crate::{Follows, Real};
+use crate::Follows;
 use camino::Utf8PathBuf;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -226,11 +226,8 @@ pub(super) fn verified(
     p["id"] == id
         && (p["parent_thread_id"] == parent
             || p["source"]["subagent"]["thread_spawn"]["parent_thread_id"] == parent)
-        && directory.real().ok().is_some_and(|expected| {
-            p["cwd"]
-                .as_str()
-                .and_then(|p| camino::Utf8Path::new(p).real().ok())
-                == Some(expected)
+        && p["cwd"].as_str().is_some_and(|recorded| {
+            crate::moved::same_place(camino::Utf8Path::new(recorded), directory)
         })
 }
 fn unknown(entries: &mut Entries, child: &str) {

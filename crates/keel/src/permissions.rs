@@ -278,6 +278,28 @@ pub(crate) fn private_lock(name: &str) -> Result<std::fs::File, String> {
     Ok(file)
 }
 
+/// The store key of a project as it stands now: read before it is moved, because the key holds
+/// its path and the path is about to change.
+pub fn key_of(repo: &Utf8Path) -> Result<String, String> {
+    project_identity(repo).map(|(_, key)| key)
+}
+
+/// Carry a project's trust and rules to where Keel moved it. The folder and its `.git` are the
+/// same ones, so this is the decision that was made about this repository — only its path moved.
+pub fn carry(old_key: &str, to: &Utf8Path) -> Result<(), String> {
+    let dir =
+        keel_workspace::Real::real(permissions_dir()?.as_path()).map_err(|e| e.to_string())?;
+    let old = dir.join(format!("{old_key}.json"));
+    if !std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_file()) {
+        return Ok(());
+    }
+    let new = store_path(to)?;
+    if std::fs::symlink_metadata(&new).is_ok() {
+        return Err("the new place already has its own permissions".into());
+    }
+    std::fs::rename(&old, &new).map_err(|e| e.to_string())
+}
+
 fn store_path(repo: &Utf8Path) -> Result<Utf8PathBuf, String> {
     let (project, key) = project_identity(repo)?;
     let dir = permissions_dir()?;

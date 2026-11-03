@@ -97,7 +97,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
       {l &&
         (trusted ? (
-          <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Keel Browser actions. Click to change.">
+          <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Keel Browser actions. Keel keeps its agent team and plugins current here. Click to change.">
             <Icon name="shield" size={14} /> Trusted
           </button>
         ) : (

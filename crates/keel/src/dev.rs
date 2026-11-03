@@ -35,6 +35,17 @@ struct DevState {
     log: Vec<String>,
 }
 
+/// Whether a dev server is running in `root` or a checkout under it.
+pub fn running_in(root: &Utf8Path) -> bool {
+    let s = state().locked();
+    s.child.is_some()
+        && s.checkout.as_deref().is_none_or(|c| {
+            keel_workspace::Real::real(c)
+                .unwrap_or_else(|_| c.to_owned())
+                .starts_with(root)
+        })
+}
+
 fn state() -> &'static Mutex<DevState> {
     static S: OnceLock<Mutex<DevState>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(DevState::default()))

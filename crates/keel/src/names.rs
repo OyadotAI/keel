@@ -103,6 +103,11 @@ fn identity(state: &crate::serve::AppState, body: &RegisterBody) -> Result<Ident
 }
 
 /// Every session-list transport uses this resolver, including native rename and deferred intent.
+/// [`Repository::relocate`] on this device's record.
+pub fn relocate(from: &[String], to: &Utf8Path) -> Result<(), String> {
+    Repository::local()?.relocate(from, to)
+}
+
 pub fn discover(repo: &Utf8Path, home: &Utf8Path) -> Vec<keel_workspace::Session> {
     let raw = keel_workspace::discover_sessions(repo, home);
     match Repository::local().and_then(|store| store.list(repo, raw.clone())) {

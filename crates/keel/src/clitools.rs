@@ -139,6 +139,17 @@ pub async fn claude_status() -> Json<ClaudeStatus> {
     Json(out)
 }
 
+/// Whether `claude` is on this machine and logged in: what a plugin install needs before it is
+/// worth starting, since the CLI does the installing.
+pub(crate) async fn claude_ready() -> bool {
+    let Some(body) = run("claude", &["auth", "status"]).await else {
+        return false;
+    };
+    let mut out = ClaudeStatus::default();
+    apply_claude_auth(&mut out, &body);
+    out.authenticated
+}
+
 fn apply_claude_auth(out: &mut ClaudeStatus, body: &str) {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return;
@@ -530,7 +541,7 @@ async fn run_install(
         return 1;
     };
     let (out, err) = (child.stdout.take(), child.stderr.take());
-    tokio::join!(pump(out, tx.clone()), pump(err, tx.clone()));
+    tokio::join!(pump(out, tx.clone(), None), pump(err, tx.clone(), None));
     child
         .wait()
         .await
@@ -1096,7 +1107,7 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
         // rather than picking one and losing half the instructions.
         let (out, err) = (child.stdout.take(), child.stderr.take());
         tokio::select! {
-            _ = async { tokio::join!(pump(out, tx.clone()), pump(err, tx.clone())); } => {},
+            _ = async { tokio::join!(pump(out, tx.clone(), None), pump(err, tx.clone(), None)); } => {},
             _ = tx.closed() => {
                 if let Some(pid) = child.id() { crate::signals::end_tree(pid); }
                 let _ = child.wait().await;
@@ -1121,6 +1132,9 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
     Sse::new(ReceiverStream::new(rx))
 }
 
+/// The most of one installer line the setup record keeps.
+const TAP_LINE: usize = 400;
+
 /// Forward every line of one pipe as an SSE event.
 ///
 /// Generic over the pipe type so stdout and stderr can share it — a closure would monomorphise to
@@ -1128,10 +1142,17 @@ fn stream(mut command: Command) -> Sse<ReceiverStream<Result<Event, Infallible>>
 pub(crate) async fn pump<R: tokio::io::AsyncRead + Unpin>(
     pipe: Option<R>,
     tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    tap: Option<tokio::sync::mpsc::Sender<String>>,
 ) {
     let Some(pipe) = pipe else { return };
     let mut lines = BufReader::new(pipe).lines();
     while let Ok(Some(line)) = lines.next_line().await {
+        // The automatic setup has no window to stream to; it reads the text beside the event,
+        // one line at a time and never a whole file's worth: it lands in a record every window
+        // receives.
+        if let Some(tap) = &tap {
+            let _ = tap.send(line.chars().take(TAP_LINE).collect()).await;
+        }
         if tx
             .send(Ok(Event::default().event("line").data(line)))
             .await

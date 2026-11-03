@@ -1,6 +1,73 @@
 import { get, type Endpoint } from "./api";
 import { offered, pending, readTeam } from "./team";
 
+/// What the daemon's automatic setup is doing or last did for a project (`GET /api/setup`,
+/// then `setup.changed`). In a trusted project this, not a window's own run, is what the chip
+/// shows: two windows see one result, and a relaunch keeps it.
+export interface SetupRecord {
+  root: string;
+  phase: "idle" | "running" | "waiting" | "done" | "failed";
+  trigger: "open" | "click";
+  step?: string | null;
+  /// `turn`, `terminal`, `keel`, a git operation's name, or `you` (paths with your uncommitted edits).
+  waiting?: { on: string; who?: string | null; paths: string[] } | null;
+  team?: { kind: "added" | "updated"; files: string[]; kept: string[]; yours: string[]; commit?: string | null; note?: string | null } | null;
+  plugins: { name: string; commit?: string | null; error?: string | null }[];
+  error?: string | null;
+  at: number;
+}
+
+export const readSetupRecord = (ep: Endpoint) => get<SetupRecord>(ep, "/api/setup");
+
+/// Whether the record carries anything a person would want to see: a run, a wait, a result.
+export const recordShown = (r?: SetupRecord): r is SetupRecord => !!r && r.phase !== "idle";
+
+/// The warnings the automatic setup answers for; in a trusted project their rows read from the record.
+export const automatic = (w: Warning) => w.id === "team/update" || w.id.startsWith("agent/") || w.id.startsWith("plugin/");
+
+/// What the chip says, in what colour, and what a screen reader hears. A trusted project reads
+/// the daemon's record; an untrusted one, or a daemon with no record, reads today's warnings.
+export function chipState(record: SetupRecord | undefined, warnings: Warning[] | undefined, trusted: boolean, running: boolean): { label: string; color: string; aria: string } {
+  const count = warnings?.length ?? 0;
+  const critical = !!warnings?.some((w) => w.severity === "critical");
+  const auto = trusted && recordShown(record) ? automaticChip(record, critical) : undefined;
+  if (auto) return auto;
+  const onlyUpdate = count === 1 && warnings![0].id === "team/update";
+  const reviewOnly = count > 0 && warnings!.every((w) => /^security\/untrusted-agent-config$/.test(w.id));
+  const label = running ? "Setting up…" : onlyUpdate ? "Team update" : count ? `${count} ${reviewOnly ? "to review" : "to set up"}` : "Setup result";
+  return { label, color: critical ? "var(--del)" : onlyUpdate ? "var(--dim)" : "var(--warn)", aria: `${count} setup warnings` };
+}
+
+/// The automatic run's own states; a failure falls through to the warnings, which name it.
+function automaticChip(record: SetupRecord, critical: boolean): { label: string; color: string; aria: string } | undefined {
+  const quiet = critical ? "var(--del)" : "var(--dim)";
+  if (record.phase === "running") return { label: "Setting up…", color: quiet, aria: "Setup: running" };
+  if (record.phase === "waiting" && record.waiting?.on === "you") {
+    const n = record.waiting.paths.length || 1;
+    return { label: `${n} waiting on you`, color: critical ? "var(--del)" : "var(--warn)", aria: `Setup: ${n} item${n === 1 ? "" : "s"} waiting on you` };
+  }
+  if (record.phase === "waiting") {
+    const on = record.waiting?.on;
+    const after = on === "turn" || on === "terminal" || on === "keel" ? "this turn" : `the ${on ?? "merge"}`;
+    return { label: `Setup · after ${after}`, color: quiet, aria: `Setup: waiting for ${after}` };
+  }
+  if (record.phase !== "done") return undefined;
+  const commits = [record.team?.commit, ...record.plugins.map((p) => p.commit)].filter(Boolean).length;
+  return { label: record.team?.kind === "updated" ? "Team updated" : "Set up", color: quiet, aria: `Setup: done, ${commits} commit${commits === 1 ? "" : "s"}` };
+}
+
+/// The result block's lines: what Keel did, and the commit each part landed in.
+export function resultLines(record: SetupRecord): string[] {
+  const out: string[] = [];
+  const t = record.team;
+  if (t && (t.files.length || t.commit)) {
+    const head = t.kind === "updated" ? `Team updated · ${t.files.length} file${t.files.length === 1 ? "" : "s"}` : `Team added · ${t.files.length} file${t.files.length === 1 ? "" : "s"}`;
+    out.push(`${head}${t.commit ? ` · commit ${t.commit}` : t.note ? ` · ${t.note}` : ""}${t.kept.length ? ` · kept ${t.kept.length} you changed` : ""}`);
+  }
+  for (const p of record.plugins) if (!p.error) out.push(`Plugin ${p.name} installed${p.commit ? ` · commit ${p.commit}` : ""}`);
+  return out;
+}
+
 /// Something about how this project is set up for an agent that is missing or not right: the CLI
 /// not installed or logged in, a suggested plugin not installed, no instructions, no reviewers, a
 /// repository config Keel had to quarantine. Each says what to do about it.

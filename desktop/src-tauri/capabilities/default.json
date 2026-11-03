@@ -31,6 +31,7 @@
     "allow-stop-all",
     "allow-scratch-dir",
     "allow-projects-dir",
+    "allow-in-workspace",
     "allow-sign-packet",
     "allow-save-text",
     "allow-is-dir",

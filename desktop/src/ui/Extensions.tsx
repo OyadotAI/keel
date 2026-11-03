@@ -6,6 +6,7 @@ import { get, post, url, type Endpoint } from "../api";
 import { start, useRun } from "../runs";
 import { TeamUpdate, useTeamPlan } from "./TeamUpdate";
 import { absent, forAgents, others } from "../team";
+import { recordShown } from "../setup";
 import { useStore } from "../store";
 import { Icon } from "./icons";
 import { MemberAvatar } from "./MemberAvatar";
@@ -283,6 +284,12 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
   const [plan, reread] = useTeamPlan(ep);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [installing, setInstalling] = useState(false);
+  const trusted = useStore((s) => !!s.trusted[project]);
+  const record = useStore((s) => s.setupRun[project]);
+  // In a trusted project Keel adds the team itself; a button stays only for a failed attempt.
+  const auto = trusted && recordShown(record) ? record : undefined;
+  const autoFailed = auto?.phase === "failed" && !!auto.error;
+  const retry = () => void post(ep, "/api/setup/run").catch(() => undefined);
   const missing = ["pm", "designer", "principal", "qa", "reviewer", "security", "reliability", "oya-browser"].some((name) => !ws.agents.some((agent) => agent.name === name));
   function installTeam() {
     setInstalling(true);
@@ -305,8 +312,8 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
         {/* Above the members: the update is the action, and eight rows pushed it out of view. */}
         <TeamUpdate key={project} ep={ep} project={project} plan={plan} reread={reread} />
         {!ws.agents.length ? <>
-          <p className="muted">Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @.</p>
-          <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>
+          <p className="muted">{trusted ? "Keel adds its default team to this project on its own. Once it is in, members appear in the sidebar and you can tag them with @." : "Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @."}</p>
+          {trusted ? (auto?.phase === "running" ? <p className="small muted" role="status">Keel is adding its default team to this project…</p> : autoFailed ? <><p className="small error">Couldn’t add the team: {auto!.error}</p><button onClick={retry}>Try adding the team again</button></> : null) : <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>}
           <p className="small muted">Adds eight members for {forAgents(plan)}, including Oya Browser, role playbooks, handoff templates and a production checklist. {absent(plan)}</p>
         </> : <ul className="rules">
           {ws.agents.map((agent) => {
@@ -315,8 +322,8 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
           })}
         </ul>}
         {!!ws.agents.length && missing && <div className="team-install">
-          <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>
-          <p className="small muted">Adds what's missing for {forAgents(plan)}. Keeps your existing definitions and images.</p>
+          {trusted ? (autoFailed ? <button onClick={retry}>Try again</button> : null) : <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>}
+          <p className="small muted">{trusted ? `Keel adds the missing members for ${forAgents(plan)} on its own. Keeps your existing definitions and images.` : `Adds what's missing for ${forAgents(plan)}. Keeps your existing definitions and images.`}{trusted && autoFailed ? ` Last attempt: ${auto!.error}` : ""}</p>
         </div>}
       </section>
       <Create ep={ep} call={call} kind={AGENT} />

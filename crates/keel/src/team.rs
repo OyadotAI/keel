@@ -214,6 +214,49 @@ fn up_to_date(text: &str) -> bool {
     t.contains("docs/PRODUCTION.md") && tmpl::with_guidance(&t) == t
 }
 
+/// Who asked for a write: a click, or Keel on project open. The commit body says which, so a
+/// commit nobody made is explained where they look; on open, a file with the person's own
+/// uncommitted edits is left for them rather than written-but-not-committed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum By {
+    Click,
+    Open,
+}
+
+/// At most this many paths in a commit body; the rest are counted.
+const BODY_PATHS: usize = 40;
+
+/// A commit message for one of Keel's own writes: the subject, who asked, and the paths.
+pub(crate) fn message(
+    by: By,
+    subject: &str,
+    clicked: &str,
+    sections: &[(&str, &[String])],
+) -> String {
+    let mut out = format!("{subject}\n\n");
+    match by {
+        By::Open => out.push_str("Keel wrote this on project open, in a trusted project.\n"),
+        By::Click => out.push_str(&format!("Keel wrote this when you clicked {clicked}.\n")),
+    }
+    for (title, paths) in sections {
+        if paths.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n{title}:\n"));
+        for p in paths.iter().take(BODY_PATHS) {
+            out.push_str(&format!("  {p}\n"));
+        }
+        if paths.len() > BODY_PATHS {
+            out.push_str(&format!("  … and {} more\n", paths.len() - BODY_PATHS));
+        }
+    }
+    out.push_str(
+        "\nKeel's own paths only; your files were not touched. Edit any of these and Keel keeps \
+         your version; delete one and Keel does not restore it.\n",
+    );
+    out
+}
+
 /// What `/api/team/update` did.
 #[derive(Debug, Default, Serialize)]
 pub struct Updated {
@@ -223,6 +266,9 @@ pub struct Updated {
     pub not_restored: Vec<String>,
     /// Written, not committed: they held changes of the person's that were not committed yet.
     pub uncommitted: Vec<String>,
+    /// Not written at all (on open): they hold the person's uncommitted edits, so Keel waits
+    /// for their commit rather than changing a file they are in the middle of.
+    pub yours: Vec<String>,
     pub committed: Option<String>,
     pub note: Option<String>,
     /// The lane it was written in instead, because something else was writing the project's
@@ -259,14 +305,24 @@ fn update(state: &Arc<AppState>, agents: &[Agent]) -> Result<Updated, crate::wri
         .writer_of(&root)
         .is_none_or(|holder| holder.starts_with("keel:"))
     {
-        return write_team(state, &root, agents);
+        return write_team(state, &root, agents, By::Click);
     }
     let name = new_lane(&root).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let checkout = crate::worktree::path_of(&root, &name)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let mut done = write_team(state, &checkout, agents)?;
+    let mut done = write_team(state, &checkout, agents, By::Click)?;
     done.lane = Some(name);
     Ok(done)
+}
+
+/// The automatic update: the project root and nothing else. A busy tree is `CONFLICT` to wait
+/// out, never a side lane — a lane appearing unprompted is the "never weird" failure.
+pub(crate) fn update_in_place(
+    state: &Arc<AppState>,
+    agents: &[Agent],
+) -> Result<Updated, crate::writes::Failure> {
+    let root = state.repo();
+    write_team(state, &root, agents, By::Open)
 }
 
 /// A fresh lane cut from where the project stands: `team-update`, or the first free
@@ -291,6 +347,7 @@ fn write_team(
     state: &Arc<AppState>,
     root: &Utf8Path,
     agents: &[Agent],
+    by: By,
 ) -> Result<Updated, crate::writes::Failure> {
     let root = root.to_owned();
     let _held = crate::writes::hold(state, &root, "team")?;
@@ -303,9 +360,10 @@ fn write_team(
             ),
         ));
     }
-    let p = plan(&root, agents);
+    let mut p = plan(&root, agents);
     // Read before writing: a file holding anything of the person's that is not committed is
-    // written but not committed, or Keel's commit would carry their work.
+    // written but not committed, or Keel's commit would carry their work. On open it is not
+    // written at all: nobody asked, and an editor's "changed on disk" mid-edit is a surprise.
     let theirs: Vec<String> = p
         .replace
         .iter()
@@ -314,10 +372,15 @@ fn write_team(
         .cloned()
         .collect();
     let mut done = Updated {
-        kept: p.kept,
-        not_restored: p.not_restored,
+        kept: std::mem::take(&mut p.kept),
+        not_restored: std::mem::take(&mut p.not_restored),
         ..Updated::default()
     };
+    if by == By::Open {
+        done.yours = theirs.clone();
+        p.add.retain(|rel| !theirs.contains(rel));
+        p.replace.retain(|rel| !theirs.contains(rel));
+    }
     // Exactly what the plan listed, and nothing it did not: the panel said "commits only these
     // files", and adoption's other files (the production checklist, lint rules) are adoption's.
     let current: std::collections::HashMap<String, String> =
@@ -355,7 +418,17 @@ fn write_team(
         .partition(|p| !theirs.contains(p));
     done.uncommitted = uncommitted;
     if !ours.is_empty() {
-        let c = crate::writes::commit_only(&root, &ours, "Update the agent team");
+        let message = message(
+            by,
+            "Update the agent team",
+            "Update team",
+            &[
+                ("Replaced", &done.replaced),
+                ("Added", &done.added),
+                ("Kept, edited since Keel wrote it", &done.kept),
+            ],
+        );
+        let c = crate::writes::commit_only(&root, &ours, &message);
         done.committed = c.sha;
         done.note = c.note;
     }

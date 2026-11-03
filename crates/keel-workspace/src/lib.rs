@@ -21,6 +21,7 @@ mod config;
 pub mod conversation;
 mod follow;
 pub mod locations;
+pub mod moved;
 mod plugins;
 mod session_names;
 mod sessions;

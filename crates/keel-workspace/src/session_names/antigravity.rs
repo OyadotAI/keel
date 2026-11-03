@@ -22,10 +22,10 @@ pub(super) fn read(
         return Ok(None);
     };
     let workspaces: Vec<String> = serde_json::from_str(&workspaces).map_err(|e| e.to_string())?;
-    let uri = format!("file://{cwd}");
-    if !workspaces.contains(&uri)
-        && crate::antigravity::conversation(&home.join("conversations"), cwd, id).is_none()
-    {
+    let here = crate::moved::places(cwd)
+        .iter()
+        .any(|place| workspaces.contains(&format!("file://{place}")));
+    if !here && crate::antigravity::conversation(&home.join("conversations"), cwd, id).is_none() {
         return Err("The Antigravity session belongs to another checkout".into());
     }
     let text = annotation(home, id)?;

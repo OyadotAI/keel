@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { agentsIn } from "../team";
 import { get, post, type Endpoint } from "../api";
 import { useStore } from "../store";
+import { useAutoSetup } from "./auto-setup";
 import { repairLane } from "../repairs";
 
 interface Finding {
@@ -23,10 +24,12 @@ interface Report {
 
 const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
 
-function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
+function FindingCard({ finding, busy, onAdopt, auto, onFix, onIgnore }: {
   finding: Finding;
   busy: boolean;
   onAdopt: () => void;
+  /// A trusted project: Keel adds the team itself, and only a failed attempt gets a button.
+  auto?: { failed?: string | null; retry: () => void };
   onFix: (finding: Finding) => void;
   onIgnore: (finding: Finding) => void;
 }) {
@@ -39,7 +42,9 @@ function FindingCard({ finding, busy, onAdopt, onFix, onIgnore }: {
       {finding.path && <div className="small"><code>{finding.path}</code></div>}
       <div className="small">{finding.fix.description}</div>
       <div className="card-actions">
-        {finding.id === "agent/no-reviewers" ? (
+        {finding.id === "agent/no-reviewers" && auto ? (
+          auto.failed ? <button onClick={auto.retry} title={auto.failed}>Try again</button> : <span className="small muted">Keel adds the team on project open.</span>
+        ) : finding.id === "agent/no-reviewers" ? (
           <button className="primary" onClick={onAdopt} title="Write the agent team and the lifecycle into this project, never over a file">
             Add the team
           </button>
@@ -84,6 +89,7 @@ export function Readiness({ lane }: { lane: string }) {
   // fixed finding then leaves the list without anyone pressing "Check again".
   const stale = useStore((s) => (project ? s.readiness[project] : undefined));
   const [ep, setEp] = useState<Endpoint>();
+  const auto = useAutoSetup(project, ep);
   const [report, setReport] = useState<Report>();
   const [scopeFilter, setScopeFilter] = useState<FindingScope | "all">("all");
   const [error, setError] = useState<string>();
@@ -198,7 +204,7 @@ export function Readiness({ lane }: { lane: string }) {
               <div className="eyebrow setup-group-head">{label}</div>
               {items.length ? (
                 items.map((f) => (
-                  <FindingCard key={f.id + (f.path ?? "")} finding={f} busy={busy} onAdopt={adopt} onFix={fix} onIgnore={ignore} />
+                  <FindingCard key={f.id + (f.path ?? "")} finding={f} busy={busy} onAdopt={adopt} auto={auto} onFix={fix} onIgnore={ignore} />
                 ))
               ) : (
                 <div className="small muted readiness-empty">

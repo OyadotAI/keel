@@ -13,7 +13,26 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 - Defaulted new projects to Empty with optional names and a lazy, home-relative KeelWorkspace
   destination on macOS and Windows, with atomic folder reservation and creation retry receipts.
 
+### Added
+- In a trusted project Keel now adds or updates its agent team, skills and official-marketplace
+  plugins on its own — on open and when the tree frees — as commits of its own paths that say
+  Keel made them, and the Setup chip reports what it did. The team-update, install-default-team
+  and adopt buttons go away there; handing readiness findings to an agent stays a button because
+  it spends a turn. Untrusted projects keep every button, and the trust dialog names the change.
+
+- Opening a folder outside the Keel workspace offers, once, to move it in: one same-disk rename,
+  with its lane checkouts relinked, Claude Code's history renamed exactly (never by prefix), its
+  trust, rules and Keel-installed plugins carried, and Codex and Antigravity conversations still
+  found through a device-level record of the old path. "Keep it here" is remembered; the project
+  menu offers the move later. A folder that can never move (a submodule, another disk) opens
+  without a word, and a busy one says what to stop first.
+
 ### Fixed
+- A project folder moved by hand no longer loses its lanes: listing worktrees relinks the lane
+  checkouts before it prunes, where it used to prune every one of them.
+- A subagent launched from a chat lane kept its sidebar avatar spinning after it finished: the note
+  that ends it only reaches the transcript's queue, which the chat stream never carries. A chat
+  turn now ends every background agent it launched when the turn closes, for every agent.
 - Replaced retained subagent reports with automatic live terminal panes that disappear when their
   work finishes: numbered, bordered tiles with a header and footer each, output drawn the way the
   CLI draws it (bulleted prose, tool calls by name, results folded to a line), and every pane

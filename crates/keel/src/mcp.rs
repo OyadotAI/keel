@@ -232,9 +232,9 @@ pub async fn add(
             ".mcp.json",
             scope == "project",
             &args,
-            q.commit,
-            &message,
+            q.commit.then_some(message.as_str()),
             &tx,
+            None,
         )
         .await;
         // The other agents only after Claude's own add succeeded, and their result never changes
@@ -289,9 +289,9 @@ pub async fn remove(
             ".mcp.json",
             scope == "project",
             &args,
-            q.commit,
-            &message,
+            q.commit.then_some(message.as_str()),
             &tx,
+            None,
         )
         .await;
         if code == 0 && before.is_some() {

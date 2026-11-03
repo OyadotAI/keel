@@ -17,7 +17,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::{Value, json};
 
-use crate::{Kind, Real};
+use crate::Kind;
 
 mod observation;
 pub(crate) use observation::ObservationReader;
@@ -59,8 +59,8 @@ pub fn conversation(dir: &Utf8Path, cwd: &Utf8Path, id: &str) -> Option<Utf8Path
         return None;
     }
     let path = dir.join(format!("{id}.db"));
-    let real = cwd.real().unwrap_or_else(|_| cwd.to_owned());
-    let needles: Vec<Vec<u8>> = [cwd, real.as_path()]
+    // This workspace as given and resolved, and where it was before Keel moved it.
+    let needles: Vec<Vec<u8>> = crate::moved::places(cwd)
         .iter()
         .map(|c| workspace_field(c.as_str()))
         .collect();

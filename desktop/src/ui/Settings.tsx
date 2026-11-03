@@ -189,14 +189,14 @@ function TrustSection({ ep, project }: { ep: Endpoint; project: string }) {
       {error && <div className="error">{error}</div>}
       {p.trusted ? (
         <p>
-          <strong>Trusted.</strong> Agents can edit files, run commands, and use permitted MCP tools, including Keel Browser actions, without asking. Explicit deny rules still apply. Questions and plan decisions still need your answer.{agy && " Antigravity lanes don't apply your Read/Edit/Write path deny rules."}{" "}
+          <strong>Trusted.</strong> Agents can edit files, run commands, and use permitted MCP tools, including Keel Browser actions, without asking. Keel also keeps its agent team, skills and the official-marketplace plugins it suggests current here as its own commits. Explicit deny rules still apply. Questions and plan decisions still need your answer.{agy && " Antigravity lanes don't apply your Read/Edit/Write path deny rules."}{" "}
           <button onClick={() => change(() => post(ep, "/api/permissions/trust", { trusted: false }))}>Stop trusting</button>
         </p>
       ) : asking ? (
         <div className="card">
           <p>
             Trusting <code>{project}</code> lets the agent use <strong>permitted file edits, commands, and MCP tools in this project without asking you</strong> — installs,
-            deletes, network calls, browser actions — for as long as it is trusted. It applies to this project only, is shown while it holds, and you can withdraw it here.
+            deletes, network calls, browser actions — for as long as it is trusted. It also lets Keel keep its own agent team, skills and the suggested plugins from Anthropic's official marketplace installed and current here, as Keel's own commits, without asking. It applies to this project only, is shown while it holds, and you can withdraw it here.
           </p>
           {agy && <p className="small muted">In Antigravity lanes, deny rules from ~/.claude/settings.json still apply to commands, MCP tools and web fetches. Path rules (Read, Edit, Write with a path) do not.</p>}
           <div className="card-actions">

@@ -699,6 +699,72 @@ fn a_background_agent_works_until_its_notification() {
     );
 }
 
+/// A chat turn is one process, and it takes its background agents with it: an agent launched
+/// on a Claude chat stream and not heard from again is ended when the turn closes, while one
+/// whose note arrived mid-turn is ended once, by the note.
+#[test]
+fn a_chat_turns_background_agents_end_with_the_turn() {
+    let launched = |call: &str| {
+        let mut v: Value =
+            serde_json::from_str(&tool_result(call, "Async agent launched")).unwrap();
+        v["toolUseResult"] = json!({"status": "async_launched", "agentId": "a"});
+        v.to_string()
+    };
+    let note = "<task-notification>\n<task-id>a</task-id>\n<tool-use-id>c1</tool-use-id>\n<status>completed</status>\n</task-notification>";
+    let lines = [
+        opener("u-1", "scope and design it"),
+        tool_use(
+            "m1",
+            "c1",
+            "Agent",
+            json!({"subagent_type": "pm", "prompt": "scope"}),
+        ),
+        launched("c1"),
+        tool_use(
+            "m2",
+            "c2",
+            "Agent",
+            json!({"subagent_type": "designer", "prompt": "design"}),
+        ),
+        launched("c2"),
+        json!({"type": "queue-operation", "operation": "enqueue", "content": note}).to_string(),
+    ];
+    let mut d = Decoder::new(Provider::Claude, Source::Chat);
+    let now = Instant::now();
+    let mut ops: Vec<Op> = lines
+        .iter()
+        .flat_map(|l| d.feed(l, None, now))
+        .map(|f| f.op)
+        .filter(|op| matches!(op, Op::Background { .. }))
+        .collect();
+    ops.extend(
+        d.close(Ending::Done)
+            .into_iter()
+            .map(|f| f.op)
+            .filter(|op| matches!(op, Op::Background { .. })),
+    );
+    let ended: Vec<&str> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Background {
+                id, running: false, ..
+            } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended, vec!["c1", "c2"], "{ops:?}");
+    // A transcript being followed is a live process between turns: nothing is ended for it.
+    let mut d = Decoder::new(Provider::Claude, Source::Transcript);
+    for l in &lines[..3] {
+        d.feed(l, None, now);
+    }
+    assert!(
+        !d.close(Ending::Done)
+            .iter()
+            .any(|f| matches!(f.op, Op::Background { running: false, .. }))
+    );
+}
+
 /// A Codex chat turn's MCP call is a row named like Claude Code's, with its result — measured on
 /// codex 0.163 calling Keel's `browser_read`.
 #[test]

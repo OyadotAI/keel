@@ -463,6 +463,10 @@ button.link {
   }
 }
 .setup-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   height: 20px !important;
   padding: 0 8px !important;
   border: none !important;
@@ -2612,6 +2616,23 @@ h3 {
 }
 .setup-sev.info {
   color: var(--accent);
+}
+.setup-sev.quiet {
+  color: var(--faint);
+}
+/* The result of an automatic run: a sentence and its commits, not the installer's log. */
+.setup-result {
+  max-height: none;
+  white-space: normal;
+}
+.setup-result .link {
+  display: block;
+  margin: 4px 0 0 auto;
+  padding: 0;
+}
+.setup-status {
+  white-space: pre-wrap;
+  max-height: 48px;
 }
 .setup-group + .setup-group {
   margin-top: 6px;

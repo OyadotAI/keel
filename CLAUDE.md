@@ -760,13 +760,21 @@ Per-command approval on a repository somebody already owns is not a safety prope
 `--dangerously-skip-permissions`, which turns permissions off everywhere and permanently. So there
 is one decision that removes the whole class: **Trust this project**.
 
-- Scoped to one project, stored in its own `.keel/permissions.json`, and never the default. Every
-  path that could set it by accident — an older store with no such field, a file that will not
-  parse — reads as untrusted, and there is a test for each.
+- Scoped to one project, stored outside the repository under this user's own prefs directory
+  and keyed to the folder's identity (so a clone cannot arrive trusted), and never the default.
+  Every path that could set it by accident — an older store with no such field, a file that will
+  not parse — reads as untrusted, and there is a test for each.
 - Withdrawable, from the status bar, keeping the rules already approved. Granting something you
   cannot easily take back is a trap.
 - Visible while it holds. A permission granted once and then forgotten is the one that surprises
   you later, so a trusted project says so in the status bar for as long as it is true.
+- **It is also what lets Keel keep its own setup current without a click** (`setup.rs`): in a
+  trusted project the daemon adds or updates the agent team, skills and the official-marketplace
+  plugins on open and whenever the tree frees, as commits of its own paths with a body saying
+  so. Never in an untrusted project, never into a tree a turn is writing (it waits; it does not
+  open a side lane), never over an instructions file with the person's uncommitted edits, and
+  never the hand-off of readiness findings to an agent, which spends a turn and stays a button.
+  The Setup chip is where it reports, and the trust dialog names it.
 
 The dialog names what it grants rather than asking "are you sure", which tells nobody anything.
 

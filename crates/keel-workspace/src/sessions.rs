@@ -723,6 +723,11 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
                 if scope != "below" && s.cwd.is_none() {
                     s.cwd = Some(dir_of(&project, claude_home, repo, scope));
                 }
+                // A transcript written before Keel moved the project names the old folder; the
+                // lane, the name and the terminal claim are all about where it is now.
+                s.cwd = s
+                    .cwd
+                    .map(|c| crate::moved::current(Utf8Path::new(&c)).to_string());
                 if let Some(busy) = running.get(&s.id) {
                     s.live = true;
                     // No word from the process: the transcript's own recency stands in. Thirty

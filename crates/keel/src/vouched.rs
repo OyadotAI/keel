@@ -62,6 +62,44 @@ fn owner(root: &Utf8Path) -> Option<Utf8PathBuf> {
     Some(real)
 }
 
+/// Carry this machine's records from where a project was to where Keel moved it: a record is a
+/// hash of the project's path with the bytes, so a moved project's own plugins and servers read
+/// as nobody's and quarantine would set them aside on the next turn, without a word.
+pub fn relocate(from: &Utf8Path, to: &Utf8Path) -> Result<(), String> {
+    let store = store().ok_or("no home directory to keep the record in")?;
+    relocate_in(&store, from, to)
+}
+
+fn relocate_in(store: &Utf8Path, from: &Utf8Path, to: &Utf8Path) -> Result<(), String> {
+    let owner = owner(to).ok_or("the moved project could not be resolved")?;
+    let mut trees = vec![to.to_owned()];
+    if let Ok(dir) = std::fs::read_dir(to.join(crate::worktree::DIR)) {
+        trees.extend(
+            dir.flatten()
+                .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok()),
+        );
+    }
+    crate::writes::locked(store.as_std_path(), || {
+        let mut all = read(store);
+        let before = all.len();
+        for tree in &trees {
+            for (rel, _) in VOUCHABLE {
+                let Ok(bytes) = std::fs::read(tree.join(rel)) else {
+                    continue;
+                };
+                if all.contains(&digest(from, rel, &bytes)) {
+                    all.insert(digest(&owner, rel, &bytes));
+                }
+            }
+        }
+        if all.len() == before {
+            return Ok(());
+        }
+        let body = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
+        crate::writes::replace(store.as_std_path(), &body)
+    })?
+}
+
 fn vouch_in(store: &Utf8Path, root: &Utf8Path, rel: &str) -> Result<(), String> {
     let path = root.join(rel);
     let owner = owner(root).ok_or("the project folder could not be resolved")?;
@@ -97,16 +135,16 @@ pub fn prepare(root: &Utf8Path) -> Result<(), String> {
 
 /// After the CLI wrote `rel`: record it, and commit exactly it when asked. Returns the line to
 /// show — what happened to the file, in words.
-pub fn settle(root: &Utf8Path, rel: &str, commit: bool, message: &str) -> String {
+pub fn settle(root: &Utf8Path, rel: &str, commit: Option<&str>) -> String {
     if std::fs::symlink_metadata(root.join(rel)).is_err() {
         return format!("{rel} is gone — nothing to record.");
     }
     if let Err(why) = vouch(root, rel) {
         return format!("{why}. It will be quarantined before the next turn.");
     }
-    if !commit {
+    let Some(message) = commit else {
         return format!("Wrote {rel} in this project — not committed.");
-    }
+    };
     match crate::writes::commit_only(root, &[rel.to_string()], message) {
         crate::writes::Committed { sha: Some(sha), .. } => format!("Committed {rel} ({sha})."),
         crate::writes::Committed { note, .. } => format!(
@@ -167,15 +205,18 @@ pub async fn run(
     rel: &'static str,
     project: bool,
     args: &[String],
-    commit: bool,
-    message: &str,
+    commit: Option<&str>,
     tx: &tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    tap: Option<&tokio::sync::mpsc::Sender<String>>,
 ) -> i32 {
     use axum::response::sse::Event;
     use tokio::process::Command;
     let say = |line: String| {
-        let tx = tx.clone();
+        let (tx, tap) = (tx.clone(), tap.cloned());
         async move {
+            if let Some(tap) = tap {
+                let _ = tap.send(line.clone()).await;
+            }
             let _ = tx.send(Ok(Event::default().event("line").data(line))).await;
         }
     };
@@ -185,11 +226,13 @@ pub async fn run(
     let root = state.repo();
     let claude = || {
         let mut c = Command::new(crate::permissions::program("claude"));
-        c.current_dir(&root).args(args);
+        // A caller that stops waiting (the automatic setup's ceiling) ends the CLI with the
+        // future, rather than leaving it to run on holding the writer claim's file.
+        c.current_dir(&root).args(args).kill_on_drop(true);
         c
     };
     if !project {
-        return crate::plugins::pipe(&mut claude(), tx).await;
+        return crate::plugins::pipe(&mut claude(), tx, tap).await;
     }
     let held = match crate::writes::hold(state, &root, "project-config") {
         Ok(h) => h,
@@ -203,9 +246,9 @@ pub async fn run(
         say(why).await;
         return 1;
     }
-    let code = crate::plugins::pipe(&mut claude(), tx).await;
-    let (at, message) = (root.clone(), message.to_string());
-    let line = tokio::task::spawn_blocking(move || settle(&at, rel, commit, &message))
+    let code = crate::plugins::pipe(&mut claude(), tx, tap).await;
+    let (at, message) = (root.clone(), commit.map(str::to_string));
+    let line = tokio::task::spawn_blocking(move || settle(&at, rel, message.as_deref()))
         .await
         .unwrap_or_else(|_| format!("Could not record {rel}."));
     drop(held);

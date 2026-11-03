@@ -25,6 +25,7 @@ import { label, matches, type Chord } from "../keys";
 import { useIde } from "../ide";
 import { Explorer, IdeWorkspace, LayoutSwitch } from "./Ide";
 import { FileNavigation } from "./FileNavigation";
+import { MoveProject } from "./MoveProject";
 import { ideCommand } from "../ide-keys";
 import { MAC } from "../keys";
 
@@ -232,6 +233,7 @@ export function App() {
       {ideActive && navigation && lane && <FileNavigation key={`${lane}:${navigation}`} lane={lane} showCode={showCode} />}
       <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
+      <MoveProject />
     </div>
   );
 }

@@ -57,6 +57,10 @@ pub struct AppState {
     /// it got the claim — so the holder's checkpoint must know it is there, or its `git add -A`
     /// commits this one's half-written files under the holder's prompt.
     contending: std::sync::Mutex<std::collections::HashMap<String, Utf8PathBuf>>,
+    /// A writer claim was given back. The automatic setup (`setup.rs`) waits on it: a tree a
+    /// turn is writing is left alone, and this is how it learns the turn ended without polling.
+    /// `notify_one` keeps a permit when nobody is waiting, so a release mid-pass is not lost.
+    pub(crate) freed: tokio::sync::Notify,
 }
 
 /// One running turn: which checkout it is in, whether it can write to it, and what to signal.
@@ -133,6 +137,7 @@ impl AppState {
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
             followers: std::sync::Mutex::new(std::collections::HashMap::new()),
             contending: std::sync::Mutex::new(std::collections::HashMap::new()),
+            freed: tokio::sync::Notify::new(),
         }
     }
 
@@ -150,6 +155,7 @@ impl AppState {
             last_turn: std::sync::Mutex::new(std::collections::HashMap::new()),
             followers: std::sync::Mutex::new(std::collections::HashMap::new()),
             contending: std::sync::Mutex::new(std::collections::HashMap::new()),
+            freed: tokio::sync::Notify::new(),
         }
     }
 
@@ -486,6 +492,7 @@ impl AppState {
         self.running
             .locked()
             .remove(&crate::turns::terminal_lane(session));
+        self.freed.notify_one();
     }
 
     /// Whether a lane in some window is driving this session. A follower of such a session
@@ -574,6 +581,13 @@ impl AppState {
         let mut map = self.running.locked();
         if map.get(lane).map(|t| t.token) == Some(token) {
             map.remove(lane);
+            drop(map);
+            // A turn or a terminal leaving is what the setup watcher waits for. Keel's own holds
+            // (`writes::hold`) are not: the watcher's own write rang the bell it was about to
+            // sleep on, and a pass that could not write re-ran itself without end.
+            if !lane.starts_with("keel:") {
+                self.freed.notify_one();
+            }
         }
     }
 
@@ -585,6 +599,19 @@ impl AppState {
     #[cfg(test)]
     pub fn writer_in(&self, checkout: &Utf8Path) -> bool {
         self.writer_of(checkout).is_some()
+    }
+
+    /// Any claim — a lane's turn, a terminal session, one of Keel's own writes — on this checkout
+    /// or one under it, by its key: what a move of the whole folder has to wait for.
+    pub fn holder_under(&self, root: &Utf8Path) -> Option<String> {
+        let root = self
+            .claim_checkout(root)
+            .unwrap_or_else(|_| root.to_owned());
+        self.running
+            .locked()
+            .iter()
+            .find(|(_, t)| t.checkout.starts_with(&root))
+            .map(|(lane, _)| lane.clone())
     }
 
     /// Who holds this checkout's writer claim — a lane, `term:<session>`, or one of Keel's own
@@ -880,6 +907,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/adopt", axum::routing::post(crate::review::api_adopt))
         .route("/api/team", get(crate::team::api_team))
+        .route("/api/setup", get(crate::setup::api_status))
+        .route(
+            "/api/project/move",
+            get(crate::relocate::api_plan).post(crate::relocate::api_move),
+        )
+        .route("/api/setup/run", axum::routing::post(crate::setup::api_run))
         .route(
             "/api/team/update",
             axum::routing::post(crate::team::api_update),
@@ -1089,7 +1122,9 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
 
     // What happens outside Keel — a session started in a terminal, a file saved in an editor —
     // reaches the window through these.
-    crate::events::watch(state);
+    crate::events::watch(state.clone());
+    // A trusted project keeps Keel's own team, skills and suggested plugins current on its own.
+    crate::setup::watch(state);
     // The daily usage report LICENSE.md describes. Fails quietly; nothing waits on it.
     tokio::spawn(crate::license::report_daily());
 

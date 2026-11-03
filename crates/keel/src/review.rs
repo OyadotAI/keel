@@ -1039,6 +1039,9 @@ pub struct Adopted {
     pub committed: Option<String>,
     /// Why it was not committed, when a commit was asked for.
     pub note: Option<String>,
+    /// Not written (on open): instructions files holding the person's uncommitted edits.
+    #[serde(default)]
+    pub yours: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1059,7 +1062,7 @@ pub async fn api_adopt(
 ) -> Result<Json<Adopted>, crate::writes::Failure> {
     let failed = |e: String| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e);
     crate::serve::blocking(
-        move || adopt_and_commit(&state, &repo, query.commit),
+        move || adopt_and_commit(&state, &repo, query.commit, crate::team::By::Click),
         Err(failed("the write was cancelled".into())),
     )
     .await
@@ -1067,10 +1070,11 @@ pub async fn api_adopt(
 }
 
 /// Adopt under the tree's writer claim, then commit what Keel wrote — never the person's work.
-fn adopt_and_commit(
+pub(crate) fn adopt_and_commit(
     state: &Arc<AppState>,
     repo: &Utf8Path,
     commit: bool,
+    by: crate::team::By,
 ) -> Result<Adopted, crate::writes::Failure> {
     let _held = crate::writes::hold(state, repo, "adopt")?;
     // Read before writing: an instructions file holding anything of the person's that is not
@@ -1083,8 +1087,14 @@ fn adopt_and_commit(
         .filter_map(|(_, t)| t.ok().map(|(_, rel)| rel))
         .filter(|rel| !crate::writes::clean_before(repo, rel))
         .collect();
-    let mut done =
-        adopt_for(repo, &agents).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    // On open, a file the person is mid-edit in is theirs until they commit it.
+    let leave: Vec<String> = match by {
+        crate::team::By::Open => theirs.clone(),
+        crate::team::By::Click => Vec::new(),
+    };
+    let mut done = adopt_skipping(repo, &agents, &leave)
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    done.yours = leave;
     if commit {
         let (ours, kept): (Vec<String>, Vec<String>) = done
             .written
@@ -1093,7 +1103,13 @@ fn adopt_and_commit(
             .partition(|p| !theirs.contains(p));
         let mut notes = Vec::new();
         if !ours.is_empty() {
-            let c = crate::writes::commit_only(repo, &ours, "Add the agent team");
+            let message = crate::team::message(
+                by,
+                "Add the agent team",
+                "Add the team",
+                &[("Files", &ours)],
+            );
+            let c = crate::writes::commit_only(repo, &ours, &message);
             done.committed = c.sha;
             notes.extend(c.note);
         }
@@ -1119,6 +1135,16 @@ pub fn adopt(repo: &Utf8Path) -> Result<Adopted, String> {
 pub fn adopt_for(
     repo: &Utf8Path,
     agents: &[keel_generator::team::Agent],
+) -> Result<Adopted, String> {
+    adopt_skipping(repo, agents, &[])
+}
+
+/// [`adopt_for`], leaving the instructions files in `leave` (repository-relative, as resolved)
+/// unwritten: the automatic path's answer to a `CLAUDE.md` the person has uncommitted edits in.
+pub(crate) fn adopt_skipping(
+    repo: &Utf8Path,
+    agents: &[keel_generator::team::Agent],
+    leave: &[String],
 ) -> Result<Adopted, String> {
     let name = repo.file_name().unwrap_or("project").to_string();
     let ctx = keel_scanner::RepoContext::load(repo).ok();
@@ -1155,7 +1181,11 @@ pub fn adopt_for(
             Err(why) => skipped.push(format!("{rel} ({})", short(repo, &why))),
         }
     }
-    for (file, _) in instruction_targets(repo, agents) {
+    for (file, target) in instruction_targets(repo, agents) {
+        if target.as_ref().is_ok_and(|(_, rel)| leave.contains(rel)) {
+            skipped.push(format!("{file} (your uncommitted edits — left for you)"));
+            continue;
+        }
         match claude_md(repo, &name, file) {
             Ok(Some(rel)) if !written.contains(&rel) => written.push(rel),
             Ok(_) => skipped.push(format!("{file} (already says it)")),
@@ -1167,6 +1197,7 @@ pub fn adopt_for(
         skipped,
         committed: None,
         note: None,
+        yours: Vec::new(),
     })
 }
 
@@ -1738,7 +1769,7 @@ mod tests {
         crate::git::run(&root, &["commit", "-qm", "claude"]).unwrap();
         std::fs::write(root.join("CLAUDE.md"), "# x\nMY WIP\n").unwrap();
         let state = Arc::new(AppState::new(root.clone()));
-        let done = adopt_and_commit(&state, &root, true).unwrap();
+        let done = adopt_and_commit(&state, &root, true, crate::team::By::Click).unwrap();
         assert!(done.committed.is_some(), "{done:?}");
         assert!(
             done.note
@@ -1760,7 +1791,7 @@ mod tests {
     fn a_clean_tree_is_committed_whole() {
         let (_d, root) = git_repo();
         let state = Arc::new(AppState::new(root.clone()));
-        let done = adopt_and_commit(&state, &root, true).unwrap();
+        let done = adopt_and_commit(&state, &root, true, crate::team::By::Click).unwrap();
         assert!(done.committed.is_some() && done.note.is_none(), "{done:?}");
         let status = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
         assert!(status.trim().is_empty(), "{status}");
@@ -1814,7 +1845,7 @@ mod tests {
         crate::git::run(&root, &["add", "claude.md"]).unwrap();
         crate::git::run(&root, &["commit", "-qm", "c"]).unwrap();
         let state = Arc::new(AppState::new(root.clone()));
-        let done = adopt_and_commit(&state, &root, true).unwrap();
+        let done = adopt_and_commit(&state, &root, true, crate::team::By::Click).unwrap();
         assert!(done.committed.is_some() && done.note.is_none(), "{done:?}");
         assert!(done.written.iter().any(|w| w == "claude.md"), "{done:?}");
         let status = crate::git::run(&root, &["status", "--porcelain"]).unwrap();
@@ -1833,7 +1864,7 @@ mod tests {
         crate::git::run(&root, &["commit", "-qm", "l"]).unwrap();
         std::fs::write(root.join("notes/INSTR.md"), "# i\nPRIVATE\n").unwrap();
         let state = Arc::new(AppState::new(root.clone()));
-        let done = adopt_and_commit(&state, &root, true).unwrap();
+        let done = adopt_and_commit(&state, &root, true, crate::team::By::Click).unwrap();
         let shown = crate::git::run(&root, &["show", "HEAD:notes/INSTR.md"]).unwrap();
         assert!(!shown.contains("PRIVATE"), "{done:?}");
         assert!(

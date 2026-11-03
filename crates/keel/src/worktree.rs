@@ -331,9 +331,51 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
 /// while `worktree add` refused its name forever with `fatal: '<path>' is a missing but already
 /// registered worktree` — a state nothing in the app could reach or explain. `prune` clears
 /// exactly that, and is a no-op when there is nothing stale.
+///
+/// Repaired before it prunes. A lane's checkout is still on disk under `.keel/worktrees` when the
+/// project folder was moved — by hand, or by Keel — and git records both ends by absolute path,
+/// so after a move every lane reads as prunable. Pruning then deletes each lane's admin entry
+/// and its checkout is a folder of files with no repository behind it: measured, `git status`
+/// inside one fails with "gitfile does not point to a valid repository". `repair` relinks the
+/// ones that exist; `prune` still clears the ones that are really gone.
 fn registered(root: &Utf8Path) -> Vec<String> {
+    let _ = repair(root);
     let _ = git(root, &["worktree", "prune"]);
     names(root)
+}
+
+/// Relink every lane checkout under `.keel/worktrees` to this repository and confirm each one
+/// opens. `git worktree repair` exits 0 while printing problems, so its exit code is not the
+/// verdict; `rev-parse` inside each checkout is. Returns the checkouts that still do not open.
+pub fn repair(root: &Utf8Path) -> Result<(), String> {
+    let lanes: Vec<Utf8PathBuf> = std::fs::read_dir(root.join(DIR))
+        .map(|dir| {
+            dir.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter(|e| e.path().join(".git").is_file())
+                .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    if lanes.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["worktree", "repair"];
+    args.extend(lanes.iter().map(|p| p.as_str()));
+    let _ = git(root, &args);
+    let broken: Vec<String> = lanes
+        .iter()
+        .filter(|lane| git(lane, &["rev-parse", "--git-dir"]).is_err())
+        .map(|lane| lane.file_name().unwrap_or_default().to_string())
+        .collect();
+    if broken.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "lane checkouts that do not open: {}",
+            broken.join(", ")
+        ))
+    }
 }
 
 /// The lane checkouts git has registered, and nothing else: one read-only git call. The watcher
@@ -1056,6 +1098,26 @@ mod tests {
             before
         );
     }
+    /// A project folder moved by hand, lanes and all: listing it repairs the lanes rather than
+    /// pruning them. On the old code every lane was pruned and its checkout cut off.
+    #[test]
+    fn a_lane_moved_by_hand_is_repaired_not_pruned() {
+        let (_dir, root) = repo();
+        create(&root, "one").unwrap();
+        create(&root, "two").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let to = Utf8PathBuf::from_path_buf(elsewhere.path().join("project")).unwrap();
+        std::fs::rename(&root, &to).unwrap();
+        let mut found = list(&to).into_iter().map(|w| w.name).collect::<Vec<_>>();
+        found.sort();
+        assert_eq!(found, vec!["one".to_string(), "two".to_string()]);
+        for lane in ["one", "two"] {
+            git(&to.join(DIR).join(lane), &["status", "--porcelain"])
+                .expect("the lane still opens");
+        }
+        std::fs::rename(&to, &root).unwrap();
+    }
+
     fn repo() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
