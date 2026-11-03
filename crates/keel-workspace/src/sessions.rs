@@ -708,6 +708,8 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
     found.truncate(MAX_LISTED);
 
     let mut sessions: Vec<Session> = Vec::new();
+    // Read once per listing, not once per session.
+    let moved = crate::moved::records();
     for (at, p, scope) in found {
         let project = p.parent().map(|d| d.to_owned()).unwrap_or_default();
         {
@@ -727,7 +729,7 @@ pub fn discover_sessions(repo: &Utf8Path, claude_home: &Utf8Path) -> Vec<Session
                 // lane, the name and the terminal claim are all about where it is now.
                 s.cwd = s
                     .cwd
-                    .map(|c| crate::moved::current(Utf8Path::new(&c)).to_string());
+                    .map(|c| crate::moved::current_in(&moved, Utf8Path::new(&c)).to_string());
                 if let Some(busy) = running.get(&s.id) {
                     s.live = true;
                     // No word from the process: the transcript's own recency stands in. Thirty

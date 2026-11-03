@@ -1012,7 +1012,7 @@ export const useStore = create<State>()((set, getState, api) => {
       if (offer && fresh && !getState().moving && !declined().includes(path) && !(await invoke<boolean>("in_workspace", { path }).catch(() => true))) {
         save(getState());
         const ep = await endpoint(path).catch(() => undefined);
-        const plan = ep && (await get<MovePlan>(ep, "/api/project/move").catch(() => undefined));
+        const plan = ep && (await get<MovePlan>(ep, "/api/project/move", { opened: path }).catch(() => undefined));
         // A folder that can never move (a submodule, another disk) opens without a word.
         if (plan && !plan.refusal) return set({ moving: { from: path, to: plan.to, phase: "offer", auto: true } });
         if (plan?.refusal && !structural(plan.refusal)) return set({ moving: { from: path, to: plan.to, phase: "refused", refusal: plan.refusal, auto: true } });
@@ -1024,7 +1024,7 @@ export const useStore = create<State>()((set, getState, api) => {
     async offerMove(path) {
       const ep = await endpoint(path).catch(() => undefined);
       if (!ep) return;
-      const plan = await get<MovePlan>(ep, "/api/project/move").catch((e) => ({ from: path, to: path, refusal: { code: "rename", error: String(e) } as Refusal }));
+      const plan = await get<MovePlan>(ep, "/api/project/move", { opened: path }).catch((e) => ({ from: path, to: path, refusal: { code: "rename", error: String(e) } as Refusal }));
       set({ moving: { from: path, to: plan.to, phase: plan.refusal ? "refused" : "offer", refusal: plan.refusal ?? undefined, auto: false } });
     },
 
@@ -1044,9 +1044,9 @@ export const useStore = create<State>()((set, getState, api) => {
       let refusal: Refusal | undefined;
       try {
         if (!ep) throw new Error("Keel isn’t running for this project.");
-        done = await post<Moved>(ep, "/api/project/move");
+        done = await post<Moved>(ep, "/api/project/move", undefined, { opened: m.from });
       } catch (e) {
-        if (e instanceof HttpError && e.status === 409) {
+        if (e instanceof HttpError && /^\{"code"/.test(e.message)) {
           try { refusal = JSON.parse(e.message) as Refusal; } catch { refusal = { code: "rename", error: e.message }; }
         } else if (!(await invoke<boolean>("is_dir", { path: m.from }).catch(() => true)) && (await invoke<boolean>("is_dir", { path: m.to }).catch(() => false))) {
           // The reply was lost but the folder moved: carry on from where it is.

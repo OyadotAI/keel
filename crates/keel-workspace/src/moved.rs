@@ -49,7 +49,7 @@ pub fn places_in(records: &[Move], cwd: &Utf8Path) -> Vec<Utf8PathBuf> {
         for m in records {
             for place in &out {
                 if let Ok(rest) = place.strip_prefix(&m.to) {
-                    more.extend(m.from.iter().map(|f| Utf8Path::new(f).join(rest)));
+                    more.extend(vacant(m).map(|f| Utf8Path::new(f).join(rest)));
                 }
             }
         }
@@ -61,6 +61,15 @@ pub fn places_in(records: &[Move], cwd: &Utf8Path) -> Vec<Utf8PathBuf> {
     }
     out.dedup();
     out
+}
+
+/// The spellings of a former path that are still empty. A folder Keel moved leaves nothing
+/// behind, so anything at that path now — a fresh clone of the same name — is another project,
+/// and must not be read as this one or have its sessions filed under it.
+fn vacant(m: &Move) -> impl Iterator<Item = &String> {
+    m.from
+        .iter()
+        .filter(|f| std::fs::symlink_metadata(f.as_str()).is_err())
 }
 
 /// [`places_in`] with this device's record.
@@ -81,8 +90,7 @@ pub fn current_in(records: &[Move], path: &Utf8Path) -> Utf8PathBuf {
     let mut now = path.to_owned();
     for _ in 0..records.len() {
         let next = records.iter().find_map(|m| {
-            m.from
-                .iter()
+            vacant(m)
                 .find_map(|f| now.strip_prefix(f).ok())
                 .map(|rest| Utf8Path::new(&m.to).join(rest))
         });
@@ -133,6 +141,21 @@ mod tests {
             current_in(&records, Utf8Path::new("/a/app/src")),
             Utf8PathBuf::from("/c/app/src")
         );
+    }
+
+    /// A new project made at the old path is its own: neither read as the moved one, nor filed
+    /// under it.
+    #[test]
+    fn a_former_path_that_is_in_use_again_is_ignored() {
+        let d = tempfile::tempdir().unwrap();
+        let old = Utf8PathBuf::from_path_buf(d.path().join("app")).unwrap();
+        std::fs::create_dir(&old).unwrap();
+        let records = [moved(old.as_str(), "/ws/app")];
+        assert_eq!(
+            places_in(&records, Utf8Path::new("/ws/app")),
+            vec![Utf8PathBuf::from("/ws/app")]
+        );
+        assert_eq!(current_in(&records, &old), old);
     }
 
     #[test]

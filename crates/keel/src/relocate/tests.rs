@@ -136,17 +136,21 @@ fn a_moved_project_stays_trusted_and_its_former_path_is_recorded() {
     assert!(places.contains(&s.project.join("src")));
 }
 
+/// A lane that was already cut off before the move (its admin entry gone) is not this
+/// project's to relink, and does not stop the move: it used to, on every attempt.
 #[test]
-fn a_lane_that_cannot_be_relinked_puts_the_project_back() {
+fn an_already_broken_lane_does_not_block_the_move() {
     let s = scratch("app");
     crate::worktree::create(&s.project, "one").unwrap();
-    // Its admin entry gone: no repair can relink the checkout, so the move must not stand.
-    let admin = s.project.join(".git/worktrees/one");
-    std::fs::remove_dir_all(&admin).unwrap();
-    let refused = run(&state(&s.project), &s.project, &s.roots).unwrap_err();
-    assert!(matches!(refused, Refusal::Repair { .. }), "{refused:?}");
-    assert!(s.project.join("README.md").is_file(), "back where it was");
-    assert!(!s.roots.workspace.join("app").exists());
+    crate::worktree::create(&s.project, "two").unwrap();
+    std::fs::remove_dir_all(s.project.join(".git/worktrees/one")).unwrap();
+    let moved = run(&state(&s.project), &s.project, &s.roots).expect("moved");
+    let to = Utf8PathBuf::from(&moved.to);
+    crate::git::run(
+        &to.join(crate::worktree::DIR).join("two"),
+        &["status", "--porcelain"],
+    )
+    .expect("the healthy lane still opens");
 }
 
 #[test]
@@ -225,4 +229,18 @@ fn a_rename_error_names_what_a_person_can_do() {
     assert_eq!(refusal_of(&cross), Refusal::Volume);
     let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
     assert!(matches!(refusal_of(&other), Refusal::Rename { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_project_opened_through_a_link_is_never_moved() {
+    let s = scratch("app");
+    let link = s.project.with_file_name("alias");
+    std::os::unix::fs::symlink(&s.project, &link).unwrap();
+    assert!(matches!(
+        opened_link(Some(link.as_str())),
+        Some(Refusal::Link { .. })
+    ));
+    assert_eq!(opened_link(Some(s.project.as_str())), None);
+    assert_eq!(opened_link(None), None);
 }

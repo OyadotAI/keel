@@ -27,7 +27,7 @@ export function MoveProject() {
     <Dialog title="Moved into the Keel workspace" onClose={close}>
       <div ref={box}>
         <p>{name} is now at <code className="project-location">{m.to}</code>.</p>
-        <p>Terminals and editors that had the old folder open need to reopen it from here.</p>
+        <p>Terminals and editors that had the old folder open need to reopen it from here. Sign-ins in the Browser tab stay with the old place.</p>
         {m.warnings?.map((w) => <Banner key={w.step} tone="warn">{warningText(w)}</Banner>)}
       </div>
       <div className="actions">

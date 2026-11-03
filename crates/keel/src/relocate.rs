@@ -249,24 +249,15 @@ fn live_claude(claude: Option<&Utf8Path>, real: &Utf8Path) -> bool {
         .filter_map(|e| std::fs::read(e.path()).ok())
         .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .any(|v| {
-            let alive = v["pid"].as_i64().is_some_and(|p| live_pid(p as i32));
+            let alive = v["pid"]
+                .as_i64()
+                .is_some_and(|p| keel_workspace::pid_alive(p as i32));
             let here = v["cwd"].as_str().is_some_and(|c| {
                 let c = Utf8Path::new(c);
                 c.real().unwrap_or_else(|_| c.to_owned()).starts_with(real)
             });
             alive && here
         })
-}
-
-#[cfg(unix)]
-fn live_pid(pid: i32) -> bool {
-    keel_workspace::pid_alive(pid)
-}
-
-#[cfg(windows)]
-fn live_pid(_pid: i32) -> bool {
-    // ponytail: assumed alive on Windows, which only ever refuses; a real check wants OpenProcess.
-    true
 }
 
 /// What a move of `from` would do, without doing any of it.
@@ -460,14 +451,36 @@ fn merge(old: &Utf8Path, new: &Utf8Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The folder as the person opened it. The daemon serves its resolved path, so a project opened
+/// through a link would otherwise be moved out from under the link, which would then point at
+/// nothing — the one place the page's spelling decides anything.
+#[derive(serde::Deserialize)]
+pub struct Opened {
+    pub opened: Option<String>,
+}
+
+/// A refusal for a link the person opened, before anything else is looked at.
+fn opened_link(opened: Option<&str>) -> Option<Refusal> {
+    let path = Utf8Path::new(opened?);
+    let target = std::fs::read_link(path).ok()?;
+    Some(Refusal::Link {
+        target: target.to_string_lossy().into_owned(),
+    })
+}
+
 /// `GET /api/project/move`: where this project would go, or why it will not.
 pub async fn api_plan(
     State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<Opened>,
 ) -> Result<Json<Plan>, (StatusCode, String)> {
     blocking(
         move || {
             let roots = Roots::local().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            Ok(Json(plan(&state, &state.repo(), &roots)))
+            let mut plan = plan(&state, &state.repo(), &roots);
+            if let Some(link) = opened_link(q.opened.as_deref()) {
+                plan.refusal = Some(link);
+            }
+            Ok(Json(plan))
         },
         Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -481,9 +494,13 @@ pub async fn api_plan(
 /// daemon and opens one at the new path after a move.
 pub async fn api_move(
     State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<Opened>,
 ) -> Result<Json<Moved>, (StatusCode, Json<Refusal>)> {
     blocking(
         move || {
+            if let Some(link) = opened_link(q.opened.as_deref()) {
+                return Err((StatusCode::CONFLICT, Json(link)));
+            }
             let roots = Roots::local().map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

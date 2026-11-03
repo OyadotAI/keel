@@ -348,12 +348,49 @@ fn registered(root: &Utf8Path) -> Vec<String> {
 /// opens. `git worktree repair` exits 0 while printing problems, so its exit code is not the
 /// verdict; `rev-parse` inside each checkout is. Returns the checkouts that still do not open.
 pub fn repair(root: &Utf8Path) -> Result<(), String> {
+    // `.keel/worktrees` is inside the repository, so a clone can bring a folder there whose
+    // `.git` points into some other repository; repairing that would rewrite the other one's
+    // record. Only a checkout this repository already keeps an admin entry for is repaired, and
+    // never one whose link names a live folder outside this repository's git directory.
+    let Ok(common) = git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ) else {
+        return Ok(());
+    };
+    let common = Utf8PathBuf::from(common);
+    let ours = |lane: &Utf8Path| {
+        let Some(name) = lane.file_name() else {
+            return false;
+        };
+        if !common.join("worktrees").join(name).is_dir() {
+            return false;
+        }
+        let Ok(file) = std::fs::read_to_string(lane.join(".git")) else {
+            return false;
+        };
+        let Some(target) = file
+            .trim()
+            .strip_prefix("gitdir:")
+            .map(|t| Utf8PathBuf::from(t.trim()))
+        else {
+            return false;
+        };
+        let common_real = common
+            .canonicalize_utf8()
+            .unwrap_or_else(|_| common.clone());
+        match target.canonicalize_utf8() {
+            // Moved: the old place is gone, and the entry to relink is this repository's own.
+            Err(_) => target.file_name() == Some(name),
+            Ok(live) => live.starts_with(&common_real),
+        }
+    };
     let lanes: Vec<Utf8PathBuf> = std::fs::read_dir(root.join(DIR))
         .map(|dir| {
             dir.flatten()
                 .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-                .filter(|e| e.path().join(".git").is_file())
                 .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+                .filter(|lane| ours(lane))
                 .collect()
         })
         .unwrap_or_default();
@@ -1116,6 +1153,30 @@ mod tests {
                 .expect("the lane still opens");
         }
         std::fs::rename(&to, &root).unwrap();
+    }
+
+    /// A checkout a clone planted under `.keel/worktrees`, linked into another repository, is
+    /// left alone: repairing it would rewrite the other repository's worktree record.
+    #[test]
+    fn a_planted_checkout_never_reaches_another_repository() {
+        let (_d, root) = repo();
+        let (_v, victim) = repo();
+        create(&victim, "x").unwrap();
+        let admin = victim.join(".git/worktrees/x/gitdir");
+        let before = std::fs::read_to_string(&admin).unwrap();
+        let planted = root.join(DIR).join("x");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::write(
+            planted.join(".git"),
+            format!("gitdir: {}\n", victim.join(".git/worktrees/x")),
+        )
+        .unwrap();
+        let _ = repair(&root);
+        assert_eq!(
+            std::fs::read_to_string(&admin).unwrap(),
+            before,
+            "the other repository's record is untouched"
+        );
     }
 
     fn repo() -> (tempfile::TempDir, Utf8PathBuf) {

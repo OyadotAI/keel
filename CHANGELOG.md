@@ -28,6 +28,12 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   without a word, and a busy one says what to stop first.
 
 ### Fixed
+- A project opened through a symlink is no longer moved into the workspace: the move moved the
+  real folder and left the link pointing at nothing. Keel now says it is a link and leaves both.
+- Relinking lane checkouts now touches only this repository's own: a checkout a clone planted
+  under `.keel/worktrees`, linked into another repository, is left alone rather than repaired.
+- A new project made at a path Keel moved a project away from is its own, and no longer has its
+  sessions filed under the moved one.
 - A project folder moved by hand no longer loses its lanes: listing worktrees relinks the lane
   checkouts before it prunes, where it used to prune every one of them.
 - A subagent launched from a chat lane kept its sidebar avatar spinning after it finished: the note
