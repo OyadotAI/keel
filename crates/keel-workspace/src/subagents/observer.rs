@@ -235,12 +235,8 @@ pub(super) fn insert<'a>(
             .iter()
             .filter(|(_, entry)| !entry.current || !entry.invocation.status.active())
             .min_by(|a, b| a.1.version.cmp(&b.1.version))
-            .map(|(id, _)| id.clone());
-        if let Some(retired) = retired {
-            entries.remove(&retired);
-        } else {
-            return None;
-        }
+            .map(|(id, _)| id.clone())?;
+        entries.remove(&retired);
     }
     Some(entries.entry(id.clone()).or_insert_with(|| Entry {
         invocation: Invocation {
