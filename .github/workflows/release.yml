@@ -139,6 +139,7 @@ jobs:
       # network and fails on one without.
       - name: Notarise and staple the image
         run: |
+          sh packaging/test-staple-image.sh
           bundle=desktop/src-tauri/target/universal-apple-darwin/release/bundle
           mkdir -p out
           cp "$bundle"/dmg/*.dmg out/Keel.dmg
@@ -146,7 +147,7 @@ jobs:
           cp "$bundle/macos/Keel.app.tar.gz.sig" out/Keel.app.tar.gz.sig
           xcrun notarytool submit out/Keel.dmg --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_PASSWORD" --wait
-          xcrun stapler staple out/Keel.dmg
+          sh packaging/staple-image.sh out/Keel.dmg
 
       # Swift testers: an installed Swift build updates through Sparkle from appcast.xml on this
       # same feed. This app has the Swift app's bundle identifier and Team ID, so Sparkle accepts
