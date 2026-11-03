@@ -192,6 +192,15 @@ fn settings_are_ours(root: &camino::Utf8Path) -> bool {
     }
 }
 
+/// Whether `claude` can install a plugin. Never asked in a test: the real CLI is the network and
+/// this machine's account, and a test that reached it installed plugins into its scratch repos.
+async fn claude_ready() -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    crate::clitools::claude_ready().await
+}
+
 /// A holder's name as the chip says it: a lane is a turn, `term:` a terminal, `keel:` Keel.
 fn waiting_on(holder: &str) -> Waiting {
     let on = if holder.starts_with("term:") {
@@ -279,6 +288,12 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
     };
     let rec = record().locked().clone();
     let mut steps = due(&plan, &suggested, &rec, true, settings_ours);
+    // Plugins need a logged-in `claude`. Asked before anything else is decided, so a pass with
+    // only the person's edits in its way waits quietly instead of running for nothing on every
+    // wake — which is what it did on a machine where `claude` was not logged in.
+    if steps.iter().any(|s| matches!(s, Step::Plugin { .. })) && !claude_ready().await {
+        steps.retain(|s| !matches!(s, Step::Plugin { .. }));
+    }
     if steps.is_empty() {
         // Nothing to do: a wait is over, a result stays until the next open.
         update(|r| {
@@ -332,14 +347,6 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
             }
         });
         return;
-    }
-    if steps.iter().any(|s| matches!(s, Step::Plugin { .. }))
-        && !crate::clitools::claude_ready().await
-    {
-        steps.retain(|s| !matches!(s, Step::Plugin { .. }));
-        if steps.is_empty() {
-            return;
-        }
     }
     update(|r| {
         r.phase = Phase::Running;
