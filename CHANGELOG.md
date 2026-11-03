@@ -28,6 +28,11 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   without a word, and a busy one says what to stop first.
 
 ### Fixed
+- Replaced subagent tile scaling with a brief smoke-like reveal and dissolution, preserved pane
+  contents through closing, and smoothly retargeted interrupted grid movement. Child transcripts
+  now share the main terminal palette, including independently selected light and dark themes.
+- Made the checkout-busy explanation in Branches a prominent, readable warning above the list
+  while keeping search available and branch mutations protected.
 - A project opened through a symlink is no longer moved into the workspace: the move moved the
   real folder and left the link pointing at nothing. Keel now says it is a link and leaves both.
 - Relinking lane checkouts now touches only this repository's own: a checkout a clone planted

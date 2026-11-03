@@ -21,8 +21,9 @@ export function BranchList({ lane, ep, wt, branches, pending, running, act, erro
   const checkoutBusy = useStore((s) => Object.values(s.lanes).some((l) => l.project === s.lanes[lane]?.project && (l.wt ?? "") === (wt ?? "") && !!l.running));
   if (!branches) return <div className="panel-empty">{error ? <>{error}<button onClick={retry}>Retry</button></> : "Reading branches…"}</div>;
   const results = branchResults(branches, query, filter, sort);
-  const reason = wt ? "This lane owns its branch. Switch branches from a project-workspace lane." : running || checkoutBusy ? "An agent is using this checkout. Wait for it to finish or stop its turn before switching." : branches.restriction;
-  const disabled = pending || !!reason || !!switching;
+  const checkoutPaused = !wt && (running || checkoutBusy);
+  const reason = wt ? "This lane owns its branch. Switch branches from a project-workspace lane." : checkoutPaused ? undefined : branches.restriction;
+  const disabled = pending || checkoutPaused || !!reason || !!switching;
   async function mutate(action: string, target: string, kind?: string) {
     if (lock.current || disabled) return false;
     lock.current = true; setFailure(undefined); setSwitching(action === "checkout" ? `${kind}:${target}` : undefined);
@@ -44,6 +45,7 @@ export function BranchList({ lane, ep, wt, branches, pending, running, act, erro
     {error && <div className="branch-notice error" role="alert">Couldn’t refresh branches. Showing the last loaded list. <button onClick={retry}>Retry</button></div>}
     <div className="branch-search"><input className="field" aria-label="Search branches" placeholder="Find a branch…" value={query} onChange={(e) => setQuery(e.target.value)} />{query && <button aria-label="Clear branch search" onClick={() => setQuery("")}>Clear</button>}</div>
     <div className="branch-controls"><div className="segmented" role="group" aria-label="Branch filter">{(["all", "local", "remote"] as const).map((value) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div><label>Sort <select aria-label="Sort branches" value={sort} onChange={(e) => setSort(e.target.value as BranchSort)}><option value="name">Name</option><option value="commit">Latest commit</option></select></label></div>
+    <div role="status" aria-live="polite" aria-atomic="true">{checkoutPaused && <div className="branch-busy-notice"><Icon name="octagon" size={16} /><div><strong>Branch switching is paused</strong><p>An agent is using this checkout. Wait for its turn to finish, or stop the turn before switching.</p></div></div>}</div>
     <p className="branch-count small muted" role="status">{results.count} {results.count === 1 ? "branch" : "branches"}</p>
     {reason && <p className="branch-notice small muted">{reason}</p>}
     {failure && <p className="branch-notice error" role="alert">{failure}</p>}

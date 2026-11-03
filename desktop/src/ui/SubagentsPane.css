@@ -1,10 +1,17 @@
-/* Live terminal tiles: bordered, numbered, animated in and out, and the parent restored on completion. */
+/* Live terminal tiles form through a brief haze; terminal-owned tokens keep output readable. */
 .terminal-grid-shell { --pane-min-height: 160px; --pane-gap: 8px; position: relative; flex: 1; min-height: 0; min-width: 0; background: var(--child-bg); color: var(--child-fg); }
 .terminal-grid { display: grid; height: 100%; min-height: 0; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); overflow: auto; }
 .split .terminal-grid { grid-template-rows: repeat(var(--terminal-rows), minmax(var(--pane-min-height), 1fr)); gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); }
 .terminal-grid-main, .child-terminal-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--child-bg); color: var(--child-fg); }
-.split .terminal-grid-main, .child-terminal-pane { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
-.split .terminal-grid-main:focus-within { border-color: var(--accent); }
+.child-terminal-surface { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.terminal-grid-main { position: relative; overflow: visible; }
+.terminal-main-viewport { position: absolute; inset: 0 auto auto 0; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--child-bg); border-radius: inherit; }
+.split .terminal-main-viewport, .terminal-main-viewport[data-moving] { border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-strong); }
+.split .terminal-main-viewport:focus-within { box-shadow: inset 0 0 0 1px var(--accent); }
+.terminal-main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.terminal-grid-main .main-pane-chrome { box-sizing: border-box; height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border: 0; overflow: hidden; transition: height var(--pane-move-ms) cubic-bezier(.2,.8,.2,1); }
+.terminal-grid-main .terminal-pane-heading.is-visible { height: 30px; }
+.terminal-grid-main .terminal-pane-footer.is-visible { height: 26px; }
 .terminal-pane-heading, .terminal-pane-footer { display: flex; align-items: center; gap: 7px; flex: none; min-height: 30px; padding: 4px 10px; font-size: 11px; line-height: 1.4; background: var(--surface); }
 .terminal-pane-heading { border-bottom: 1px solid var(--line); }
 .terminal-pane-footer { border-top: 1px solid var(--line); color: var(--faint); min-height: 26px; }
@@ -15,17 +22,18 @@
 .terminal-pane-status { margin-left: auto; font-size: 10px; }
 .child-terminal-content { display: flex; flex: 1; flex-direction: column; position: relative; min-height: 0; }
 .child-terminal-output { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; user-select: text; font-family: var(--mono); font-size: var(--child-terminal-font); line-height: 1.45; }
-.child-terminal-note { margin: 6px 12px; font-size: 11px; opacity: .7; overflow-wrap: anywhere; }
+.child-terminal-note { margin: 6px 12px; font-size: 11px; color: var(--child-muted); overflow-wrap: anywhere; }
 /* Rows read like the CLI's: a mark in the gutter, the message beside it, results dimmed and folded. */
 .child-line { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; min-width: 0; }
 .child-line > :last-child { flex: 1; min-width: 0; }
-.child-mark { flex: none; width: 1em; text-align: center; opacity: .55; }
+.child-mark { flex: none; width: 1em; text-align: center; color: var(--child-muted); }
+.child-tool .child-mark, .child-tool b { color: var(--child-tool); }
 .child-tool b { font-weight: 600; }
 .child-tool span { overflow-wrap: anywhere; }
-.child-result { opacity: .75; }
+.child-result { color: var(--child-muted); }
 .child-result summary { display: flex; gap: 8px; cursor: pointer; list-style: none; min-width: 0; }
 .child-result summary::-webkit-details-marker { display: none; }
-.child-result summary > small { flex: none; opacity: .7; }
+.child-result summary > small { flex: none; color: var(--child-muted); }
 .child-result[open] summary > small { display: none; }
 .child-result pre { margin: 2px 0 0 calc(1em + 8px); }
 .child-code { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
@@ -35,16 +43,41 @@
 .child-prose .chat-markdown p, .child-prose .chat-markdown ul, .child-prose .chat-markdown ol { margin: 0 0 6px; }
 .child-terminal-latest, .terminal-grid-return { position: absolute; right: 12px; bottom: 10px; font-size: 11px; z-index: 1; }
 .terminal-grid-return { position: sticky; display: block; margin: -38px 12px 8px auto; bottom: 10px; width: max-content; }
-/* A pane arrives and leaves at its own slot: `useDeparting` keeps a finished one for PANE_CLOSE_MS, and
-   `useFlip` glides every other pane to its new box. The main pane is a canvas, so it moves with a
-   transform only: no filter, which on a terminal-sized surface costs the frames the glide needs. */
-.child-terminal-pane { animation: pane-open .36s cubic-bezier(.2, .8, .2, 1) both; transform-origin: center; }
-.child-terminal-pane.is-leaving { animation: pane-close .26s cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
-.child-terminal-pane.is-leaving .terminal-pane-order { background: var(--faint); }
-@keyframes pane-open { from { opacity: 0; transform: scale(.94) translateY(10px); } to { opacity: 1; transform: none; } }
-@keyframes pane-close { to { opacity: 0; transform: scale(.92); } }
+/* Only outer tiles move with the grid. An inner layer owns reveal/dissolution and the mist. */
+.child-terminal-pane {
+  --bg: var(--child-bg); --well: var(--child-bg); --surface: var(--child-surface); --chrome: var(--child-surface); --raised: var(--child-surface);
+  --text: var(--child-fg); --dim: var(--child-muted); --faint: var(--child-muted);
+  --line: var(--child-line); --line-strong: var(--child-line); --hairline: var(--child-line);
+  --accent: var(--child-link); --add: var(--child-string); --del: var(--child-error); --warn: var(--child-number);
+  position: relative; overflow: visible; background: transparent;
+}
+.child-terminal-surface { position: relative; isolation: isolate; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--child-bg); border-radius: 8px; }
+.child-terminal-pane.is-leaving { pointer-events: none; }
+.child-terminal-pane.is-leaving .terminal-pane-order { background: var(--child-muted); }
+.child-terminal-pane .terminal-pane-heading small, .child-terminal-pane .terminal-pane-footer small { color: var(--child-muted); opacity: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.child-terminal-pane .terminal-pane-heading > small { flex-shrink: 2; }
+.child-terminal-pane .terminal-pane-status { min-width: 0; overflow-wrap: anywhere; }
+.child-terminal-pane :focus-visible { outline: 2px solid var(--child-link); outline-offset: -2px; }
+.child-terminal-pane ::selection { background: var(--child-selection); }
+.child-terminal-pane .chat-markdown { color: var(--child-fg); }
+.child-terminal-pane .chat-markdown a { color: var(--child-link); text-decoration: underline; }
+.child-terminal-pane .chat-code-head, .child-terminal-pane .chat-copy { color: var(--child-muted); }
+.child-terminal-pane .chat-code code { color: var(--child-fg); }
+.child-terminal-pane .hljs-keyword, .child-terminal-pane .hljs-selector-tag, .child-terminal-pane .hljs-literal { color: var(--child-keyword); }
+.child-terminal-pane .hljs-string, .child-terminal-pane .hljs-attr, .child-terminal-pane .hljs-title { color: var(--child-string); }
+.child-terminal-pane .hljs-number, .child-terminal-pane .hljs-type, .child-terminal-pane .hljs-built_in { color: var(--child-number); }
+.child-terminal-pane .hljs-comment { color: var(--child-muted); }
+/* A feathered diagonal front materializes the surface; independent lobes linger after it. */
+.child-terminal-surface[data-motion] { mask-image: linear-gradient(165deg, #000 0%, #000 calc(50% - 24px), transparent calc(50% + 24px), transparent 100%); mask-size: 100% 300%; mask-repeat: no-repeat; }
+.child-terminal-smoke { display: none; position: absolute; inset: -12px; overflow: hidden; border-radius: 20px; pointer-events: none; z-index: 2; }
+.child-terminal-surface[data-motion] + .child-terminal-smoke { display: block; }
+.child-terminal-smoke i, .child-terminal-smoke span { position: absolute; inset: 25% -5% -15%; opacity: 0; transform-origin: 50% 80%; background: radial-gradient(ellipse at 40% 65%, color-mix(in srgb, var(--child-tool) 18%, transparent), transparent 62%), radial-gradient(ellipse at 65% 75%, color-mix(in srgb, var(--child-fg) 14%, transparent), transparent 55%); }
+.child-terminal-smoke i:nth-child(2) { inset: 10% -10% -5%; transform-origin: 70% 70%; }
+.child-terminal-smoke i:nth-child(3) { inset: 40% 10% -20%; transform-origin: 30% 90%; }
+.child-terminal-smoke span { inset: 10% 0; background: linear-gradient(165deg, transparent 38%, var(--child-tool) 49%, transparent 57%); }
 @media (prefers-reduced-motion: reduce) {
-  .child-terminal-pane, .child-terminal-pane.is-leaving { animation: none; }
-  .child-terminal-pane.is-leaving { opacity: 0; }
+  .child-terminal-smoke { display: none !important; }
+  .child-terminal-surface[data-motion] { mask-image: none; }
+  .terminal-grid-main .main-pane-chrome { transition: none; }
   .child-terminal-pane .member-avatar.is-working::after { animation: none; }
 }

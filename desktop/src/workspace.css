@@ -180,6 +180,11 @@ body { background: var(--workspace-bg); }
 .branch-meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--dim); font-size: 12px; margin: 5px 0; }
 .branch-subject { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .branch-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.branch-busy-notice { display: flex; align-items: flex-start; gap: 10px; margin: 8px 12px 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line)); border-left: 3px solid var(--warn); border-radius: var(--r-sm); background: color-mix(in srgb, var(--warn) 8%, var(--bg)); }
+.branch-busy-notice > svg { flex: none; color: var(--warn); margin-top: 2px; }
+.branch-busy-notice > div { min-width: 0; overflow-wrap: anywhere; }
+.branch-busy-notice strong { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
+.branch-busy-notice p { margin: 4px 0 0; color: var(--dim); font-size: 13px; line-height: 1.55; }
 .branch-actions > button { min-height: 32px; }
 .branch-occupancy { margin-top: 6px; overflow-wrap: anywhere; }
 .branch-occupancy .mono { display: block; white-space: normal; }

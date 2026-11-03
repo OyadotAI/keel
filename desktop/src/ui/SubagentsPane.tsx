@@ -5,9 +5,10 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { AGENT_NAME, useStore } from "../store";
 import { terminalLease } from "../typers";
 import { childrenOf, childScope, useChildPane, useChildReading, releaseGridText, SHORT_ID, type Invocation, type ChildOutput, type Shown } from "../subagents";
-import { gridColumns, useDeparting, useFlip, useLiveInvocations, useVisibleChildren } from "../subagents";
+import { gridColumns, useDeparting, useFlip, useLiveInvocations, useVisibleChildren, usePaneMotion, useReducedMotion, PANE_OPEN_MS, PANE_CLOSE_MS, PANE_MOVE_MS } from "../subagents";
 import { useGridOutput } from "../subagent-output";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
+import { terminalPaneColors } from "../terminal-palette";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { MemberAvatar } from "./MemberAvatar";
 import { Markdown } from "./Markdown";
@@ -21,7 +22,8 @@ const startedAt = (child: Invocation) => { const at = child.started ? new Date(c
 export function SubagentsPane({ lane, hidden, enabled = true, children }: { lane: string; hidden: boolean; enabled?: boolean; children?: ReactNode }) {
   const current = useStore((s) => s.lanes[lane]), ep = useStore((s) => current ? s.projects[current.project]?.endpoint : undefined);
   const scope = childScope(current), snapshot = enabled && current ? childrenOf(current) : undefined;
-  const live = useLiveInvocations(scope, snapshot), shown = useDeparting(enabled ? live : []), active = shown.filter((child) => !child.leaving);
+  const reduced = useReducedMotion();
+  const live = useLiveInvocations(scope, snapshot), shown = useDeparting(enabled ? live : [], scope, reduced ? 0 : PANE_CLOSE_MS), active = shown.filter((child) => !child.leaving);
   const view = useChildPane(scope), grid = useRef<HTMLDivElement>(null), main = useRef<HTMLElement>(null);
   const visible = useVisibleChildren(grid, active.map((child) => child.id), hidden);
   useGridOutput(lane, scope, visible, ep);
@@ -35,24 +37,27 @@ export function SubagentsPane({ lane, hidden, enabled = true, children }: { lane
     setWidth(node.clientWidth); observer.observe(node); return () => observer.disconnect();
   }, []);
   const total = shown.length + 1, columns = gridColumns(width, total), rows = Math.ceil(total / columns);
-  useFlip(grid, shown.map((child) => child.id).join() + "/" + columns);
-  const style = { "--terminal-columns": columns, "--terminal-rows": rows, "--child-terminal-font": font + "px", "--child-bg": dark ? "#141410" : "#fafaf8", "--child-fg": dark ? "#f4f3ef" : "#1c1c1a" } as CSSProperties;
+  useFlip(grid, shown.map((child) => child.id).join() + "/" + columns, reduced);
+  const style = { ...terminalPaneColors(dark), "--terminal-columns": columns, "--terminal-rows": rows, "--child-terminal-font": font + "px", "--pane-open-ms": PANE_OPEN_MS + "ms", "--pane-close-ms": PANE_CLOSE_MS + "ms", "--pane-move-ms": PANE_MOVE_MS + "ms" } as CSSProperties;
   const returnToMain = () => { main.current?.scrollIntoView({ block: "nearest" }); terminalLease(lane)?.focus(); };
   const agentName = current?.agent === "claude" ? "Claude Code" : AGENT_NAME[current?.agent ?? "claude"];
   return <div className={"terminal-grid-shell" + (shown.length ? " split" : "")} style={style}>
     <div ref={grid} className="terminal-grid" onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}>
       <section key="main" ref={main} className="terminal-grid-main" data-pane="main" aria-label="Main terminal">
-        {shown.length > 0 && <header className="terminal-pane-heading"><span className="terminal-pane-order">1</span><strong>{agentName} · Main</strong><small>you type here</small></header>}
-        {children}
-        {shown.length > 0 && <footer className="terminal-pane-footer"><span>{active.length} subagent{active.length === 1 ? "" : "s"} working</span><small>Esc in a pane returns here</small></footer>}
+        <div className="terminal-main-viewport" data-main-viewport>
+        <header aria-hidden={!shown.length} className={"terminal-pane-heading main-pane-chrome" + (shown.length ? " is-visible" : "")}><span className="terminal-pane-order">1</span><strong>{agentName} · Main</strong><small>you type here</small></header>
+        <div className="terminal-main-content" data-main-content>{children}</div>
+        <footer aria-hidden={!shown.length} className={"terminal-pane-footer main-pane-chrome" + (shown.length ? " is-visible" : "")}><span>{active.length} subagent{active.length === 1 ? "" : "s"} working</span><small>Esc in a pane returns here</small></footer>
+        </div>
       </section>
-      {shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} last={index === shown.length - 1} span={total % columns ? columns - total % columns + 1 : 1} />)}
+      {shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} last={index === shown.length - 1} span={total % columns ? columns - total % columns + 1 : 1} />)}
     </div>
     {shown.length > 0 && scrolled && <button className="terminal-grid-return" onClick={returnToMain}>Main terminal</button>}
   </div>;
 }
-function ChildPane({ lane, scope, child, order, connected, output, last, span }: { lane: string; scope: string; child: Shown; order: number; connected: boolean; output?: ChildOutput; last: boolean; span: number }) {
+function ChildPane({ lane, scope, child, reduced, order, connected, output, last, span }: { lane: string; scope: string; child: Shown; reduced: boolean; order: number; connected: boolean; output?: ChildOutput; last: boolean; span: number }) {
   const pane = useRef<HTMLElement>(null);
+  usePaneMotion(pane, !!child.leaving, reduced);
   useLayoutEffect(() => {
     const node = pane.current;
     return () => {
@@ -66,9 +71,12 @@ function ChildPane({ lane, scope, child, order, connected, output, last, span }:
   return <section ref={pane} className={"child-terminal-pane" + (child.leaving ? " is-leaving" : "")} data-pane={child.id} data-child-invocation={child.id} aria-hidden={child.leaving || undefined} style={last ? { gridColumn: "span " + span } : undefined} aria-label={nameOf(child) + " " + shortId(child) + " terminal"} onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); terminalLease(lane)?.focus(); }
   }}>
-    <header className="terminal-pane-heading"><span className="terminal-pane-order">{order}</span><MemberAvatar name={child.member ?? "subagent"} size={16} working={!child.leaving && (status === "working" || status === "waiting")} /><strong>{nameOf(child)}</strong><small>{shortId(child)}</small><span className="terminal-pane-status" role="status">{child.leaving ? "Finished · closing" : STATUS[status]}</span></header>
+    <div className="child-terminal-surface">
+    <header className="terminal-pane-heading"><span className="terminal-pane-order">{order}</span><MemberAvatar name={child.member ?? "subagent"} size={16} working={!child.leaving && (status === "working" || status === "waiting")} /><strong>{nameOf(child)}</strong><small>{shortId(child)}</small><span className="terminal-pane-status" role="status">{child.leaving ? "Closing" : STATUS[status]}</span></header>
     <ChildOutputView scope={scope} child={child} output={output} />
-    <footer className="terminal-pane-footer"><span>{child.activity || (child.leaving ? "Done" : "Waiting for the first step…")}</span>{started && <small>started {started}</small>}<small>Read only</small></footer>
+    <footer className="terminal-pane-footer"><span>{child.activity || (child.leaving ? "Closing" : "Waiting for the first step…")}</span>{started && <small>started {started}</small>}<small>Read only</small></footer>
+    </div>
+    <div className="child-terminal-smoke" aria-hidden="true"><i /><i /><i /><span /></div>
   </section>;
 }
 function ChildOutputView({ scope, child, output }: { scope: string; child: Invocation; output?: ChildOutput }) {

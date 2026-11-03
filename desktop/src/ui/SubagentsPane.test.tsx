@@ -42,3 +42,12 @@ it("connection loss retains unconfirmed output without advertising working activ
   expect(html).toContain("Output disconnected"); expect(html).not.toContain("<script>");
   expect(html).not.toContain("is-working");
 });
+it("the transcript owns terminal colors while safe Markdown, tool text and disclosures stay intact", () => {
+  patchChildOutput(scope, "codex:child:run-one", { detail: { items: [{ kind: "text", text: "A [link](https://example.com) and `inline code`.\n\n```js\nconst answer = 42;\n```" }, { kind: "tool", text: "Bash <img src=x onerror=alert(1)>" }, { kind: "result", text: "<script>alert(1)</script>\nmore output" }], availability: "available", truncated: false } });
+  const html = render();
+  expect(html).toContain("--child-bg:#fafaf8"); expect(html).toContain("--child-tool:#1b7a86");
+  expect(html).toContain("child-terminal-surface"); expect(html).toContain('href="https://example.com"');
+  expect(html).toContain("chat-code-head"); expect(html).toContain("Copy</button>"); expect(html).toContain("<details");
+  expect(html).toContain("&lt;img"); expect(html).toContain("&lt;script&gt;");
+  expect(html).not.toContain("<img"); expect(html).not.toContain("<script>");
+});

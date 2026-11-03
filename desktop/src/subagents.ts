@@ -2,8 +2,9 @@
 export * from "./subagents/model";
 export { paneOf, patchPane, patchChildOutput, reconcilePane, useChildPane, releaseGridText } from "./subagents/state";
 export type { ChildOutput, PaneState } from "./subagents/state";
-export { FOLLOW_DISTANCE, COMPACT_HEIGHT, SHORT_ID } from "./subagents/constants";
+export { FOLLOW_DISTANCE, COMPACT_HEIGHT, SHORT_ID, PANE_OPEN_MS, PANE_CLOSE_MS, PANE_MOVE_MS } from "./subagents/constants";
 export { useCompactChildren, useChildReading } from "./subagents/view";
 
 export { flipFrom, gridColumns, liveInvocations, useDeparting, useFlip, useLiveInvocations, useVisibleChildren, withDeparting } from "./subagents/grid";
 export type { Shown } from "./subagents/grid";
+export { usePaneMotion, useReducedMotion } from "./subagents/motion";

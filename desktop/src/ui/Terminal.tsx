@@ -7,6 +7,7 @@ import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
+import { terminalXtermTheme as theme } from "../terminal-palette";
 import { SubagentsPane } from "./SubagentsPane";
 import { TerminalFileSurface } from "./TerminalFileFeedback";
 
@@ -16,44 +17,6 @@ import { TerminalFileSurface } from "./TerminalFileFeedback";
 /// terminal is mostly escape sequences and input methods, and a home-made one gets both wrong.
 /// An agent terminal stays mounted while its lane is off screen (`hidden`): closing the socket
 /// ends the process, and switching lanes must never stop a turn.
-const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"] as const;
-
-/// Keel's two terminal palettes: background, text and all sixteen ANSI colours, from the same
-/// tokens as the window. Fixed values rather than read from the page, because the terminal's
-/// colours are a choice of their own (`terminal-theme`), which may differ from the window's.
-const PALETTES = {
-  light: {
-    background: "#fafaf8",
-    foreground: "#1c1c1a",
-    cursor: "#157a13",
-    selection: "rgba(21, 122, 19, 0.25)",
-    ansi: ["#1c1c1a", "#c0322a", "#16774a", "#9a5200", "#2f5fb3", "#8a3fa0", "#1b7a86", "#62625a", "#45453e", "#d5473e", "#157a13", "#b06a12", "#3d6fc7", "#9d52b3", "#238e9b", "#1c1c1a"],
-  },
-  dark: {
-    background: "#141410",
-    foreground: "#f4f3ef",
-    cursor: "#39ed35",
-    selection: "rgba(57, 237, 53, 0.25)",
-    ansi: ["#2c2c26", "#ff7b72", "#5cd39a", "#f2b544", "#79a8ff", "#d199ff", "#6fd3dd", "#babab0", "#62625a", "#ff9a92", "#7fe0b0", "#f7c96b", "#9cbfff", "#ddb3ff", "#93e2ea", "#f4f3ef"],
-  },
-};
-
-function theme(dark: boolean) {
-  const p = dark ? PALETTES.dark : PALETTES.light;
-  const out: Record<string, string> = {
-    background: p.background,
-    foreground: p.foreground,
-    cursor: p.cursor,
-    cursorAccent: p.background,
-    selectionBackground: p.selection,
-  };
-  ANSI.forEach((name, i) => {
-    out[name] = p.ansi[i];
-    out[`bright${name[0].toUpperCase()}${name.slice(1)}`] = p.ansi[i + 8];
-  });
-  return out;
-}
-
 /// `term::ELSEWHERE`: the close code for "this conversation is open in another process".
 const ELSEWHERE = 4001;
 
