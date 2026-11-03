@@ -5,6 +5,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Redesigned Settings with a project-trust summary first and section navigation, and opened a
+  shared confirmation dialog directly from workspace trust actions without leaving the project.
 - Measured supervised agent runtime and installation-scoped project activity in the anonymous daily
   license report, with bounded durable retries, crash checkpoints and explicit missing measurements.
 - Counted accepted steps for unmetered licenses while preserving free and capped-license refusals.

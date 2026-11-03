@@ -1,0 +1,201 @@
+// Existing connection, licensing and update controls stay mounted while Settings navigation moves.
+import { useCallback, useEffect, useRef, useState } from "react";
+import { get, post, url, type Endpoint } from "../api";
+import { open as openStream } from "../streams";
+import { useStore } from "../store";
+import { check, useUpdate } from "../update";
+import type { Meter } from "../setup";
+
+interface Claude {
+  installed: boolean;
+  version?: string | null;
+  authenticated: boolean;
+  account?: string | null;
+  plan?: string | null;
+}
+
+/** Retain installation and sign-in streams while the person moves between settings sections. */
+export function ClaudeSection({ ep }: { ep: Endpoint }) {
+  const [claude, setClaude] = useState<Claude>();
+  const [log, setLog] = useState<string[]>([]);
+  const [busy, setBusy] = useState<string>();
+  // The running install or login. Closed by Cancel and by leaving the page: a login waits on the
+  // browser for as long as it takes, and closing the stream is what ends the process behind it.
+  const stream = useRef<{ close(): void }>(undefined);
+  const read = useCallback(() => get<Claude>(ep, "/api/claude").then(setClaude, () => undefined), [ep]);
+  useEffect(() => {
+    void read();
+    return () => stream.current?.close();
+  }, [read]);
+  function cancel() {
+    stream.current?.close();
+    stream.current = undefined;
+    setBusy(undefined);
+    void read();
+  }
+  function run(action: "install" | "login") {
+    setBusy(action);
+    setLog([]);
+    stream.current = openStream(
+      url(ep, `/api/claude/${action}`),
+      ep.token,
+      (events) => {
+        const lines = events.filter((e) => e.event === "line" || e.event === "fatal").map((e) => String(e.data));
+        if (lines.length) setLog((l) => [...l, ...lines].slice(-200));
+      },
+      () => {
+        stream.current = undefined;
+        setBusy(undefined);
+        void read();
+      },
+    );
+  }
+  return (
+    <section className="settings-section">
+      {!claude ? (
+        <p className="muted">Checking…</p>
+      ) : !claude.installed ? (
+        <>
+          <p>Claude Code is not installed. Keel runs your own <code>claude</code>, so it needs it first.</p>
+          <button className="primary" disabled={!!busy} onClick={() => run("install")}>
+            {busy === "install" ? "Installing…" : "Install Claude Code"}
+          </button>
+        </>
+      ) : !claude.authenticated ? (
+        <>
+          <p>
+            Installed ({claude.version}), but not logged in. Logging in opens your browser; this page shows what it says.
+          </p>
+          <button className="primary" disabled={!!busy} onClick={() => run("login")}>
+            {busy === "login" ? "Waiting for the browser…" : "Log in"}
+          </button>
+        </>
+      ) : (
+        <p>
+          {claude.version} · logged in{claude.account ? ` as ${claude.account}` : ""}
+          {claude.plan ? ` · ${claude.plan}` : ""}
+        </p>
+      )}
+      {busy && (
+        <button className="link small" onClick={cancel}>
+          Cancel
+        </button>
+      )}
+      {log.length > 0 && <Log lines={log} />}
+    </section>
+  );
+}
+
+/// Output with its links clickable: a login prints the URL to finish it at.
+function Log({ lines }: { lines: string[] }) {
+  return (
+    <pre className="code">
+      {lines.map((l, i) => (
+        <div key={i}>
+          {l.split(/(https?:\/\/\S+)/).map((part, j) =>
+            /^https?:\/\//.test(part) ? (
+              <a key={j} href={part}>
+                {part}
+              </a>
+            ) : (
+              part
+            ),
+          )}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+/// "expires 2027-01-31", or "no expiry" for a key minted to the end of time.
+export const until = (expires: string | null) => (!expires ? "" : expires >= "9999" ? "no expiry" : `expires ${expires}`);
+
+/// The license key, pasted here rather than into a file. The daemon verifies it before saving,
+/// so a bad paste is refused with the reason and never replaces a key that works.
+export function LicenseSection({ ep }: { ep: Endpoint }) {
+  const [meter, setMeter] = useState<Meter | null>();
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => void get<Meter | null>(ep, "/api/license").then(setMeter, () => setMeter(null)), [ep]);
+  async function save() {
+    setBusy(true);
+    try {
+      const saved = await post<Meter>(ep, "/api/license", { key });
+      setMeter(saved);
+      setKey("");
+      setError(undefined);
+      // The key is machine-wide: every project's daily-limit warning is now stale, not just this one's.
+      useStore.setState((s) => ({ license: saved, setup: Object.fromEntries(Object.entries(s.setup).map(([p, w]) => [p, w.filter((x) => !x.id.startsWith("license/"))])) }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="settings-section">
+      <h2>License</h2>
+      {meter === undefined ? (
+        <p className="muted">Reading…</p>
+      ) : meter === null ? (
+        <p className="muted">Could not read the license.</p>
+      ) : meter.licensee ? (
+        <p>
+          Licensed to <strong>{meter.licensee}</strong> · {meter.cap == null ? "unlimited agent steps" : `${meter.steps} of ${meter.cap} agent steps today`} · {until(meter.expires)}
+        </p>
+      ) : (
+        <p>
+          Free tier · {meter.steps} of {meter.cap} agent steps today, reset at 00:00 UTC. Teams, companies and more steps: {meter.email}.
+        </p>
+      )}
+      {error && <div className="error">{error}</div>}
+      <div className="form-row">
+        <input className="field" style={{ margin: 0, flex: 1, maxWidth: "none" }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="keel1.…" aria-label="License key" spellCheck={false} />
+        <button className="primary" disabled={busy || !key.trim()} onClick={() => void save()}>
+          {busy ? "Checking…" : meter?.licensee ? "Replace key" : "Add key"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/// Which version this is, and whether a newer one exists — asked on demand as well as on the
+/// six-hourly check.
+export function UpdatesSection() {
+  const u = useUpdate();
+  const [version, setVersion] = useState<string>();
+  useEffect(() => {
+    void import("@tauri-apps/api/app").then((a) => a.getVersion()).then(setVersion, () => undefined);
+  }, []);
+  const said =
+    u.state === "checking"
+      ? "Checking…"
+      : u.state === "current"
+        ? "This is the latest version."
+        : u.state === "downloading"
+          ? `Downloading ${u.version}…`
+          : u.state === "ready"
+            ? `Keel ${u.version} is downloaded — choose Update now in the header to install it.`
+            : u.state === "installing"
+              ? `Installing Keel ${u.version}…`
+            : u.state === "failed"
+              ? `Could not check: ${u.why}`
+              : import.meta.env.DEV
+                ? "A development build does not update itself."
+                : "";
+  return (
+    <section className="settings-section">
+      <h2>Updates</h2>
+      <p className="small muted">
+        Keel {version ?? "…"} · checks for a new version at launch and every six hours, downloads it in the background, and installs it when you restart.
+      </p>
+      <div className="form-row">
+        <button onClick={() => void check()} disabled={u.state === "checking" || u.state === "downloading" || u.state === "ready" || u.state === "installing"}>
+          Check for updates
+        </button>
+        {said && <span className="small faint">{said}</span>}
+      </div>
+    </section>
+  );
+}

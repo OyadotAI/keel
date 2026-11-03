@@ -1,6 +1,6 @@
 // The workspace footer shares reported usage and activity with the sidebar and Context panel.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AGENT_NAME, useStore, type Agent, type Lane } from "../store";
+import { AGENT_NAME, projectTrust, useStore, type Agent, type Lane } from "../store";
 import { count } from "./Turn";
 import { Icon } from "./icons";
 import { label } from "../keys";
@@ -101,7 +101,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
             <Icon name="shield" size={14} /> Trusted
           </button>
         ) : (
-          <button onClick={() => useStore.setState({ settings: true })} title="Every command outside the allowlist asks first. Trusting the project lets the agent run them without asking.">
+          <button onClick={() => projectTrust.open(l.project)} title="Review and confirm trust for this project. Every command outside the allowlist asks first until you confirm.">
             <Icon name="shield" size={14} /> Trust this project…
           </button>
         ))}

@@ -21,6 +21,7 @@ import { composerAfterSend, submissionBlock, type FileReference } from "./chat-f
 import { requestChatFocus } from "./chat-focus";
 import { createReferenceActions } from "./reference-actions";
 import { createQuestionActions } from "./question-actions";
+import { createTrustController, type TrustRequest } from "./project-trust";
 import { acknowledgeQuestion, resolvedQuestion, type QuestionDrafts } from "./question-drafts";
 
 /// Keep reported totals while removing activity that a lost reader or exited process cannot vouch for.
@@ -224,6 +225,8 @@ interface State {
   extensionsSection?: "agents";
   /// Whether each project is trusted, for the marker that says so while it holds.
   trusted: Record<string, boolean>;
+  /** An unsaved, project-bound trust decision; never persisted with the workspace. */
+  trustRequest: TrustRequest | null;
   /// What is missing from each project's agent setup, for the warning that says so.
   setup: Record<string, Warning[]>;
   /// What the daemon's automatic setup did or is doing per project: the chip's source when trusted.
@@ -958,6 +961,7 @@ export const useStore = create<State>()((set, getState, api) => {
     shortcuts: false,
     extensions: false,
     trusted: {},
+    trustRequest: null,
     setup: {},
     setupRun: {},
     moving: null,
@@ -1489,6 +1493,16 @@ export const useStore = create<State>()((set, getState, api) => {
       }
     },
   };
+});
+
+/** Connect consent to the existing project daemon and publish only confirmed grants. */
+export const projectTrust = createTrustController({
+  read: () => useStore.getState().trustRequest,
+  put: (trustRequest) => useStore.setState({ trustRequest }),
+  exists: (project) => !!useStore.getState().projects[project],
+  ensure: (project) => useStore.getState().ensure(project),
+  grant: (ep) => post(ep, "/api/permissions/trust", { trusted: true }),
+  confirmed: (project) => useStore.setState((s) => s.projects[project] ? { trusted: { ...s.trusted, [project]: true } } : {}),
 });
 
 function sessionPatch(frames: Frame[]): Partial<Lane> {

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type S
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
-import { useStore, agentName } from "../store";
+import { useStore, agentName, projectTrust } from "../store";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
 import { Extensions } from "./Extensions";
@@ -26,6 +26,7 @@ import { useIde } from "../ide";
 import { Explorer, IdeWorkspace, LayoutSwitch } from "./Ide";
 import { FileNavigation } from "./FileNavigation";
 import { MoveProject } from "./MoveProject";
+import { TrustDialog } from "./TrustDialog";
 import { ideCommand } from "../ide-keys";
 import { MAC } from "../keys";
 
@@ -234,6 +235,7 @@ export function App() {
       <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
       <MoveProject />
+      <TrustDialog />
     </div>
   );
 }
@@ -407,7 +409,7 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
     out.push({ id: "focus", title: "Focus composer", keys: label({ key: "l" }), run: focusTerminal });
     out.push({ id: "shell", title: "Toggle the shell", keys: label({ key: "j" }), run: () => setShell((x) => !x) });
     TABS.forEach((t, i) => out.push({ id: `tab-${t}`, title: `Show ${t[0].toUpperCase()}${t.slice(1)}`, keys: label({ key: String(i + 1), alt: true }), run: () => showTab(t) }));
-    out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => useStore.setState({ settings: true }) });
+    out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => s.trusted[l.project] ? useStore.setState({ settings: true }) : projectTrust.open(l.project) });
   }
   out.push({ id: "shortcuts", title: "Keyboard shortcuts", keys: label({ key: "/" }), run: () => useStore.setState({ shortcuts: true }) });
   out.push({ id: "next-lane", title: "Next lane", keys: label({ key: "ArrowDown", alt: true }), run: () => cycle(1) });
