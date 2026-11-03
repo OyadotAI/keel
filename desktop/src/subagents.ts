@@ -1,6 +1,8 @@
 // Stable facade shares provider child evidence between terminal panes, lane activity, and members.
 export * from "./subagents/model";
-export { paneOf, patchPane, patchChildOutput, reconcilePane, useChildPane } from "./subagents/state";
+export { paneOf, patchPane, patchChildOutput, reconcilePane, useChildPane, releaseGridText } from "./subagents/state";
 export type { ChildOutput, PaneState } from "./subagents/state";
 export { FOLLOW_DISTANCE, COMPACT_HEIGHT, SHORT_ID } from "./subagents/constants";
 export { useCompactChildren, useChildReading } from "./subagents/view";
+
+export { gridColumns, liveInvocations, useLiveInvocations, useVisibleChildren } from "./subagents/grid";

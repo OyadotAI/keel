@@ -162,6 +162,20 @@ fn selected_output_contains_only_its_execution_and_never_raw_or_thinking_records
         .join("\n");
     assert!(text.contains("Allowed result"), "{text}");
     assert!(!text.contains("Other execution"));
+    let ids = vec![
+        "codex:child:one".into(),
+        "codex:child:two".into(),
+        "foreign".into(),
+    ];
+    let details = f.observer.details(&ids);
+    assert_eq!(details.len(), 2);
+    assert_eq!(details["codex:child:one"], detail);
+    assert!(
+        details["codex:child:two"]
+            .items
+            .iter()
+            .any(|line| line.text.contains("Other execution"))
+    );
 }
 #[test]
 fn claude_foreground_agent_calls_are_visible_and_their_results_remain_inspectable() {
@@ -178,6 +192,11 @@ fn claude_foreground_agent_calls_are_visible_and_their_results_remain_inspectabl
         "parent".into(),
     );
     assert_eq!(observer.snapshot().invocations[0].status, Status::Working);
+    assert!(
+        observer
+            .details(&["claude:call".into(), "foreign".into()])
+            .contains_key("claude:call")
+    );
     append(
         &path,
         json!({"type":"user","timestamp":"1","message":{"content":[{"type":"tool_result","tool_use_id":"call","content":"Final result"}]}}),
@@ -246,6 +265,11 @@ fn antigravity_reads_children_beyond_pending_parent_rows_and_distinguishes_missi
     assert_eq!(s.invocations.len(), 1);
     assert_eq!(s.invocations[0].status, Status::Working);
     assert_eq!(s.invocations[0].member.as_deref(), Some("pm"));
+    assert!(
+        observer
+            .details(&[s.invocations[0].id.clone()])
+            .contains_key(&s.invocations[0].id)
+    );
     child
         .execute("UPDATE steps SET status=3 WHERE idx=1", [])
         .unwrap();

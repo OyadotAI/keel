@@ -285,6 +285,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
     );
   return (
     <TerminalFileSurface lane={lane} agent={agent} hidden={hidden}>
+      <SubagentsPane lane={lane} hidden={hidden} enabled={agent}>
       {state !== "open" && (
         <div className="terminal-state small">
           {error ? (
@@ -315,7 +316,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       )}
       {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
       <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
-      {agent && <SubagentsPane lane={lane} hidden={hidden} />}
+      </SubagentsPane>
     </TerminalFileSurface>
   );
 }

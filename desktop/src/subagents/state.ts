@@ -1,7 +1,7 @@
 // Pane preferences survive collapse and lane changes without owning any provider execution.
 import { useEffect, useSyncExternalStore } from "react";
 import type { ChildDetail, ChildSnapshot } from "./model";
-import { OUTPUT_CACHE, PANE_CACHE } from "./constants";
+import { OUTPUT_CACHE, OUTPUT_CACHE_BYTES, PANE_CACHE } from "./constants";
 /** A reader can pause following and keep its position independently for each selected invocation. */
 export interface ChildOutput { detail?: ChildDetail; disconnected: boolean; top: number; following: boolean }
 /** One parent conversation owns its selected child, discovery state, and bounded output history. */
@@ -33,7 +33,23 @@ export function useChildPane(scope: string, snapshot?: ChildSnapshot): PaneState
 /** A failed output read preserves useful text and its reader position. */
 export function patchChildOutput(scope: string, id: string, patch: Partial<ChildOutput>): void {
   const before = paneOf(scope), outputs = { ...before.outputs };
-  outputs[id] = { ...(outputs[id] ?? { disconnected: false, top: 0, following: true }), ...patch };
+  const previous = outputs[id];
+  delete outputs[id];
+  outputs[id] = { ...(previous ?? { disconnected: false, top: 0, following: true }), ...patch };
   while (Object.keys(outputs).length > OUTPUT_CACHE) { const oldest = Object.keys(outputs).find((key) => key !== id)!; delete outputs[oldest]; }
+  let bytes = Object.values(outputs).reduce((sum, output) => sum + JSON.stringify(output.detail ?? "").length * 2, 0);
+  for (const key of Object.keys(outputs)) {
+    if (bytes <= OUTPUT_CACHE_BYTES) break;
+    if (key === id) continue;
+    bytes -= JSON.stringify(outputs[key].detail ?? "").length * 2;
+    outputs[key] = { ...outputs[key], detail: undefined };
+  }
   patchPane(scope, { outputs });
+}
+
+/** Hidden grids release retained transcript text while preserving each reader's position. */
+export function releaseGridText(scope: string): void {
+  const before = paneOf(scope);
+  if (!Object.values(before.outputs).some((output) => output.detail)) return;
+  patchPane(scope, { outputs: Object.fromEntries(Object.entries(before.outputs).map(([id, output]) => [id, { ...output, detail: undefined }])) });
 }

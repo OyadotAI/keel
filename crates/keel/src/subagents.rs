@@ -1,4 +1,5 @@
 //! Parent-scoped read-only child observation shares lifecycle readers without creating terminals.
+mod batch;
 use crate::serve::{Checkout, blocking};
 use axum::{
     extract::Query,
@@ -8,6 +9,8 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+pub(crate) use batch::REQUEST_BYTES as BATCH_REQUEST_BYTES;
+pub(crate) use batch::batch;
 use camino::Utf8Path;
 use keel_workspace::{
     Follows, Transcript,

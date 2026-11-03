@@ -4,6 +4,8 @@ use crate::{Follows, Transcript};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::BTreeMap;
 
+const OUTPUT_CACHE_LIMIT: usize = 16;
+
 /// Injectable provider roots keep scratch transcript tests independent of real account state.
 #[derive(Clone)]
 pub struct Roots {
@@ -51,7 +53,7 @@ pub struct Observer {
     adapter: Box<dyn Adapter>,
     entries: Entries,
     truncated: bool,
-    cached_output: Option<(String, u64, Detail)>,
+    cached_output: BTreeMap<String, (u64, Detail)>,
     minimum_started: Option<String>,
 }
 impl Observer {
@@ -82,7 +84,7 @@ impl Observer {
             adapter,
             entries: BTreeMap::new(),
             truncated: false,
-            cached_output: None,
+            cached_output: BTreeMap::new(),
             minimum_started: None,
         }
     }
@@ -200,6 +202,19 @@ impl Observer {
     /// Lookup by invocation identity cannot expose an arbitrary child session or filesystem path.
     pub fn detail(&mut self, id: &str) -> Option<Detail> {
         self.snapshot();
+        self.cached_detail(id)
+    }
+
+    /// A visible grid reads a bounded group after one lifecycle scan, without opening child PTYs.
+    pub fn details(&mut self, ids: &[String]) -> BTreeMap<String, Detail> {
+        self.snapshot();
+        ids.iter()
+            .take(super::OUTPUT_BATCH_LIMIT)
+            .filter_map(|id| self.cached_detail(id).map(|detail| (id.clone(), detail)))
+            .collect()
+    }
+
+    fn cached_detail(&mut self, id: &str) -> Option<Detail> {
         let entry = self.entries.get(id)?;
         if !output::authorized(entry) {
             return Some(Detail {
@@ -209,14 +224,20 @@ impl Observer {
             });
         }
         let stamp = output::signature(entry);
-        if let Some((old, version, detail)) = &self.cached_output
-            && old == id
+        if let Some((version, detail)) = self.cached_output.get(id)
             && *version == stamp
         {
             return Some(detail.clone());
         }
         let detail = output::read(entry);
-        self.cached_output = Some((id.to_string(), stamp, detail.clone()));
+        if self.cached_output.len() >= OUTPUT_CACHE_LIMIT
+            && !self.cached_output.contains_key(id)
+            && let Some(oldest) = self.cached_output.keys().next().cloned()
+        {
+            self.cached_output.remove(&oldest);
+        }
+        self.cached_output
+            .insert(id.to_string(), (stamp, detail.clone()));
         Some(detail)
     }
 }

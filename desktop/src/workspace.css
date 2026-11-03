@@ -440,28 +440,5 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .team-group ul { list-style: none; margin: 4px 0 0; padding: 0 0 0 14px; }
 .team-group li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Child observation scrolls independently while the parent PTY remains mounted. */
-.subagent-pane { flex: none; min-height: 32px; border-top: 1px solid var(--line); background: var(--surface); overflow: hidden; container-type: inline-size; }
-.subagent-pane.expanded { display: flex; flex-direction: column; height: min(33%, 280px); min-height: 140px; }
-.subagent-pane-toggle { display: flex; align-items: center; width: 100%; min-height: 32px; gap: 7px; border: 0; border-radius: 0; background: transparent; font-size: 11px; text-align: left; box-shadow: none; }
-.subagent-pane-toggle small { color: var(--faint); }
-.subagent-pane-body { display: grid; grid-template-columns: 190px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
-.subagent-list { overflow: auto; border-right: 1px solid var(--line); padding: 4px; }
-.subagent-list > p { padding: 4px; }
-.subagent-row { width: 100%; display: flex; align-items: flex-start; gap: 8px; border: 0; background: transparent; text-align: left; padding: 7px; box-shadow: none; }
-.subagent-row.selected { background: var(--tint); }
-.subagent-row > span:last-child { display: flex; flex-direction: column; min-width: 0; font-size: 11px; gap: 3px; }
-.subagent-row strong, .subagent-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-progress { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
-.subagent-progress > header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 7px 10px; font-size: 11px; }
-.subagent-progress > p { margin: 3px 10px; }
-.subagent-output { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 10px; }
-.subagent-output pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.6; user-select: text; }
-.subagent-output-tool { color: var(--dim); font-family: var(--mono); }
-.subagent-latest { position: absolute; bottom: 8px; right: 14px; }
-@container (max-width: 599px) {
-  .subagent-pane-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(48px, 35%) minmax(0, 1fr); }
-  .subagent-list { border-right: 0; border-bottom: 1px solid var(--line); }
-}
 /* Project destinations remain selectable and readable on both platform path formats. */
 .project-location { overflow-wrap: anywhere; user-select: text; }

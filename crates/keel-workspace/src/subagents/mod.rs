@@ -12,6 +12,9 @@ mod output;
 pub use model::{Availability, Detail, Invocation, OutputLine, Snapshot, Status};
 pub use observer::{Observer, Roots};
 
+/// Grid output requests share one bounded parent-authorized observation batch.
+pub const OUTPUT_BATCH_LIMIT: usize = 8;
+
 #[cfg(test)]
 mod tests;
 

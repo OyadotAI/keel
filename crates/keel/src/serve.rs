@@ -807,6 +807,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             get(crate::subagents::output),
         )
         .route(
+            "/api/session/subagents/output",
+            axum::routing::post(crate::subagents::batch).layer(
+                axum::extract::DefaultBodyLimit::max(crate::subagents::BATCH_REQUEST_BYTES),
+            ),
+        )
+        .route(
             "/api/session/rename",
             axum::routing::post(crate::names::rename),
         )

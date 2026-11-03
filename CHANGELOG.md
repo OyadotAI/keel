@@ -14,6 +14,7 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   destination on macOS and Windows, with atomic folder reservation and creation retry receipts.
 
 ### Fixed
+- Replaced retained subagent reports with automatic live terminal panes that disappear when their work finishes.
 - Restored terminal subagent indicators for resumed child turns and added a read-only Subagents
   pane with provider lifecycle status, bounded progress, retained results, and reconnect feedback.
 - Enabled validated Explorer file-path insertion into active Claude Code, Codex, and Antigravity

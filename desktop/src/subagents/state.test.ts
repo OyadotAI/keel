@@ -20,7 +20,16 @@ it("output failure preserves text, paused following, selection and reading posit
   module.patchPane("parent", { open: false }); module.patchPane("parent", { open: true });
   expect(module.paneOf("parent").outputs["run-one"].top).toBe(24);
 });
-it("selected caches are bounded while the current invocation remains retained", () => {
+it("four concurrent panes retain independent output and reading positions", () => {
   for (const id of ["one", "two", "three", "four"]) module.patchChildOutput("parent", id, { top: 1 });
-  expect(Object.keys(module.paneOf("parent").outputs)).toEqual(["two", "three", "four"]);
+  expect(Object.keys(module.paneOf("parent").outputs)).toEqual(["one", "two", "three", "four"]);
+});
+it("large cached output is evicted without removing reader identities", () => {
+  const detail = { items: [{ kind: "text", text: "x".repeat(200_000) }], availability: "available" as const, truncated: false };
+  for (let n = 0; n < 10; n++) module.patchChildOutput("parent", String(n), { detail, top: n });
+  const outputs = module.paneOf("parent").outputs;
+  expect(Object.keys(outputs)).toHaveLength(10);
+  expect(outputs["0"].detail).toBeUndefined();
+  expect(outputs["9"].detail).toEqual(detail);
+  expect(outputs["0"].top).toBe(0);
 });
