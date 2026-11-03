@@ -5,4 +5,5 @@ export type { ChildOutput, PaneState } from "./subagents/state";
 export { FOLLOW_DISTANCE, COMPACT_HEIGHT, SHORT_ID } from "./subagents/constants";
 export { useCompactChildren, useChildReading } from "./subagents/view";
 
-export { gridColumns, liveInvocations, useLiveInvocations, useVisibleChildren } from "./subagents/grid";
+export { flipFrom, gridColumns, liveInvocations, useDeparting, useFlip, useLiveInvocations, useVisibleChildren, withDeparting } from "./subagents/grid";
+export type { Shown } from "./subagents/grid";

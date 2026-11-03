@@ -22,7 +22,9 @@ it("gives every active child an independent read-only pane alongside the parent"
   const html = render();
   expect(html.match(/data-child-invocation=/g)).toHaveLength(3);
   expect(html).toContain("Codex · Main"); expect(html).toContain("Read only");
-  expect(html).toContain('data-parent-host="same"'); expect(html).toContain('data-reference-target=""');
+  expect(html.match(/terminal-pane-order">(\d)</g)).toEqual(['terminal-pane-order">1<', 'terminal-pane-order">2<', 'terminal-pane-order">3<', 'terminal-pane-order">4<']);
+  expect(html.match(/terminal-pane-footer/g)).toHaveLength(4); expect(html).toContain("3 subagents working");
+  expect(html).toContain('data-parent-host="same"'); expect(html).not.toContain('data-reference-target');
   expect(html).not.toContain("textarea"); expect(html).not.toContain("<input");
 });
 it("completed invocations do not leave a report or reduce the parent's space", () => {
@@ -33,9 +35,10 @@ it("completed invocations do not leave a report or reduce the parent's space", (
 });
 it("connection loss retains unconfirmed output without advertising working activity", () => {
   fake.state.lanes[source.id].subagents!.connected = false;
-  patchChildOutput(scope, "codex:child:run-one", { detail: { items: [{ kind: "text", text: "<script>Useful result</script>" }], availability: "available", truncated: true }, disconnected: true });
+  patchChildOutput(scope, "codex:child:run-one", { detail: { items: [{ kind: "text", text: "<script>Useful result</script>" }, { kind: "tool", text: "Bash cat notes.md" }, { kind: "result", text: "first line\nsecond line\nthird line\n" }], availability: "available", truncated: true }, disconnected: true });
   const html = render();
   expect(html).toContain("status unconfirmed"); expect(html).toContain("Useful result");
+  expect(html).toContain("<b>Bash</b>(cat notes.md)"); expect(html).toMatch(/<summary>.*first line.*\+2 lines.*<\/summary>/); expect(html).toContain("second line\nthird line");
   expect(html).toContain("Output disconnected"); expect(html).not.toContain("<script>");
   expect(html).not.toContain("is-working");
 });

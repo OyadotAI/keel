@@ -14,7 +14,12 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   destination on macOS and Windows, with atomic folder reservation and creation retry receipts.
 
 ### Fixed
-- Replaced retained subagent reports with automatic live terminal panes that disappear when their work finishes.
+- Replaced retained subagent reports with automatic live terminal panes that disappear when their
+  work finishes: numbered, bordered tiles with a header and footer each, output drawn the way the
+  CLI draws it (bulleted prose, tool calls by name, results folded to a line), and every pane
+  gliding to its new place as the split opens and closes.
+- Fixed a file dropped from the Explorer onto a subagent pane doing nothing; it now inserts into
+  the lane's main terminal like a drop anywhere else in it.
 - Restored terminal subagent indicators for resumed child turns and added a read-only Subagents
   pane with provider lifecycle status, bounded progress, retained results, and reconnect feedback.
 - Enabled validated Explorer file-path insertion into active Claude Code, Codex, and Antigravity

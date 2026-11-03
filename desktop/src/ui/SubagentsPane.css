@@ -1,17 +1,50 @@
-/* Live terminal tiles preserve readable minimums and restore the parent on completion. */
-.terminal-grid-shell { --pane-min-height: 160px; position: relative; flex: 1; min-height: 0; min-width: 0; background: var(--child-bg); color: var(--child-fg); }
+/* Live terminal tiles: bordered, numbered, animated in and out, and the parent restored on completion. */
+.terminal-grid-shell { --pane-min-height: 160px; --pane-gap: 8px; position: relative; flex: 1; min-height: 0; min-width: 0; background: var(--child-bg); color: var(--child-fg); }
 .terminal-grid { display: grid; height: 100%; min-height: 0; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); overflow: auto; }
-.split .terminal-grid { grid-template-rows: repeat(var(--terminal-rows), minmax(var(--pane-min-height), 1fr)); gap: 1px; background: var(--line); }
+.split .terminal-grid { grid-template-rows: repeat(var(--terminal-rows), minmax(var(--pane-min-height), 1fr)); gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); }
 .terminal-grid-main, .child-terminal-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--child-bg); color: var(--child-fg); }
-.terminal-pane-heading { display: flex; align-items: center; gap: 7px; flex: none; min-height: 30px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 11px; line-height: 1.4; }
+.split .terminal-grid-main, .child-terminal-pane { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.split .terminal-grid-main:focus-within { border-color: var(--accent); }
+.terminal-pane-heading, .terminal-pane-footer { display: flex; align-items: center; gap: 7px; flex: none; min-height: 30px; padding: 4px 10px; font-size: 11px; line-height: 1.4; background: var(--surface); }
+.terminal-pane-heading { border-bottom: 1px solid var(--line); }
+.terminal-pane-footer { border-top: 1px solid var(--line); color: var(--faint); min-height: 26px; }
+.terminal-pane-footer > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-pane-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-pane-heading small { opacity: .65; white-space: nowrap; }
+.terminal-pane-heading small, .terminal-pane-footer small { opacity: .65; white-space: nowrap; }
+.terminal-pane-order { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--child-bg); font-weight: 600; font-size: 10px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .terminal-pane-status { margin-left: auto; font-size: 10px; }
 .child-terminal-content { display: flex; flex: 1; flex-direction: column; position: relative; min-height: 0; }
-.child-terminal-output { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; user-select: text; }
-.child-terminal-output pre { margin: 0 0 12px; font-family: var(--mono); font-size: var(--child-terminal-font); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.child-terminal-output { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; user-select: text; font-family: var(--mono); font-size: var(--child-terminal-font); line-height: 1.45; }
 .child-terminal-note { margin: 6px 12px; font-size: 11px; opacity: .7; overflow-wrap: anywhere; }
-.child-terminal-tool { opacity: .7; }
+/* Rows read like the CLI's: a mark in the gutter, the message beside it, results dimmed and folded. */
+.child-line { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; min-width: 0; }
+.child-line > :last-child { flex: 1; min-width: 0; }
+.child-mark { flex: none; width: 1em; text-align: center; opacity: .55; }
+.child-tool b { font-weight: 600; }
+.child-tool span { overflow-wrap: anywhere; }
+.child-result { opacity: .75; }
+.child-result summary { display: flex; gap: 8px; cursor: pointer; list-style: none; min-width: 0; }
+.child-result summary::-webkit-details-marker { display: none; }
+.child-result summary > small { flex: none; opacity: .7; }
+.child-result[open] summary > small { display: none; }
+.child-result pre { margin: 2px 0 0 calc(1em + 8px); }
+.child-code { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.child-prose .chat-markdown { font: inherit; }
+.child-prose .chat-markdown > :first-child { margin-top: 0; }
+.child-prose .chat-markdown > :last-child { margin-bottom: 0; }
+.child-prose .chat-markdown p, .child-prose .chat-markdown ul, .child-prose .chat-markdown ol { margin: 0 0 6px; }
 .child-terminal-latest, .terminal-grid-return { position: absolute; right: 12px; bottom: 10px; font-size: 11px; z-index: 1; }
 .terminal-grid-return { position: sticky; display: block; margin: -38px 12px 8px auto; bottom: 10px; width: max-content; }
-@media (prefers-reduced-motion: reduce) { .child-terminal-pane .member-avatar.is-working::after { animation: none; } }
+/* A pane arrives and leaves at its own slot: `useDeparting` keeps a finished one for PANE_CLOSE_MS, and
+   `useFlip` glides every other pane to its new box. The main pane is a canvas, so it moves with a
+   transform only: no filter, which on a terminal-sized surface costs the frames the glide needs. */
+.child-terminal-pane { animation: pane-open .36s cubic-bezier(.2, .8, .2, 1) both; transform-origin: center; }
+.child-terminal-pane.is-leaving { animation: pane-close .26s cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
+.child-terminal-pane.is-leaving .terminal-pane-order { background: var(--faint); }
+@keyframes pane-open { from { opacity: 0; transform: scale(.94) translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pane-close { to { opacity: 0; transform: scale(.92); } }
+@media (prefers-reduced-motion: reduce) {
+  .child-terminal-pane, .child-terminal-pane.is-leaving { animation: none; }
+  .child-terminal-pane.is-leaving { opacity: 0; }
+  .child-terminal-pane .member-avatar.is-working::after { animation: none; }
+}
