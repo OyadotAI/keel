@@ -1,0 +1,156 @@
+<!-- Oya's product-family landing page; native links keep every destination usable without scripts. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oya — Tools for working with agents</title>
+  <meta name="description" content="A workspace to build. A browser to act. A team to review. Explore Keel, Oya Browser, and Keel Reviewer.">
+  <meta name="theme-color" content="#fbfaf8">
+  <meta property="og:title" content="Oya — Give your agents room to work.">
+  <meta property="og:description" content="Meet Keel, Oya Browser, and Keel Reviewer. Three tools for working with agents.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://oya.dev/">
+  <link rel="canonical" href="https://oya.dev/">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="assets/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="illustrations.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="arrow-up-right" viewBox="0 0 24 24"><path d="M5 19 19 5M5 5h14v14"/></symbol>
+    <symbol id="arrow-down-right" viewBox="0 0 24 24"><path d="m5 5 14 14M5 19h14V5"/></symbol>
+    <symbol id="branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 8v8m12-8v1a6 6 0 0 1-6 6H6"/></symbol>
+    <symbol id="cursor" viewBox="0 0 24 24"><path d="m5 3 14 9-7 1-3 7L5 3Z"/></symbol>
+    <symbol id="document" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M9 12h6m-6 4h6"/></symbol>
+    <symbol id="play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8V4Z"/></symbol>
+    <symbol id="comment" viewBox="0 0 24 24"><path d="M21 4H3v13h5v4l5-4h8V4ZM7 9h10M7 13h6"/></symbol>
+  </svg>
+
+  <header class="site-header container">
+    <a class="wordmark" href="#" aria-label="Oya home">oya<span>.dev</span></a>
+    <nav aria-label="Products">
+      <a href="#keel">Keel</a>
+      <a href="#oya-browser">Oya Browser</a>
+      <a href="#keel-reviewer">Keel Reviewer</a>
+    </nav>
+    <a class="header-source" href="https://github.com/OyadotAI" aria-label="Oya on GitHub">GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main id="main">
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Tools for working with agents</p>
+        <h1 id="hero-title">Give your agents<br><span>room to work.</span></h1>
+        <p class="hero-description">A workspace to build. A browser to act. A team to review.<br class="desktop-break"> Meet three tools that bring your agents into the work.</p>
+      </div>
+      <div class="product-directory" aria-label="Explore the products">
+        <p class="directory-label">The Oya collection <span aria-hidden="true">/ 03</span></p>
+        <a class="directory-item" href="#keel">
+          <span class="directory-number">01</span>
+          <span><strong>Keel</strong><small>Build in a dedicated workspace</small></span>
+          <svg class="icon" aria-hidden="true"><use href="#arrow-down-right"/></svg>
+        </a>
+        <a class="directory-item browser-link" href="#oya-browser">
+          <span class="directory-number">02</span>
+          <span><strong>Oya Browser</strong><small>Put agents in a real browser</small></span>
+          <svg class="icon" aria-hidden="true"><use href="#arrow-down-right"/></svg>
+        </a>
+        <a class="directory-item reviewer-link" href="#keel-reviewer">
+          <span class="directory-number">03</span>
+          <span><strong>Keel Reviewer</strong><small>Bring the team to your pull requests</small></span>
+          <svg class="icon" aria-hidden="true"><use href="#arrow-down-right"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <section class="product-section keel-section container" id="keel" aria-labelledby="keel-title">
+      <div class="section-label"><p><span>01 / Build</span> Keel</p><span class="category">Desktop workspace</span></div>
+      <div class="product-intro">
+        <h2 id="keel-title">Your coding agent.<br>A whole team around it.</h2>
+        <div class="product-copy">
+          <p>Bring planning, design, implementation, and review into one desktop workspace. Keep tasks in separate lanes, inspect changes as they happen, and run your repository’s own checks.</p>
+          <div class="actions">
+            <a class="button" href="https://github.com/OyadotAI/keel-releases/releases/latest">Get Keel <svg class="icon" aria-hidden="true"><use href="#arrow-up-right"/></svg></a>
+            <a class="text-link" href="https://github.com/OyadotAI/keel">View source <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="product-note">Source available <span aria-hidden="true">·</span> <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE.md">License terms</a></p>
+        </div>
+      </div>
+      <figure class="workspace-figure">
+        <div class="workspace-surround"><img src="assets/keel-workspace.png" width="1600" height="1000" alt="Keel desktop workspace with separate task lanes, a coding-agent conversation, and changed files and check results in the review panel." loading="lazy" decoding="async"></div>
+        <figcaption><span>The Keel workspace</span><span>Separate lanes. Visible changes. Your checks.</span></figcaption>
+      </figure>
+      <div class="keel-details">
+        <p><svg class="icon" aria-hidden="true"><use href="#branch"/></svg> A branch for every task</p>
+        <p><svg class="icon" aria-hidden="true"><use href="#document"/></svg> Changes you can inspect</p>
+        <p><svg class="icon" aria-hidden="true"><use href="#comment"/></svg> Approvals in the conversation</p>
+      </div>
+    </section>
+
+    <section class="product-section browser-section container" id="oya-browser" aria-labelledby="browser-title">
+      <div class="section-label"><p><span>02 / Browse</span> Oya Browser</p><span class="category">Browser for agents</span></div>
+      <div class="browser-layout">
+        <figure class="browser-figure">
+          <div class="browser-frame">
+            <div class="browser-chrome" aria-hidden="true"><span class="window-dots"><i></i><i></i><i></i></span><span>oya browser</span><span>↗</span></div>
+            <div class="browser-address"><span aria-hidden="true">⌁</span> Your signed-in workspace</div>
+            <div class="playbook">
+              <div class="playbook-heading"><span class="small-label">From task to playbook</span><span class="workflow-badge">Repeatable by design</span></div>
+              <ol class="playbook-steps">
+                <li><span class="step-icon"><svg class="icon" aria-hidden="true"><use href="#cursor"/></svg></span><div><span class="step-number">Step 01</span><strong>Record task</strong><p>Start with the work you already do.</p></div></li>
+                <li><span class="step-icon"><svg class="icon" aria-hidden="true"><use href="#document"/></svg></span><div><span class="step-number">Step 02</span><strong>Save playbook</strong><p>Turn the sequence into a repeatable run.</p></div></li>
+                <li><span class="step-icon"><svg class="icon" aria-hidden="true"><use href="#play"/></svg></span><div><span class="step-number">Step 03</span><strong>Replay with inputs</strong><p>Same workflow. The next set of inputs.</p></div></li>
+              </ol>
+            </div>
+            <div class="browser-footnote"><span>Desktop / SDK / MCP</span><span aria-hidden="true">↳</span></div>
+          </div>
+          <figcaption>Illustrative workflow</figcaption>
+        </figure>
+        <div class="browser-copy">
+          <p class="eyebrow">Take the work to the web</p>
+          <h2 id="browser-title">A real browser.<br>Ready for your agents.</h2>
+          <p class="body-copy">Work in signed-in sessions, record repeatable tasks, and replay them with new inputs. Connect through the desktop app, SDK, or MCP.</p>
+          <div class="actions">
+            <a class="button browser-button" href="https://oyabrowser.com">Explore Oya Browser <svg class="icon" aria-hidden="true"><use href="#arrow-up-right"/></svg></a>
+            <a class="text-link" href="https://oyabrowser.com/docs">Read the docs <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="reviewer-section" id="keel-reviewer" aria-labelledby="reviewer-title">
+      <div class="container">
+        <div class="section-label"><p><span>03 / Review</span> Keel Reviewer</p><span class="category">Pull request reviews</span></div>
+        <div class="reviewer-layout">
+          <div class="reviewer-copy">
+            <p class="eyebrow">Another perspective on every change</p>
+            <h2 id="reviewer-title">The team is in<br>your pull request.</h2>
+            <p class="body-copy">Run specialist reviews in sequence and collect the result in one PR comment, updated on each push.</p>
+            <a class="button reviewer-button" href="https://github.com/OyadotAI/keel/tree/main/packaging/action/review">Set up Keel Reviewer <svg class="icon" aria-hidden="true"><use href="#arrow-up-right"/></svg></a>
+            <p class="reviewer-boundary">Inspects code and diffs.<br>Does not execute tests or change files.</p>
+          </div>
+          <figure class="review-flow">
+            <div class="review-flow-header"><span class="small-label">From diff to discussion</span><span class="diagram-label">Illustrative flow</span></div>
+            <ol class="review-stages">
+              <li><span class="review-node"><svg class="icon" aria-hidden="true"><use href="#branch"/></svg></span><div><span class="small-label">The input</span><strong>Checkout + diff</strong></div></li>
+              <li><span class="review-node"><svg class="icon" aria-hidden="true"><use href="#document"/></svg></span><div><span class="small-label">A sequence of perspectives</span><strong>Specialist reviews</strong><p class="specialists"><span>PM</span><span>Design</span><span>Principal</span><span>Review</span><span>Security</span><span>Reliability</span><span>QA</span></p></div></li>
+              <li><span class="review-node"><svg class="icon" aria-hidden="true"><use href="#comment"/></svg></span><div><span class="small-label">The result</span><strong>One updated PR comment</strong><p class="review-result">Findings stay with the conversation.</p></div></li>
+            </ol>
+            <figcaption>One pull request. A team’s perspective.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer container">
+    <div class="footer-brand"><a class="wordmark" href="#" aria-label="Oya home">oya<span>.dev</span></a><p>Tools for working with agents.</p></div>
+    <nav aria-label="Product destinations"><a href="https://github.com/OyadotAI/keel-releases/releases/latest">Get Keel <span aria-hidden="true">↗</span></a><a href="https://oyabrowser.com">Oya Browser <span aria-hidden="true">↗</span></a><a href="https://github.com/OyadotAI/keel/tree/main/packaging/action/review">Keel Reviewer <span aria-hidden="true">↗</span></a></nav>
+    <div class="footer-bottom"><p>Built by Oya. Made for the work ahead.</p><nav aria-label="Keel information"><a href="https://github.com/OyadotAI/keel">Keel source</a><a href="https://github.com/OyadotAI/keel/blob/main/LICENSE.md">Keel license</a><a href="https://github.com/OyadotAI/keel/blob/main/docs/privacy.md">Keel privacy</a><a href="mailto:sales@getoya.ai">Contact</a></nav></div>
+  </footer>
+</body>
+</html>

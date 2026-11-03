@@ -1,0 +1,53 @@
+/* Static, labeled workflow diagrams explain Browser and Reviewer without implying a live demo. */
+.browser-figure { padding: var(--space-7); background: var(--blue-wash); border: 1px solid var(--blue-line); border-radius: var(--radius-large); min-width: 0; }
+.browser-frame { background: var(--paper); border: 1px solid var(--blue-line); border-radius: var(--radius-medium); box-shadow: var(--frame-shadow); overflow: hidden; }
+.browser-chrome { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-4); border-bottom: 1px solid var(--blue-line); font-size: var(--type-small); color: var(--blue); }
+.window-dots { display: flex; gap: var(--space-1); }
+.window-dots i { width: var(--space-2); height: var(--space-2); border: 1px solid var(--blue-line); border-radius: 50%; }
+.browser-address { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin: var(--space-3); padding: var(--space-2); background: var(--blue-wash); border-radius: var(--radius-small); color: var(--blue); font-size: var(--type-micro); }
+.playbook { padding: var(--space-6); }
+.playbook-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); justify-content: space-between; }
+.small-label { font-family: var(--mono); font-size: var(--type-micro); font-weight: 400; }
+.playbook-heading .small-label { color: var(--body); }
+.workflow-badge { color: var(--blue); background: var(--blue-wash); border-radius: var(--radius-pill); padding: var(--space-1) var(--space-2); font-size: var(--type-micro); }
+.playbook-steps, .review-stages { list-style: none; padding: 0; margin: var(--space-7) 0 0; }
+.playbook-steps li { position: relative; display: flex; align-items: flex-start; gap: var(--space-4); padding-bottom: var(--step-gap); }
+.playbook-steps li:last-child { padding-bottom: 0; }
+.playbook-steps li:not(:last-child)::after { content: ""; position: absolute; top: var(--step-icon); bottom: 0; left: calc(var(--step-icon) / 2); border-left: 1px dashed var(--blue-line); }
+.step-icon { display: grid; place-items: center; width: var(--step-icon); height: var(--step-icon); flex: none; border: 1px solid var(--blue-line); border-radius: var(--radius-medium); color: var(--blue); background: var(--blue-wash); }
+.step-number { display: block; color: var(--muted); text-transform: uppercase; font-family: var(--mono); font-size: var(--type-micro); margin-bottom: var(--space-1); }
+.playbook-steps strong { display: block; font-size: var(--type-body); font-weight: 500; letter-spacing: -0.02em; }
+.playbook-steps p { margin-top: var(--space-1); font-size: var(--type-small); color: var(--muted); }
+.browser-footnote { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-6); border-top: 1px solid var(--blue-line); color: var(--blue); font-family: var(--mono); font-size: var(--type-micro); }
+.browser-figure figcaption { margin-top: var(--space-4); color: var(--blue); text-align: center; font-size: var(--type-micro); }
+.review-flow { min-width: 0; border: 1px solid var(--dark-line); border-radius: var(--radius-medium); padding: var(--space-7); background: var(--dark-raised); }
+.review-flow-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding-bottom: var(--space-5); border-bottom: 1px solid var(--dark-line); color: var(--dark-muted); }
+.diagram-label { font-size: var(--type-micro); color: var(--dark-muted); }
+.review-stages { margin-top: var(--space-7); }
+.review-stages li { position: relative; display: flex; gap: var(--space-5); padding-bottom: var(--space-7); }
+.review-stages li > div { padding-top: var(--space-1); min-width: 0; }
+.review-stages li:last-child { padding-bottom: 0; }
+.review-stages li:not(:last-child)::after { content: ""; position: absolute; top: var(--step-icon); bottom: 0; left: calc(var(--step-icon) / 2); border-left: 1px solid var(--dark-line); }
+.review-node { display: grid; place-items: center; width: var(--step-icon); height: var(--step-icon); flex: none; border: 1px solid var(--dark-line); border-radius: 50%; color: var(--amber); }
+.review-stages .small-label { display: block; color: var(--dark-muted); margin-bottom: var(--space-2); }
+.review-stages strong { font-size: var(--type-lead); font-weight: 500; letter-spacing: -0.02em; }
+.specialists { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); max-width: 30ch; }
+.specialists span { padding: var(--space-1) var(--space-2); border: 1px solid var(--dark-line); border-radius: var(--radius-small); color: var(--dark-muted); font-size: var(--type-micro); }
+.review-result { color: var(--dark-muted); font-size: var(--type-small); margin-top: var(--space-2); }
+.review-flow figcaption { border-top: 1px solid var(--dark-line); margin-top: var(--space-7); padding-top: var(--space-5); color: var(--dark-muted); font-size: var(--type-small); }
+
+@media (max-width: 1020px) {
+  .browser-figure { padding: var(--space-5); }
+  .playbook { padding: var(--space-5); }
+  .workflow-badge { display: none; }
+  .review-flow { padding: var(--space-6); }
+}
+
+@media (max-width: 420px) {
+  .browser-figure { padding: var(--space-3); }
+  .playbook { padding: var(--space-4); }
+  .playbook-steps li { gap: var(--space-3); }
+  .review-flow { padding: var(--space-5); }
+  .review-stages li { gap: var(--space-3); }
+  .review-stages strong { font-size: var(--type-body); }
+}

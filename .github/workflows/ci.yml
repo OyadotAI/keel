@@ -1,3 +1,4 @@
+# Verify Keel and the standalone Oya landing page on changes to the repository.
 name: ci
 
 on:
@@ -21,6 +22,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Oya product page
+        run: python3 -B -m unittest discover -s website/tests -p 'test_*.py'
       # keel-license is a private repository (see Cargo.toml). A read-only deploy key on it, and
       # `.cargo/config.toml` has cargo fetch through this git, so the key is the only access.
       - name: Read access to keel-license

@@ -1,4 +1,5 @@
-.PHONY: help build check fmt lint test scan clean dev
+# Build and verify Keel, its desktop shell, and the standalone Oya product page.
+.PHONY: help build check fmt lint test scan clean dev website-test
 
 help:
 	@echo "build   compile the workspace"
@@ -10,7 +11,11 @@ help:
 build:
 	cargo build
 
-check: fmt lint test desktop-test
+check: website-test fmt lint test desktop-test
+
+# The landing page is buildless; validate its public contracts without installing dependencies.
+website-test:
+	python3 -B -m unittest discover -s website/tests -p 'test_*.py'
 
 fmt:
 	cargo fmt --all -- --check

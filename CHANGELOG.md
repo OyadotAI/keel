@@ -12,6 +12,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 - Counted accepted steps for unmetered licenses while preserving free and capped-license refusals.
 
 ### Added
+- Added a standalone oya.dev landing page for Keel, Oya Browser, and Keel Reviewer, with local
+  product visuals, direct product destinations, and hermetic page checks in the gate and CI.
 - Added a device-level choice between Keel's browser and an installed Oya Browser, keeping each
   session on its selected browser and limiting local Oya access to its own pages.
 - Updated the inherited QA agent to exercise UI changes in Oya and report browser testing blockers.
