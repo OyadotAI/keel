@@ -1,8 +1,9 @@
+// New projects start Empty with an optional name and the shared, visible workspace destination.
 import { UpdateButton } from "./UpdateButton";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useProjectCreation, projectScratch, projectDestination } from "../project-creation";
 import { open } from "@tauri-apps/plugin-dialog";
-import { get, post, type Endpoint } from "../api";
+import { get, post } from "../api";
 import { useStore } from "../store";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { Tabs } from "./kit";
@@ -17,69 +18,39 @@ interface Repo {
 }
 
 const TEMPLATES = [
+  { id: "empty", label: "Empty", detail: "A Git repository with Keel’s agent team and checklist." },
   { id: "app", label: "Cloudflare app", detail: "Next.js frontend and Hono API, each a Worker, joined by a service binding." },
   { id: "stack", label: "Container stack", detail: "Next.js and Hono on Node, Postgres and Redis, kustomize for dev and prod." },
-  { id: "empty", label: "Empty", detail: "A git repository with Keel's agent team and checklist, nothing else." },
 ] as const;
-
-/// A project that does not exist yet needs a daemon that is not about a project. One runs on an
-/// empty folder for the length of this page, makes or clones the project, and hands over.
-async function scratch(): Promise<{ ep: Endpoint; done: () => void }> {
-  const dir = await invoke<string>("scratch_dir");
-  const ep = await invoke<Endpoint>("open_project", { path: dir });
-  return { ep, done: () => void invoke("close_project", { path: dir }) };
-}
 
 export function NewProject() {
   const [mode, setMode] = useState<"template" | "clone">("template");
-  const [parent, setParent] = useState<string>();
+  const creation = useProjectCreation();
+  const { parent, setParent, busy, error, setError, created, run, reopen, resetOperation } = creation;
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState<(typeof TEMPLATES)[number]["id"]>("app");
+  const [template, setTemplate] = useState<(typeof TEMPLATES)[number]["id"]>("empty");
   const [repos, setRepos] = useState<Repo[]>();
   const [filter, setFilter] = useState("");
-  const [busy, setBusy] = useState<string>();
-  const [error, setError] = useState<string>();
   const close = () => useStore.setState({ creating: false });
 
   useEffect(() => {
     if (mode !== "clone" || repos) return;
     let cleanup = () => {};
-    scratch()
+    projectScratch()
       .then(({ ep, done }) => {
         cleanup = done;
         return get<Repo[]>(ep, "/api/github/repos");
       })
       .then(setRepos, (e) => setError(/connect GitHub/.test(String(e)) ? "GitHub is not connected. Run `gh auth login` in a terminal, then come back." : String(e)))
       .finally(() => cleanup());
-  }, [mode, repos]);
+  }, [mode, repos, setError]);
 
   async function pick() {
     const dir = await open({ directory: true, title: "Where the project goes" });
-    if (typeof dir === "string") setParent(dir);
+    if (typeof dir === "string") { setParent(dir); resetOperation(); }
   }
 
-  async function run(what: string, act: (ep: Endpoint) => Promise<string>) {
-    if (!parent) return setError("Choose the folder it goes in first.");
-    setBusy(what);
-    setError(undefined);
-    let done = () => {};
-    try {
-      const s = await scratch();
-      done = s.done;
-      const path = await act(s.ep);
-      done();
-      done = () => {};
-      close();
-      await useStore.getState().openProject(path);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      done();
-      setBusy(undefined);
-    }
-  }
-
-  const valid = /^[a-z0-9][a-z0-9-]{0,40}$/.test(name);
+  const valid = !name.trim() || /^[a-z0-9][a-z0-9-]{0,40}$/.test(name.trim());
   const shown = (repos ?? []).filter((r) => r.full_name.toLowerCase().includes(filter.toLowerCase())).slice(0, 100);
 
   return (
@@ -100,23 +71,25 @@ export function NewProject() {
             { id: "clone", label: "Clone from GitHub" },
           ]}
           value={mode}
-          onChange={setMode}
+          onChange={(value) => { if (!busy && !created) setMode(value); }}
         />
         <section className="settings-section">
           <p>
-            Goes in <code>{parent ?? "…"}</code> <button onClick={pick}>{parent ? "Change…" : "Choose a folder…"}</button>
+            Location <code className="project-location">{parent ?? "Finding your Keel projects folder…"}</code> <button disabled={!!busy || !!created} onClick={pick}>Change…</button>
           </p>
-          {error && <div className="error">{error}</div>}
-          {mode === "template" ? (
+          {error && <div className="error" role="alert">{error}</div>}
+          {created ? <><p>Project created at <code className="project-location">{created}</code>.</p><button className="primary" disabled={!!busy} onClick={() => void reopen()}>Open project</button></> : mode === "template" ? (
             <>
               <label className="field">
-                Name
-                <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="my-app" aria-invalid={!!name && !valid} />
+                Name (optional)
+                <input value={name} disabled={!!busy} onChange={(e) => { setName(e.target.value.toLowerCase()); resetOperation(); }} placeholder="Automatic name" aria-describedby="project-name-help" aria-invalid={!!name.trim() && !valid} />
               </label>
-              {name && !valid && <div className="small error">Lowercase letters, digits and hyphens — it becomes a folder and two Worker names.</div>}
+              <p id="project-name-help" className="small muted">Leave blank and Keel will create a uniquely named project folder.</p>
+              {name.trim() && !valid && <div className="small error">Use lowercase letters, digits and hyphens, up to 41 characters.</div>}
+              <p className="small muted project-location">{name.trim() && valid ? projectDestination(parent ?? "", name) : "A unique project folder will be created in this location."}</p>
               <div className="templates">
                 {TEMPLATES.map((t) => (
-                  <button key={t.id} className={`template ${template === t.id ? "active" : ""}`} aria-pressed={template === t.id} onClick={() => setTemplate(t.id)}>
+                  <button key={t.id} className={`template ${template === t.id ? "active" : ""}`} aria-pressed={template === t.id} disabled={!!busy} onClick={() => { setTemplate(t.id); resetOperation(); }}>
                     <strong>{t.label}</strong>
                     <span className="small muted">{t.detail}</span>
                   </button>
@@ -125,9 +98,9 @@ export function NewProject() {
               <button
                 className="primary"
                 disabled={!valid || !parent || !!busy}
-                onClick={() => run("create", (ep) => post<{ path: string }>(ep, "/api/project/new", { name, parent, template }).then((r) => r.path))}
+                onClick={() => run("create", (ep, operation) => post<{ path: string }>(ep, "/api/project/new", { name: name.trim(), parent, template, operation }).then((r) => r.path))}
               >
-                {busy === "create" ? "Creating…" : "Create project"}
+                {busy === "create" ? "Creating project…" : "Create project"}
               </button>
             </>
           ) : !repos ? (

@@ -1,39 +1,22 @@
-//! Creating a new project.
-//!
-//! A new project is scaffolded from the golden path rather than left empty: the whole point of Keel
-//! is that a repository arrives already shippable, so a project it creates itself should start at a
-//! passing readiness score rather than at the same findings every empty directory produces.
-//!
-//! # The three folders
-//!
-//! `frontend/` is Next.js on Workers, `backend/` is Go, `infra/` is how both of them ship. The
-//! split is not organisational tidiness — it is the seam where the two halves have genuinely
-//! different constraints, and putting them in one folder hides that.
-//!
-//! # Why the backend is its own Worker rather than Next.js API routes
-//!
-//! Two Workers cost almost nothing on Cloudflare and buy three things a single Next.js app cannot
-//! have: the backend deploys on its own schedule, it is reachable by things that are not the
-//! website, and the frontend talks to it over a service binding — an internal call with no public
-//! route, no CORS and no second TLS hop.
-//!
-//! The seam is typed rather than documented. The backend exports the type of its route table, and
-//! the frontend builds its client from that type, so a route that changes shape breaks the
-//! frontend at compile time instead of at runtime. That is the whole argument for TypeScript on
-//! both sides, and it is worth more than the language being the same.
-
+//! New projects start Empty and reserve their actual destination before scaffolding any files.
 use axum::{Json, extract::State, http::StatusCode};
-use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::serve::AppState;
-use keel_generator::cloudflare::{Template, scaffold, valid_name};
+use keel_generator::cloudflare::{Template, scaffold};
+mod location;
+mod operations;
+pub(crate) use location::parent as project_parent;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct NewProject {
     /// Directory to create the project in.
+    #[serde(default)]
     pub parent: String,
+    /// Replaying this operation returns the same created project after a lost response.
+    pub operation: Option<String>,
+    #[serde(default)]
     pub name: String,
     /// `app` for the full three-folder stack, `empty` for just the agent scaffolding.
     pub template: Option<String>,
@@ -49,8 +32,9 @@ pub struct NewProject {
     pub pack: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Created {
+    pub name: String,
     pub path: String,
 }
 
@@ -71,7 +55,15 @@ pub async fn create(
 ) -> Result<Json<Created>, (StatusCode, String)> {
     // A scaffold is a hundred file writes and a scan: off the executor.
     crate::serve::blocking(
-        move || scaffold_project(&state, req),
+        move || {
+            if let Some(id) = req.operation.clone() {
+                let parent =
+                    project_parent(Some(&req.parent)).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+                operations::run(&parent, &id, &req, || scaffold_project(&state, req.clone()))
+            } else {
+                scaffold_project(&state, req)
+            }
+        },
         Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "the scaffold was cancelled".into(),
@@ -84,28 +76,36 @@ pub async fn create(
 fn scaffold_project(state: &AppState, req: NewProject) -> Result<Created, (StatusCode, String)> {
     let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
 
-    if !valid_name(&req.name) {
-        return Err(bad(
-            "Use lowercase letters, digits and hyphens — the name becomes a directory, two Worker \
-             names.",
-        ));
-    }
-
-    let parent = Utf8PathBuf::from(expand(&req.parent));
-    if !parent.is_dir() {
-        return Err(bad(&format!("no such directory: {parent}")));
-    }
-    let root = parent.join(&req.name);
-    if root.exists() {
-        return Err(bad(&format!("{root} already exists")));
-    }
-
-    std::fs::create_dir_all(&root).map_err(|e| bad(&e.to_string()))?;
-
-    let template = match req.template.as_deref() {
-        Some("empty") => Template::Empty,
+    match req.template.as_deref() {
+        None | Some("empty") => Template::Empty,
+        Some("app") => Template::App,
         Some("stack") => Template::Stack,
-        _ => Template::App,
+        Some(_) => return Err(bad("Unknown project template")),
+    };
+    let parent = project_parent(Some(&req.parent)).map_err(|e| bad(&e))?;
+    let (name, root) = location::reserve(&parent, &req.name).map_err(|e| bad(&e))?;
+    let req = NewProject { name, ..req };
+    let failure_path = root.to_string();
+    scaffold_reserved(state, req, root).map_err(|(status, error)| {
+        (
+            status,
+            format!(
+                "Project creation stopped at {failure_path}; partial files were preserved. {error}"
+            ),
+        )
+    })
+}
+
+fn scaffold_reserved(
+    state: &AppState,
+    req: NewProject,
+    root: camino::Utf8PathBuf,
+) -> Result<Created, (StatusCode, String)> {
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    let template = match req.template.as_deref() {
+        Some("app") => Template::App,
+        Some("stack") => Template::Stack,
+        _ => Template::Empty,
     };
     let mut files = scaffold(&req.name, template);
     if template == Template::Stack
@@ -184,10 +184,16 @@ fn scaffold_project(state: &AppState, req: NewProject) -> Result<Created, (Statu
     // A repository from the start, so the diff view and the readiness scan both have a baseline.
     let mut init = crate::git::command(&root);
     init.arg("init").arg("--quiet");
-    let _ = crate::git::output(init);
+    let initialized = crate::git::output(init).map_err(|e| bad(&format!("Project files were created at {root}, but Git initialization failed: {e}. Open that folder to recover.")))?;
+    if !initialized.status.success() {
+        return Err(bad(&format!(
+            "Project files were created at {root}, but Git initialization failed. Open that folder to recover."
+        )));
+    }
 
     state.set_repo(root.clone());
     Ok(Created {
+        name: req.name,
         path: root.to_string(),
     })
 }
@@ -207,6 +213,7 @@ mod tests {
             let state = AppState::new(parent.clone());
             let req = NewProject {
                 parent: parent.to_string(),
+                operation: None,
                 name: "demo".into(),
                 template: Some(template.into()),
                 notes: None,
@@ -221,5 +228,37 @@ mod tests {
                 again.written
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+    use camino::Utf8Path;
+    #[test]
+    fn omitted_names_and_templates_create_a_uniquely_named_empty_git_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = Utf8Path::from_path(temp.path()).unwrap();
+        let state = AppState::new(parent.to_owned());
+        let req: NewProject = serde_json::from_value(serde_json::json!({"parent":parent})).unwrap();
+        let created = scaffold_project(&state, req).unwrap();
+        let root = Utf8Path::new(&created.path);
+        assert!(created.name.starts_with("project-"));
+        assert!(root.join(".git").exists());
+        assert!(root.join("CLAUDE.md").exists());
+        assert!(!root.join("frontend").exists());
+        assert!(!root.join("backend").exists());
+    }
+    #[test]
+    fn unknown_templates_are_rejected_before_reserving_a_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = Utf8Path::from_path(temp.path()).unwrap();
+        let state = AppState::new(parent.to_owned());
+        let req: NewProject = serde_json::from_value(
+            serde_json::json!({"parent":parent,"name":"demo","template":"unknown"}),
+        )
+        .unwrap();
+        assert!(scaffold_project(&state, req).is_err());
+        assert!(!parent.join("demo").exists());
     }
 }

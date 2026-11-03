@@ -399,8 +399,8 @@ instead of spawning it.
 do not require unrelated pipeline stages. `oya-browser` is the browser specialist for research,
 web interaction, screenshots and browser QA. Use Oya exclusively for all browser work; if its
 connection is unavailable, report the blocker and never substitute another provider. Inside Keel,
-Keel's own browser (the `browser_*` tools on server `keel`, the lane's Browser tab) is the browser
-and Oya's tools are withheld on purpose; use it the same way. The team
+use the `browser_*` tools on server `keel`. They use the browser selected for the session: Inside
+Keel or the person's local Oya Browser. Keep to owned tabs and report connection failures. The team
 ships role playbooks, specialist engineering skills, and Oya research with supporting assets.
 Use `/handoff` when a session transfer is requested. Load `writing-for-agents` when editing
 agent instructions or skills; these workflows do not change a member's permissions.
@@ -744,6 +744,21 @@ mod tests {
                     "{path} names .claude/skills"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn inherited_qa_agents_try_oya_for_ui_changes() {
+        let files = files_for(&[Agent::Claude, Agent::Antigravity, Agent::Codex], false);
+        for path in [
+            ".claude/agents/qa.md",
+            ".agents/agents/qa.md",
+            ".codex/agents/qa.toml",
+        ] {
+            let body = &files.iter().find(|(name, _)| name == path).expect(path).1;
+            assert!(body.contains("For every UI change"), "{path}");
+            assert!(body.contains("Oya"), "{path}");
+            assert!(body.contains("never substitute another browser"), "{path}");
         }
     }
 

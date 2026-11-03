@@ -30,6 +30,7 @@
     "allow-close-project",
     "allow-stop-all",
     "allow-scratch-dir",
+    "allow-projects-dir",
     "allow-sign-packet",
     "allow-save-text",
     "allow-is-dir",

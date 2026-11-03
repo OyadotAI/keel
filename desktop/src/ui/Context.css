@@ -70,3 +70,11 @@
 .context-limits ul { font-size: 11px; padding-left: 18px; margin-bottom: 0; }
 .context-limits li + li { margin-top: 7px; }
 @media (prefers-reduced-motion: reduce) { .context-segment, .context-section > summary::before { transition: none; } }
+.handoff-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; font-size: 11px; line-height: 1.6; }
+.handoff-meta dt { color: var(--dim); }
+.handoff-meta dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.handoff-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.handoff-provider { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; font-size: 12px; }
+.handoff-history { padding-left: 18px; font-size: 11px; }
+.handoff-history pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.task-handoff > summary { outline-offset: 4px; }

@@ -1,6 +1,7 @@
 // Project and application settings describe the same standing grants enforced by the daemon.
 import { UpdateButton } from "./UpdateButton";
 import { NotificationSetting } from "./NotificationSetting";
+import { BrowserPreference } from "./BrowserPreference";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { check, useUpdate } from "../update";
@@ -51,6 +52,7 @@ export function Settings() {
         <AppearanceSetting />
         <NotificationSetting />
         <InterfaceSetting applyToLane />
+        <BrowserPreference />
         {error && <div className="error">{error}</div>}
         {!project ? (
           <p className="muted">Open a project to configure project trust and Claude Code.</p>

@@ -7,6 +7,7 @@ import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
+import { SubagentsPane } from "./SubagentsPane";
 import { TerminalFileSurface } from "./TerminalFileFeedback";
 
 /// A terminal over the daemon's PTY: the lane's agent itself (`agent`), or a shell in its checkout.
@@ -314,6 +315,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       )}
       {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
       <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
+      {agent && <SubagentsPane lane={lane} hidden={hidden} />}
     </TerminalFileSurface>
   );
 }

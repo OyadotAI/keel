@@ -209,13 +209,10 @@ pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
          the refusal with a button to allow it, so say what you needed.\n\
          - To ask the person a question with options, call the `ask_user` tool (server `keel`); \
          the answer is returned as its result. `AskUserQuestion` does not exist in this session.\n\
-         - The browser: for any website, use the `browser_*` tools (server `keel`). They drive \
-         this lane's Browser tab inside Keel, which the person can see. Oya's and Chrome's \
-         browser tools are withheld on purpose so the person's own browser is left alone; that is \
-         not them being unavailable, and wherever a skill or instruction says to use Oya, use \
-         these instead. The tab has none of the person's logins: if a site needs one, ask with \
-         `ask_user` for them to sign in there. It reads text only (no screenshots) and only the \
-         top frame.\n\
+         - The browser: use only Keel’s `browser_*` tools. The session’s captured browser \
+         preference selects Inside Keel or Local Oya Browser behind the same permission gate. \
+         Read the tool instructions for the effective browser and profile. Do not enable other \
+         browser providers, use personal tabs, or switch browsers after a failure.\n\
          - In plan mode `ask_user` is refused — Claude Code blocks every MCP tool there, and it is \
          not Keel doing it. So put anything you would have asked into the plan itself, as the \
          decision you made and the one you would have preferred to check. Write the plan to the \
@@ -277,6 +274,7 @@ pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
         }
     }
 
+    out.push_str(&crate::guidance::prompt(repo));
     out
 }
 
@@ -512,7 +510,7 @@ mod prompt_tests {
     }
 
     #[test]
-    fn the_prompt_is_facts_not_instructions() {
+    fn project_facts_stay_short_and_shared_guidance_is_appended_separately() {
         let (_d, root) = repo_with(&[("README.md", "x")]);
         let prompt = system_prompt(&root);
         // What used to be here: eleven paragraphs on tone, scope and when to stop. The agent
@@ -532,8 +530,14 @@ mod prompt_tests {
         assert!(prompt.contains("Facts, not instructions"));
         assert!(prompt.contains(".mcp.json") && prompt.contains(".claude/settings.json"));
         assert!(
-            prompt.lines().count() < 20,
-            "short: {}",
+            prompt
+                .split("\nKeel collaboration guidance")
+                .next()
+                .unwrap()
+                .lines()
+                .count()
+                < 20,
+            "project facts must stay short: {}",
             prompt.lines().count()
         );
     }
@@ -823,6 +827,50 @@ pub async fn chat(
         stopper.hold_early(&lane, started_fact);
 
         let provider = query.provider.as_deref().unwrap_or("claude");
+        let (
+            task_repo,
+            task_checkout,
+            task_lane,
+            task_provider,
+            task_session,
+            task_prompt,
+            task_wt,
+        ) = (
+            repo.clone(),
+            cwd.clone(),
+            lane.clone(),
+            provider.to_string(),
+            query.session.clone().unwrap_or_else(|| lane.clone()),
+            query.prompt.clone(),
+            query.wt.clone(),
+        );
+        let task_resume = query.session.is_some();
+        let task_ready = crate::serve::in_blocking(move || {
+            crate::tasks::register(
+                &task_repo,
+                crate::tasks::Source {
+                    lane: task_lane.clone(),
+                    provider: task_provider.clone(),
+                    session: task_session.clone(),
+                    checkout: task_checkout.to_string(),
+                    wt: task_wt,
+                },
+            )?;
+            crate::guidance::prepare(&task_repo)?;
+            crate::browser::prepare(
+                &task_repo,
+                &task_lane,
+                &task_provider,
+                &task_session,
+                task_resume,
+            )?;
+            crate::tasks::input(&task_repo, &task_provider, &task_session, &task_prompt)
+        })
+        .await;
+        if let Err(error) = task_ready {
+            let _ = tx.send(Ok(said("fatal", error))).await;
+            return;
+        }
         // This scans files and invokes toolchain detection. Keeping it on the async executor
         // could delay the Stop request for the entire preparation on a large repository.
         let base_system = if provider == "claude" || query.session.is_none() {
@@ -1244,6 +1292,13 @@ pub async fn chat(
                     && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
                     && let Some(id) = v["thread_id"].as_str()
                 {
+                    session = Some(id.to_string());
+                    let (task_repo, task_lane, task_session) =
+                        (repo.clone(), lane.clone(), id.to_string());
+                    let _ = crate::serve::in_blocking(move || {
+                        crate::tasks::session(&task_repo, &task_lane, &task_session)
+                    })
+                    .await;
                     subagents = Some(codex_subagents(
                         cwd.clone(),
                         id.to_string(),
@@ -1262,6 +1317,12 @@ pub async fn chat(
                                 if session.is_none() {
                                     session = Some(id.to_string());
                                     stopper.bound(&lane, token, id);
+                                    let (task_repo, task_lane, task_session) =
+                                        (repo.clone(), lane.clone(), id.to_string());
+                                    let _ = crate::serve::in_blocking(move || {
+                                        crate::tasks::session(&task_repo, &task_lane, &task_session)
+                                    })
+                                    .await;
                                 }
                                 let turn = format!(
                                     "keel-{}-{token}",
@@ -1324,6 +1385,12 @@ pub async fn chat(
                 {
                     session = Some(id.to_string());
                     stopper.bound(&lane, token, id);
+                    let (task_repo, task_lane, task_session) =
+                        (repo.clone(), lane.clone(), id.to_string());
+                    let _ = crate::serve::in_blocking(move || {
+                        crate::tasks::session(&task_repo, &task_lane, &task_session)
+                    })
+                    .await;
                 }
                 if key.is_none()
                     && key_attempts < 5
@@ -1658,6 +1725,9 @@ pub(crate) fn interactive(
     resume: bool,
     lane: Option<&str>,
 ) -> Result<(std::ffi::OsString, Vec<String>), String> {
+    if let Some(lane) = lane {
+        crate::browser::prepare(repo, lane, agent, session, resume)?;
+    }
     let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(cwd, rel, bytes);
     keel_harness::quarantine_keeping(cwd, keep).map_err(|e| {
         format!(
@@ -1675,7 +1745,11 @@ pub(crate) fn interactive(
                 "--mcp-config".into(),
                 crate::askmcp::config(port, lane),
                 "--append-system-prompt".into(),
-                system_prompt(cwd),
+                format!(
+                    "{}\n{}",
+                    system_prompt(cwd),
+                    crate::browser::instructions(lane)
+                ),
             ];
             // The project's servers ride on the same flag, as on a turn: it takes several.
             if let Some(mcp) = project_mcp(cwd) {
@@ -1696,6 +1770,7 @@ pub(crate) fn interactive(
             // Keel's browser, and the other browsers taken away — the same as a chat turn. First,
             // as global options, rather than trusting them to parse after `resume <id>`.
             let mut args = crate::askmcp::codex_args(cwd, port, lane)?;
+            args.extend(crate::guidance::codex_args(repo, cwd));
             if resume {
                 args.extend(["resume".into(), session.to_string()]);
             }

@@ -627,6 +627,12 @@ pub fn settings_json(
         crate::askmcp::SERVER,
         crate::askmcp::TOOL
     ));
+    // Task memory writes only bounded, lane-scoped notes; an explicit native deny still wins.
+    allow.push(format!(
+        "mcp__{}__{}",
+        crate::askmcp::SERVER,
+        crate::tasks::TOOL
+    ));
     // The person's own browsers are not a Keel turn's to drive: Oya's server took the tab they
     // were reading and opened and closed its own in front of them, and Claude-in-Chrome says of
     // itself that it opens tabs in their existing Chrome session. A lane's browser is its Browser

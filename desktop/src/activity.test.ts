@@ -1,6 +1,6 @@
 // Display activity must track current work without changing the execution state used by queues.
 import { describe, expect, it } from "vitest";
-import { activity, waiting, workingMembers } from "./activity";
+import { activity, waiting, workingMembers, memberInvocations } from "./activity";
 import type { Lane } from "./store";
 
 const lane = (over: Partial<Lane> = {}): Lane => ({ id: "l", project: "/r", title: "Agy", agent: "antigravity", known: false, isolated: false, jobs: [], queued: [], conv: { turns: [] }, running: false, loaded: true, pending: [], ...over });
@@ -46,4 +46,17 @@ it.each(["codex", "antigravity"] as const)("keeps %s members active when History
   const l = lane({ agent, session: "s1", observation: { running: true, background: { a: "pm" }, truncated: false } });
   expect(workingMembers(l, { id: "s1", provider: agent, live: false, busy: false, messages: 1 })).toEqual(["pm"]);
   expect(workingMembers({ ...l, agent: "claude" }, { id: "s1", provider: "claude", live: false, busy: false, messages: 1 })).toEqual([]);
+});
+
+it.each(["claude", "codex", "antigravity"] as const)("%s terminal indicators use confirmed invocation snapshots over stale background maps", (agent) => {
+  const source = lane({ agent, interface: "terminal", session: "parent", conv: { turns: [], background: { old: "designer" } } });
+  const l = { ...source, subagents: { scope: JSON.stringify([source.project, source.wt, agent, source.session]), connected: true, truncated: false, invocations: [
+    { id: "one", member: "pm", status: "working" as const, output: "waiting" as const },
+    { id: "two", member: "pm", status: "working" as const, output: "waiting" as const },
+  ] } };
+  expect(workingMembers(l)).toEqual(["pm"]); expect(activity(l).tone).toBe("live");
+  expect(memberInvocations(l)).toEqual({pm:2});
+  expect(memberInvocations({...l,subagents:{...l.subagents,invocations:l.subagents.invocations.map((child,index)=> index ? child : {...child,status:"done" as const})}})).toEqual({pm:1});
+  expect(workingMembers({ ...l, subagents: { ...l.subagents, connected: false } })).toEqual([]);
+  expect(workingMembers({ ...l, session: "replaced" })).toEqual(["designer"]);
 });

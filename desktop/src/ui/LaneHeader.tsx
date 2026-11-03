@@ -88,6 +88,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
           <LaneViewSwitch lane={lane} menu onSwitch={() => setMenu(null)} />
           <button onClick={() => (setMenu(null), toggleShell())}>{shell ? "Close the shell" : "Open a shell"}</button>
           <button onClick={() => (setMenu(null), setRenaming(true))}>Rename lane…</button>
+          <button onClick={() => { setMenu(null); useStore.setState({ panelTab: "context" }); requestAnimationFrame(() => document.querySelector<HTMLElement>(".task-handoff summary")?.focus()); }}>Continue with…</button>
           <div className="sep" />
           {isolated && wt && (
             <>

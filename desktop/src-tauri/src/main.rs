@@ -8,6 +8,8 @@
 
 mod browser;
 mod preview;
+#[path = "../../../crates/keel-workspace/src/locations.rs"]
+mod locations;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -209,6 +211,12 @@ fn scratch_dir() -> Result<String, String> {
     dir.to_str().map(str::to_string).ok_or_else(|| "The temp folder's path is not text.".into())
 }
 
+/// Report the common project location without creating it or starting a daemon.
+#[tauri::command]
+fn projects_dir() -> Result<String, String> {
+    locations::projects()?.into_os_string().into_string().map_err(|_| "The workspace path is not text.".into())
+}
+
 /// The device's review-packet key: made once, kept in the system's own credential store
 /// (Keychain, Windows Credential Manager), never in the page or on disk.
 fn signing_key() -> Result<ed25519_dalek::SigningKey, String> {
@@ -315,7 +323,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Daemons::default())
-        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("the window")
         .run(|app, event| {

@@ -1080,6 +1080,7 @@ dependencies = [
  "notify",
  "open",
  "portable-pty",
+ "reqwest",
  "sentry",
  "serde",
  "serde_json",

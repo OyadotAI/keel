@@ -866,8 +866,15 @@ pub async fn api_list(State(state): State<Arc<AppState>>) -> Json<Vec<Worktree>>
     )
 }
 
+/// A transferred worktree can only be removed or merged by its current task lane.
+#[derive(Default, Deserialize)]
+pub struct Owner {
+    pub lane: Option<String>,
+}
+
 pub async fn api_finish(
     State(state): State<Arc<AppState>>,
+    axum::extract::Query(owner): axum::extract::Query<Owner>,
     Json(body): Json<FinishBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
     let root = state.repo();
@@ -876,6 +883,7 @@ pub async fn api_finish(
     if let Ok(lane) = path_of(&root, &body.name)
         && lane.exists()
     {
+        crate::tasks::destructive_guard(&root, owner.lane.as_deref(), &lane).map_err(bad)?;
         crate::serve::not_mid_turn(&state, &lane)?;
     }
     crate::serve::not_mid_turn(&state, &root)?;
@@ -886,6 +894,7 @@ pub async fn api_finish(
 
 pub async fn api_discard(
     State(state): State<Arc<AppState>>,
+    axum::extract::Query(owner): axum::extract::Query<Owner>,
     Json(body): Json<DiscardBody>,
 ) -> Result<Json<bool>, (StatusCode, String)> {
     let root = state.repo();
@@ -893,6 +902,7 @@ pub async fn api_discard(
     if let Ok(lane) = path_of(&root, &body.name)
         && lane.exists()
     {
+        crate::tasks::destructive_guard(&root, owner.lane.as_deref(), &lane).map_err(bad)?;
         crate::serve::not_mid_turn(&state, &lane)?;
     }
     off_thread(move || discard(&root, &body.name, body.force))

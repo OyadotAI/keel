@@ -27,6 +27,8 @@ pub fn config(port: u16, lane: Option<&str>) -> String {
 pub struct McpQuery {
     #[serde(default)]
     pub lane: Option<String>,
+    #[serde(default)]
+    pub binding: Option<String>,
 }
 
 /// The decision Claude's hook makes before a browser action, made here for an agent with no hook
@@ -42,6 +44,7 @@ async fn gated(
     args: &Value,
 ) -> Result<(), String> {
     let lane = q.lane.clone().unwrap_or_default();
+    crate::browser::validate_binding(&state.repo(), &lane, q.binding.as_deref())?;
     let tool = format!("mcp__{SERVER}__{name}");
     // A Keel hook in front of the agent — Claude's, the SDK bridge's, a chat `agy`'s — already
     // decided this exact call; it is not asked twice.
@@ -77,7 +80,12 @@ async fn gated(
 /// decided is known from the hook's own call (`approve::take_hook_yes`).
 pub fn url(port: u16, lane: Option<&str>) -> String {
     match lane {
-        Some(l) => format!("http://127.0.0.1:{port}/mcp?lane={}", escaped(l)),
+        Some(l) => {
+            let extra = crate::browser::binding_id(l)
+                .map(|id| format!("&binding={id}"))
+                .unwrap_or_default();
+            format!("http://127.0.0.1:{port}/mcp?lane={}{extra}", escaped(l))
+        }
         None => format!("http://127.0.0.1:{port}/mcp"),
     }
 }
@@ -359,13 +367,13 @@ pub async fn post(
                 "protocolVersion": "2025-06-18",
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": SERVER, "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "ask_user shows the person a question with options in Keel and returns their answer. There is no AskUserQuestion here; this is it."
+                "instructions": format!("ask_user shows the person a question with options in Keel and returns their answer. There is no AskUserQuestion here; this is it.{}\n{}", crate::guidance::prompt(&state.repo()), crate::browser::instructions(q.lane.as_deref()))
             }),
         ),
         "ping" => rpc_ok(id, json!({})),
         "tools/list" => {
-            let mut tools = vec![tool_schema()];
-            tools.extend(crate::browser::schemas());
+            let mut tools = vec![tool_schema(), crate::tasks::schema()];
+            tools.extend(crate::browser::session_schemas(q.lane.as_deref()));
             rpc_ok(id, json!({ "tools": tools }))
         }
         "tools/call" => {
@@ -379,9 +387,20 @@ pub async fn post(
                 .unwrap_or(json!({}));
             let answered = if crate::browser::is_tool(name) {
                 Some(match gated(&state, &q, name, &args).await {
-                    Ok(()) => crate::browser::call(q.lane.as_deref(), name, &args).await,
+                    Ok(()) => {
+                        crate::browser::call(
+                            Some(&state.repo()),
+                            q.lane.as_deref(),
+                            q.binding.as_deref(),
+                            name,
+                            &args,
+                        )
+                        .await
+                    }
                     Err(why) => Err(why),
                 })
+            } else if name == crate::tasks::TOOL {
+                Some(crate::tasks::call(state.clone(), q.lane.clone(), args).await)
             } else if name == TOOL {
                 Some(ask(q.lane.as_deref(), &args).await)
             } else {
@@ -604,12 +623,14 @@ mod browser_gate_tests {
         let state = Arc::new(AppState::new(root.clone()));
         let q = McpQuery {
             lane: Some("gate-test".into()),
+            binding: None,
         };
         let asked = |name: &'static str, args: Value| {
             let (state, q) = (
                 state.clone(),
                 McpQuery {
                     lane: q.lane.clone(),
+                    binding: None,
                 },
             );
             async move {

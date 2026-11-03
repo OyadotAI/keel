@@ -6,6 +6,29 @@ use std::io::{BufRead, Write};
 const FIXTURE_LANE: &str = "offline-background-question";
 const FIXTURE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+#[tokio::test]
+async fn closing_a_one_shot_chat_retires_its_browser_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+    let lane = "one-shot-browser-close-fixture";
+    let state = Arc::new(AppState::new(root.to_owned()));
+    crate::browser::prepare(root, lane, "antigravity", "session", false).unwrap();
+    assert!(crate::browser::binding_id(lane).is_some());
+    let _ = control(
+        State(state),
+        Json(Control {
+            lane: lane.into(),
+            method: "close".into(),
+            id: String::new(),
+            answer: json!(null),
+            prompt: String::new(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(crate::browser::binding_id(lane).is_none());
+}
+
 /// The child speaks only the private helper protocol; it never launches an SDK or model.
 #[test]
 fn offline_runtime_child() {
@@ -20,6 +43,15 @@ fn offline_runtime_child() {
         let q: Value = serde_json::from_str(&line.unwrap()).unwrap();
         match q["method"].as_str().unwrap() {
             "start" => {
+                if std::env::var_os("KEEL_OFFLINE_BREAK_METADATA").is_some() {
+                    let path = std::path::Path::new(".keel/CHANGELOG.md");
+                    std::fs::remove_file(path).unwrap();
+                    std::fs::create_dir(path).unwrap();
+                    emit(
+                        "msg",
+                        json!({"type":"system","session_id":"metadata-fixture"}),
+                    );
+                }
                 emit(
                     "request",
                     json!({"id":"question","kind":"question","provider":"claude","input":{"questions":[]}}),
@@ -55,7 +87,9 @@ impl Drop for FixtureProcess {
     }
 }
 
-async fn fixture_runtime() -> (
+async fn fixture_runtime(
+    break_metadata: bool,
+) -> (
     tempfile::TempDir,
     Arc<AppState>,
     Arc<Runtime>,
@@ -79,6 +113,9 @@ async fn fixture_runtime() -> (
     command
         .args(["runtime::tests::offline_runtime_child", "--nocapture"])
         .env("KEEL_OFFLINE_RUNTIME_FIXTURE", "1");
+    if break_metadata {
+        command.env("KEEL_OFFLINE_BREAK_METADATA", "1");
+    }
     let runtime = spawn_runtime(&state, FIXTURE_LANE, root, command)
         .await
         .unwrap();
@@ -154,7 +191,7 @@ async fn fixture_branch_blocked(state: &Arc<AppState>, runtime: &Runtime) {
 
 #[tokio::test]
 async fn a_background_question_keeps_its_output_and_branch_protection_until_completion() {
-    let (_dir, state, runtime, _process) = fixture_runtime().await;
+    let (_dir, state, runtime, _process) = fixture_runtime(false).await;
     let mut stream = fixture_stream(state.clone()).await;
     fixture_until(&mut stream, "parent-result-fixture").await;
     fixture_branch_blocked(&state, &runtime).await;
@@ -178,7 +215,7 @@ async fn a_background_question_keeps_its_output_and_branch_protection_until_comp
 
 #[tokio::test]
 async fn stopping_a_background_question_releases_its_output_and_branch_protection() {
-    let (_dir, state, runtime, _process) = fixture_runtime().await;
+    let (_dir, state, runtime, _process) = fixture_runtime(false).await;
     let mut stream = fixture_stream(state.clone()).await;
     fixture_until(&mut stream, "parent-result-fixture").await;
     fixture_branch_blocked(&state, &runtime).await;
@@ -194,6 +231,27 @@ async fn stopping_a_background_question_releases_its_output_and_branch_protectio
     let _ = crate::serve::fixture_switch_branch(state.clone(), state.repo())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn metadata_failure_during_a_turn_keeps_checkout_protection_until_completion() {
+    let (_dir, state, runtime, _process) = fixture_runtime(true).await;
+    let mut stream = fixture_stream(state.clone()).await;
+    fixture_until(&mut stream, "couldn’t update shared task").await;
+    fixture_until(&mut stream, "parent-result-fixture").await;
+    fixture_branch_blocked(&state, &runtime).await;
+    fixture_control(state.clone(), "steer").await;
+    fixture_until(&mut stream, "event: done").await;
+    tokio::time::timeout(FIXTURE_WAIT, async {
+        while stream.recv().await.is_some() {}
+    })
+    .await
+    .unwrap();
+    assert!(runtime.output.locked().is_none());
+    let _ = crate::serve::fixture_switch_branch(state.clone(), state.repo())
+        .await
+        .unwrap();
+    assert_eq!(fixture_control(state, "close").await["ok"], true);
 }
 
 #[test]

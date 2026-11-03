@@ -305,6 +305,9 @@ impl AppState {
             ));
         }
         let activity = crate::checkout_activity::hold(&checkout, exclusive)?;
+        if !lane.starts_with("keel:") {
+            crate::tasks::guard(&self.repo(), lane, &checkout)?;
+        }
         let writer_lock = if writes {
             let lock = writer_lock(&checkout)
                 .map_err(|e| format!("Could not reserve this working tree for editing: {e}"))?;
@@ -603,6 +606,15 @@ impl AppState {
     /// is in and writing its transcript. SIGTERM abandons the turn, and the transcript is the whole
     /// record of what the agent did — losing it is losing the evidence Keel exists to show.
     /// Returns whether there was a running or preparing turn to stop.
+    /// The process for a live daemon-owned turn, excluding reaped children finishing their checks.
+    pub(crate) fn owned_pid(&self, lane: &str) -> Option<u32> {
+        self.running
+            .locked()
+            .get(lane)
+            .filter(|t| !t.finished)
+            .and_then(|t| t.pid)
+    }
+
     pub fn interrupt(&self, lane: &str) -> bool {
         let mut map = self.running.locked();
         let Some(turn) = map.get_mut(lane).filter(|turn| !turn.finished) else {
@@ -791,10 +803,33 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/frontend/importers", get(api_importers))
         .route("/api/session/tail", get(api_session_tail))
         .route(
+            "/api/session/subagent/output",
+            get(crate::subagents::output),
+        )
+        .route(
             "/api/session/rename",
             axum::routing::post(crate::names::rename),
         )
         .route("/api/raw", get(api_raw))
+        .route("/api/task", get(crate::tasks::inspect))
+        .route("/api/task/save", axum::routing::post(crate::tasks::save))
+        .route("/api/task/stop", axum::routing::post(crate::tasks::stop))
+        .route(
+            "/api/task/continue",
+            axum::routing::post(crate::tasks::continue_task),
+        )
+        .route(
+            "/api/browser/preference",
+            get(crate::browser::preference_status).post(crate::browser::preference_save),
+        )
+        .route(
+            "/api/browser/show-local",
+            axum::routing::post(crate::browser::show_local),
+        )
+        .route(
+            "/api/browser/reconnect",
+            axum::routing::post(crate::browser::reconnect),
+        )
         .route("/api/context", get(crate::context::inspect))
         .route("/api/context/source", get(crate::context::source))
         .route("/api/chat", get(crate::agent::chat))
@@ -1393,6 +1428,10 @@ async fn api_session_tail(
             let (d, sid) = (dir.clone(), query.id.clone());
             blocking(move || agent.locate(&d, &sid), None).await
         };
+        let child_reader = transcript
+            .clone()
+            .map(|t| crate::subagents::watch(t, &dir, &query.id));
+        let mut children = None;
         // What Keel knew about these turns, keyed by the record that opened each. Sent right
         // after that record on the first pass, so a replayed turn carries its files, gate, commit
         // and cost exactly where a live one would have.
@@ -1556,6 +1595,18 @@ async fn api_session_tail(
                         }
                     }
                 }
+                if let keel_workspace::Kind::Opener { prompt, .. } = &kind {
+                    let (task_repo, task_session, task_provider, task_prompt) = (
+                        store.clone(),
+                        query.id.clone(),
+                        query.agent.clone().unwrap_or_else(|| "claude".into()),
+                        prompt.clone(),
+                    );
+                    let _ = in_blocking(move || {
+                        crate::tasks::input(&task_repo, &task_provider, &task_session, &task_prompt)
+                    })
+                    .await;
+                }
                 if follower.is_none() {
                     match &kind {
                         keel_workspace::Kind::Opener {
@@ -1599,6 +1650,31 @@ async fn api_session_tail(
             }
             // Display state has its own cursor: an unsettled timer can precede later responses.
             // It never drives the follower's checks, commits, or completion decisions.
+            if let Some(reader) = &child_reader
+                && let Some(current) = crate::subagents::snapshot(
+                    reader.clone(),
+                    if said_ended {
+                        Some(false)
+                    } else if alive {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    crate::term::live_since(&query.id),
+                )
+                .await
+                && children.as_ref() != Some(&current)
+            {
+                let json = serde_json::to_string(&current).expect("child activity");
+                if tx
+                    .send(Ok(Event::default().event("subagents").data(json)))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                children = Some(current);
+            }
             let reader = t.clone();
             if let Some(current) = blocking(move || reader.observation(), None).await {
                 let current =

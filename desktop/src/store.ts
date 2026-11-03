@@ -5,6 +5,7 @@
 // the stream worker, never one per event.
 
 import { readSetup, type Meter, type Readiness, type Warning } from "./setup";
+import { childScope, disconnectedChildren, type ChildSnapshot } from "./subagents";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url, isRejected } from "./api";
@@ -120,6 +121,9 @@ function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachmen
 }
 
 export interface Lane {
+  /** Authoritative terminal child evidence is scoped to the current parent and checkout. */
+  subagents?: import("./subagents").ChildState;
+  browserRevision?: number;
   /// Native CLI prompts are answered in its terminal, never through a synthetic approval card.
   attention?: { id: string; kind: "permission" | "question" };
   attentionSeen?: string;
@@ -235,6 +239,7 @@ interface State {
   openProject(path: string): Promise<void>;
   closeProject(path: string): Promise<void>;
   newLane(project: string, isolated?: boolean, agent?: Agent, surface?: ChatInterface): string;
+  adoptContinuation(source: string, continuation: import("./handoffs").Continuation): string;
   newConversationFrom(lane: string): string | undefined;
   referenceFile(lane: string, reference: FileReference): Promise<boolean>;
   removeReference(lane: string, reference: FileReference): void;
@@ -473,6 +478,10 @@ export const useStore = create<State>()((set, getState, api) => {
       // Followed now, whichever lane is on screen: the sidebar says what it is doing.
       void follow(l.id);
     },
+    "browser.binding": (path, _ep, data) => {
+      const id = (data as { data?: { lane?: string } })?.data?.lane;
+      if (id && getState().lanes[id]?.project === path) lane(id, (current) => ({ browserRevision: (current.browserRevision ?? 0) + 1 }));
+    },
     "context.changed": (path, _ep, data) => {
       const d = (data as { data?: { lane: string; snapshot: import("./context").ContextSnapshot } })?.data;
       const current = d && getState().lanes[d.lane];
@@ -703,7 +712,7 @@ export const useStore = create<State>()((set, getState, api) => {
       url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt, agent: l.agent ?? "claude" }),
       ep.token,
       (events) =>
-        { const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
+        { const currentEndpoint = getState().projects[l.project]?.endpoint; if (follows.get(lid) !== stream || childScope(getState().lanes[lid]) !== childScope(l) || currentEndpoint?.port !== ep.port || currentEndpoint.token !== ep.token) return; const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
           // A replay starts over: what an earlier stream folded is let go once this one speaks,
           // not before, so a retry that fails does not blank the turns on screen.
           let conv = fresh && events.some((e) => e.event === "turn") ? empty : l.conv;
@@ -726,14 +735,16 @@ export const useStore = create<State>()((set, getState, api) => {
               missing = true;
               conv = { turns: conv.turns };
               patch.observation = inactiveObservation(patch.observation ?? l.observation);
+              patch.subagents = disconnectedChildren({ ...l, ...patch });
             }
             // The process is gone, and its subagents with it. Claude's lanes also hear this from
             // the session list; Codex's and Antigravity's have only this to say it.
+            else if (e.event === "subagents") patch.subagents = { ...(e.data as ChildSnapshot), scope: childScope(l), connected: true };
             else if (e.event === "observation") patch.observation = e.data as Observation;
             else if (e.event === "truncated") patch.historyTruncated = true;
             else if (e.event === "ended") {
               conv = { turns: conv.turns };
-              patch = { ...patch, running: false, transcriptOpen: false, pending: [] };
+              patch = { ...patch, running: false, transcriptOpen: false, pending: [], subagents: disconnectedChildren({ ...l, ...patch }, true) };
               patch.observation = inactiveObservation(patch.observation ?? l.observation);
             }
             else if (e.event === "caught-up") {
@@ -758,6 +769,7 @@ export const useStore = create<State>()((set, getState, api) => {
       (error) => {
         if (follows.get(lid) !== stream) return;
         follows.delete(lid);
+        lane(lid, (current) => ({ subagents: disconnectedChildren(current) }));
         const now = getState().lanes[lid];
         if (!now) return;
         if (now.known) save(getState());
@@ -1030,6 +1042,23 @@ export const useStore = create<State>()((set, getState, api) => {
       return lid;
     },
 
+    adoptContinuation(source, continuation) {
+      const current = getState().lanes[source];
+      if (!current) throw new Error("The source lane is closed. Reopen it from History.");
+      const lid = continuation.destination.lane;
+      if (!getState().lanes[lid]) {
+        const wt = continuation.destination.wt;
+        set((s) => ({
+          lanes: { ...s.lanes, [lid]: { id: lid, project: current.project, interface: "chat", session: id(), agent: continuation.destination.provider, known: false, naming: { revision: 0 }, title: `Continued: ${current.title}`, isolated: !!wt, wt, mode: current.mode ?? "plan", model: undefined, jobs: [], queued: [], conv: empty, running: false, loaded: true,
+            receipt: { id: continuation.id, prompt: continuation.prompt, mode: current.mode ?? "plan", wt, attachments: [], references: [] }, pending: [] } },
+          projects: { ...s.projects, [current.project]: { ...s.projects[current.project], lanes: [...s.projects[current.project].lanes, lid] } },
+        }));
+        if (!save(getState())) throw new Error("Could not save the continuation locally. Your server-side handoff is preserved; retry the same continuation.");
+      }
+      getState().select(lid);
+      requestChatFocus(lid);
+      return lid;
+    },
     select(lid) {
       set((s) => ({ active: lid, settings: false, creating: false, extensions: false, opened: s.opened.includes(lid) ? s.opened : [...s.opened, lid] }));
       save(getState());
@@ -1179,7 +1208,7 @@ export const useStore = create<State>()((set, getState, api) => {
       try {
         // `--no-ff` into the branch the lane was cut from; a dirty project or a conflict refuses
         // and leaves the lane as it was.
-        await post(ep, "/api/worktree/finish", { name: l.wt, message: l.title });
+        await post(ep, "/api/worktree/finish", { name: l.wt, message: l.title }, { lane: lid });
         await getState().closeLane(lid);
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e);
@@ -1201,7 +1230,7 @@ export const useStore = create<State>()((set, getState, api) => {
       if (!ep || !await names.flush(lid)) return;
       lane(lid, { nameLocked: true });
       try {
-        await post(ep, "/api/worktree/discard", { name: l.wt, force });
+        await post(ep, "/api/worktree/discard", { name: l.wt, force }, { lane: lid });
         await getState().closeLane(lid);
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e);

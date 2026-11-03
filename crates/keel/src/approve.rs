@@ -485,7 +485,11 @@ fn note_hook_yes(hook: &HookInput) {
     let mut yeses = hook_yeses().locked();
     yeses.retain(|(_, _, _, at)| at.elapsed() < HOOK_YES);
     yeses.push_back((
-        hook.lane.clone(),
+        format!(
+            "{}:{}",
+            hook.lane,
+            crate::browser::binding_id(&hook.lane).unwrap_or_default()
+        ),
         hook.tool_name.clone(),
         hook.tool_input.to_string(),
         std::time::Instant::now(),
@@ -498,10 +502,14 @@ fn note_hook_yes(hook: &HookInput) {
 /// Whether a hook said yes to exactly this Browser tab call, recently; spends it if so.
 pub(crate) fn take_hook_yes(lane: &str, tool: &str, input: &serde_json::Value) -> bool {
     let input = input.to_string();
+    let lane = format!(
+        "{lane}:{}",
+        crate::browser::binding_id(lane).unwrap_or_default()
+    );
     let mut yeses = hook_yeses().locked();
-    let found = yeses
-        .iter()
-        .position(|(l, t, i, at)| l == lane && t == tool && *i == input && at.elapsed() < HOOK_YES);
+    let found = yeses.iter().position(|(l, t, i, at)| {
+        *l == lane && t == tool && *i == input && at.elapsed() < HOOK_YES
+    });
     found.and_then(|i| yeses.remove(i)).is_some()
 }
 

@@ -16,6 +16,19 @@
 //! screenshots (neither WKWebView through Tauri nor WebView2 offers a snapshot on desktop), the top
 //! frame only, synthetic input only, and none of the person's logins.
 
+mod bindings;
+mod connection;
+mod detection;
+mod local;
+mod preference;
+mod settings;
+pub(crate) use bindings::{
+    alias as session_alias, id as binding_id, instructions, prepare, release,
+};
+pub(crate) use settings::{
+    reconnect, save as preference_save, show as show_local, status as preference_status,
+};
+
 use crate::lock::Locked;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -192,12 +205,25 @@ fn some_window(open: usize) -> Result<(), String> {
 }
 
 /// Run one tool call in the lane's tab and return what the agent reads.
-pub async fn call(lane: Option<&str>, name: &str, args: &Value) -> Answer {
+/// Every browser call proves its pinned generation before choosing an adapter.
+pub async fn call(
+    project: Option<&camino::Utf8Path>,
+    lane: Option<&str>,
+    binding: Option<&str>,
+    name: &str,
+    args: &Value,
+) -> Answer {
     // no-blocking: an event out and a oneshot back; the work is the window's.
     let lane = lane
         .filter(|l| !l.is_empty())
         .ok_or("The Browser tab belongs to a lane, and this call came from none.")?;
     let op = op(name, args)?;
+    if let Some(project) = project
+        && let Some(bound) = bindings::authorize(project, lane, binding)?
+        && bound.backend == preference::Backend::LocalOya
+    {
+        return bindings::local(bound, op).await.map(capped);
+    }
     some_window(crate::events::windows())?;
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = format!(
@@ -351,6 +377,24 @@ pub fn schemas() -> Vec<Value> {
     ]
 }
 
+/// Validate before asking permission so stale requests cannot consume a newer session's approval.
+pub(crate) fn validate_binding(
+    project: &camino::Utf8Path,
+    lane: &str,
+    binding: Option<&str>,
+) -> Result<(), String> {
+    bindings::authorize(project, lane, binding).map(|_| ())
+}
+/// Tool descriptions reflect the captured browser and never promise the wrong profile or surface.
+pub(crate) fn session_schemas(lane: Option<&str>) -> Vec<Value> {
+    let mut tools = schemas();
+    for tool in &mut tools {
+        let current = tool["description"].as_str().unwrap_or_default();
+        tool["description"]=format!("{} {}",instructions(lane),current.replace("in this lane's Browser tab inside Keel", "in this session's selected browser").replace("It has none of the person's logins: if a page needs a sign-in, ask the person with ask_user to sign in in the Browser tab.", "The selected browser's profile is used; request any missing sign-in from the person.")).into();
+    }
+    tools
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,7 +451,11 @@ mod tests {
 
     #[tokio::test]
     async fn no_window_fails_at_once_and_no_lane_is_refused() {
-        assert!(call(None, "browser_read", &json!({})).await.is_err());
+        assert!(
+            call(None, None, None, "browser_read", &json!({}))
+                .await
+                .is_err()
+        );
         assert!(some_window(0).unwrap_err().contains("No Keel window"));
         assert!(some_window(1).is_ok());
     }
@@ -417,7 +465,9 @@ mod tests {
     async fn a_call_reaches_the_window_and_its_answer_comes_back() {
         let _window = crate::events::tests_window();
         let mut bus = crate::events::subscribe();
-        let asking = tokio::spawn(async { call(Some("lane-b"), "browser_read", &json!({})).await });
+        let asking = tokio::spawn(async {
+            call(None, Some("lane-b"), None, "browser_read", &json!({})).await
+        });
         let id = loop {
             let e = bus.recv().await.unwrap();
             if e.kind == "browser" && e.data["lane"] == "lane-b" {
@@ -447,7 +497,9 @@ mod tests {
     async fn a_dropped_call_leaves_no_waiter() {
         let _window = crate::events::tests_window();
         let mut bus = crate::events::subscribe();
-        let asking = tokio::spawn(async { call(Some("lane-d"), "browser_read", &json!({})).await });
+        let asking = tokio::spawn(async {
+            call(None, Some("lane-d"), None, "browser_read", &json!({})).await
+        });
         let id = loop {
             let e = bus.recv().await.unwrap();
             if e.kind == "browser" && e.data["lane"] == "lane-d" {

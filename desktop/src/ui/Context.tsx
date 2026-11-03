@@ -9,6 +9,7 @@ import { tilde } from "../hooks";
 import { count } from "./Turn";
 import { Icon } from "./icons";
 import "./Context.css";
+import { TaskHandoff } from "./TaskHandoff";
 import { ContextUsage } from "./ContextUsage";
 import { usageSummary } from "../session-usage";
 
@@ -152,6 +153,7 @@ export function Context({ lane }: { lane: string }) {
     {error && <p className="context-error" role="alert">{error}</p>}
     <ReportedUsage lane={lane} />
     <ContextUsage snapshot={snapshot} busy={busy} disconnected={!!l.disconnected} />
+    <TaskHandoff lane={lane} />
     <details className="context-section" open><summary><span>Memory & instructions</span><span className="context-section-count">{snapshot?.memory.length ?? 0}</span></summary><div className="context-section-body">
       {snapshot?.memory.length && ep ? snapshot.memory.map((s) => <ContextSourceView key={s.path} source={s} ep={ep} snapshot={snapshot} wt={wt} />) : <p className="context-note">No memory sources were reported. This does not establish that the session has no memory.</p>}
       {snapshot && <MemoryActivity snapshot={snapshot} />}

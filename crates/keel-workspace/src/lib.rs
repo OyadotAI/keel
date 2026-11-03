@@ -20,10 +20,12 @@ mod codex;
 mod config;
 pub mod conversation;
 mod follow;
+pub mod locations;
 mod plugins;
 mod session_names;
 mod sessions;
 mod skills;
+pub mod subagents;
 
 pub use agents::{Agent, Command, discover_agents, discover_commands};
 pub use codex::{codex_home, rollout};
@@ -33,7 +35,7 @@ pub use plugins::{Plugin, discover_plugins};
 pub use session_names::{NativeName, SessionNames};
 pub use sessions::{
     Kind, MAX_READ, Session, Status, discover_sessions, interactive, kind_of, opener_of,
-    opening_turn, project_key, session_dirs, session_summary, status, tail, tail_last,
+    opening_turn, pid_alive, project_key, session_dirs, session_summary, status, tail, tail_last,
     transcript_len, transcript_path,
 };
 pub use skills::{Skill, discover_skills, plugin_skills};
@@ -222,14 +224,7 @@ pub fn plain(path: Utf8PathBuf) -> Utf8PathBuf {
 /// and nothing else: the `HOME` the processes Keel starts inherit (git, `claude`, a dev server) is
 /// left exactly as it was.
 pub fn home() -> Option<Utf8PathBuf> {
-    if let Some(keel) = std::env::var("KEEL_HOME").ok().filter(|h| !h.is_empty()) {
-        return Some(Utf8PathBuf::from(keel));
-    }
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .map(Utf8PathBuf::from)
-        .or_else(|| std::env::home_dir().and_then(|h| Utf8PathBuf::from_path_buf(h).ok()))
+    locations::home().and_then(|path| Utf8PathBuf::from_path_buf(path).ok())
 }
 
 /// Read the `name` and `description` fields out of a Markdown file's YAML frontmatter.

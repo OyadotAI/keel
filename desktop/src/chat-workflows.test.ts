@@ -186,3 +186,17 @@ it("repeated questions and duplicate submit clicks have independent request owne
   expect(store.getState().lanes.test.questionDrafts?.[second.id].values[0].custom).toBe("Second");
   expect(store.getState().lanes.test.pending).toEqual([second]);
 });
+
+it.each(["claude", "codex", "antigravity"] as const)("explicit %s continuation retains the checkout and retries its durable receipt", async (provider) => {
+  const store = await fixture();
+  store.setState((s) => ({ lanes: { test: { ...s.lanes.test, isolated: true, wt: "existing-tree", mode: "acceptEdits" } } }));
+  const result = { id: "stable-receipt", revision: 7, source: { lane: "test", provider: "claude" as const, session: "old-session", checkout: "/repo/.keel/worktrees/existing-tree", wt: "existing-tree" }, destination: { lane: "continued", provider, session: "pending-receipt", checkout: "/repo/.keel/worktrees/existing-tree", wt: "existing-tree" }, prompt: "Inspected revision seven" };
+  const destination = store.getState().adoptContinuation("test", result);
+  expect(store.getState().lanes[destination]).toMatchObject({ agent: provider, interface: "chat", wt: "existing-tree", known: false, receipt: { id: "stable-receipt", prompt: "Inspected revision seven" } });
+  expect(store.getState().lanes.test).toMatchObject({ session: "old-session", wt: "existing-tree", draft: "Existing draft" });
+  expect(store.getState().adoptContinuation("test", result)).toBe(destination);
+  expect(store.getState().projects["/repo"].lanes.filter((id) => id === destination)).toHaveLength(1);
+  await store.getState().send(destination, result.prompt);
+  expect(mocks.post.mock.calls.find(([, path]) => path === "/api/chat/send")?.[2]).toMatchObject({ id: "stable-receipt", provider });
+  expect(mocks.post.mock.calls.some(([, path]) => path === "/api/worktree/create")).toBe(false);
+});

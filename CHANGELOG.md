@@ -4,11 +4,28 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Added a device-level choice between Keel's browser and an installed Oya Browser, keeping each
+  session on its selected browser and limiting local Oya access to its own pages.
+- Updated the inherited QA agent to exercise UI changes in Oya and report browser testing blockers.
+- Added shared delegation guidance and durable task memory, saved handoff previews, and a project
+  task changelog under `.keel/`, with explicit provider continuation on the same checkout.
+- Defaulted new projects to Empty with optional names and a lazy, home-relative KeelWorkspace
+  destination on macOS and Windows, with atomic folder reservation and creation retry receipts.
+
 ### Fixed
+- Restored terminal subagent indicators for resumed child turns and added a read-only Subagents
+  pane with provider lifecycle status, bounded progress, retained results, and reconnect feedback.
 - Enabled validated Explorer file-path insertion into active Claude Code, Codex, and Antigravity
   terminals without submitting prompts, with visible rejection and connection-change protection.
 - Preserved PR review forms and results through errors, confirmed cancellation and findings
   delivery, and reconciled existing pull requests before retrying creation.
+
+### Known issues
+- A project can stop starting new agent conversations when shared task storage reaches 128 tasks
+  or 8 MiB. Existing task records are preserved.
+- Closing an Antigravity conversation while it starts can retain a browser binding; repeated early
+  closures can eventually exhaust the daemon's binding capacity.
 
 ## [0.4.40] - 2026-11-02
 

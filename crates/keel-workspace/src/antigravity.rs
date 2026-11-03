@@ -107,7 +107,8 @@ fn head(path: &Utf8Path) -> Option<Vec<u8>> {
 
 /// Read-only, and never a writer: `mode=ro` while agy has it open, `immutable` when the
 /// write-ahead log's index cannot be opened (a conversation nobody is running).
-fn open(path: &Utf8Path) -> Option<rusqlite::Connection> {
+/// Read provider state without modifying settings, conversation content, or its WAL.
+pub(crate) fn open(path: &Utf8Path) -> Option<rusqlite::Connection> {
     use rusqlite::OpenFlags;
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
     let try_open = |query: &str| {
@@ -162,7 +163,8 @@ pub(crate) fn count(path: &Utf8Path) -> Option<u64> {
 }
 
 /// One step as the line the decoder and the follower read.
-fn line(idx: i64, kind: i64, status: i64, payload: &[u8]) -> Value {
+/// Share protobuf decoding between settled transcripts and independent live child observations.
+pub(crate) fn line(idx: i64, kind: i64, status: i64, payload: &[u8]) -> Value {
     let f = Fields::parse(payload);
     let mut v = json!({ "agy": idx, "step": kind, "status": status });
     if let (Some(secs), nanos) = (f.int(&[5, 1, 1]), f.int(&[5, 1, 2]).unwrap_or(0)) {

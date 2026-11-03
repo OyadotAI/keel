@@ -1,4 +1,6 @@
 // The lane's Browser tab: the page the agent is using, with the person's own back, forward, reload
+import { useBrowserPreference } from "../browser-preference";
+import { BrowserPreferenceView, LocalOyaView } from "./BrowserPreference";
 // and address. The page is a native webview laid inside `.browser-page`, inset by its ring; it is
 // moved off-screen whenever this tab is not showing it or something is drawn on top.
 //
@@ -134,6 +136,7 @@ export function Browser({ lane }: { lane: string }) {
   const project = useStore((s) => s.lanes[lane]?.project);
   const running = useStore((s) => !!s.lanes[lane]?.running);
   const tab = useTab(lane);
+  const browserPreference = useBrowserPreference(lane);
   // Held across a run, and only while the lane's turn runs, so it cannot outlive the agent.
   const working = !!tab?.browsing && running;
   const run = (op: Op) => {
@@ -141,10 +144,13 @@ export function Browser({ lane }: { lane: string }) {
     setError(lane, undefined);
     act(lane, project, op).catch((e) => setError(lane, e instanceof Error ? e.message : String(e)));
   };
+  if (!browserPreference.value) return <div className="preview browser"><p>{browserPreference.error || "Checking browser preference…"}</p><button onClick={() => void browserPreference.refresh()}>Retry</button></div>;
+  if (browserPreference.value.effective.backend === "local_oya") return <LocalOyaView state={browserPreference} />;
   return (
     <div className="preview browser">
       <Bar url={tab?.url} loading={tab?.loading} run={run} />
       <Status tab={tab} working={working} />
+      {browserPreference.choosing && <BrowserPreferenceView state={browserPreference} lane={lane} />}
       {tab?.url ? (
         <Place lane={lane} working={working} />
       ) : tab?.room ? (

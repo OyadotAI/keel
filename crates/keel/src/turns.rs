@@ -698,6 +698,9 @@ pub fn emit(repo: &Utf8Path, session: &str, turn: &str, fact: Fact) -> Emitted {
     if let Err(e) = upsert(repo, session, turn, |r| r.absorb(&at, &fact)) {
         tracing::warn!("could not record a fact for {session}: {e}");
     }
+    if let Err(error) = crate::tasks::observed(repo, session, &fact) {
+        tracing::warn!("Could not checkpoint shared task evidence: {error}");
+    }
     let emitted = Emitted {
         turn: Some(turn.to_string()),
         at,

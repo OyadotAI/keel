@@ -11,7 +11,7 @@ import { SetupBadge } from "./SetupWarnings";
 import { Icon } from "./icons";
 import { label } from "../keys";
 import { cycle } from "./App";
-import { activity, waiting, workingMembers } from "../activity";
+import { activity, waiting, memberInvocations } from "../activity";
 import { BrandMark } from "./BrandMark";
 import { MemberAvatar } from "./MemberAvatar";
 import { Working } from "./Working";
@@ -110,16 +110,16 @@ function Members({ project }: { project: string }) {
   const [showAll, setShowAll] = useState(false);
   const projectName = useStore((s) => s.projects[project]?.name);
   const workingNames = useStore((s) => {
-    const names = new Set<string>();
+    const names: Record<string, number> = Object.create(null);
     for (const id of s.projects[project]?.lanes ?? []) {
       const lane = s.lanes[id];
       if (!lane) continue;
       const session = sessionForLane(lane, s.projects[project]?.sessions);
-      for (const name of workingMembers(lane, session)) names.add(name);
+      for (const [name, count] of Object.entries(memberInvocations(lane, session))) names[name] = (names[name] ?? 0) + count;
     }
-    return [...names].sort().join("\n");
+    return JSON.stringify(Object.fromEntries(Object.entries(names).sort(([a], [b]) => a.localeCompare(b))));
   });
-  const working = new Set(workingNames.split("\n"));
+  const working = JSON.parse(workingNames) as Record<string, number>;
   useEffect(() => {
     let live = true;
     setLoaded(false);
@@ -163,10 +163,10 @@ function Members({ project }: { project: string }) {
           else useStore.setState({ extensions: true, extensionsSection: "agents", settings: false, creating: false });
         }}>{loadError ? "Retry" : "Add team"}<Icon name={loadError ? "chevron-right" : "plus"} size={12} /></button>
       </div>}
-      {shown.map((member) => <button className={`member-row${working.has(member.name) ? " is-working" : ""}`} key={member.name} onClick={() => tag(member)} aria-label={`Tag ${member.display_name || member.name}${working.has(member.name) ? ", working" : ""}`} title={`@${member.name}${working.has(member.name) ? " · Working" : ""} · click to tag`}>
-        <MemberAvatar name={member.name} displayName={member.display_name} avatar={member.avatar} working={working.has(member.name)} />
+      {shown.map((member) => <button className={`member-row${(working[member.name] > 0) ? " is-working" : ""}`} key={member.name} onClick={() => tag(member)} aria-label={`Tag ${member.display_name || member.name}${(working[member.name] > 0) ? `, ${working[member.name]} invocation${working[member.name] === 1 ? "" : "s"} working` : ""}`} title={`@${member.name}${(working[member.name] > 0) ? ` · ${working[member.name]} working` : ""} · click to tag`}>
+        <MemberAvatar name={member.name} displayName={member.display_name} avatar={member.avatar} working={(working[member.name] > 0)} />
         <span className="member-name">{member.display_name || member.name}</span>
-        {working.has(member.name) ? <Working /> : <span className="member-action" aria-hidden="true">@</span>}
+        {(working[member.name] > 0) ? <Working /> : <span className="member-action" aria-hidden="true">@</span>}
       </button>)}
       {members.length > MEMBERS_VISIBLE && <button className="member-more" onClick={() => setShowAll((all) => !all)} aria-expanded={showAll}>{showAll ? "Show less" : `Show ${members.length - MEMBERS_VISIBLE} more`}</button>}
       {members.length > 0 && <p className="member-hint">Type <span>@</span> to mention a member</p>}

@@ -120,8 +120,7 @@ pub async fn repos() -> ApiResult<Vec<github::Repo>> {
 pub struct CloneBody {
     pub clone_url: String,
     pub name: String,
-    /// Where to put it. Defaults to the parent of the repository currently open, which is almost
-    /// always where the user keeps their other projects.
+    /// Defaults to the shared KeelWorkspace directory on this platform.
     pub parent: Option<String>,
 }
 
@@ -134,23 +133,7 @@ pub async fn clone(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CloneBody>,
 ) -> ApiResult<OpenedRepo> {
-    let parent = match &body.parent {
-        // `~/Dev` is what a person types; expanding it here means every caller gets it right
-        // rather than each one remembering to.
-        Some(p) => Utf8PathBuf::from(match p.strip_prefix('~') {
-            Some(rest) => keel_workspace::home()
-                .map(String::from)
-                .ok_or(std::env::VarError::NotPresent)
-                .map(|h| format!("{h}{rest}"))
-                .unwrap_or_else(|_| p.clone()),
-            None => p.clone(),
-        }),
-        None => state
-            .repo()
-            .parent()
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| bad("no parent directory to clone into"))?,
-    };
+    let parent = crate::project::project_parent(body.parent.as_deref()).map_err(bad)?;
 
     // Off the executor: this is the one call in Keel that can take minutes, and running it here
     // stalled every other request for the whole clone — the UI simply stopped responding.

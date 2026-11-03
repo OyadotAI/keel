@@ -288,6 +288,27 @@ fn running() -> &'static std::sync::Mutex<Running> {
     RUNNING.get_or_init(Default::default)
 }
 
+fn owners() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static OWNERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+        std::sync::OnceLock::new();
+    OWNERS.get_or_init(Default::default)
+}
+struct TaskProcess(String, u32);
+impl Drop for TaskProcess {
+    fn drop(&mut self) {
+        use crate::lock::Locked;
+        let mut owners = owners().locked();
+        if owners.get(&self.0) == Some(&self.1) {
+            owners.remove(&self.0);
+        }
+    }
+}
+/// Source-stop controls can only reach the process registered by this terminal launch.
+pub(crate) fn owned_pid(lane: &str) -> Option<u32> {
+    use crate::lock::Locked;
+    owners().locked().get(lane).copied()
+}
+
 /// Whether a Keel terminal is running conversation `id`.
 pub fn live(id: &str) -> bool {
     use crate::lock::Locked;
@@ -359,6 +380,52 @@ fn pty_thread(
         return;
     };
 
+    // Hold task ownership for the terminal lifetime without blocking ordinary idle Git operations.
+    let _task_activity = match &launch {
+        Launch::Agent {
+            repo,
+            agent,
+            lane: Some(lane),
+            session,
+            ..
+        } => {
+            let checkout = camino::Utf8Path::new(cwd);
+            match (|| {
+                let activity = crate::tasks::hold_ownership(checkout, false)?;
+                crate::tasks::register(
+                    repo,
+                    crate::tasks::Source {
+                        lane: lane.clone(),
+                        provider: agent.clone(),
+                        session: session.clone(),
+                        checkout: cwd.to_string(),
+                        wt: checkout
+                            .strip_prefix(repo.join(crate::worktree::DIR))
+                            .ok()
+                            .map(|s| s.to_string()),
+                    },
+                )?;
+                crate::guidance::prepare(repo)?;
+                Ok::<_, String>(activity)
+            })() {
+                Ok(activity) => Some(activity),
+                Err(error) => {
+                    let _ = out.blocking_send(Out::Bytes(format!("{error}\r\n").into_bytes()));
+                    return;
+                }
+            }
+        }
+        _ => None,
+    };
+    let task_owner = match &launch {
+        Launch::Agent {
+            repo,
+            lane: Some(lane),
+            ..
+        } => Some((repo.clone(), lane.clone())),
+        _ => None,
+    };
+
     // A Codex or Antigravity terminal names its conversation itself; see `discover`.
     let mut unnamed = match &launch {
         Launch::Agent {
@@ -376,12 +443,12 @@ fn pty_thread(
     };
     // Resumed, the conversation is known from the start; started fresh, once it is found.
     let mut _live = match &launch {
-        Launch::Agent {
-            agent,
-            session,
-            resume: true,
-            ..
-        } if agent != "claude" => Some(Live::hold(session)),
+        Launch::Agent { agent, session, .. }
+            if agent == "claude" || matches!(&launch, Launch::Agent { resume: true, .. }) =>
+        {
+            let _ = agent;
+            Some(Live::hold(session))
+        }
         _ => None,
     };
     let mut looked = std::time::Instant::now();
@@ -472,7 +539,17 @@ fn pty_thread(
         return;
     };
     // Taken now: the group outlives its leader, so ending it after an exit needs the number.
+    let browser_generation = task_owner
+        .as_ref()
+        .and_then(|(_, lane)| crate::browser::binding_id(lane));
     let leader = child.process_id();
+    let _task_process = task_owner.as_ref().and_then(|(_, lane)| {
+        leader.map(|pid| {
+            use crate::lock::Locked;
+            owners().locked().insert(lane.clone(), pid);
+            TaskProcess(lane.clone(), pid)
+        })
+    });
     drop(pair.slave);
 
     let Ok(mut reader) = pair.master.try_clone_reader() else {
@@ -568,6 +645,9 @@ fn pty_thread(
                     crate::discover::started(agent, std::path::Path::new(cwd), *since, live, leader)
             {
                 _live = Some(Live::since(&id, started.clone()));
+                if let Some((repo, owner)) = &task_owner {
+                    let _ = crate::tasks::session(repo, owner, &id);
+                }
                 crate::events::emit(
                     "terminal.session",
                     None,
@@ -610,6 +690,9 @@ fn pty_thread(
         crate::signals::end_all(pid, &stragglers);
         #[cfg(not(unix))]
         crate::signals::end_tree(pid);
+    }
+    if let Some((_, lane)) = &task_owner {
+        crate::browser::release(lane, browser_generation.as_deref());
     }
     // Reaped, always: a zombie answers `kill(pid, 0)`, so an unreaped agent read as a live
     // session for the rest of the daemon's life. Bounded — it has been sent SIGKILL.

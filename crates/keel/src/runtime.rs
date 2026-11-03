@@ -259,6 +259,8 @@ async fn spawn_runtime(
     });
     let answers = r.answers.clone();
     let pid = r.pid;
+    let browser_lane = lane.to_string();
+    let browser_generation = crate::browser::binding_id(lane);
     processes().locked().insert(pid);
     state.runtimes.0.locked().insert(lane.into(), r.clone());
     let errors = output.clone();
@@ -313,6 +315,7 @@ async fn spawn_runtime(
         }
         let status = child.wait().await;
         alive.store(false, Ordering::Release);
+        crate::browser::release(&browser_lane, browser_generation.as_deref());
         inspections.locked().clear();
         answers.locked().clear();
         processes().locked().remove(&pid);
@@ -353,7 +356,9 @@ pub async fn control(
         return if q.method == "close" {
             // An Antigravity turn is a one-shot `agy`, not a runtime: closing its lane must still
             // end it, or it runs on with nothing on screen.
+            let browser_generation = crate::browser::binding_id(&q.lane);
             state.interrupt(&q.lane);
+            crate::browser::release(&q.lane, browser_generation.as_deref());
             Ok(Json(json!({"ok":true})))
         } else {
             Err((
@@ -428,6 +433,27 @@ pub async fn chat(state: Arc<AppState>, q: ChatQuery) -> axum::response::Respons
     crate::agent::alive(out)
 }
 
+/// Only daemon-owned runtimes may be signalled by a task handoff.
+pub(crate) fn owned_pid(state: &AppState, lane: &str) -> Option<u32> {
+    state
+        .runtimes
+        .0
+        .locked()
+        .get(lane)
+        .filter(|r| r.alive.load(Ordering::Acquire))
+        .map(|r| r.pid)
+}
+
+/// An idle managed provider still owns its session and may retain children.
+pub(crate) fn has_session(state: &AppState, lane: &str) -> bool {
+    state
+        .runtimes
+        .0
+        .locked()
+        .get(lane)
+        .is_some_and(|r| r.alive.load(Ordering::Acquire))
+}
+
 async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> {
     let lane = q.lane.as_deref().ok_or("A lane is required")?;
     let cwd = state.checkout(q.wt.as_deref())?;
@@ -465,16 +491,51 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     let checkout = cwd.clone();
     let previous_session = q.session.clone();
     let selected_provider = provider.to_owned();
+    let fresh_runtime = !has_session(&state, lane);
+    let task_repo = repo.clone();
+    let task_lane = lane.to_string();
+    let task_prompt = q.prompt.clone();
+    let task_wt = q.wt.clone();
+    let browser_resume = q.session.is_some();
+    let task_session = q.session.clone().unwrap_or_else(|| lane.to_string());
     let (begun, system) = tokio::task::spawn_blocking(move || {
+        crate::tasks::register(
+            &task_repo,
+            crate::tasks::Source {
+                lane: task_lane.clone(),
+                provider: selected_provider.clone(),
+                session: task_session.clone(),
+                checkout: checkout.to_string(),
+                wt: task_wt,
+            },
+        )?;
+        crate::guidance::prepare(&task_repo)?;
+        if fresh_runtime {
+            crate::browser::prepare(
+                &task_repo,
+                &task_lane,
+                &selected_provider,
+                &task_session,
+                browser_resume,
+            )?;
+        }
+        crate::tasks::input(&task_repo, &selected_provider, &task_session, &task_prompt)?;
         if let Some(session) = previous_session {
             crate::context::prime(&checkout, &selected_provider, &session);
         }
         let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(&checkout, rel, bytes);
         keel_harness::quarantine_keeping(&checkout, keep).map_err(|e| e.to_string())?;
-        Ok::<_, String>((
-            crate::turns::begin(&checkout),
+        let system = format!(
+            "{}\n{}",
             crate::agent::system_prompt(&checkout),
-        ))
+            crate::browser::instructions(Some(&task_lane))
+        );
+        let system = if selected_provider == "codex" && fresh_runtime {
+            crate::guidance::codex_system(&checkout, &system)
+        } else {
+            system
+        };
+        Ok::<_, String>((crate::turns::begin(&checkout), system))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -525,6 +586,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     } else {
         Vec::new()
     };
+    let supplied_guidance = system.contains("Keel collaboration guidance");
     r.send(json!({"method":"start", "query": {
         "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":provider_prompt, "session":q.session,
         "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings, "port":state.port(),
@@ -566,6 +628,30 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         if forward.is_none()
             && let Some(session) = &session
         {
+            let (task_repo, task_lane, task_session, task_provider) = (
+                repo.clone(),
+                lane.to_string(),
+                session.clone(),
+                provider.to_string(),
+            );
+            let binding = crate::serve::in_blocking(move || {
+                crate::tasks::session(&task_repo, &task_lane, &task_session)?;
+                if !supplied_guidance {
+                    return Ok(());
+                }
+                crate::guidance::acknowledge(
+                    &task_repo,
+                    &task_provider,
+                    &task_session,
+                    "Managed native instruction initialization",
+                )
+            })
+            .await;
+            if let Err(error) = binding {
+                emit(tx, "err", json!(format!(
+                    "Keel couldn’t update shared task or browser session metadata: {error}. The agent is still running; stop it before retrying the handoff."
+                ))).await;
+            }
             state.keyed(lane, token, session, &key);
             let mut bus = crate::turns::subscribe(session);
             crate::turns::emit(&repo, session, &key, started.clone());

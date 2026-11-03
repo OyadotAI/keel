@@ -344,6 +344,23 @@ pub async fn send(
             .filter_map(|r| serde_json::from_str::<Value>(r.data.get()).ok())
             .any(|r| r["id"] == receipt);
         if !repeated {
+            let checkout = owner.checkout(seed.wt.as_deref()).map_err(internal)?;
+            let source = crate::tasks::Source {
+                lane: seed.lane.clone().unwrap_or_default(),
+                provider: seed.provider.clone().unwrap_or_else(|| "claude".into()),
+                session: seed
+                    .session
+                    .clone()
+                    .unwrap_or_else(|| seed.lane.clone().unwrap_or_default()),
+                checkout: checkout.to_string(),
+                wt: seed.wt.clone(),
+            };
+            let task_session = source.session.clone();
+            let task_provider = source.provider.clone();
+            crate::tasks::register(&owner.repo(), source).map_err(internal)?;
+            crate::guidance::prepare(&owner.repo()).map_err(internal)?;
+            crate::tasks::input(&owner.repo(), &task_provider, &task_session, &seed.prompt)
+                .map_err(internal)?;
             crate::references::validate_query(&owner, &seed)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
         }

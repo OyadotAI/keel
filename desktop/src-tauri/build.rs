@@ -7,6 +7,7 @@ fn main() {
         "close_project",
         "stop_all",
         "scratch_dir",
+        "projects_dir",
         "sign_packet",
         "save_text",
         "is_dir",
