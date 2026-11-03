@@ -4,6 +4,17 @@
 
 use camino::Utf8PathBuf;
 
+mod project;
+
+/// Meter only an owned supervised run, using the opened project rather than its lane checkout.
+pub async fn run(project: Utf8PathBuf) -> Option<keel_license::RunUsage> {
+    let directory = dir()?;
+    crate::serve::in_blocking(move || {
+        keel_license::RunUsage::start(directory, &project::identity(&project))
+    })
+    .await
+}
+
 fn dir() -> Option<Utf8PathBuf> {
     if cfg!(test) {
         return None;

@@ -48,10 +48,12 @@ them is not licensed.
 
 ### Usage Report
 
-The software sends the licensor, once a day, an anonymous report containing a random installation
-identifier, the software version, the operating system, the number of agent steps run on the previous
-day and, if one is configured, the license key's identifier. It contains no personal data, prompts,
-conversation content, file names, file contents, repository names or credentials. The report cannot be
+The software sends the licensor daily usage reports containing a random installation identifier,
+the software version, the operating system, completed-day agent step counts, supervised agent runtime,
+installation-scoped opaque project identifiers and, if one is configured, the license key's identifier.
+Project identifiers use a random local secret; the secret is never sent. The payload contains no
+prompts, conversation content, paths, file names, file contents, repository names or signed keys.
+The receiver also receives ordinary network connection metadata. The report cannot be
 turned off; sending it is a condition of this license, and blocking or altering it is not licensed.
 
 ### Patents

@@ -1121,7 +1121,7 @@ dependencies = [
 [[package]]
 name = "keel-license"
 version = "0.1.0"
-source = "git+ssh://git@github.com/OyadotAI/keel-license.git?rev=3af073fcc8226759e8538ddfcece053eb6455f55#3af073fcc8226759e8538ddfcece053eb6455f55"
+source = "git+ssh://git@github.com/OyadotAI/keel-license.git?rev=06a3116a2ca4839fd9150ec4bbb014ea2c4e891e#06a3116a2ca4839fd9150ec4bbb014ea2c4e891e"
 dependencies = [
  "base64",
  "camino",

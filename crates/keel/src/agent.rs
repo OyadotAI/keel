@@ -1198,6 +1198,7 @@ pub async fn chat(
         // On the parent-death path for as long as it runs: `exit` alone would reparent the agent
         // and everything under it to init.
         let _tracked = crate::runtime::Tracked::new(pid);
+        let run_usage = crate::license::run(repo.clone()).await;
 
         // Drained, always, and not only to report it.
         //
@@ -1439,6 +1440,7 @@ pub async fn chat(
         // Before the turn closes: a subagent's end read after that would open a turn of its own.
         drop(subagents);
         let status = wait_for_agent(&mut child, &tx).await;
+        drop(run_usage);
         // Reaped: off the parent-death list before the pid can be reused by something else.
         drop(_tracked);
         // Stopped — the person pressed Stop, or closed the window or the lane — is how a turn

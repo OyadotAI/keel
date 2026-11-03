@@ -15,6 +15,27 @@ can execute third-party code. Review installation commands and the tools you aut
 
 ## Crash reports and usage events
 
+### License usage report
+
+The compiled license component sends a daily report to Oya independently of the optional crash and
+product-analytics switches described below. This report is a condition of Keel's license.
+It includes a random installation ID, release, OS, completed-day accepted step counts, supervised
+agent runtime, opaque installation-scoped project identifiers, and a reported license ID when present.
+It never includes prompts, transcripts, source, paths, repository names, remotes, complete signed
+license keys, or the local secret used to derive project IDs. The receiver sees ordinary network
+connection metadata. IDs count installations and installation-scoped projects, not unique people
+or repositories across devices.
+
+Runtime measures top-level supervised runs, including tools and approval waits. Concurrent lanes add
+agent-hours. Idle persistent sessions, transcript followers, verification, automatic commits and
+separately observed subagents are excluded. Confirmed intervals are saved approximately every thirty
+seconds; a crash can lose the final unconfirmed tail. New hours/project measurements begin with the
+next full UTC day after upgrade, and unavailable or overflowed measurements are not reported as zero.
+Completed daily snapshots retry after failed delivery and are retained locally for at most ninety
+days. No historical runtime or project activity is reconstructed from transcripts.
+
+### Optional crash and product analytics
+
 Reporting depends on the build. `KEEL_SENTRY_DSN`, `KEEL_POSTHOG_KEY`, and `KEEL_POSTHOG_HOST`
 are explicit build inputs. Builds without reporting keys leave the corresponding SDK off.
 The build script does not borrow configuration from neighboring projects.
@@ -23,8 +44,8 @@ When configured, crash reporting and usage reporting are **enabled by default**.
 independently in **Settings → Privacy**. Turning reporting off stops future reporting through that
 switch; it does not delete reports already delivered.
 
-App-launched daemons do not initialize a separate reporting client, so they cannot bypass that
-switch. A daemon manually launched with `keel serve --sentry-dsn` is a separate, explicit opt-in
+App-launched daemons do not initialize a separate Sentry or PostHog client, so they cannot bypass
+those optional switches. A daemon manually launched with `keel serve --sentry-dsn` is a separate, explicit opt-in
 and is not controlled by the app's settings. Restart older app/daemon processes after upgrading
 to apply this change; changing files on disk does not stop an already-running older reporter.
 

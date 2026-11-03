@@ -593,6 +593,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy(),
         "codexArgs":codex_args
     }})).await?;
+    let run_usage = crate::license::run(repo.clone()).await;
     let mut session = q.session.clone();
     let mut usage = None;
     let mut code = -1;
@@ -709,6 +710,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             _ => {}
         }
     }
+    drop(run_usage);
     *r.output.locked() = None;
     state.finished(lane, token);
     let stopped = state.was_interrupted(lane, token) || code == -1;
