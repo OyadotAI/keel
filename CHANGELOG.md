@@ -5,6 +5,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Gave the Keel screenshot a content-based asset URL so replacing the image does not reuse the
+  previous screenshot's browser or CDN cache entry.
 - Replaced the landing page's Keel screenshot with the supplied workspace capture, preserving
   the complete image and its aspect ratio.
 - Matched the oya.dev landing page to Oya Browser's public theme and original two-ring logo,
