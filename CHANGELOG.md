@@ -14,6 +14,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 - Counted accepted steps for unmetered licenses while preserving free and capped-license refusals.
 
 ### Added
+- Published the Oya product landing page on Cloudflare Pages, connected oya.dev while preserving
+  email DNS, and documented deployment and rollback commands with CLI cache excluded from Git.
 - Added a standalone oya.dev landing page for Keel, Oya Browser, and Keel Reviewer, with local
   product visuals, direct product destinations, and hermetic page checks in the gate and CI.
 - Added a device-level choice between Keel's browser and an installed Oya Browser, keeping each

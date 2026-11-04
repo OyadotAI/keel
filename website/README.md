@@ -44,6 +44,34 @@ Shared values live in `tokens.css`. Layouts live in `styles.css`; diagram styles
 `illustrations.css` to keep the files small. The single semantic HTML document intentionally
 avoids a template/build system. Essential content and navigation work with JavaScript disabled.
 
-The page is prepared for `https://oya.dev/` (canonical and social metadata). Hosting, deployment,
-DNS changes, and individual product sites are outside this change. Publish only `website/public/`
-when deployment is authorized. There are no new network services or analytics in the page.
+## Cloudflare Pages
+
+The published project is `oya-dev`, with production branch `main` and Pages hostname
+<https://oya-dev-2fs.pages.dev>. The production custom domain is <https://oya.dev/>; its canonical
+and social metadata already use that address. Publish only `website/public/`.
+
+From the repository root, using an authenticated Cloudflare account:
+
+```sh
+make website-test
+wrangler whoami
+wrangler pages deploy website/public --project-name oya-dev --branch main
+```
+
+Wrangler reports the immutable deployment URL after upload. Check the production hostname and
+custom domain in Oya after deployment. The project was first published from commit `b963302`;
+the immutable initial deployment is <https://a09e45f0.oya-dev-2fs.pages.dev>.
+
+The apex domain belongs to an active zone in the same Cloudflare account. Its Pages custom-domain
+binding is registered on `oya-dev`, and its apex CNAME targets `oya-dev-2fs.pages.dev` (proxied,
+automatic TTL). The custom-domain page and its product navigation were verified over HTTPS in
+Oya on 2026-11-03. Email records were preserved during the cutover.
+
+Keep email, verification, and subdomain records when changing the web record. Inspect Pages'
+custom-domain and certificate status after a change; DNS verification and final certificate
+validation can have separate states. Record the previous apex web target before replacing it
+so the DNS change can be reversed. If Wrangler cannot edit DNS with its current token scopes,
+use the signed-in Cloudflare Pages domain wizard to review and activate the proposed record.
+
+To roll back site content, select a previous production deployment in the Pages project; preserve
+the DNS and custom-domain binding. There are no new backend services or analytics in this page.
