@@ -30,8 +30,8 @@ real keyboard, or responsive browser testing.
   and foreground colors. Header and footer share this asset. The favicon preserves the
   supplied `agentchrome/ui/src/app/icon.svg` geometry and colors. Brand source was checked
   against the local Oya Browser checkout and the live site through Oya on 2026-11-03.
-- Keel's screenshot is copied, unaltered, from `docs/media/workspace.png`. It is an existing demo
-  workspace, not a claim that the picture shows the latest release.
+- Keel's screenshot is the unaltered image supplied by the user on 2026-11-04, stored at
+  `public/assets/keel-workspace.png`. It shows a live agent terminal and embedded browser.
 - DM Sans is copied from `desktop/src/fonts/dm-sans-latin.woff2`; its original SIL Open Font
   License is retained in `public/assets/OFL.txt`.
 - Browser and Reviewer diagrams are HTML/CSS illustrations, explicitly labeled as such.
