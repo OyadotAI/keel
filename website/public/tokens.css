@@ -1,4 +1,4 @@
-/* Shared values keep Oya's three product treatments part of one visual system. */
+/* Oya Browser's public-page palette and type keep this directory in the existing Oya brand. */
 @font-face {
   font-family: "DM Sans";
   font-style: normal;
@@ -9,29 +9,31 @@
 
 :root {
   color-scheme: light;
-  --canvas: #fbfaf8;
+  --canvas: #ffffff;
   --paper: #ffffff;
-  --ink: #1c1c1a;
-  --body: #45453e;
-  --muted: #6c6c62;
-  --rule: #dedcd4;
-  --green: #356b53;
-  --green-hover: #28543f;
-  --sage: #e9ede5;
-  --blue: #3b5f87;
-  --blue-hover: #2d4b6c;
-  --blue-wash: #edf1f5;
-  --blue-line: #d1dbe6;
-  --dark: #202722;
-  --dark-raised: #29312b;
-  --dark-line: #455047;
-  --dark-muted: #bcc7bd;
-  --amber: #e7c894;
-  --amber-hover: #f4dcb5;
+  --ink: #1a261e;
+  --body: #454f47;
+  --muted: #535d55;
+  --rule: #e5e9e1;
+  --green: #16733b;
+  --lime: #c7f7a4;
+  --lime-hover: #b8ed90;
+  --lime-border: #b5dc99;
+  --on-lime: #1a331d;
+  --diagram-wash: #f7f9f5;
+  --diagram-line: #dce3d7;
+  --dark: #1b2d22;
+  --dark-raised: #15251b;
+  --dark-line: #425741;
+  --dark-muted: #c3d4bf;
+  --on-dark: #f5f7ed;
+  --header-glass: #ffffffc7;
+  --header-rule: #1a261e14;
+  --halo: #c7f7a426;
   --font: "DM Sans", sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --container: 1180px;
-  --gutter: clamp(20px, 4vw, 64px);
+  --container: 1200px;
+  --gutter: 32px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -51,12 +53,14 @@
   --type-body: 16px;
   --type-lead: 18px;
   --type-directory: 23px;
-  --type-wordmark: 33px;
-  --type-hero: clamp(46px, 6.2vw, 88px);
+  --type-wordmark: 18px;
+  --type-hero: clamp(42px, 6.4vw, 92px);
+  --type-hero-phone: clamp(38px, 11vw, 46px);
   --type-heading: clamp(34px, 4vw, 54px);
   --line-body: 1.65;
   --line-tight: 1.08;
-  --tracking-heading: -0.055em;
+  --tracking-heading: -0.045em;
+  --tracking-hero: -0.058em;
   --tracking-label: 0.1em;
   --radius-small: 6px;
   --radius-medium: 12px;
@@ -66,12 +70,20 @@
   --icon-small: 16px;
   --tap: 44px;
   --button-height: 48px;
-  --header-height: 88px;
+  --header-height: 76px;
+  --header-blur: 16px;
+  --anchor-clearance: 104px;
+  --anchor-clearance-phone: 152px;
+  --logo-size: 30px;
+  --header-layer: 40;
+  --skip-layer: 50;
+  --hover-lift: -1px;
   --step-icon: 40px;
   --step-gap: 28px;
   --motion: 180ms;
   --focus-width: 2px;
   --focus-offset: 4px;
-  --image-shadow: 0 12px 32px #20322214, 0 1px 3px #20322218;
-  --frame-shadow: 0 16px 40px #263b5210;
+  --image-shadow: 0 12px 32px #0c180d29, 0 1px 3px #0c180d33;
+  --frame-shadow: 0 1px 2px #1a261e0a, 0 18px 40px -28px #1a261e40;
+  --button-shadow: 0 1px 0 #ffffff99 inset, 0 8px 20px -12px #16733b8c;
 }

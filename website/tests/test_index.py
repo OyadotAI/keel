@@ -6,6 +6,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 PUBLIC = Path(__file__).resolve().parents[1] / "public"
 PRODUCT_DESTINATIONS = {
@@ -16,6 +17,19 @@ PRODUCT_DESTINATIONS = {
 MIN_ALT_LENGTH = 24
 FIRST_HEADING = "h1"
 NEXT_HEADING = "h2"
+BRAND_LOGO = "assets/oya-logo.svg"
+SVG_NAMESPACE = "{http://www.w3.org/2000/svg}"
+BRAND_VIEWBOX = "0 0 512 512"
+BRAND_CIRCLES = [
+    {"cx": "276", "cy": "276", "r": "160", "stroke": "#16733b", "stroke-width": "80"},
+    {"cx": "236", "cy": "236", "r": "160", "stroke": "#1a261e", "stroke-width": "80"},
+]
+FAVICON_VIEWBOX = "0 0 64 64"
+FAVICON_CIRCLES = [
+    {"cx": "35", "cy": "35", "r": "17", "fill": "none", "stroke": "#39ed35", "stroke-width": "8"},
+    {"cx": "29", "cy": "29", "r": "17", "fill": "none", "stroke": "#f0f0e8", "stroke-width": "8"},
+]
+FAVICON_BACKGROUND = {"width": "64", "height": "64", "rx": "15", "fill": "#141410"}
 
 
 def local_asset(reference, base, root):
@@ -45,6 +59,8 @@ class Page(HTMLParser):
         self.section_stack = []
         self.scripts = []
         self.languages = []
+        self.region_stack = []
+        self.logo_regions = []
         self.feed(source)
 
     def handle_starttag(self, tag, attributes):
@@ -54,6 +70,8 @@ class Page(HTMLParser):
             self.ids.append(attrs["id"])
         if tag == "section":
             self.section_stack.append(attrs.get("id"))
+        if tag in ("header", "footer"):
+            self.region_stack.append(tag)
         if tag == "a":
             section = self.section_stack[-1] if self.section_stack else None
             self.links.append((section, attrs.get("href", "")))
@@ -70,6 +88,8 @@ class Page(HTMLParser):
         if tag == "img":
             self.images.append(attrs)
             self.assets.append(attrs.get("src", ""))
+            if attrs.get("src") == BRAND_LOGO and self.region_stack:
+                self.logo_regions.append(self.region_stack[-1])
         if tag == "link" and attrs.get("rel") != "canonical":
             self.assets.append(attrs.get("href", ""))
 
@@ -77,6 +97,8 @@ class Page(HTMLParser):
         """Restore product ownership when a section ends, including nested sections."""
         if tag == "section" and self.section_stack:
             self.section_stack.pop()
+        if tag in ("header", "footer") and self.region_stack:
+            self.region_stack.pop()
 
 
 class LandingPageTests(unittest.TestCase):
@@ -122,6 +144,16 @@ class LandingPageTests(unittest.TestCase):
             self.assertGreaterEqual(len(image.get("alt", "").strip()), MIN_ALT_LENGTH)
             self.assertTrue(image.get("width"))
             self.assertTrue(image.get("height"))
+
+    def test_header_footer_and_favicon_retain_the_original_oya_identity(self):
+        self.assertEqual(["header", "footer"], self.page.logo_regions)
+        logo = ElementTree.parse(PUBLIC / BRAND_LOGO).getroot()
+        self.assertEqual(BRAND_VIEWBOX, logo.get("viewBox"))
+        self.assertEqual(BRAND_CIRCLES, [node.attrib for node in logo.findall(f"{SVG_NAMESPACE}circle")])
+        favicon = ElementTree.parse(PUBLIC / "assets/favicon.svg").getroot()
+        self.assertEqual(FAVICON_VIEWBOX, favicon.get("viewBox"))
+        self.assertEqual(FAVICON_CIRCLES, [node.attrib for node in favicon.findall(f"{SVG_NAMESPACE}circle")])
+        self.assertEqual([FAVICON_BACKGROUND], [node.attrib for node in favicon.findall(f"{SVG_NAMESPACE}rect")])
 
     def test_page_is_readable_and_navigable_without_javascript(self):
         self.assertEqual([], self.page.scripts)

@@ -5,6 +5,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Matched the oya.dev landing page to Oya Browser's public theme and original two-ring logo,
+  replacing the custom palette and wordmark with shared brand assets and product navigation.
 - Redesigned Settings with a project-trust summary first and section navigation, and opened a
   shared confirmation dialog directly from workspace trust actions without leaving the project.
 - Measured supervised agent runtime and installation-scoped project activity in the anonymous daily

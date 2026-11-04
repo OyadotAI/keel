@@ -21,6 +21,15 @@ real keyboard, or responsive browser testing.
 
 ## Content and assets
 
+- The theme follows Oya Browser's **public landing page**, using its white canvas, DM Sans,
+  green `#16733b`, pale-lime `#c7f7a4` actions, and forest `#1b2d22` panels. These come from
+  `agentchrome/ui/src/app/page.module.css`, including its final layout overrides. The app's
+  dark globals and Archivo display font do not apply to that public page.
+- `public/assets/oya-logo.svg` preserves the original two-ring vector from
+  `agentchrome/ui/src/components/oya-logo.tsx`; its strokes resolve the public page's primary
+  and foreground colors. Header and footer share this asset. The favicon preserves the
+  supplied `agentchrome/ui/src/app/icon.svg` geometry and colors. Brand source was checked
+  against the local Oya Browser checkout and the live site through Oya on 2026-11-03.
 - Keel's screenshot is copied, unaltered, from `docs/media/workspace.png`. It is an existing demo
   workspace, not a claim that the picture shows the latest release.
 - DM Sans is copied from `desktop/src/fonts/dm-sans-latin.woff2`; its original SIL Open Font
