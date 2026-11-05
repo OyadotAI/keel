@@ -68,6 +68,12 @@ fn offline_runtime_child() {
                 );
                 emit("answer_ack", json!({"id":q["delivery"],"ok":true}));
             }
+            "initialized" => {
+                emit(
+                    "initialized_fixture",
+                    json!({"ready":q["launch"]["system"].is_string(),"url":q["launch"]["mcp"]["mcpServers"]["keel"]["url"]}),
+                );
+            }
             "steer" => {
                 emit(
                     "msg",
@@ -78,6 +84,51 @@ fn offline_runtime_child() {
             _ => std::process::exit(1),
         }
     }
+}
+
+#[tokio::test]
+async fn lazy_initialization_updates_the_browser_generation_owned_by_the_helper() {
+    let (_dir, state, runtime, _process) = fixture_runtime(false).await;
+    let query: ChatQuery = serde_json::from_value(
+        json!({"prompt":"fixture","lane":FIXTURE_LANE,"provider":"claude","mode":"plan"}),
+    )
+    .unwrap();
+    let token = state.claim(FIXTURE_LANE, &state.repo(), false).unwrap();
+    let _held = crate::serve::Held::new(state.clone(), FIXTURE_LANE.into(), token);
+    let (tx, mut rx) = mpsc::channel(8);
+    *runtime.output.locked() = Some(tx);
+    assert!(
+        initialization::respond(
+            &state,
+            &runtime,
+            &query,
+            &state.repo(),
+            token,
+            &json!({"id":"fixture"})
+        )
+        .await
+        .unwrap()
+    );
+    let observed = tokio::time::timeout(FIXTURE_WAIT, rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed["event"], "initialized_fixture");
+    assert_eq!(observed["data"]["ready"], true);
+    let generation = runtime.browser_generation.locked().clone().unwrap();
+    assert!(
+        observed["data"]["url"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("binding={generation}"))
+    );
+    assert_eq!(
+        *runtime.browser_generation.locked(),
+        crate::browser::binding_id(FIXTURE_LANE)
+    );
+    assert!(runtime.browser_generation.locked().is_some());
+    fixture_control(state, "close").await;
+    assert!(crate::browser::binding_id(FIXTURE_LANE).is_none());
 }
 
 struct FixtureProcess(u32);

@@ -5,6 +5,10 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Focused coding and review team handoffs on the original ask, affected callers and existing
+  evidence, with concise briefs and no repeated checks without a new risk. Warm managed sessions
+  now request launch context only when creating a provider; reviews report bounded, private stage
+  timing while preserving required stages, isolation and structured verdict validation.
 - Gave the Keel screenshot a content-based asset URL so replacing the image does not reuse the
   previous screenshot's browser or CDN cache entry.
 - Replaced the landing page's Keel screenshot with the supplied workspace capture, preserving

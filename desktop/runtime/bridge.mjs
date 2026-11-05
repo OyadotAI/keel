@@ -7,8 +7,10 @@ import { Codex } from './codex.mjs';
 import { ContextInspector } from './context.mjs';
 import { Requests } from './requests.mjs';
 import { ClaudeCompletion } from './claude-completion.mjs';
+import { Initialization } from './initialization.mjs';
 
 const emit = (event, data) => process.stdout.write(JSON.stringify({ event, data }) + '\n');
+const initialization = new Initialization(emit);
 let completion;
 const requests = new Requests(emit, (event, id, fields) => { if (fields.provider === 'claude') completion?.callback(event, id, fields); });
 let provider;
@@ -63,9 +65,11 @@ async function startClaude(q) {
   if (!claude) completion.processStart();
   else completion.begin();
   if (!claude) {
+    q = await initialization.launch(q);
     config = q;
     inspector = new ContextInspector('claude', q.cwd, emit);
     await inspector.catalog();
+    q.assertLaunch();
     claude = query({ prompt: messages(), options: {
       cwd: q.cwd, pathToClaudeCodeExecutable: q.executable,
       resume: q.session || undefined, model: q.model || undefined,
@@ -137,6 +141,7 @@ async function startClaude(q) {
   wake?.(); wake = undefined;
 }
 async function command(message) {
+  if (message.method === 'initialized') { initialization.complete(message); return; }
   if (message.method === 'inspect_context') {
     try {
       if (claude && inspector) {
@@ -150,7 +155,7 @@ async function command(message) {
   if (message.method === 'answer') {
     emit('answer_ack', { id: message.delivery, ...requests.answer(message.id, message.answer) }); return;
   }
-  if (message.method === 'interrupt') { if (claude) await claude.interrupt(); if (codex) await codex.interrupt(); return; }
+  if (message.method === 'interrupt') { initialization.cancel('The turn was cancelled.', true); if (claude) await claude.interrupt(); if (codex) await codex.interrupt(); return; }
   if (message.method === 'steer') { if (!codex) throw new Error('Steering is not available in this session'); await codex.steer(message.prompt); return; }
   if (message.method !== 'start') throw new Error('Unknown runtime command');
   if (busy) throw new Error('A turn is already active');
@@ -160,15 +165,18 @@ async function command(message) {
   try {
     if (provider === 'claude') await startClaude(q);
     else if (provider === 'codex') {
-      codex ??= new Codex(emit, ask, daemonDecision, (reason, thread) => requests.cancelAll(reason, thread));
+      codex ??= new Codex(emit, ask, daemonDecision, (reason, thread) => requests.cancelAll(reason, thread), (query) => initialization.launch(query));
       await codex.start(q, () => { busy = false; });
     } else throw new Error(`Unsupported provider: ${provider}`);
   } catch (error) {
-    emit('fatal', String(error));
-    if (provider === 'claude') { claude?.close(); completion.shutdown('The provider could not start this turn.'); }
-    else { busy = false; emit('end', { code: 1 }); }
+    // Codex.fail already ended this turn when a pending App Server request rejected.
+    if (provider === 'codex' && !busy) return;
+    const interrupted = error.name === 'AbortError';
+    if (!interrupted) emit('fatal', String(error));
+    if (provider === 'claude') { claude?.close(); if (interrupted) completion.complete(-1, 'The turn was cancelled.'); else completion.shutdown('The provider could not start this turn.'); }
+    else { busy = false; emit('end', { code: interrupted ? -1 : 1 }); }
   }
 }
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => { try { void command(JSON.parse(line)).catch((error) => emit('fatal', String(error))); } catch (error) { emit('fatal', String(error)); } });
-rl.on('close', () => { requests.cancelAll('The runtime closed.'); claude?.close(); codex?.close(); process.exit(0); });
+rl.on('close', () => { initialization.cancel('The runtime closed.'); requests.cancelAll('The runtime closed.'); claude?.close(); codex?.close(); process.exit(0); });

@@ -51,6 +51,8 @@ for (const failure of [false, true]) test(`the actual bridge ${failure ? 'cancel
       watchers.push(check); check();
     });
     child.stdin.write(JSON.stringify({ method: 'start', query: { lane: 'fixture', provider: 'claude', cwd: scratch, repo: scratch, prompt: 'offline fixture', mode: 'plan' } }) + '\n');
+    const initialize = await wait((e) => e.event === 'initialize');
+    child.stdin.write(JSON.stringify({ method: 'initialized', id: initialize.data.id, launch: { system: 'offline fixture context', mcp: { mcpServers: { keel: { url: 'http://127.0.0.1/mcp?binding=fixture' } } } } }) + '\n');
     const request = await wait((e) => e.event === 'request');
     await wait((e) => e.event === 'msg' && e.data.type === 'result');
     assert.equal(events.some((e) => e.event === 'end'), false, 'the parent result released background ownership');

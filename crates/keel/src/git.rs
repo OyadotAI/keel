@@ -127,9 +127,31 @@ pub fn output_within(command: Command, ceiling: Duration) -> std::io::Result<Out
 /// `keel review-pr`, whose CI job is cancelled by a signal that its own child, leading a group of
 /// its own, never receives.
 pub fn output_until(
+    command: Command,
+    ceiling: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Output> {
+    collect_until(command, ceiling, stop, None)
+}
+
+/// Drain a verbose provider stream without retaining its file contents, using the same kill rules.
+pub fn stream_until(
+    command: Command,
+    ceiling: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+    consume: impl FnMut(&[u8]) + Send + 'static,
+) -> std::io::Result<Output> {
+    collect_until(command, ceiling, stop, Some(Box::new(consume)))
+}
+
+type Consumer = Box<dyn FnMut(&[u8]) + Send>;
+const STREAM_STDERR_BYTES: usize = 64 * 1024;
+
+fn collect_until(
     mut command: Command,
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
+    mut consume: Option<Consumer>,
 ) -> std::io::Result<Output> {
     use crate::signals::Leads;
     // Its own group, so a timeout ends everything it started (`crate::signals`): a `claude` or a
@@ -149,8 +171,10 @@ pub fn output_until(
     type Shared = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
     let (out_buf, err_buf): (Shared, Shared) = Default::default();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
-    for (buf, pipe) in [
+    let streaming = consume.is_some();
+    for (stdout, buf, pipe) in [
         (
+            true,
             out_buf.clone(),
             child
                 .stdout
@@ -158,6 +182,7 @@ pub fn output_until(
                 .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
         ),
         (
+            false,
             err_buf.clone(),
             child
                 .stderr
@@ -166,6 +191,12 @@ pub fn output_until(
         ),
     ] {
         let tx = tx.clone();
+        let mut consume = if stdout { consume.take() } else { None };
+        let cap = match (streaming, stdout) {
+            (true, true) => 0,
+            (true, false) => STREAM_STDERR_BYTES,
+            _ => usize::MAX,
+        };
         std::thread::spawn(move || {
             if let Some(mut p) = pipe {
                 let mut chunk = [0u8; 64 * 1024];
@@ -174,7 +205,12 @@ pub fn output_until(
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
                             use crate::lock::Locked;
-                            buf.locked().extend_from_slice(&chunk[..n]);
+                            if let Some(consume) = &mut consume {
+                                consume(&chunk[..n]);
+                            }
+                            let mut buf = buf.locked();
+                            let keep = n.min(cap.saturating_sub(buf.len()));
+                            buf.extend_from_slice(&chunk[..keep]);
                         }
                     }
                 }

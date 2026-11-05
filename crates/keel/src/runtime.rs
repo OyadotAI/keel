@@ -1,5 +1,6 @@
 //! Persistent provider sessions. The helper hosts the official Claude SDK and Codex App Server;
 //! Rust keeps ownership of checkout claims, checkpoints, stop signals and verification.
+mod initialization;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -77,6 +78,7 @@ struct Runtime {
     inspections: Inspections,
     answers: Inspections,
     inspection_lock: tokio::sync::Mutex<()>,
+    browser_generation: Arc<Mutex<Option<String>>>,
 }
 
 /// Read telemetry from an existing runtime, including while no turn owns its output channel.
@@ -256,11 +258,12 @@ async fn spawn_runtime(
         inspections: inspections.clone(),
         inspection_lock: tokio::sync::Mutex::new(()),
         answers: Default::default(),
+        browser_generation: Arc::new(Mutex::new(crate::browser::binding_id(lane))),
     });
     let answers = r.answers.clone();
     let pid = r.pid;
     let browser_lane = lane.to_string();
-    let browser_generation = crate::browser::binding_id(lane);
+    let browser_generation = r.browser_generation.clone();
     processes().locked().insert(pid);
     state.runtimes.0.locked().insert(lane.into(), r.clone());
     let errors = output.clone();
@@ -315,7 +318,7 @@ async fn spawn_runtime(
         }
         let status = child.wait().await;
         alive.store(false, Ordering::Release);
-        crate::browser::release(&browser_lane, browser_generation.as_deref());
+        crate::browser::release(&browser_lane, browser_generation.locked().take().as_deref());
         inspections.locked().clear();
         answers.locked().clear();
         processes().locked().remove(&pid);
@@ -491,14 +494,12 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     let checkout = cwd.clone();
     let previous_session = q.session.clone();
     let selected_provider = provider.to_owned();
-    let fresh_runtime = !has_session(&state, lane);
     let task_repo = repo.clone();
     let task_lane = lane.to_string();
     let task_prompt = q.prompt.clone();
     let task_wt = q.wt.clone();
-    let browser_resume = q.session.is_some();
     let task_session = q.session.clone().unwrap_or_else(|| lane.to_string());
-    let (begun, system) = tokio::task::spawn_blocking(move || {
+    let begun = tokio::task::spawn_blocking(move || {
         crate::tasks::register(
             &task_repo,
             crate::tasks::Source {
@@ -510,32 +511,13 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             },
         )?;
         crate::guidance::prepare(&task_repo)?;
-        if fresh_runtime {
-            crate::browser::prepare(
-                &task_repo,
-                &task_lane,
-                &selected_provider,
-                &task_session,
-                browser_resume,
-            )?;
-        }
         crate::tasks::input(&task_repo, &selected_provider, &task_session, &task_prompt)?;
         if let Some(session) = previous_session {
             crate::context::prime(&checkout, &selected_provider, &session);
         }
         let keep = |rel: &str, bytes: &[u8]| crate::vouched::holds(&checkout, rel, bytes);
         keel_harness::quarantine_keeping(&checkout, keep).map_err(|e| e.to_string())?;
-        let system = format!(
-            "{}\n{}",
-            crate::agent::system_prompt(&checkout),
-            crate::browser::instructions(Some(&task_lane))
-        );
-        let system = if selected_provider == "codex" && fresh_runtime {
-            crate::guidance::codex_system(&checkout, &system)
-        } else {
-            system
-        };
-        Ok::<_, String>((crate::turns::begin(&checkout), system))
+        Ok::<_, String>(crate::turns::begin(&checkout))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -575,23 +557,11 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         &cwd,
     ))
     .map_err(|e| e.to_string())?;
-    // Keel's browser for a Codex lane, and the other browsers taken away (`askmcp::codex_args`).
-    let codex_args = if provider == "codex" {
-        let (dir, lane, port) = (cwd.clone(), lane.to_string(), state.port());
-        crate::serve::blocking(
-            move || crate::askmcp::codex_args(&dir, port, Some(&lane)),
-            Err("the browser could not be prepared".into()),
-        )
-        .await?
-    } else {
-        Vec::new()
-    };
-    let supplied_guidance = system.contains("Keel collaboration guidance");
+    let mut supplied_guidance = false;
     r.send(json!({"method":"start", "query": {
         "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":provider_prompt, "session":q.session,
-        "mode":q.mode, "model":q.model, "attachments":q.attachments, "system":system, "settings":settings, "port":state.port(),
-        "mcp":serde_json::from_str::<Value>(&crate::askmcp::config(state.port(), Some(lane))).unwrap_or(Value::Null), "executable":crate::permissions::program(provider).to_string_lossy(),
-        "codexArgs":codex_args
+        "mode":q.mode, "model":q.model, "attachments":q.attachments, "settings":settings, "port":state.port(),
+        "executable":crate::permissions::program(provider).to_string_lossy(),
     }})).await?;
     let run_usage = crate::license::run(repo.clone()).await;
     let mut session = q.session.clone();
@@ -602,6 +572,10 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     while let Some(record) = records.recv().await {
         let data = record["data"].clone();
         let name = record["event"].as_str().unwrap_or("");
+        if name == "initialize" {
+            supplied_guidance = initialization::respond(&state, &r, &q, &cwd, token, &data).await?;
+            continue;
+        }
         if name == "msg" {
             if let Some(id) = data["session_id"].as_str() {
                 session = Some(id.into());

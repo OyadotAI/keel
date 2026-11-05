@@ -6,7 +6,7 @@ import { ContextInspector } from './context.mjs';
 
 // App Server owns thread state; this adapter maps its items to Keel's ordered conversation ops.
 export class Codex {
-  constructor(emit, ask, decide, cancelQuestions = () => {}) { this.emit = emit; this.ask = ask; this.decide = decide; this.cancelQuestions = cancelQuestions; this.requests = new Map(); this.next = 0; this.text = new Set(); this.agents = new Set(); }
+  constructor(emit, ask, decide, cancelQuestions = () => {}, initialize = async (q) => q) { this.emit = emit; this.ask = ask; this.decide = decide; this.cancelQuestions = cancelQuestions; this.initialize = initialize; this.requests = new Map(); this.next = 0; this.text = new Set(); this.agents = new Set(); }
   write(value) { this.child.stdin.write(JSON.stringify(value) + '\n'); }
   rpc(method, params, timeoutMs) {
     const id = ++this.next;
@@ -20,16 +20,19 @@ export class Codex {
   async start(q, done) {
     this.done = done; this.mode = q.mode;
     if (!this.child) {
+      q = await this.initialize(q);
+      q.assertLaunch?.();
       // Keel's overrides first (`askmcp::codex_args`): its browser for this lane, Codex's own
       // approval off for it, and the person's other browsers switched off for this process.
-      this.child = spawn(q.executable, appServerArgs(q), { cwd: q.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const child = spawn(q.executable, appServerArgs(q), { cwd: q.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      this.child = child;
       createInterface({ input: this.child.stdout }).on('line', (line) => {
         try { void this.message(JSON.parse(line)).catch((error) => this.emit('fatal', String(error))); }
         catch (error) { this.emit('fatal', `Invalid App Server message: ${error}`); }
       });
       this.child.stderr.on('data', (bytes) => this.emit('err', bytes.toString()));
-      this.child.on('error', (error) => this.fail(error));
-      this.child.on('exit', () => this.fail(new Error('Codex App Server exited')));
+      this.child.on('error', (error) => { if (this.child === child) this.fail(error); });
+      this.child.on('exit', () => { if (this.child === child) this.fail(new Error('Codex App Server exited')); });
       await this.rpc('initialize', { clientInfo: { name: 'keel', title: 'Keel', version: '0.3.6' }, capabilities: {} });
       this.write({ method: 'initialized', params: {} });
       const thread = await this.rpc(q.session ? 'thread/resume' : 'thread/start', {

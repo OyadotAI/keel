@@ -27,6 +27,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use keel_generator::team;
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
+mod activity;
 
 pub struct Opts {
     pub base: Option<String>,
@@ -930,7 +931,14 @@ fn ask(
                 })
                 .map(|(k, v)| (k, v)),
         )
-        .args(["-p", &prompt, "--output-format", "json", "--json-schema"])
+        .args([
+            "-p",
+            &prompt,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--json-schema",
+        ])
         .arg(if replies_only {
             team::PR_REPLIES_SCHEMA
         } else {
@@ -957,17 +965,25 @@ fn ask(
         command.args(["--model", model]);
     }
 
+    use crate::lock::Locked;
+    let activity = std::sync::Arc::new(std::sync::Mutex::new(activity::Activity::new()));
+    eprintln!(
+        "keel review-pr: [0m 0s] review started; limit {}m",
+        ceiling.as_secs().div_ceil(60)
+    );
     let (done, rx) = std::sync::mpsc::channel::<()>();
+    let observed = activity.clone();
     let ticker = std::thread::spawn(move || {
-        let mut minutes = 0;
-        while rx.recv_timeout(Duration::from_secs(300))
+        while rx.recv_timeout(activity::HEARTBEAT)
             == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         {
-            minutes += 5;
-            eprintln!("keel review-pr: still reviewing, {minutes}m elapsed");
+            eprintln!("{}", observed.locked().heartbeat());
         }
     });
-    let out = crate::git::output_until(command, ceiling, stop);
+    let observed = activity.clone();
+    let out = crate::git::stream_until(command, ceiling, stop, move |bytes| {
+        observed.locked().push(bytes)
+    });
     drop(done);
     let _ = ticker.join();
 
@@ -975,7 +991,10 @@ fn ask(
         Ok(out) => out,
         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
             return (
-                Verdict::None("The job was cancelled, so the review was stopped.".into()),
+                Verdict::None(format!(
+                    "The job was cancelled, so the review was stopped.\n\n{}",
+                    activity.locked().context()
+                )),
                 None,
                 None,
                 Some("cancelled"),
@@ -984,9 +1003,9 @@ fn ask(
         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
             return (
                 Verdict::None(format!(
-                    "The review hit its {}-minute ceiling and was stopped. Raise `minutes` or \
-                     split the PR.",
-                    ceiling.as_secs().div_ceil(60)
+                    "The review reached its {}-minute limit and was stopped. No verdict was produced.\n\n{}",
+                    ceiling.as_secs().div_ceil(60),
+                    activity.locked().context()
                 )),
                 None,
                 None,
@@ -1004,7 +1023,7 @@ fn ask(
             );
         }
     };
-    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    let reply = activity.locked().answer();
     // A failed start reports 0, which is not a cost anyone was charged — "not reported" is true.
     let cost = reply["total_cost_usd"].as_f64().filter(|c| *c > 0.0);
     if !out.status.success() || reply["is_error"] == true {
@@ -1019,7 +1038,7 @@ fn ask(
                        claude-code-oauth-token or api-proxy-token secret."
                 .to_string(),
             "limits" => "The account or proxy hit a usage or rate limit.".to_string(),
-            "network" => "Claude could not reach the API or the proxy.".to_string(),
+            "network" => "Claude could not reach the API or proxy. Check the connection and run the review again.".to_string(),
             _ => format!(
                 "Claude exited {} ({cause}): {}",
                 out.status
@@ -1029,8 +1048,14 @@ fn ask(
             ),
         };
         let cause = if cause == "auth" { "auth" } else { "other" };
-        return (Verdict::None(line), None, cost, Some(cause));
+        return (
+            Verdict::None(format!("{line}\n\n{}", activity.locked().context())),
+            None,
+            cost,
+            Some(cause),
+        );
     }
+    eprintln!("keel review-pr: provider finished; validating review");
     // The verdict is the structured field and nothing else; `result` is never parsed for one.
     let answer = reply
         .get("structured_output")
@@ -1301,7 +1326,7 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
         (Verdict::None(why), _) => {
             out.push_str(&format!(
                 "{why}\n\nThe check failed because Keel could not finish the review, not because \
-                 of the change. Re-run the job to try again.\n"
+                 of the change. Review the activity above, then re-run the job to try again.\n"
             ));
         }
         (_, None) => unreachable!("a verdict always carries its answer"),
@@ -1592,7 +1617,7 @@ mod tests {
             "verdict": verdict,
             "reason": if verdict == "ship" { "" } else { "b() does not exist" },
         });
-        let out = serde_json::json!({"is_error": false, "result": "Verdict: ship",
+        let out = serde_json::json!({"type":"result","is_error": false, "result": "Verdict: ship",
                                      "structured_output": answer, "total_cost_usd": 0.42});
         format!("cat <<'EOF'\n{out}\nEOF")
     }
@@ -1861,7 +1886,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(3));
         assert!(!marker.exists(), "the agent's children went with it");
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("ceiling and was stopped"));
+        assert!(text.contains("limit and was stopped"));
     }
 
     #[test]
@@ -2235,7 +2260,7 @@ mod tests {
         ]);
         std::fs::write(root.join("threads.json"), threads.to_string()).unwrap();
         let seen = root.join("threads-seen.md");
-        let answer = serde_json::json!({"structured_output": {"threads": [{"thread": "T1", "status": "answered", "reply": "Agreed."}]}});
+        let answer = serde_json::json!({"type":"result","structured_output": {"threads": [{"thread": "T1", "status": "answered", "reply": "Agreed."}]}});
         let program = stub(
             &root,
             &format!(
@@ -2311,7 +2336,7 @@ mod tests {
             "stages": stages,
             "findings": [{"path": "src/lib.rs", "line": 1, "severity": "warning", "title": "Name b", "body": "ping @octocat"}],
         });
-        let out = serde_json::json!({"structured_output": answer});
+        let out = serde_json::json!({"type":"result","structured_output": answer});
         let program = stub(&root, &format!("cat <<'EOF'\n{out}\nEOF"));
         assert_eq!(
             review(

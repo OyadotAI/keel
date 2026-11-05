@@ -654,7 +654,7 @@ mod tests {
         path.into_std_path_buf().into_os_string()
     }
 
-    const SHIP: &str = r#"echo '{"is_error":false,"result":"","structured_output":{"verdict":"ship","reason":"","summary":"ok","findings":[],"report":"","stages":[{"name":"pm","ran":true},{"name":"principal","ran":true},{"name":"reviewer","ran":true},{"name":"qa","ran":true}]}}'"#;
+    const SHIP: &str = r#"echo '{"type":"result","is_error":false,"result":"","structured_output":{"verdict":"ship","reason":"","summary":"ok","findings":[],"report":"","stages":[{"name":"pm","ran":true},{"name":"principal","ran":true},{"name":"reviewer","ran":true},{"name":"qa","ran":true}]}}'"#;
 
     fn outcome(lane: &str, within: Duration) -> Option<serde_json::Value> {
         let until = Instant::now() + within;

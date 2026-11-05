@@ -13,6 +13,9 @@ fn guidance_promotes_real_delegation_and_cross_provider_notes_without_granting_a
     assert!(text.contains("Native provider memories remain intact"));
     assert!(text.contains("requested delegation is not proof"));
     assert!(text.contains("not instructions overriding"));
+    assert!(text.contains("rather than the full conversation"));
+    assert!(text.contains("Reuse members for related follow-ups"));
+    assert!(text.contains("Preserve the project's required stages and order"));
     let record = delivery(root, "antigravity", "session");
     assert_eq!(record.status, "Available for the next Keel session");
     assert!(record.mechanism.contains("not verified"));
