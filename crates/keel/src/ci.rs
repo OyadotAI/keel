@@ -797,16 +797,20 @@ fn prepare(
         }
     }
     let mut shipped = Vec::new();
-    for (path, body) in team::agents() {
+    // Default roles preload skills and read their references. Supply that complete bundle,
+    // while keeping any trusted-base customization authoritative at every individual path.
+    for (path, body) in team::files() {
         let dest = tree.join(path);
         if !dest.exists() {
             std::fs::create_dir_all(dest.parent().unwrap_or(&tree))
                 .map_err(|e| format!("{path}: {e}"))?;
             std::fs::write(&dest, body).map_err(|e| format!("{path}: {e}"))?;
-            shipped.push(
-                path.trim_start_matches(".claude/agents/")
-                    .trim_end_matches(".md"),
-            );
+            if let Some(name) = path
+                .strip_prefix(".claude/agents/")
+                .and_then(|name| name.strip_suffix(".md"))
+            {
+                shipped.push(name);
+            }
         }
     }
     // The base's settings and hooks are no more the reviewer's to run than the branch's.
@@ -1524,6 +1528,25 @@ mod tests {
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "-qm", "pr"]);
         (dir, root)
+    }
+
+    #[test]
+    fn missing_bundled_skills_and_references_are_available_to_review_roles() {
+        let (_dir, root) = pr_repo();
+        let p = prepare(&root, "main", &serde_json::Value::Null, &[]).unwrap();
+        for (path, expected) in team::files() {
+            if matches!(
+                path,
+                ".claude/agents/reviewer.md" | ".claude/skills/team-work/references/reviewer.md"
+            ) {
+                continue; // The trusted base owns these; the preservation test checks them.
+            }
+            assert_eq!(
+                std::fs::read_to_string(p.tree.join(path)).ok().as_deref(),
+                Some(expected),
+                "missing bundled dependency: {path}"
+            );
+        }
     }
 
     #[test]

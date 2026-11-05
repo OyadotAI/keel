@@ -450,8 +450,8 @@ Keep the review focused. Read the ask, stat and diff once to identify changed fi
 
 1. `pm` — does the change do what the ask says, at the scope worth shipping? Scope creep and missing pieces are its findings.
 2. `designer` — only when something a person reads changed (a view, a label, an error message, CLI output, an API response a client renders). Otherwise skipped, with that reason.
-3. `principal` — the design as built: modules, reuse, invariants at risk, tests that pin it.
-4. `reviewer` — always: correctness of the diff against its callers.
+3. `principal` — assess the existing change's affected contracts and invariants. Return examined paths, supported risks and unresolved questions as an investigation index. Produce no implementation plan or alternative architecture unless needed to explain a defect.
+4. `reviewer` — always: independently verify correctness of the diff against its callers and the ask. Use principal's evidence as an investigation index; confirm relevant claims in code and expand for concrete risks or contrary evidence. Cover standards and requested behavior without repeating settled architecture exploration.
 5. `security` and `reliability` — each only when its description says the change is its kind of change. Otherwise skipped, with the reason.
 6. `qa` — what the change needs verified and what the tests do and do not cover. It cannot run the app here; it reads.
 
@@ -583,6 +583,26 @@ pub const QA_AGENT: &str = include_str!("team/agents/qa.md");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CI reviews need evidence from principal and an independent correctness check, in every
+    /// provider's rendering; design assignments must retain their separate planning workflow.
+    #[test]
+    fn ci_review_roles_share_evidence_without_sharing_a_verdict() {
+        assert!(PR_REVIEW.contains("Produce no implementation plan"));
+        assert!(PR_REVIEW.contains("independently verify correctness"));
+        let files = files_for(&[Agent::Claude, Agent::Antigravity, Agent::Codex], false);
+        for (path, body) in files {
+            if path.ends_with("agents/principal.md") || path.ends_with("agents/principal.toml") {
+                assert!(body.contains("For CI review"), "{path}");
+                assert!(body.contains("For design"), "{path}");
+                assert!(body.contains("examined paths"), "{path}");
+            }
+            if path.ends_with("agents/reviewer.md") || path.ends_with("agents/reviewer.toml") {
+                assert!(body.contains("Independently verify correctness"), "{path}");
+                assert!(body.contains("rather than inheriting a verdict"), "{path}");
+            }
+        }
+    }
 
     #[test]
     fn the_pr_review_names_every_stage_and_its_schema_parses() {

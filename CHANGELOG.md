@@ -5,6 +5,9 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Separated CI principal and reviewer assignments so architecture evidence guides independent
+  correctness checks, and supplied missing bundled skills and references in disposable review
+  trees while preserving each trusted-base customization.
 - Focused coding and review team handoffs on the original ask, affected callers and existing
   evidence, with concise briefs and no repeated checks without a new risk. Warm managed sessions
   now request launch context only when creating a provider; reviews report bounded, private stage
