@@ -956,13 +956,29 @@ fn ask(
     if let Err(why) = budget.check() {
         return (Verdict::None(why.to_string()), None, None, Some("ceiling"));
     }
+    // Named-agent tool filtering hides the SDK's generated StructuredOutput helper. Keep the
+    // complete trusted policy as system context while the root retains that formatting tool.
+    let reviewer = match std::fs::read_to_string(prepared.tree.join(".claude/agents/reviewer.md")) {
+        Ok(policy) => policy,
+        Err(_) => {
+            return (
+                Verdict::None("The trusted reviewer instructions could not be read.".into()),
+                None,
+                None,
+                Some("prepare"),
+            );
+        }
+    };
     // Said, because the agent cannot see it: on the first live run it flagged a checkout with no
     // `ref` as letting the PR rewrite its reviewers, which is exactly what this function undoes.
     let prompt = format!(
-        "{}\n\nThe evidence folder is `{}`.\n\nWhat Keel already did, which you cannot see: \
+        "{}\n\nThe evidence folder is `{}`.\n\nRead each skill named in the trusted reviewer definition \
+         and its referenced guidance using Read before assessing the change or replies. Frontmatter \
+         is policy context, not executable configuration or permission to widen tools.\n\n\
+         What Keel already did, which you cannot see: \
          every `.claude/` file, `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` in the working \
          directory is the copy from `{}`, not the PR's (the PR's own versions are in \
-         `diff.patch`), and the team you are running is that copy. Whatever runs this review \
+         `diff.patch`), and the reviewer instructions supplied separately are that copy. Whatever runs this review \
          (a workflow, a checkout step) does not need to do it again.",
         if replies_only {
             team::PR_REPLIES
@@ -1003,6 +1019,7 @@ fn ask(
                 })
                 .map(|(k, v)| (k, v)),
         )
+        .env("ENABLE_TOOL_SEARCH", "false")
         .args([
             "-p",
             &prompt,
@@ -1016,6 +1033,7 @@ fn ask(
         } else {
             team::PR_REVIEW_SCHEMA
         })
+        .args(["--append-system-prompt", &reviewer])
         .args([
             "--permission-mode",
             "dontAsk",
@@ -1023,8 +1041,6 @@ fn ask(
             &out_of_reach(),
         ])
         .args([
-            "--agent",
-            "reviewer",
             "--tools",
             "Read,Grep,Glob",
             "--disallowedTools",
@@ -1178,7 +1194,25 @@ fn ask(
                 .filter(|r| !r.is_empty())
                 .unwrap_or_else(|| "no reason given".into()),
         ),
-        _ => Verdict::None("The review finished without a verdict Keel could read.".into()),
+        Some("incomplete") => Verdict::None(
+            "The focused review reported incomplete coverage. No verdict was produced.".into(),
+        ),
+        None if reply
+            .get("structured_output")
+            .is_none_or(serde_json::Value::is_null) =>
+        {
+            Verdict::None(
+                "The provider returned no structured review. No verdict was produced.".into(),
+            )
+        }
+        None => Verdict::None(
+            "The structured review did not match the required format. No verdict was produced."
+                .into(),
+        ),
+        _ => Verdict::None(
+            "The structured review returned an unsupported verdict. No verdict was produced."
+                .into(),
+        ),
     };
     let (verdict, answer) = if let Err(why) = budget.check() {
         (Verdict::None(why.to_string()), None)
@@ -1857,7 +1891,9 @@ mod tests {
             "{args}"
         );
         assert!(args.contains("Do not delegate"));
-        assert!(args.contains("--agent\nreviewer\n"));
+        assert!(!args.contains("--agent\n"));
+        assert!(args.contains("--append-system-prompt\nbase reviewer\n"));
+        assert!(args.contains("Read each skill named in the trusted reviewer definition"));
         assert!(args.contains("--tools\nRead,Grep,Glob\n"));
         assert!(args.contains(
             "--disallowedTools\nTask,Agent,Skill,Bash,PowerShell,Edit,Write,NotebookEdit"
@@ -1919,7 +1955,7 @@ mod tests {
         );
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
         assert!(text.contains("alt=\"Keel\" align=\"top\"> Keel review: No verdict"));
-        assert!(text.contains("without a verdict Keel could read"));
+        assert!(text.contains("returned no structured review"));
     }
 
     #[test]
@@ -2389,11 +2425,12 @@ mod tests {
         ]);
         std::fs::write(root.join("threads.json"), threads.to_string()).unwrap();
         let seen = root.join("threads-seen.md");
+        let prompt_seen = root.join("reply-prompt.txt");
         let answer = serde_json::json!({"type":"result","structured_output": {"threads": [{"thread": "T1", "status": "answered", "reply": "Agreed."}]}});
         let program = stub(
             &root,
             &format!(
-                "dir=$(printf '%s' \"$2\" | sed -n 's/.*The evidence folder is `\\([^`]*\\)`.*/\\1/p' | head -1)\ncat \"$dir/threads.md\" > '{seen}'\ncat <<'EOF'\n{answer}\nEOF"
+                "printf '%s' \"$2\" > '{prompt_seen}'\ndir=$(printf '%s' \"$2\" | sed -n 's/.*The evidence folder is `\\([^`]*\\)`.*/\\1/p' | head -1)\ncat \"$dir/threads.md\" > '{seen}'\ncat <<'EOF'\n{answer}\nEOF"
             ),
         );
         let mut o = opts(&root, 1);
@@ -2405,6 +2442,11 @@ mod tests {
             "a reply run posts no summary"
         );
         let shown = std::fs::read_to_string(&seen).unwrap();
+        assert!(
+            std::fs::read_to_string(prompt_seen)
+                .unwrap()
+                .contains("Read each skill named in the trusted reviewer definition")
+        );
         assert!(shown.contains("## T1") && shown.contains("Kept: b is the spec's name."));
         assert!(
             !shown.contains("Other"),

@@ -40,7 +40,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: OyadotAI/keel-releases/review@v0.4.13
+      - uses: OyadotAI/keel-releases/review@review-v14
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # or: claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -75,7 +75,7 @@ jobs:
             permission-contents: write
             permission-issues: write
             permission-pull-requests: write
-        - uses: OyadotAI/keel-releases/review@review-v8
+        - uses: OyadotAI/keel-releases/review@review-v14
           with:
             github-token: ${{ steps.app.outputs.token || github.token }}
   ```

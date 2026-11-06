@@ -5,6 +5,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Kept the SDK's formatting-only structured-output helper available to focused reviews while
+  applying the complete trusted reviewer policy, so a completed assessment returns a validated verdict.
 - Replaced sequential CI review orchestration with one read-only focused reviewer, explicit
   coverage validation and a shared five-minute execution budget; preserved the coding team,
   trusted reviewer customization and local effort settings. CI uses medium effort with the selected model.
