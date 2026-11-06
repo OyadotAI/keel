@@ -48,31 +48,13 @@ fn an_oversized_frame_is_drained_and_parsing_recovers_at_the_next_line() {
 }
 
 #[test]
-fn stage_output_contains_only_known_names_and_observed_durations() {
+fn delegation_cannot_produce_a_passing_focused_result_or_leak_prompts() {
     let mut activity = Activity::new();
-    let call = |name, background| json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Agent","input":{"subagent_type":name,"prompt":"SECRET","run_in_background":background}}]}});
-    assert!(
-        !activity
-            .event(&call("SECRET", false), Duration::ZERO)
-            .join("\n")
-            .contains("SECRET")
-    );
-    let start = activity
-        .event(&call("reviewer", true), Duration::from_secs(12))
-        .join("\n");
-    assert!(start.contains("[0m 12s] stage reviewer started"));
-    let result = json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"SECRET"}]}});
-    assert!(
-        !activity
-            .event(&result, Duration::from_secs(20))
-            .join("\n")
-            .contains("finished")
-    );
-    let end = json!({"type":"system","subtype":"task_notification","tool_use_id":"a","status":"completed","summary":"SECRET"});
-    let lines = activity.event(&end, Duration::from_secs(48)).join("\n");
-    assert!(lines.contains("stage reviewer finished; took 0m 36s"));
+    let event = json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"SECRET","prompt":"SECRET"}}]}});
+    let lines = activity.event(&event, Duration::ZERO).join("\n");
     assert!(!lines.contains("SECRET"));
-    assert!(activity.context().contains("Last observed stage: reviewer"));
+    activity.push(b"{\"type\":\"result\",\"structured_output\":{\"verdict\":\"ship\"}}\n");
+    assert!(activity.answer().is_null());
 }
 
 #[test]
@@ -86,6 +68,6 @@ fn regular_activity_is_throttled_and_unknown_events_cannot_name_a_stage() {
     assert!(
         Activity::new()
             .context()
-            .contains("No stage activity was observed")
+            .contains("No provider activity was observed")
     );
 }

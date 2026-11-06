@@ -164,8 +164,8 @@ enum Command {
         /// `pull_request_review_comment` run.
         #[arg(long)]
         replies_only: bool,
-        /// Stop the review after this long.
-        #[arg(long, default_value_t = 30)]
+        /// Review execution limit including preparation and validation, capped at five minutes.
+        #[arg(long, default_value_t = ci::MAX_MINUTES)]
         minutes: u64,
         /// The model to review with; Claude Code's default otherwise.
         #[arg(long)]

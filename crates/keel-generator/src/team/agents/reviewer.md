@@ -12,8 +12,8 @@ callers, tests, repository instructions, and `team-work`'s `references/reviewer.
 review range; include staged and relevant untracked work when that is the requested change.
 Use `code-review` for separate standards and requested-behavior passes, including working changes.
 
-For CI review, use principal's examined paths, risks and unresolved questions as an investigation
-index. Independently verify correctness against callers and the ask; confirm relevant claims in
+For a focused CI review, inspect the changed code directly. Use preceding evidence as an
+investigation index when provided; no preceding stage is required. Independently verify correctness against callers and the ask; confirm relevant claims in
 code rather than inheriting a verdict. Reuse gathered evidence for the standards and requested-
 behavior passes. Repeat architecture exploration when contrary evidence or a concrete risk needs
 it. Return supported findings and coverage limits when the assigned questions are answered.

@@ -1,9 +1,14 @@
 # Keel review
 
-Your repository's Keel team reviews every pull request: pm, designer, principal, reviewer,
-security, reliability and qa, run in order with each stage's output handed on. The result is one
-comment on the PR, updated on every push. A **do not ship** verdict fails the check, and so does a
-review that could not finish.
+One focused reviewer checks changed code, affected callers, security, reliability and relevant
+test coverage. It uses the selected model at medium effort in CI, with delegation disabled.
+The coding team remains unchanged. One comment is updated on the PR; blocking findings and
+incomplete reviews fail the check.
+
+Keel review execution, including preparation, validation and cleanup, is capped at five minutes.
+The CLI and action default to five; larger legacy inputs are capped. Checkout, installation and
+GitHub posting are separate overhead and must be measured separately. A timeout is no verdict,
+never a passing review. Tests are inspected, not executed, by this read-only reviewer.
 
 ```yaml
 name: Keel review
@@ -17,7 +22,7 @@ permissions:
   pull-requests: write
 jobs:
   review:
-    name: ${{ github.event_name == 'pull_request' && 'Team review' || 'Keel replies' }}
+    name: ${{ github.event_name == 'pull_request' && 'Focused review' || 'Keel replies' }}
     # A collaborator's reply in a thread, never a bot's comment (Keel's own line comments
     # included).
     if: >-
@@ -29,7 +34,7 @@ jobs:
       group: keel-review-${{ github.event.pull_request.number }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +48,7 @@ jobs:
           # api-proxy-url: ${{ secrets.KEEL_PROXY_URL }}
           # api-proxy-token: ${{ secrets.KEEL_PROXY_TOKEN }}
           # fail-on-block: true
-          # minutes: 30
+          # minutes: 5
 ```
 
 - Use `pull_request`, never `pull_request_target`. The second runs this PR's code with your
@@ -74,15 +79,15 @@ jobs:
           with:
             github-token: ${{ steps.app.outputs.token || github.token }}
   ```
-- The team comes from the base branch, so a PR cannot rewrite its own reviewers, their skills or
-  `CLAUDE.md`. Without a team, Keel's shipped one reviews.
+- Reviewer instructions and skills come from the base branch, so a PR cannot rewrite its own
+  review policy or `CLAUDE.md`. Missing files use Keel's shipped defaults.
 - The agent can read the checkout and the diff, and nothing else. It cannot run commands, cannot
   write, and never holds the GitHub token.
 - Threads close themselves. On every push Keel reads its open line comments with their replies
   and, in the same thread, says ✅ fixed (checked in the code, not taken on trust), 👍
   acknowledged (a reply settles it) or 🔁 still open, resolving the first two. A 🔴 blocking
   finding closes only when the code changes (or a maintainer resolves it), never on a reply. A
-  collaborator's reply gets its answer right away, from one reviewer rather than the whole team;
+  collaborator's reply gets its answer right away, from the same focused reviewer;
   anyone else's waits for the next push. Keel never deletes a thread.
 - The verdict is advisory. It comes from an agent that read the PR's text, and that text can
   mislead it.

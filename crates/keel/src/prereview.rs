@@ -1,4 +1,4 @@
-//! The team's review of a branch before its pull request opens.
+//! A focused review of a branch before its pull request opens.
 //!
 //! The pipeline in a repository's `CLAUDE.md` says a reviewer runs before a change is done, and
 //! it is prose: the session that opened OyadotAI/oya-browser#43 ran `gh pr create` with no
@@ -32,9 +32,9 @@ pub(crate) use control::cancel_for_open;
 pub use control::{api_dismiss, api_stop};
 
 /// How long a review waits for the turn writing its tree to end.
-const WAIT: Duration = Duration::from_secs(15 * 60);
+const WAIT: Duration = crate::ci::MAX_DURATION;
 /// The review's own ceiling: `keel review-pr`'s default.
-const CEILING: Duration = Duration::from_secs(30 * 60);
+const CEILING: Duration = crate::ci::MAX_DURATION;
 /// Finished records kept, oldest dropped first. One per lane is the most a window ever reads.
 const KEPT: usize = 32;
 
@@ -254,13 +254,38 @@ fn run(
     program: &std::ffi::OsStr,
     stop: &AtomicBool,
 ) -> Done {
-    let since = Instant::now();
+    let budget = crate::ci::Budget::new(CEILING, stop);
+    let since = budget.started;
+    let expired = |e: std::io::Error| {
+        none(
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                "cancelled"
+            } else {
+                "ceiling"
+            },
+            e.to_string(),
+            since,
+        )
+    };
     let cancelled = || none("cancelled", "The review was cancelled.".into(), since);
     // The review reads a commit in a scratch copy, never this tree, so the one thing worth waiting
     // for is a turn's own commit: with nothing uncommitted there is none to come. Waiting for the
     // tree to go quiet as well never ended in a terminal lane kept busy — measured, the agent's
     // `gh pr create` started a review, the person typed "cont", and it sat waiting until it gave up.
-    while state.writer_of(dir).is_some() && !crate::pr::uncommitted(dir).is_empty() {
+    while state.writer_of(dir).is_some() {
+        if let Err(e) = budget.check() {
+            return expired(e);
+        }
+        match budget.git(dir, &["status", "--porcelain"]) {
+            Ok(status) if status.trim().is_empty() => break,
+            Err(why) => {
+                if let Err(e) = budget.check() {
+                    return expired(e);
+                }
+                return none("prepare", why, since);
+            }
+            _ => {}
+        }
         if stop.load(Ordering::Relaxed) {
             return cancelled();
         }
@@ -281,14 +306,30 @@ fn run(
     // get "Ship" over an empty diff, while Open opens against the default. The lane's own base,
     // or the remote's default — where the pull request will actually go.
     let branch = if let Some(name) = wt {
-        crate::worktree::base_of(&state.repo(), name)
+        let root = state.repo();
+        crate::worktree::base_of_using(name, |args| {
+            budget.git(&root, args).map(|s| s.trim().to_string())
+        })
     } else {
-        remote_default(dir)
+        budget
+            .git(
+                dir,
+                &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            )
+            .ok()
+            .and_then(|s| s.trim().strip_prefix("origin/").map(str::to_string))
+            .unwrap_or_else(|| "main".into())
     };
-    if let Err(why) = crate::pr::precheck(dir, &branch) {
+    if let Err(why) = crate::pr::precheck_before(dir, &branch, &budget) {
+        if let Err(e) = budget.check() {
+            return expired(e);
+        }
         return none("refused", why, since);
     }
-    let sha = crate::git::trimmed(dir, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let sha = budget
+        .git(dir, &["rev-parse", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     set(id, dir, |r| {
         r.phase = "fetching";
         r.sha = sha;
@@ -300,12 +341,17 @@ fn run(
     fetch
         .args(crate::git::AUTOMATIC)
         .args(["fetch", "--quiet", "origin", &branch]);
-    let _ = crate::git::output_until(fetch, Duration::from_secs(60), stop);
+    let _ = budget.output(fetch);
     if stop.load(Ordering::Relaxed) {
         return cancelled();
     }
+    if let Err(e) = budget.check() {
+        return expired(e);
+    }
     let verifies = |r: &str| {
-        crate::git::trimmed(dir, &["rev-parse", "--verify", &format!("{r}^{{commit}}")]).is_ok()
+        budget
+            .git(dir, &["rev-parse", "--verify", &format!("{r}^{{commit}}")])
+            .is_ok()
     };
     let remote = format!("origin/{branch}");
     let base = if verifies(&remote) {
@@ -313,6 +359,9 @@ fn run(
     } else if verifies(&branch) {
         branch
     } else {
+        if let Err(e) = budget.check() {
+            return expired(e);
+        }
         return none(
             "base",
             format!("`{branch}` is not in this checkout and fetching it failed."),
@@ -334,7 +383,7 @@ fn run(
         serde_json::json!({ "title": opening.title, "body": opening.body })
     };
     let env: Vec<(String, String)> = std::env::vars().collect();
-    crate::ci::local(dir, &base, &pr, program, &env, CEILING, stop)
+    crate::ci::local_with_budget(dir, &base, &pr, program, &env, &budget)
 }
 
 /// The branch `origin`'s HEAD points at, else `main`.
@@ -654,7 +703,7 @@ mod tests {
         path.into_std_path_buf().into_os_string()
     }
 
-    const SHIP: &str = r#"echo '{"type":"result","is_error":false,"result":"","structured_output":{"verdict":"ship","reason":"","summary":"ok","findings":[],"report":"","stages":[{"name":"pm","ran":true},{"name":"principal","ran":true},{"name":"reviewer","ran":true},{"name":"qa","ran":true}]}}'"#;
+    const SHIP: &str = r#"echo '{"type":"result","is_error":false,"result":"","structured_output":{"verdict":"ship","reason":"","summary":"ok","findings":[],"report":"","coverage":[{"area":"correctness","status":"checked","evidence":"source"},{"area":"security","status":"not_applicable","evidence":"no trust boundary changed"},{"area":"reliability","status":"checked","evidence":"failure paths"},{"area":"tests","status":"checked","evidence":"test source"}]}}'"#;
 
     fn outcome(lane: &str, within: Duration) -> Option<serde_json::Value> {
         let until = Instant::now() + within;

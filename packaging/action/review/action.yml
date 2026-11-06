@@ -1,4 +1,4 @@
-# Keel review: the repository's team reviews a pull request and posts one comment.
+# Keel review: one focused reviewer inspects a pull request and posts one comment.
 #
 # Published to OyadotAI/keel-releases at `review/action.yml` by release.yml, so it is used as
 # `OyadotAI/keel-releases/review@<tag>` and downloads the `keel` of that same release: a
@@ -9,7 +9,7 @@
 # this repository's secrets. Under `pull_request` a fork's PR gets no secrets, and the review
 # skips with one line in the log rather than failing.
 name: Keel review
-description: Review a pull request with the repository's Keel team and post one comment.
+description: Review changed code and affected callers with one focused reviewer. Post one report.
 branding:
   icon: check-circle
   color: blue
@@ -30,8 +30,8 @@ inputs:
     description: Fail the check when the verdict is "do not ship" or there is no verdict.
     default: "true"
   minutes:
-    description: Stop the review after this many minutes.
-    default: "30"
+    description: Review execution limit including preparation and validation; maximum 5 minutes.
+    default: "5"
   model:
     description: The model to review with. Claude Code's default otherwise.
     required: false
@@ -142,7 +142,7 @@ runs:
         rm -f "$OUT" "$LINES" "$ACTIONS"
         args=(review-pr --out "$OUT" --comments "$LINES" --threads "$THREADS" --thread-actions "$ACTIONS" --minutes "$MINUTES")
         if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
-        # Someone replied on a thread: answer it now, without re-running the whole team.
+        # Someone replied on a thread: answer it now, without re-running the full review.
         if [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then args+=(--replies-only); fi
         set +e
         keel "${args[@]}"

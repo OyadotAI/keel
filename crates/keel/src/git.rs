@@ -131,17 +131,26 @@ pub fn output_until(
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<Output> {
-    collect_until(command, ceiling, stop, None)
+    output_before(command, Instant::now() + ceiling, stop)
 }
 
-/// Drain a verbose provider stream without retaining its file contents, using the same kill rules.
-pub fn stream_until(
+/// Share a caller's absolute deadline so preparation cannot renew its execution budget.
+pub fn output_before(
     command: Command,
-    ceiling: Duration,
+    deadline: Instant,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Output> {
+    collect_until(command, deadline, stop, None)
+}
+
+/// Stream under the same deadline as preparation, without retaining provider file contents.
+pub fn stream_before(
+    command: Command,
+    deadline: Instant,
     stop: &std::sync::atomic::AtomicBool,
     consume: impl FnMut(&[u8]) + Send + 'static,
 ) -> std::io::Result<Output> {
-    collect_until(command, ceiling, stop, Some(Box::new(consume)))
+    collect_until(command, deadline, stop, Some(Box::new(consume)))
 }
 
 type Consumer = Box<dyn FnMut(&[u8]) + Send>;
@@ -149,11 +158,12 @@ const STREAM_STDERR_BYTES: usize = 64 * 1024;
 
 fn collect_until(
     mut command: Command,
-    ceiling: Duration,
+    deadline: Instant,
     stop: &std::sync::atomic::AtomicBool,
     mut consume: Option<Consumer>,
 ) -> std::io::Result<Output> {
     use crate::signals::Leads;
+    check_deadline(deadline, stop)?;
     // Its own group, so a timeout ends everything it started (`crate::signals`): a `claude` or a
     // credential helper that forks and hangs left its children reparented to init.
     command.lead_group();
@@ -220,7 +230,6 @@ fn collect_until(
     }
     drop(tx);
 
-    let deadline = Instant::now() + ceiling;
     let pid = child.id();
     let status = loop {
         match child.try_wait()? {
@@ -239,7 +248,7 @@ fn collect_until(
                 let _ = child.wait();
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!("took longer than {}s and was stopped", ceiling.as_secs()),
+                    "reached its deadline and was stopped",
                 ));
             }
             // Long enough not to spin, short enough that a fast command is not held up by it.
@@ -252,12 +261,11 @@ fn collect_until(
     // A moment, not the rest of the ceiling: output that is coming arrives within a pipe buffer
     // of the exit, and what is still open after that is a child the command left behind.
     const GRACE: Duration = Duration::from_millis(500);
-    let deadline = deadline.min(Instant::now() + GRACE);
+    const DRAIN: Duration = Duration::from_secs(1);
+    let pipe_deadline = deadline.min(Instant::now() + GRACE);
     let mut ended = false;
     for _ in 0..2 {
-        let wait = deadline
-            .saturating_duration_since(Instant::now())
-            .max(Duration::from_millis(50));
+        let wait = pipe_deadline.saturating_duration_since(Instant::now());
         if rx.recv_timeout(wait).is_ok() {
             continue;
         }
@@ -266,10 +274,14 @@ fn collect_until(
         }
         ended = true;
         crate::signals::end_tree(pid);
-        if rx.recv_timeout(Duration::from_secs(1)).is_err() {
+        if rx
+            .recv_timeout(DRAIN.min(deadline.saturating_duration_since(Instant::now())))
+            .is_err()
+        {
             break;
         }
     }
+    check_deadline(deadline, stop)?;
     let take = |b: &Shared| {
         use crate::lock::Locked;
         std::mem::take(&mut *b.locked())
@@ -280,6 +292,23 @@ fn collect_until(
         stdout,
         stderr,
     })
+}
+
+/// Refuse both late starts and late results, rather than granting another command a fresh timer.
+fn check_deadline(deadline: Instant, stop: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "was cancelled",
+        ));
+    }
+    if Instant::now() >= deadline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "execution deadline reached",
+        ));
+    }
+    Ok(())
 }
 
 // ── The four ways the daemon asks git something ───────────────────────────────────────────────

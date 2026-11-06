@@ -74,11 +74,19 @@ fn remember_base(root: &Utf8Path, name: &str, base: &str) {
 /// The branch a lane was cut from, or where the project is standing for one made before Keel
 /// recorded it.
 pub fn base_of(root: &Utf8Path, name: &str) -> String {
-    git(root, &["config", "--local", "--get", &base_key(name)])
+    base_of_using(name, |args| git(root, args))
+}
+
+/// Let review callers keep base lookup inside their existing deadline and cancellation signal.
+pub(crate) fn base_of_using(
+    name: &str,
+    read: impl Fn(&[&str]) -> Result<String, String>,
+) -> String {
+    read(&["config", "--local", "--get", &base_key(name)])
         .ok()
         .map(|b| b.trim().to_string())
         .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| git(root, &["branch", "--show-current"]).unwrap_or_default())
+        .unwrap_or_else(|| read(&["branch", "--show-current"]).unwrap_or_default())
 }
 
 use crate::git::trimmed as git;
@@ -1004,6 +1012,45 @@ pub async fn api_commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn review_base_fallback_does_not_renew_an_exhausted_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("started");
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let budget = crate::ci::Budget::new(std::time::Duration::from_secs(1), &stop);
+        let base = base_of_using("lane", |_| {
+            let mut command = std::process::Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "printf x >> \"$1\"; sleep 5; printf main",
+                    "git-fixture",
+                ])
+                .arg(&marker);
+            budget
+                .output(command)
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+                .map_err(|e| e.to_string())
+        });
+        assert!(base.is_empty());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "x");
+        assert!(budget.started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn cancelled_review_base_lookup_does_not_start_either_command() {
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        let budget = crate::ci::Budget::new(crate::ci::MAX_DURATION, &stop);
+        let base = base_of_using("lane", |_| {
+            let command = std::process::Command::new("a-program-that-must-not-start");
+            let error = budget.output(command).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+            Err(error.to_string())
+        });
+        assert!(base.is_empty());
+    }
 
     fn scratch_git() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();

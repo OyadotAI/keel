@@ -1,4 +1,4 @@
-//! `keel review-pr`: the team's review stages over a pull request, in CI.
+//! One focused, read-only review of a pull request under a shared five-minute deadline.
 //!
 //! The pull request is untrusted twice over — its text is written by its author, and so is every
 //! file in its checkout — and three things follow from that, each a hole the first design had:
@@ -28,6 +28,9 @@ use keel_generator::team;
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 mod activity;
+mod budget;
+mod coverage;
+pub(crate) use budget::{Budget, MAX_DURATION, MAX_MINUTES};
 
 pub struct Opts {
     pub base: Option<String>,
@@ -81,6 +84,8 @@ struct Answer {
     report: String,
     #[serde(default)]
     stages: Vec<Stage>,
+    #[serde(default)]
+    coverage: Vec<coverage::Check>,
     #[serde(default)]
     threads: Vec<ThreadVerdict>,
     #[serde(default)]
@@ -188,10 +193,6 @@ struct Outcome {
     took: Duration,
     cost: Option<f64>,
 }
-
-/// The stages a review cannot skip. designer, security and reliability run only when the change
-/// is theirs; these four judge every change.
-const REQUIRED: &[&str] = &["pm", "principal", "reviewer", "qa"];
 
 /// The variables a review may hand `claude`, by name or by prefix. Everything else is dropped.
 const PASSED: &[&str] = &[
@@ -307,6 +308,12 @@ fn review(
     env: &[(String, String)],
     stop: &std::sync::atomic::AtomicBool,
 ) -> i32 {
+    let requested = if cfg!(test) && opts.minutes == 0 {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_secs(opts.minutes.clamp(1, MAX_MINUTES) * 60)
+    };
+    let budget = Budget::new(requested, stop);
     match credentials(env) {
         None => {
             eprintln!(
@@ -349,7 +356,12 @@ fn review(
     let sha = pr["head"]["sha"]
         .as_str()
         .map(str::to_owned)
-        .or_else(|| crate::git::trimmed(repo, &["rev-parse", "HEAD"]).ok())
+        .or_else(|| {
+            budget
+                .git(repo, &["rev-parse", "HEAD"])
+                .ok()
+                .map(|s| s.trim().to_string())
+        })
         .unwrap_or_default();
     let threads: Vec<Thread> = opts
         .threads
@@ -371,13 +383,17 @@ fn review(
         }
         return 0;
     }
-    let started = Instant::now();
+    let started = budget.started;
+    eprintln!(
+        "keel review-pr: [0m 0s] focused review started; limit {}m",
+        budget.limit.as_secs().div_ceil(60)
+    );
     let web = match (get(env, "GITHUB_SERVER_URL"), get(env, "GITHUB_REPOSITORY")) {
         (Some(server), Some(repository)) => Some(format!("{server}/{repository}")),
         _ => None,
     };
 
-    let outcome = match prepare(repo, &base, pr, &threads) {
+    let outcome = match prepare(repo, &base, pr, &threads, &budget) {
         Err(why) => Outcome {
             verdict: Verdict::None(format!("Keel could not prepare the review: {why}")),
             answer: None,
@@ -389,23 +405,28 @@ fn review(
             took: started.elapsed(),
             cost: None,
         },
-        Ok(prepared) => {
-            let ceiling = Duration::from_secs(opts.minutes.max(1) * 60);
-            let ceiling = if cfg!(test) && opts.minutes == 0 {
-                Duration::from_secs(1)
-            } else {
-                ceiling
-            };
-            let (verdict, answer, cost, _) = ask(
+        Ok(mut prepared) => {
+            let (mut verdict, mut answer, cost, _) = ask(
                 &prepared,
                 program,
                 env,
                 opts.model.as_deref(),
-                ceiling,
-                stop,
+                &budget,
                 opts.replies_only,
                 Where::Ci,
             );
+            if let Err(why) = prepared.cleanup() {
+                verdict = Verdict::None(format!(
+                    "The review could not clean up its scratch checkout: {why}"
+                ));
+                answer = None;
+            }
+            if !matches!(verdict, Verdict::None(_))
+                && let Err(why) = budget.finish()
+            {
+                verdict = Verdict::None(why.to_string());
+                answer = None;
+            }
             Outcome {
                 verdict,
                 answer,
@@ -488,6 +509,7 @@ pub(crate) enum Done {
         summary: String,
         findings: Vec<Finding>,
         stages: Vec<Stage>,
+        coverage: Vec<coverage::Check>,
         report: String,
         took: u64,
         cost: Option<f64>,
@@ -505,6 +527,7 @@ pub(crate) enum Done {
 /// The team's review of `checkout` against `base`, before its pull request opens: the same
 /// `prepare` and `ask` CI runs, with the person's own login. `pr` is what the pull request will
 /// say — `title` and `body` — so the team reviews what the person is about to publish.
+#[cfg(test)]
 pub(crate) fn local(
     checkout: &Utf8Path,
     base: &str,
@@ -514,29 +537,52 @@ pub(crate) fn local(
     ceiling: Duration,
     stop: &std::sync::atomic::AtomicBool,
 ) -> Done {
-    let started = Instant::now();
+    let budget = Budget::new(ceiling, stop);
+    local_with_budget(checkout, base, pr, program, env, &budget)
+}
+
+/// Local preflight and inference share one deadline rather than each receiving five minutes.
+pub(crate) fn local_with_budget(
+    checkout: &Utf8Path,
+    base: &str,
+    pr: &serde_json::Value,
+    program: &OsStr,
+    env: &[(String, String)],
+    budget: &Budget<'_>,
+) -> Done {
+    let started = budget.started;
     let took = || started.elapsed().as_secs();
-    let prepared = match prepare(checkout, base, pr, &[]) {
+    let mut prepared = match prepare(checkout, base, pr, &[], budget) {
         Ok(p) => p,
         Err(why) => {
             return Done::None {
-                cause: "prepare",
+                cause: if budget.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    "cancelled"
+                } else if budget.check().is_err() {
+                    "ceiling"
+                } else {
+                    "prepare"
+                },
                 line: format!("Keel could not prepare the review: {why}"),
                 took: took(),
                 cost: None,
             };
         }
     };
-    let (verdict, answer, cost, cause) = ask(
-        &prepared,
-        program,
-        env,
-        None,
-        ceiling,
-        stop,
-        false,
-        Where::Local,
-    );
+    let (mut verdict, mut answer, cost, mut cause) =
+        ask(&prepared, program, env, None, budget, false, Where::Local);
+    if let Err(why) = prepared
+        .cleanup()
+        .and_then(|_| budget.finish().map_err(|e| e.to_string()))
+    {
+        verdict = Verdict::None(why);
+        answer = None;
+        cause = Some(if budget.stop.load(std::sync::atomic::Ordering::Relaxed) {
+            "cancelled"
+        } else {
+            "ceiling"
+        });
+    }
     match (verdict, answer) {
         (Verdict::Ship | Verdict::Block(_), Some(a)) => Done::Verdict {
             verdict: a.verdict,
@@ -544,6 +590,7 @@ pub(crate) fn local(
             summary: a.summary,
             findings: a.findings,
             stages: a.stages,
+            coverage: a.coverage,
             report: a.report,
             took: took(),
             cost,
@@ -573,18 +620,22 @@ struct Prepared {
     home: Utf8PathBuf,
     evidence: Utf8PathBuf,
     _dir: tempfile::TempDir,
+    cleanup_deadline: Instant,
+    cleaned: bool,
 }
 
+impl Prepared {
+    fn cleanup(&mut self) -> Result<(), String> {
+        if self.cleaned {
+            return Ok(());
+        }
+        self.cleaned = true;
+        budget::cleanup(&self.repo, &self.tree, self.cleanup_deadline)
+    }
+}
 impl Drop for Prepared {
     fn drop(&mut self) {
-        let _ = crate::git::run(
-            &self.repo,
-            &[
-                crate::git::AUTOMATIC,
-                &["worktree", "remove", "--force", self.tree.as_str()],
-            ]
-            .concat(),
-        );
+        let _ = self.cleanup();
     }
 }
 
@@ -598,10 +649,10 @@ fn instructions(path: &str) -> bool {
         )
 }
 
-fn blob(repo: &Utf8Path, sha: &str) -> Result<Vec<u8>, String> {
+fn blob(repo: &Utf8Path, sha: &str, budget: &Budget<'_>) -> Result<Vec<u8>, String> {
     let mut c = crate::git::command(repo);
     c.args(["cat-file", "blob", sha]);
-    let out = crate::git::output(c).map_err(|e| format!("git cat-file: {e}"))?;
+    let out = budget.output(c).map_err(|e| format!("git cat-file: {e}"))?;
     out.status
         .success()
         .then_some(out.stdout)
@@ -613,12 +664,14 @@ fn entries(
     repo: &Utf8Path,
     rev: &str,
     under: Option<&str>,
+    budget: &Budget<'_>,
 ) -> Result<Vec<(String, String, String)>, String> {
     let mut args = vec!["ls-tree", "-r", "-z", rev];
     if let Some(under) = under {
         args.extend(["--", under]);
     }
-    Ok(crate::git::run(repo, &args)?
+    Ok(budget
+        .git(repo, &args)?
         .split('\0')
         .filter_map(|entry| {
             let (meta, path) = entry.split_once('\t')?;
@@ -669,14 +722,17 @@ fn prepare(
     base: &str,
     pr: &serde_json::Value,
     threads: &[Thread],
+    budget: &Budget<'_>,
 ) -> Result<Prepared, String> {
-    crate::git::trimmed(
-        repo,
-        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    )
-    .map_err(|_| {
-        format!("the base `{base}` is not in this checkout. Check out with fetch-depth: 0.")
-    })?;
+    budget.check().map_err(|e| e.to_string())?;
+    budget
+        .git(
+            repo,
+            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+        )
+        .map_err(|_| {
+            format!("the base `{base}` is not in this checkout. Check out with fetch-depth: 0.")
+        })?;
     // `/tmp`, never `$TMPDIR`: a self-hosted runner can point that under a home folder, where
     // `out_of_reach` would hide the very tree under review.
     let dir = if cfg!(unix) {
@@ -694,6 +750,7 @@ fn prepare(
     // Claude Code loads instructions from every folder above its own, and `/tmp` is anyone's.
     // A `CLAUDE.md` waiting there would be obeyed by the reviewer, so the review does not start.
     for above in root.ancestors().skip(1) {
+        budget.check().map_err(|e| e.to_string())?;
         for name in ["CLAUDE.md", "CLAUDE.local.md", ".claude"] {
             if above.join(name).symlink_metadata().is_ok() {
                 return Err(format!(
@@ -710,15 +767,27 @@ fn prepare(
     let head = pr["head"]["sha"]
         .as_str()
         .filter(|sha| {
-            crate::git::trimmed(
-                repo,
-                &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
-            )
-            .is_ok()
+            budget
+                .git(
+                    repo,
+                    &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
+                )
+                .is_ok()
         })
         .unwrap_or("HEAD")
         .to_string();
-    crate::git::run(
+    let mut prepared = Prepared {
+        repo: repo.to_owned(),
+        base: base.to_string(),
+        hunks: Vec::new(),
+        tree: tree.clone(),
+        home,
+        evidence: evidence.clone(),
+        _dir: dir,
+        cleanup_deadline: budget.deadline,
+        cleaned: false,
+    };
+    budget.git(
         repo,
         // Links check out as files holding their target: the PR's checkout is its author's, and
         // `notes.txt -> /proc/self/environ` is a read of the API key by another name — or a
@@ -741,25 +810,18 @@ fn prepare(
         ]
         .concat(),
     )?;
-    let mut prepared = Prepared {
-        repo: repo.to_owned(),
-        base: base.to_string(),
-        hunks: Vec::new(),
-        tree: tree.clone(),
-        home,
-        evidence: evidence.clone(),
-        _dir: dir,
-    };
 
     // The branch's instructions out, the base's in. Only regular files are written, and nothing
     // in the tree is a link (above), so a write never lands outside it.
-    for path in crate::git::run(&tree, &["ls-files", "-z"])?.split('\0') {
+    for path in budget.git(&tree, &["ls-files", "-z"])?.split('\0') {
+        budget.check().map_err(|e| e.to_string())?;
         if !path.is_empty() && instructions(path) {
             let _ = std::fs::remove_file(tree.join(path));
         }
     }
     let mut from_base = 0;
-    for (mode, sha, path) in entries(repo, base, None)? {
+    for (mode, sha, path) in entries(repo, base, None, budget)? {
+        budget.check().map_err(|e| e.to_string())?;
         if !instructions(&path) {
             continue;
         }
@@ -767,14 +829,14 @@ fn prepare(
         // repository is not rare: the base's link is followed inside the base's own tree and
         // what it names is written as files, so the review still has the project's rules.
         let files = if mode == "120000" {
-            let target = String::from_utf8_lossy(&blob(repo, &sha)?).into_owned();
+            let target = String::from_utf8_lossy(&blob(repo, &sha, budget)?).into_owned();
             let Some(target) = inside(&path, &target) else {
                 eprintln!(
                     "keel review-pr: {path} in {base} links outside the repository, so it is not used"
                 );
                 continue;
             };
-            entries(repo, base, Some(&target))?
+            entries(repo, base, Some(&target), budget)?
                 .into_iter()
                 .filter(|(mode, _, _)| mode != "120000")
                 .map(|(m, s, p)| (m, s, format!("{path}{}", &p[target.len()..])))
@@ -783,6 +845,7 @@ fn prepare(
             vec![(mode, sha, path)]
         };
         for (mode, sha, path) in files {
+            budget.check().map_err(|e| e.to_string())?;
             if !matches!(mode.as_str(), "100644" | "100755") {
                 continue;
             }
@@ -790,7 +853,7 @@ fn prepare(
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("{path}: {e}"))?;
             }
-            std::fs::write(&dest, blob(repo, &sha)?).map_err(|e| format!("{path}: {e}"))?;
+            std::fs::write(&dest, blob(repo, &sha, budget)?).map_err(|e| format!("{path}: {e}"))?;
             if path.starts_with(".claude/agents/") {
                 from_base += 1;
             }
@@ -800,6 +863,7 @@ fn prepare(
     // Default roles preload skills and read their references. Supply that complete bundle,
     // while keeping any trusted-base customization authoritative at every individual path.
     for (path, body) in team::files() {
+        budget.check().map_err(|e| e.to_string())?;
         let dest = tree.join(path);
         if !dest.exists() {
             std::fs::create_dir_all(dest.parent().unwrap_or(&tree))
@@ -832,11 +896,11 @@ fn prepare(
 
     std::fs::create_dir_all(&evidence).map_err(|e| format!("evidence: {e}"))?;
     let range = format!("{base}...{head}");
-    let full = crate::git::run(repo, &["diff", "--no-color", &range])?;
+    let full = budget.git(repo, &["diff", "--no-color", &range])?;
     prepared.hunks = hunks(&full);
     let (patch, cut) = capped(&full);
-    let stat = crate::git::run(repo, &["diff", "--stat", &range])?;
-    let log = crate::git::run(
+    let stat = budget.git(repo, &["diff", "--stat", &range])?;
+    let log = budget.git(
         repo,
         &[
             "log",
@@ -873,6 +937,7 @@ fn prepare(
             String::new()
         }
     );
+    budget.check().map_err(|e| e.to_string())?;
     Ok(prepared)
 }
 
@@ -883,11 +948,14 @@ fn ask(
     program: &OsStr,
     env: &[(String, String)],
     model: Option<&str>,
-    ceiling: Duration,
-    stop: &std::sync::atomic::AtomicBool,
+    budget: &Budget<'_>,
     replies_only: bool,
     place: Where,
 ) -> (Verdict, Option<Answer>, Option<f64>, Option<&'static str>) {
+    let ceiling = budget.limit;
+    if let Err(why) = budget.check() {
+        return (Verdict::None(why.to_string()), None, None, Some("ceiling"));
+    }
     // Said, because the agent cannot see it: on the first live run it flagged a checkout with no
     // `ref` as letting the PR rewrite its reviewers, which is exactly what this function undoes.
     let prompt = format!(
@@ -954,7 +1022,14 @@ fn ask(
             "--settings",
             &out_of_reach(),
         ])
-        .args(["--tools", "Read,Grep,Glob,Task,Skill"])
+        .args([
+            "--agent",
+            "reviewer",
+            "--tools",
+            "Read,Grep,Glob",
+            "--disallowedTools",
+            "Task,Agent,Skill,Bash,PowerShell,Edit,Write,NotebookEdit",
+        ])
         .args([
             "--strict-mcp-config",
             "--mcp-config",
@@ -965,15 +1040,20 @@ fn ask(
             prepared.evidence.as_str(),
             "--no-session-persistence",
         ]);
+    if place == Where::Ci {
+        command.args(["--effort", "medium"]);
+    }
     if let Some(model) = model {
         command.args(["--model", model]);
     }
 
     use crate::lock::Locked;
-    let activity = std::sync::Arc::new(std::sync::Mutex::new(activity::Activity::new()));
+    let activity = std::sync::Arc::new(std::sync::Mutex::new(activity::Activity::since(
+        budget.started,
+    )));
     eprintln!(
-        "keel review-pr: [0m 0s] review started; limit {}m",
-        ceiling.as_secs().div_ceil(60)
+        "keel review-pr: focused reviewer started; remaining {}",
+        clock(budget.work_until.saturating_duration_since(Instant::now()))
     );
     let (done, rx) = std::sync::mpsc::channel::<()>();
     let observed = activity.clone();
@@ -985,7 +1065,7 @@ fn ask(
         }
     });
     let observed = activity.clone();
-    let out = crate::git::stream_until(command, ceiling, stop, move |bytes| {
+    let out = crate::git::stream_before(command, budget.work_until, budget.stop, move |bytes| {
         observed.locked().push(bytes)
     });
     drop(done);
@@ -1007,7 +1087,7 @@ fn ask(
         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
             return (
                 Verdict::None(format!(
-                    "The review reached its {}-minute limit and was stopped. No verdict was produced.\n\n{}",
+                    "The focused review reached its {}-minute limit and stopped. No verdict was produced.\n\n{}",
                     ceiling.as_secs().div_ceil(60),
                     activity.locked().context()
                 )),
@@ -1075,20 +1155,21 @@ fn ask(
             ),
         };
     }
-    // A partial review is no review: measured on the first live run, the agent started `pm`,
-    // answered before the rest, and the check failed on one stage's opinion of the PR.
-    let missing: Vec<&str> = answer.as_ref().map_or(Vec::new(), |a| {
-        REQUIRED
-            .iter()
-            .copied()
-            .filter(|name| !a.stages.iter().any(|s| s.name == *name && s.ran))
-            .collect()
+    let complete = answer
+        .as_ref()
+        .is_some_and(|a| coverage::complete(&a.coverage));
+    let contradictory = answer.as_ref().is_some_and(|a| {
+        a.verdict == "ship" && a.findings.iter().any(|f| f.severity == "blocking")
     });
     let verdict = match answer.as_ref().map(|a| a.verdict.as_str()) {
-        Some(_) if !missing.is_empty() => Verdict::None(format!(
-            "Only part of the team ran: {} did not, so this is not a verdict on the change.",
-            missing.join(", ")
-        )),
+        Some(_) if !complete => Verdict::None(
+            "The focused review could not complete the required coverage. No verdict was produced."
+                .into(),
+        ),
+        Some(_) if contradictory => Verdict::None(
+            "The review reported a blocking finding with a Ship verdict. No verdict was produced."
+                .into(),
+        ),
         Some("ship") => Verdict::Ship,
         Some("do not ship") => Verdict::Block(
             answer
@@ -1099,7 +1180,21 @@ fn ask(
         ),
         _ => Verdict::None("The review finished without a verdict Keel could read.".into()),
     };
-    let answer = answer.filter(|_| !matches!(verdict, Verdict::None(_)));
+    let (verdict, answer) = if let Err(why) = budget.check() {
+        (Verdict::None(why.to_string()), None)
+    } else {
+        let answer = answer
+            .filter(|_| !matches!(verdict, Verdict::None(_)))
+            .map(|mut a| {
+                a.stages = vec![Stage {
+                    name: "reviewer".into(),
+                    ran: true,
+                    note: "focused review".into(),
+                }];
+                a
+            });
+        (verdict, answer)
+    };
     let cause = matches!(verdict, Verdict::None(_)).then_some("other");
     (verdict, answer, cost, cause)
 }
@@ -1373,14 +1468,12 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
                 }
                 out.push('\n');
             }
-            out.push_str(&format!("**Team** {}\n\n", team_row(&a.stages)));
-            out.push_str(&format!(
-                "**What each agent said**\n\n{}\n\n",
-                stages(&a.stages)
-            ));
+            out.push_str("**Focused review** · one reviewer\n\n**Coverage**\n\n");
+            out.push_str(&coverage::markdown(&a.coverage));
+            out.push_str("\n\nTests were inspected, not executed.\n\n");
             let footer = format!(
                 "<sub>Advisory: an agent that read this PR's text wrote it, and that text can mislead \
-                 it. The team is from `{}`.</sub>\n",
+                 it. Reviewer instructions are from `{}`.</sub>\n",
                 o.base
             );
             let room = COMMENT_MAX.saturating_sub(out.len() + footer.len() + 200);
@@ -1405,40 +1498,6 @@ fn render(o: &Outcome, secrets: &[&str]) -> String {
     clean(out, secrets)
 }
 
-/// Each agent's own icon, so a glance down the list finds the one you care about.
-fn agent_icon(name: &str) -> &'static str {
-    match name {
-        "pm" => "🧭",
-        "designer" => "🎨",
-        "principal" => "🏛️",
-        "reviewer" => "🔍",
-        "security" => "🛡️",
-        "reliability" => "⚙️",
-        "qa" => "🧪",
-        _ => "🤖",
-    }
-}
-
-fn stage_mark(name: &str, reported: &[Stage]) -> &'static str {
-    if name == "qa" {
-        return "👀";
-    }
-    match reported.iter().find(|s| s.name == name) {
-        Some(s) if s.ran => "✅",
-        Some(_) => "⏭️",
-        None => "❔",
-    }
-}
-
-/// One line: every stage and whether it ran.
-fn team_row(reported: &[Stage]) -> String {
-    team::PR_STAGES
-        .iter()
-        .map(|name| format!("{} {name}", stage_mark(name, reported)))
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
 fn unmention(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -1449,32 +1508,6 @@ fn unmention(text: &str) -> String {
         }
     }
     out
-}
-
-fn stages(reported: &[Stage]) -> String {
-    team::PR_STAGES
-        .iter()
-        .map(|name| {
-            let found = reported.iter().find(|s| s.name == *name);
-            let note = match found {
-                Some(s) if !s.note.trim().is_empty() => s.note.trim().to_string(),
-                Some(s) if s.ran => "ran".into(),
-                Some(_) => "skipped".into(),
-                None => "not reported".into(),
-            };
-            let note = if *name == "qa" {
-                format!("{note} (read the change; CI cannot run the app)")
-            } else {
-                note
-            };
-            format!(
-                "- {} **{name}** {} {note}",
-                agent_icon(name),
-                stage_mark(name, reported)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 // The stubs are shell scripts.
@@ -1494,6 +1527,15 @@ mod tests {
         let p = root.join(path);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, body).unwrap();
+    }
+
+    fn prepare(
+        repo: &Utf8Path,
+        base: &str,
+        pr: &serde_json::Value,
+        threads: &[Thread],
+    ) -> Result<Prepared, String> {
+        super::prepare(repo, base, pr, threads, &Budget::new(MAX_DURATION, &NEVER))
     }
 
     /// A repository whose `main` has a reviewer and a reference, and whose HEAD — the PR —
@@ -1624,24 +1666,24 @@ mod tests {
         }
     }
 
-    fn reply(verdict: &str, report: &str) -> String {
-        reply_with(verdict, report, &["pm", "principal", "reviewer", "qa"])
+    fn checked_coverage() -> Vec<coverage::Check> {
+        ["correctness", "security", "reliability", "tests"].iter().map(|area| serde_json::from_value(serde_json::json!({"area":area,"status":"checked","evidence":"src/lib.rs and callers inspected"})).unwrap()).collect()
     }
 
-    fn reply_with(verdict: &str, report: &str, ran: &[&str]) -> String {
-        let mut stages: Vec<_> = ran
-            .iter()
-            .map(|name| serde_json::json!({"name": name, "ran": true, "note": ""}))
-            .collect();
-        stages.push(serde_json::json!({"name": "designer", "ran": false, "note": "nothing a person reads changed"}));
+    fn reply(verdict: &str, report: &str) -> String {
+        reply_with_coverage(
+            verdict,
+            report,
+            serde_json::to_value(checked_coverage()).unwrap(),
+        )
+    }
+
+    fn reply_with_coverage(verdict: &str, report: &str, coverage: serde_json::Value) -> String {
         let answer = serde_json::json!({
-            "report": report,
-            "stages": stages,
-            "verdict": verdict,
+            "report": report, "coverage": coverage, "verdict": verdict,
             "reason": if verdict == "ship" { "" } else { "b() does not exist" },
         });
-        let out = serde_json::json!({"type":"result","is_error": false, "result": "Verdict: ship",
-                                     "structured_output": answer, "total_cost_usd": 0.42});
+        let out = serde_json::json!({"type":"result","is_error":false,"result":"Verdict: ship","structured_output":answer,"total_cost_usd":0.42});
         format!("cat <<'EOF'\n{out}\nEOF")
     }
 
@@ -1712,10 +1754,13 @@ mod tests {
     /// The first live run: `pm` returned, the rest were "cut short", and the check failed on one
     /// stage's opinion. Neither verdict stands on part of the team.
     #[test]
-    fn a_review_by_part_of_the_team_is_no_verdict() {
+    fn a_review_without_complete_coverage_is_no_verdict() {
         let (_dir, root) = pr_repo();
         for verdict in ["ship", "do not ship"] {
-            let program = stub(&root, &reply_with(verdict, "pm says so", &["pm"]));
+            let program = stub(
+                &root,
+                &reply_with_coverage(verdict, "partial inspection", serde_json::json!([])),
+            );
             assert_eq!(
                 review(
                     &root,
@@ -1729,10 +1774,66 @@ mod tests {
             );
             let text = std::fs::read_to_string(root.join("report.md")).unwrap();
             assert!(
-                text.contains("Only part of the team ran: principal, reviewer, qa did not"),
+                text.contains("could not complete the required coverage"),
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_ship_with_a_blocking_finding_is_no_verdict() {
+        let (_dir, root) = pr_repo();
+        let answer = serde_json::json!({"type":"result","structured_output": {
+            "verdict":"ship", "coverage":checked_coverage(),
+            "findings":[{"path":"src/lib.rs","line":1,"severity":"blocking","title":"broken","body":"reachable failure"}]
+        }});
+        let program = stub(&root, &format!("cat <<'EOF'\n{answer}\nEOF"));
+        assert_eq!(
+            review(
+                &root,
+                &opts(&root, 1),
+                program.as_os_str(),
+                &env(&[]),
+                &NEVER
+            ),
+            2
+        );
+        assert!(
+            std::fs::read_to_string(root.join("report.md"))
+                .unwrap()
+                .contains("blocking finding with a Ship verdict")
+        );
+    }
+
+    #[test]
+    fn preparation_cannot_start_after_its_shared_deadline() {
+        let (_dir, root) = pr_repo();
+        let before = crate::git::run(&root, &["worktree", "list"]).unwrap();
+        let budget = Budget::new(Duration::ZERO, &NEVER);
+        assert!(super::prepare(&root, "main", &serde_json::Value::Null, &[], &budget).is_err());
+        assert_eq!(
+            crate::git::run(&root, &["worktree", "list"]).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn a_checkout_that_exhausts_preparation_budget_is_cleaned() {
+        let (_dir, root) = pr_repo();
+        write(&root, ".gitattributes", "slow.txt filter=slow\n");
+        write(&root, "slow.txt", "payload\n");
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-qm", "slow checkout fixture"]);
+        git(&root, &["config", "filter.slow.smudge", "sleep 5; cat"]);
+        git(&root, &["config", "filter.slow.required", "true"]);
+        let before = crate::git::run(&root, &["worktree", "list"]).unwrap();
+        let budget = Budget::new(Duration::from_secs(1), &NEVER);
+        assert!(super::prepare(&root, "main", &serde_json::Value::Null, &[], &budget).is_err());
+        assert!(budget.started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            crate::git::run(&root, &["worktree", "list"]).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -1755,7 +1856,13 @@ mod tests {
             args.contains("is the copy from `main`, not the PR's"),
             "{args}"
         );
-        assert!(args.contains("never in the background"));
+        assert!(args.contains("Do not delegate"));
+        assert!(args.contains("--agent\nreviewer\n"));
+        assert!(args.contains("--tools\nRead,Grep,Glob\n"));
+        assert!(args.contains(
+            "--disallowedTools\nTask,Agent,Skill,Bash,PowerShell,Edit,Write,NotebookEdit"
+        ));
+        assert!(args.contains("--effort\nmedium\n"));
     }
 
     #[test]
@@ -1909,7 +2016,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(3));
         assert!(!marker.exists(), "the agent's children went with it");
         let text = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(text.contains("limit and was stopped"));
+        assert!(text.contains("limit and stopped"));
     }
 
     #[test]
@@ -2007,6 +2114,7 @@ mod tests {
         };
         let answer = Answer {
             summary: "Adds a pager. Off by one.".into(),
+            coverage: checked_coverage(),
             findings: vec![
                 finding("README.md", 3, "nit", "Typo"),
                 finding("src/pager.py", 4, "blocking", "Page 1 | skips items"),
@@ -2041,13 +2149,10 @@ mod tests {
         let blocking = text.find("| 🔴 | Page 1 \\| skips items | [`src/pager.py:4`](https://github.com/o/r/blob/0123456789abcdef/src/pager.py#L4) |").unwrap();
         assert!(blocking < text.find("| 🔵 | Typo |").unwrap());
         assert!(text.contains("/README.md#L3) (outside the diff) |"));
-        assert!(text.contains("**Team** ❔ pm · ❔ designer · ❔ principal · ❔ reviewer · ⏭️ security · ❔ reliability · 👀 qa"));
-        assert!(text.contains("**What each agent said**\n\n- 🧭 **pm** ❔ not reported\n"));
-        assert!(text.contains("- 🛡️ **security** ⏭️ no auth or input changed\n"));
-        assert!(
-            !text.contains("<summary>What each"),
-            "the agents are shown, not folded"
-        );
+        assert!(text.contains("**Focused review** · one reviewer"));
+        assert!(text.contains("**Coverage**"));
+        assert!(text.contains("Tests (source inspection)"));
+        assert!(!text.contains("What each agent said"));
         assert!(text.contains("<details><summary>Full report</summary>"));
         assert!(
             text.ends_with(DOWNLOAD),
@@ -2102,6 +2207,7 @@ mod tests {
             verdict: Verdict::Ship,
             answer: Some(Answer {
                 summary: String::new(),
+                coverage: checked_coverage(),
                 findings,
                 report: String::new(),
                 stages: Vec::new(),
@@ -2357,6 +2463,7 @@ mod tests {
         let answer = serde_json::json!({
             "summary": "ok", "report": "", "verdict": "ship", "reason": "",
             "stages": stages,
+            "coverage": checked_coverage(),
             "findings": [{"path": "src/lib.rs", "line": 1, "severity": "warning", "title": "Name b", "body": "ping @octocat"}],
         });
         let out = serde_json::json!({"type":"result","structured_output": answer});

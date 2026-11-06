@@ -1,23 +1,12 @@
-//! Bounded provider frames expose stage timing without logging prompts or trusting prose as verdicts.
-use super::{clock, team};
+//! Bounded focused-review activity never logs source contents or trusts prose as a verdict.
+use super::clock;
 use serde_json::Value;
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
-
+use std::time::{Duration, Instant};
 const FRAME_BYTES: usize = 2 * 1024 * 1024;
 const RESULT_BYTES: usize = 1024 * 1024;
-const CORRELATIONS: usize = 64;
 const ID_BYTES: usize = 128;
 const ACTIVITY_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const HEARTBEAT: Duration = Duration::from_secs(60);
-
-struct Stage {
-    name: &'static str,
-    since: Duration,
-    background: bool,
-}
 
 pub(super) struct Activity {
     since: Instant,
@@ -26,32 +15,26 @@ pub(super) struct Activity {
     session: Option<String>,
     result: Option<Value>,
     invalid_result: bool,
-    stages: HashMap<String, Stage>,
-    seen: HashSet<String>,
-    aliases: HashMap<String, String>,
-    last_stage: Option<&'static str>,
     last_activity: Option<(&'static str, Duration)>,
     last_printed: Option<Duration>,
 }
-
 impl Activity {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
+        Self::since(Instant::now())
+    }
+    pub(super) fn since(since: Instant) -> Self {
         Self {
-            since: Instant::now(),
+            since,
             partial: Vec::new(),
             oversized: false,
             session: None,
             result: None,
             invalid_result: false,
-            stages: HashMap::new(),
-            seen: HashSet::new(),
-            aliases: HashMap::new(),
-            last_stage: None,
             last_activity: None,
             last_printed: None,
         }
     }
-
     pub(super) fn push(&mut self, bytes: &[u8]) {
         for part in bytes.split_inclusive(|b| *b == b'\n') {
             if !self.oversized && self.partial.len().saturating_add(part.len()) <= FRAME_BYTES {
@@ -82,10 +65,9 @@ impl Activity {
     }
 
     fn event(&mut self, value: &Value, now: Duration) -> Vec<String> {
-        let mut lines = Vec::new();
         if value["type"] == "result" {
             self.result(value);
-            return lines;
+            return Vec::new();
         }
         if value["type"] == "system"
             && value["subtype"] == "init"
@@ -98,66 +80,13 @@ impl Activity {
         for block in value["message"]["content"].as_array().into_iter().flatten() {
             if block["type"] == "tool_use" {
                 label = activity_label(block["name"].as_str().unwrap_or(""));
-                if matches!(block["name"].as_str(), Some("Task" | "Agent"))
-                    && value["parent_tool_use_id"].is_null()
-                {
-                    self.start(
-                        &block["id"],
-                        &block["input"]["subagent_type"],
-                        block["input"]["run_in_background"]
-                            .as_bool()
-                            .unwrap_or(true),
-                        now,
-                        &mut lines,
-                    );
+                if matches!(block["name"].as_str(), Some("Task" | "Agent")) {
+                    self.invalid_result = true;
                 }
-            } else if block["type"] == "tool_result"
-                && value["tool_use_result"]["status"] != "async_launched"
-                && value["tool_use_result"]["isAsync"] != true
-            {
-                self.finish(
-                    &block["tool_use_id"],
-                    value["tool_use_result"]["status"] == "completed",
-                    now,
-                    &mut lines,
-                );
             }
         }
         if value["type"] == "system" && value["subtype"] == "task_started" {
-            let key = id(&value["tool_use_id"]).or_else(|| id(&value["task_id"]));
-            if let Some(key) = key {
-                if let Some(stage) = self.stages.get_mut(key)
-                    && let Some(background) = value["is_backgrounded"].as_bool()
-                {
-                    stage.background = background;
-                }
-                self.start(
-                    &Value::String(key.into()),
-                    &value["subagent_type"],
-                    value["is_backgrounded"].as_bool().unwrap_or(false),
-                    now,
-                    &mut lines,
-                );
-                if let Some(task) = id(&value["task_id"])
-                    && self.aliases.len() < CORRELATIONS
-                {
-                    self.aliases.insert(task.into(), key.into());
-                }
-            }
-        }
-        if value["type"] == "system"
-            && value["subtype"] == "task_notification"
-            && matches!(
-                value["status"].as_str(),
-                Some("completed" | "failed" | "stopped")
-            )
-        {
-            let key = if id(&value["tool_use_id"]).is_some() {
-                &value["tool_use_id"]
-            } else {
-                &value["task_id"]
-            };
-            self.finish(key, true, now, &mut lines);
+            self.invalid_result = true;
         }
         if value["type"]
             .as_str()
@@ -168,72 +97,12 @@ impl Activity {
                 .last_printed
                 .is_none_or(|last| now.saturating_sub(last) >= ACTIVITY_INTERVAL)
             {
-                lines.push(line(now, &format!("provider activity: {label}")));
                 self.last_printed = Some(now);
+                return vec![line(now, &format!("provider activity: {label}"))];
             }
         }
-        lines
+        Vec::new()
     }
-
-    fn start(
-        &mut self,
-        key: &Value,
-        name: &Value,
-        background: bool,
-        now: Duration,
-        lines: &mut Vec<String>,
-    ) {
-        let Some(name) = team::PR_STAGES
-            .iter()
-            .copied()
-            .find(|s| Some(*s) == name.as_str())
-        else {
-            return;
-        };
-        let Some(key) = id(key) else {
-            return;
-        };
-        if self.seen.contains(key) || self.seen.len() >= CORRELATIONS {
-            return;
-        }
-        self.seen.insert(key.into());
-        self.stages.insert(
-            key.into(),
-            Stage {
-                name,
-                since: now,
-                background,
-            },
-        );
-        self.last_stage = Some(name);
-        lines.push(line(now, &format!("stage {name} started")));
-    }
-
-    fn finish(&mut self, key: &Value, lifecycle: bool, now: Duration, lines: &mut Vec<String>) {
-        let Some(key) = id(key) else {
-            return;
-        };
-        let key = self.aliases.get(key).map(String::as_str).unwrap_or(key);
-        if self
-            .stages
-            .get(key)
-            .is_some_and(|s| s.background && !lifecycle)
-        {
-            return;
-        }
-        let Some(stage) = self.stages.remove(key) else {
-            return;
-        };
-        lines.push(line(
-            now,
-            &format!(
-                "stage {} finished; took {}",
-                stage.name,
-                clock(now.saturating_sub(stage.since))
-            ),
-        ));
-    }
-
     fn result(&mut self, value: &Value) {
         if !value["parent_tool_use_id"].is_null() {
             return;
@@ -275,21 +144,15 @@ impl Activity {
     }
 
     pub(super) fn context(&self) -> String {
-        let stage = self
-            .last_stage
-            .map_or("No stage activity was observed.".into(), |s| {
-                format!("Last observed stage: {s}.")
-            });
         match self.last_activity {
             Some((label, at)) => format!(
-                "{stage}\nLast provider activity: {label}, {} before stopping.",
+                "Last provider activity: {label}, {} before stopping.",
                 clock(self.since.elapsed().saturating_sub(at))
             ),
-            None => stage,
+            None => "No provider activity was observed.".into(),
         }
     }
 }
-
 fn id(value: &Value) -> Option<&str> {
     value
         .as_str()
@@ -302,10 +165,8 @@ fn activity_label(tool: &str) -> &'static str {
     match tool {
         "Read" => "reading files",
         "Grep" | "Glob" => "searching files",
-        "Task" | "Agent" => "running a stage",
         _ => "provider activity",
     }
 }
-
 #[cfg(test)]
 mod tests;

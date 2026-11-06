@@ -26,10 +26,26 @@ pub struct PrQuery {
 /// Whether `repo` can have a pull request opened from it, and the branch it would be from. The
 /// review before a pull request asks the same question first, in the same words.
 pub fn precheck(repo: &camino::Utf8Path, base: &str) -> Result<String, String> {
+    precheck_using(base, |args| crate::git::run(repo, args))
+}
+
+/// A review's preflight shares its deadline rather than allowing each Git query sixty seconds.
+pub(crate) fn precheck_before(
+    repo: &camino::Utf8Path,
+    base: &str,
+    budget: &crate::ci::Budget<'_>,
+) -> Result<String, String> {
+    precheck_using(base, |args| budget.git(repo, args))
+}
+
+fn precheck_using(
+    base: &str,
+    run: impl Fn(&[&str]) -> Result<String, String>,
+) -> Result<String, String> {
     // A branch with no commits on it is not a thing to open a pull request from, and it is the
     // ordinary state right after `git init` — so it gets its own sentence rather than being
     // folded into "not a git repository", which is both wrong and unactionable.
-    if !has_commits(repo) {
+    if run(&["rev-parse", "--verify", "HEAD"]).is_err() {
         return Err(
             "This repository has no commits yet. Make one first — a pull request is a request to \
              merge commits, and there are none."
@@ -38,14 +54,18 @@ pub fn precheck(repo: &camino::Utf8Path, base: &str) -> Result<String, String> {
     }
     // A pull request is a branch, and `main` is not one. Catching it here is the difference
     // between a clear refusal and `gh` failing four steps in with something about a head ref.
-    let branch = branch_of(repo).ok_or("Could not read the current branch.")?;
+    let branch = run(&["branch", "--show-current"])
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .ok_or("Could not read the current branch.")?;
     if matches!(branch.as_str(), "main" | "master" | "trunk") {
         return Err(format!(
             "You are on `{branch}`. Make a branch for the change first — a pull request needs \
              somewhere to merge from."
         ));
     }
-    if !uncommitted(repo).is_empty() {
+    if !run(&["status", "--porcelain"])?.trim().is_empty() {
         return Err(
             "There are uncommitted changes. Commit them first — a pull request only carries what \
              is committed, and opening one now would leave the rest behind."
@@ -55,7 +75,17 @@ pub fn precheck(repo: &camino::Utf8Path, base: &str) -> Result<String, String> {
     // Nothing the base does not already have: `gh` pushed and then refused with "could not
     // compute title or body defaults: could not find any commits between origin/main and …",
     // which says neither what is wrong nor what to do.
-    if ahead_of(repo, base) == Some(0) {
+    if [format!("origin/{base}"), base.to_string()]
+        .iter()
+        .find_map(|b| {
+            run(&["rev-list", "--count", &format!("{b}..HEAD")])
+                .ok()?
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        == Some(0)
+    {
         return Err(format!(
             "`{branch}` has no commits that `{base}` doesn't already have, so there is nothing to \
              open a pull request for. Commit the change on this branch first — or, if it was \
@@ -64,56 +94,6 @@ pub fn precheck(repo: &camino::Utf8Path, base: &str) -> Result<String, String> {
     }
     Ok(branch)
 }
-
-/// How many commits `HEAD` has that `base` does not, against the remote's copy of `base` as `gh`
-/// compares, else the local one; `None` when neither exists, which `gh` is left to say.
-fn ahead_of(repo: &camino::Utf8Path, base: &str) -> Option<u64> {
-    [format!("origin/{base}"), base.to_string()]
-        .iter()
-        .find_map(|b| {
-            let mut c = crate::git::command(repo);
-            c.args(["rev-list", "--count", &format!("{b}..HEAD")]);
-            let out = crate::git::output(c).ok()?;
-            out.status
-                .success()
-                .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())?
-        })
-}
-
-/// The current branch.
-///
-/// `git branch --show-current`, not `rev-parse --abbrev-ref HEAD`. The latter exits non-zero on a
-/// repository with no commits — an unborn HEAD — which is the ordinary state one second after
-/// `git init`, and it was being reported as "this is not a git repository".
-fn branch_of(repo: &camino::Utf8Path) -> Option<String> {
-    let mut c = crate::git::command(repo);
-    c.args(["branch", "--show-current"]);
-    let out = crate::git::output(c).ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Whether anything has been committed. False on an unborn HEAD.
-fn has_commits(repo: &camino::Utf8Path) -> bool {
-    let mut c = crate::git::command(repo);
-    c.args(["rev-parse", "--verify", "HEAD"]);
-    crate::git::output(c)
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-pub(crate) fn uncommitted(repo: &camino::Utf8Path) -> String {
-    let mut c = crate::git::command(repo);
-    c.args(["status", "--porcelain"]);
-    crate::git::output(c)
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
