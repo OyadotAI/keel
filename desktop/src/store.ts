@@ -404,7 +404,8 @@ export const useStore = create<State>()((set, getState, api) => {
       .catch(() => undefined);
   const setup = (path: string, ep: Endpoint) =>
     soon(`setup:${path}`, () =>
-      readSetup(ep, path).then(
+      // Ask about `claude` only for a project that runs it: a lane with no agent yet starts as Claude.
+      readSetup(ep, !lanesOf(path).length || lanesOf(path).some((id) => getState().lanes[id]?.agent === "claude")).then(
         ({ warnings, readiness, license }) =>
           set((s) => ({ setup: { ...s.setup, [path]: warnings }, readiness: readiness ? { ...s.readiness, [path]: readiness } : s.readiness, license: license ?? s.license })),
         () => undefined,
