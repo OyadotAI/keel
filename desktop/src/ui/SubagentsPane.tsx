@@ -11,10 +11,13 @@ import { onTerminalTheme, terminalDark } from "../terminal-theme";
 import { terminalPaneColors } from "../terminal-palette";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { MemberAvatar } from "./MemberAvatar";
+import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
 import "./SubagentsPane.css";
 const shortId = (child: Invocation) => child.id.split(":").at(-1)?.slice(0, SHORT_ID) ?? "";
 const nameOf = (child: Invocation) => child.member || "Subagent";
+/** A pane's own size: folded to its header, or given the whole subagent area. Unset is a grid tile. */
+type Size = "min" | "max";
 const STATUS = { working: "Working", waiting: "Waiting", unknown: "Reconnecting · status unconfirmed", done: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted" };
 /** The clock a pane opened at, or nothing: a provider that reports no start time gets no guess. */
 const startedAt = (child: Invocation) => { const at = child.started ? new Date(child.started) : undefined; return at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : undefined; };
@@ -36,9 +39,26 @@ export function SubagentsPane({ lane, hidden, enabled = true, children }: { lane
     const observer = new ResizeObserver(() => setWidth(node.clientWidth));
     setWidth(node.clientWidth); observer.observe(node); return () => observer.disconnect();
   }, []);
-  const total = shown.length + 1, columns = gridColumns(width, total), rows = Math.ceil(total / columns);
-  useFlip(grid, shown.map((child) => child.id).join() + "/" + columns, reduced);
-  const style = { ...terminalPaneColors(dark), "--terminal-columns": columns, "--terminal-rows": rows, "--child-terminal-font": font + "px", "--pane-open-ms": PANE_OPEN_MS + "ms", "--pane-close-ms": PANE_CLOSE_MS + "ms", "--pane-move-ms": PANE_MOVE_MS + "ms" } as CSSProperties;
+  // The main terminal always has the first row to itself. Open children share the rows below it and
+  // minimized ones fold to their headers after them. A maximized child takes every subagent row, the
+  // rest fold to headers, and main keeps its row: maximizing never covers the terminal you type in.
+  const [sizes, setSizes] = useState<Record<string, Size>>({});
+  const resize = (id: string, size: Size) => setSizes((before) => {
+    const max = Object.keys(before).find((key) => before[key] === "max"), next = { ...before };
+    // Restoring a pane that is folded only because another is maximized ends the maximize.
+    if (max && max !== id && size === "min") { delete next[max]; delete next[id]; return next; }
+    if (max && size === "max") delete next[max];
+    if (before[id] === size) delete next[id]; else next[id] = size;
+    return next;
+  });
+  const maxed = shown.find((child) => sizes[child.id] === "max")?.id;
+  const sizeOf = (id: string): Size | undefined => maxed ? (id === maxed ? "max" : "min") : sizes[id];
+  const open = shown.filter((child) => !sizeOf(child.id)), columns = gridColumns(width, maxed ? shown.length : open.length);
+  const rows = maxed ? 1 : Math.ceil(open.length / columns);
+  const lastOpen = open.at(-1)?.id, span = open.length % columns ? columns - open.length % columns + 1 : 1;
+  useFlip(grid, shown.map((child) => child.id + (sizes[child.id] ?? "")).join() + "/" + columns, reduced);
+  const template = ["minmax(var(--pane-min-height), 1fr)", ...Array(rows).fill("minmax(var(--pane-min-height), 1fr)")].join(" ");
+  const style = { ...terminalPaneColors(dark), "--terminal-columns": columns, "--terminal-rows": template, "--child-terminal-font": font + "px", "--pane-open-ms": PANE_OPEN_MS + "ms", "--pane-close-ms": PANE_CLOSE_MS + "ms", "--pane-move-ms": PANE_MOVE_MS + "ms" } as CSSProperties;
   const returnToMain = () => { main.current?.scrollIntoView({ block: "nearest" }); terminalLease(lane)?.focus(); };
   const agentName = current?.agent === "claude" ? "Claude Code" : AGENT_NAME[current?.agent ?? "claude"];
   return <div className={"terminal-grid-shell" + (shown.length ? " split" : "")} style={style}>
@@ -50,12 +70,12 @@ export function SubagentsPane({ lane, hidden, enabled = true, children }: { lane
         <footer aria-hidden={!shown.length} className={"terminal-pane-footer main-pane-chrome" + (shown.length ? " is-visible" : "")}><span>{active.length} subagent{active.length === 1 ? "" : "s"} working</span><small>Esc in a pane returns here</small></footer>
         </div>
       </section>
-      {shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} last={index === shown.length - 1} span={total % columns ? columns - total % columns + 1 : 1} />)}
+      {shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} span={child.id === lastOpen ? span : 1} size={sizeOf(child.id)} onSize={(size) => resize(child.id, size)} />)}
     </div>
     {shown.length > 0 && scrolled && <button className="terminal-grid-return" onClick={returnToMain}>Main terminal</button>}
   </div>;
 }
-function ChildPane({ lane, scope, child, reduced, order, connected, output, last, span }: { lane: string; scope: string; child: Shown; reduced: boolean; order: number; connected: boolean; output?: ChildOutput; last: boolean; span: number }) {
+function ChildPane({ lane, scope, child, reduced, order, connected, output, span, size, onSize }: { lane: string; scope: string; child: Shown; reduced: boolean; order: number; connected: boolean; output?: ChildOutput; span: number; size?: Size; onSize: (size: Size) => void }) {
   const pane = useRef<HTMLElement>(null);
   usePaneMotion(pane, !!child.leaving, reduced);
   useLayoutEffect(() => {
@@ -68,11 +88,13 @@ function ChildPane({ lane, scope, child, reduced, order, connected, output, last
     };
   }, [lane]);
   const status = connected ? child.status : "unknown", started = startedAt(child);
-  return <section ref={pane} className={"child-terminal-pane" + (child.leaving ? " is-leaving" : "")} data-pane={child.id} data-child-invocation={child.id} aria-hidden={child.leaving || undefined} style={last ? { gridColumn: "span " + span } : undefined} aria-label={nameOf(child) + " " + shortId(child) + " terminal"} onKeyDown={(event) => {
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); terminalLease(lane)?.focus(); }
+  return <section ref={pane} className={"child-terminal-pane" + (child.leaving ? " is-leaving" : "") + (size ? " is-" + size : "")} data-pane={child.id} data-child-invocation={child.id} aria-hidden={child.leaving || undefined} style={span > 1 ? { gridColumn: "span " + span } : undefined} aria-label={nameOf(child) + " " + shortId(child) + " terminal"} onKeyDown={(event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (size === "max") onSize("max"); terminalLease(lane)?.focus(); }
   }}>
     <div className="child-terminal-surface">
-    <header className="terminal-pane-heading"><span className="terminal-pane-order">{order}</span><MemberAvatar name={child.member ?? "subagent"} size={16} working={!child.leaving && (status === "working" || status === "waiting")} /><strong>{nameOf(child)}</strong><small>{shortId(child)}</small><span className="terminal-pane-status" role="status">{child.leaving ? "Closing" : STATUS[status]}</span></header>
+    <header className="terminal-pane-heading"><span className="terminal-pane-order">{order}</span><MemberAvatar name={child.member ?? "subagent"} size={16} working={!child.leaving && (status === "working" || status === "waiting")} /><strong>{nameOf(child)}</strong><small>{shortId(child)}</small><span className="terminal-pane-status" role="status">{child.leaving ? "Closing" : STATUS[status]}</span>
+      <button className="terminal-pane-control" aria-pressed={size === "min"} aria-label={size === "min" ? "Restore pane" : "Minimize pane"} title={size === "min" ? "Restore" : "Minimize"} onClick={() => onSize("min")}><Icon name={size === "min" ? "chevron-down" : "minus"} size={12} /></button>
+      <button className="terminal-pane-control" aria-pressed={size === "max"} aria-label={size === "max" ? "Restore pane" : "Maximize pane"} title={size === "max" ? "Restore (Esc)" : "Maximize"} onClick={() => onSize("max")}><Icon name={size === "max" ? "minimize-2" : "maximize"} size={12} /></button></header>
     <ChildOutputView scope={scope} child={child} output={output} />
     <footer className="terminal-pane-footer"><span>{child.activity || (child.leaving ? "Closing" : "Waiting for the first step…")}</span>{started && <small>started {started}</small>}<small>Read only</small></footer>
     </div>

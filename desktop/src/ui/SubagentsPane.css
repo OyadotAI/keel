@@ -1,10 +1,16 @@
 /* Live terminal tiles form through a brief haze; terminal-owned tokens keep output readable. */
 .terminal-grid-shell { --pane-min-height: 160px; --pane-gap: 8px; position: relative; flex: 1; min-height: 0; min-width: 0; background: var(--child-bg); color: var(--child-fg); }
 .terminal-grid { display: grid; height: 100%; min-height: 0; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); overflow: auto; }
-.split .terminal-grid { grid-template-rows: repeat(var(--terminal-rows), minmax(var(--pane-min-height), 1fr)); gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); }
+.split .terminal-grid { grid-template-rows: var(--terminal-rows); grid-auto-rows: auto; gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); }
 .terminal-grid-main, .child-terminal-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--child-bg); color: var(--child-fg); }
 .child-terminal-surface { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
-.terminal-grid-main { position: relative; overflow: visible; }
+.terminal-grid-main { position: relative; overflow: visible; grid-column: 1 / -1; }
+/* Minimized: the header alone, after the open panes. Maximized: the whole subagent area, under main. */
+.child-terminal-pane.is-min { order: 1; }
+.child-terminal-pane.is-min .child-terminal-content, .child-terminal-pane.is-min .terminal-pane-footer { display: none; }
+.child-terminal-pane.is-max { grid-column: 1 / -1; }
+.terminal-pane-control { flex: none; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); cursor: pointer; }
+.terminal-pane-control:hover { background: var(--line); color: var(--text); }
 .terminal-main-viewport { position: absolute; inset: 0 auto auto 0; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--child-bg); border-radius: inherit; }
 .split .terminal-main-viewport, .terminal-main-viewport[data-moving] { border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-strong); }
 .split .terminal-main-viewport:focus-within { box-shadow: inset 0 0 0 1px var(--accent); }

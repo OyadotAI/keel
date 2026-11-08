@@ -51,3 +51,10 @@ it("the transcript owns terminal colors while safe Markdown, tool text and discl
   expect(html).toContain("&lt;img"); expect(html).toContain("&lt;script&gt;");
   expect(html).not.toContain("<img"); expect(html).not.toContain("<script>");
 });
+it("every child pane can be minimized or maximized, and the main terminal keeps a row of its own", () => {
+  fake.state.lanes[source.id].subagents!.invocations.push({ id: "run-two", member: "qa", status: "working", output: "waiting" });
+  const html = render();
+  expect(html.match(/aria-label="Minimize pane"/g)).toHaveLength(2);
+  expect(html.match(/aria-label="Maximize pane"/g)).toHaveLength(2);
+  expect(html).toMatch(/--terminal-rows:minmax\(var\(--pane-min-height\), 1fr\) minmax\(var\(--pane-min-height\), 1fr\)/);
+});
