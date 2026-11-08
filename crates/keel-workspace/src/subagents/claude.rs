@@ -158,10 +158,16 @@ fn notification(record: &Value) -> Option<(String, Status, Option<String>)> {
             at,
         ));
     }
-    if record["type"] != "user" {
-        return None;
-    }
-    let text = text(&record["message"]["content"]).filter(|s| s.contains("<task-notification>"))?;
+    // Where the notice's text is, by record shape. Claude Code 2.x writes it as a queued command:
+    // `queue-operation` the moment the child ends, and an `attachment` when the parent takes it.
+    // Reading only `user` left an async child "Working" for as long as its parent stayed busy.
+    let body = match record["type"].as_str() {
+        Some("user") => &record["message"]["content"],
+        Some("queue-operation") if record["operation"] == "enqueue" => &record["content"],
+        Some("attachment") => &record["attachment"]["prompt"],
+        _ => return None,
+    };
+    let text = text(body).filter(|s| s.contains("<task-notification>"))?;
     Some((
         tag(&text, "tool-use-id")?,
         terminal(tag(&text, "status").as_deref()),

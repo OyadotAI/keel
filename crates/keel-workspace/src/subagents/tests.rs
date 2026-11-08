@@ -511,8 +511,9 @@ fn display_history_eviction_does_not_erase_a_recent_terminal_only_run_during_bac
     );
 }
 #[test]
-fn claude_async_notifications_reconcile_before_call_discovery_in_both_native_forms() {
-    for structured in [false, true] {
+fn claude_async_notifications_reconcile_before_call_discovery_in_every_native_form() {
+    let notice = "<task-notification><tool-use-id>call</tool-use-id><status>completed</status></task-notification>";
+    for form in ["system", "user", "queue-operation", "attachment"] {
         let temp = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(temp.path()).unwrap();
         let path = root.join("parent.jsonl");
@@ -533,10 +534,18 @@ fn claude_async_notifications_reconcile_before_call_discovery_in_both_native_for
         }
         append(
             &path,
-            if structured {
-                json!({"type":"system","subtype":"task_notification","tool_use_id":"call","status":"completed","timestamp":"2"})
-            } else {
-                json!({"type":"user","timestamp":"2","message":{"content":"<task-notification><tool-use-id>call</tool-use-id><status>completed</status></task-notification>"}})
+            match form {
+                "system" => {
+                    json!({"type":"system","subtype":"task_notification","tool_use_id":"call","status":"completed","timestamp":"2"})
+                }
+                "user" => json!({"type":"user","timestamp":"2","message":{"content":notice}}),
+                // Claude Code 2.x: queued the moment the child ends, while the parent is still busy.
+                "queue-operation" => {
+                    json!({"type":"queue-operation","operation":"enqueue","timestamp":"2","content":notice})
+                }
+                _ => {
+                    json!({"type":"attachment","timestamp":"2","attachment":{"type":"queued_command","prompt":notice}})
+                }
             },
         );
         let mut observer = Observer::new(
@@ -548,6 +557,6 @@ fn claude_async_notifications_reconcile_before_call_discovery_in_both_native_for
             observer.snapshot();
         }
         let snapshot = observer.snapshot();
-        assert_eq!(snapshot.invocations[0].status, Status::Done);
+        assert_eq!(snapshot.invocations[0].status, Status::Done, "{form}");
     }
 }
