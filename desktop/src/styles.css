@@ -495,6 +495,15 @@ button.link {
 .history-head {
   padding: 8px 8px 2px 20px;
 }
+.history-search {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 4px 8px 4px 28px;
+  font-size: var(--t-small);
+}
+.history-none {
+  padding: 4px 8px 4px 28px;
+}
 .history .lane {
   padding-left: 28px;
   height: 28px;

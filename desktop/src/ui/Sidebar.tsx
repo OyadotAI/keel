@@ -1,4 +1,5 @@
 // Projects, lanes, and team members share the same observed activity indicators.
+import { matchSessions } from "../history-search";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useOutsideWorkspace } from "./MoveProject";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -396,11 +397,13 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
   const openIds = useMemo(() => new Set(openKey.split(",")), [openKey]);
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
+  const [query, setQuery] = useState("");
   const [ctx, setCtx] = useState<{ at: DOMRect; session: Session } | null>(null);
   if (!sessions) return null;
   const list = [...sessions].filter((s) => !openIds.has(`${s.provider ?? "claude"}:${s.id}`)).sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
   if (!list.length) return null;
-  const shown = all ? list : list.slice(0, 5);
+  const q = query.trim(), found = matchSessions(list, q);
+  const shown = all || q ? found : found.slice(0, 5);
   return (
     <div className="history">
       <button className="lane history-head" onClick={() => setOpen(!open)} aria-expanded={open}>
@@ -408,6 +411,10 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
         <span>History</span>
         <span className="history-count">{list.length}</span>
       </button>
+      {open && list.length > 5 && (
+        <input className="history-search" type="search" aria-label="Search history" placeholder="Search sessions…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && query) { e.stopPropagation(); setQuery(""); } }} />
+      )}
+      {open && q && !found.length && <div className="faint small history-none">No session matches “{q}”.</div>}
       {open &&
         shown.map((s) => (
           <button key={`${s.provider ?? "claude"}:${s.id}`} className="lane" onClick={() => resume(path, s)} onContextMenu={(e) => (e.preventDefault(), setCtx({ at: pointer(e), session: s }))} aria-label={`Resume ${AGENT_NAME[s.provider ?? "claude"]}: ${s.title || "Untitled session"}`} title={`${AGENT_NAME[s.provider ?? "claude"]} — ${s.title || "Untitled session"} — ${s.messages} messages${s.branch ? ` · ${s.branch}` : ""}`}>
@@ -428,7 +435,7 @@ function History({ path, sessions }: { path: string; sessions?: Session[] }) {
           </button>
         </Floating>
       )}
-      {open && list.length > shown.length && (
+      {open && !q && list.length > shown.length && (
         <button className="lane faint small" style={{ paddingLeft: 28 }} onClick={() => setAll(true)}>
           Show all {list.length}
         </button>
