@@ -628,13 +628,39 @@ in a browser shell, and a proxy breaks HMR.
 
 ## The Browser tab
 
-When an agent in a lane needs a website, it uses the lane's **Browser tab**, not the person's
-browser. Oya's MCP drove their active window — took the tab they were reading, opened its own in
+When an agent in a lane needs a website, it uses the browser that lane chose — the lane's own
+**Browser tab** inside Keel, or the person's Oya Browser driven tab-by-tab through Keel — never
+whatever window the person is reading. Oya's MCP drove their active window — took the tab they were reading, opened its own in
 front of them, closed them when the run ended — and Claude-in-Chrome says of itself that it opens
 tabs in their existing Chrome. Both are **withheld from every turn Keel runs**
 (`permissions::WITHHELD`, a `deny` that beats any allow) — chat lanes and terminal agent lanes
 alike. A `claude` the person types themselves in a shell keeps them.
 
+- **Each lane chooses where it browses: Inside Keel, or the person's own Oya Browser**
+  (`browser/choice.rs`). Oya's own MCP stays withheld — Keel drives Oya through its local
+  connection (`browser/local.rs`), only the tab the lane opened, never the person's other tabs. The
+  choice is per lane (`browser-lanes/<sha256(real project path \n lane)>.json`), **read on every
+  call** (`preference::resolve`: the lane's file, else the device's "Always …", else ask), never
+  captured at launch — a binding carries no browser, so a switch in the tab or a card answered a
+  second ago applies to the next step. The first `browser_*` call in a lane with no choice is held
+  on a card (`approve::choose_browser`, `BROWSER_CHOICE`) and the answer is saved and used for that
+  same call. Every agent's call reaches `browser::call`, so the card needs no per-agent code; in an
+  untrusted project Claude's permission card comes first and this one second. One question per
+  lane at a time (`Busy`); no window fails at once; an unanswered card fails the step with a
+  reason and saves nothing. Keel never switches browsers on its own.
+- **No Oya installed is an offer, not a dead end.** The card's Oya button becomes "Install Oya
+  Browser": `install.rs`'s `oya` row reads the release named in oyabrowser.com's electron-builder
+  feed (`latest-mac.yml` / `latest.yml`, no pinned version), checks the SHA-512 it carries, and on
+  macOS also requires Oya's Developer ID (Team `68267DX5UC`) before copying the app into
+  `~/Applications` — the checksum shares the download's origin, the signature does not. Windows
+  runs the NSIS installer with `/S`; **its build is unsigned today** (1.0.210 has no Authenticode
+  block), so there the checksum is all there is — require the signature once it is signed. The
+  install belongs to the lane, not the call: it outlives a call that gives up after 45 s, saves the
+  lane's choice and opens Oya when it lands, and a failure forgets the choice so the next step asks.
+- **"Open in Oya Browser"** in an Inside Keel tab opens the page once in the person's Oya
+  (`open_url` with `oya: true`: the `.app` on macOS, the detected `.exe` on Windows). Settings is
+  "Ask each lane" (the default), "Always Inside Keel" or "Always Oya Browser"; nothing pops up at
+  app open any more.
 - **A webview of its own per lane, not the preview's** (`desktop/src-tauri/src/browser.rs`). It
   loads any http(s) site, so it carries no picker and **no capability names it**: nothing it loads
   can call the app. The web only (`preview::web_only`), no downloads, no camera or microphone, new
