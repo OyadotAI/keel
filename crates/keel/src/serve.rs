@@ -1471,6 +1471,10 @@ async fn api_session_tail(
         // The first read is the catch-up; every one after it is the few hundred bytes that were
         // appended.
         let mut first = true;
+        // The replay's last prompt: the turn that may still be running when the window opened. A
+        // terminal lane's prompt reaches task memory only through this stream, so it is fed once,
+        // after the replay, while earlier prompts are history (`input` ignores a repeat).
+        let mut replayed_prompt: Option<String> = None;
         // Found once: Codex's is a walk of its sessions folder. Not there yet — a conversation
         // whose first message has not been written — is the `fatal` below, and the window asks
         // again.
@@ -1645,7 +1649,13 @@ async fn api_session_tail(
                         }
                     }
                 }
-                if let keel_workspace::Kind::Opener { prompt, .. } = &kind {
+                // Live prompts only: the first pass replays the history, and feeding it again on
+                // every reopen pushed old prompts back as fresh steering, rewriting the store each.
+                if let keel_workspace::Kind::Opener { prompt, .. } = &kind
+                    && first
+                {
+                    replayed_prompt = Some(prompt.clone());
+                } else if let keel_workspace::Kind::Opener { prompt, .. } = &kind {
                     let (task_repo, task_session, task_provider, task_prompt) = (
                         store.clone(),
                         query.id.clone(),
@@ -1743,6 +1753,17 @@ async fn api_session_tail(
             }
             if first {
                 first = false;
+                if let Some(task_prompt) = replayed_prompt.take() {
+                    let (task_repo, task_session, task_provider) = (
+                        store.clone(),
+                        query.id.clone(),
+                        query.agent.clone().unwrap_or_else(|| "claude".into()),
+                    );
+                    let _ = in_blocking(move || {
+                        crate::tasks::input(&task_repo, &task_provider, &task_session, &task_prompt)
+                    })
+                    .await;
+                }
                 // A replay that ends inside a turn nobody is still writing: that turn is over,
                 // and every call in it that never answered is answered now. A busy one stays open
                 // and belongs to the follower.
@@ -2032,7 +2053,10 @@ async fn api_git_branches(
         let mut branches = crate::repo::git_branches(&repo).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
         branches.restriction = if repo.real().ok() != state.repo().real().ok() {
             Some("This lane owns its branch. Switch branches from a project-workspace lane.".into())
-        } else if crate::checkout_activity::hold(&repo, true).is_err() {
+        // Asked of the claims in memory, never by taking the checkout's exclusive lock: this runs
+        // on every git event, and a turn whose claim landed in that instant was refused. The switch
+        // itself still takes the lock, so this is the label and that is the guarantee.
+        } else if state.writer_of(&repo).is_some() {
             Some("An agent is using this checkout. Wait for it to finish or stop its turn before switching.".into())
         } else { None };
         Ok(Json(branches))

@@ -29,6 +29,12 @@ pub enum Refusal {
     Worktree {
         main: String,
     },
+    /// The project has a git worktree of the person's own outside `.keel/worktrees`. Moving the
+    /// repository leaves it pointing at nothing — its uncommitted work stranded in a folder git no
+    /// longer knows — and `worktree::repair` only re-points Keel's own.
+    Linked {
+        path: String,
+    },
     Submodule {
         parent: String,
     },
@@ -175,9 +181,20 @@ fn repository(real: &Utf8Path) -> Option<Refusal> {
     let common = Utf8Path::new(&common)
         .real()
         .unwrap_or_else(|_| common.clone().into());
-    (common != real.join(".git")).then(|| Refusal::Worktree {
-        main: common.parent().unwrap_or(&common).to_string(),
-    })
+    if common != real.join(".git") {
+        return Some(Refusal::Worktree {
+            main: common.parent().unwrap_or(&common).to_string(),
+        });
+    }
+    let list = ask(&["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let keel = real.join(crate::worktree::DIR);
+    list.lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(|p| Utf8Path::new(p).real().unwrap_or_else(|_| p.into()))
+        .find(|p| p != real && !p.starts_with(&keel))
+        .map(|p| Refusal::Linked {
+            path: p.to_string(),
+        })
 }
 
 #[cfg(unix)]

@@ -11,6 +11,18 @@ struct Receipt {
     outcome: Option<Created>,
     error: Option<String>,
 }
+/// Where receipts for projects created under `parent` live: Keel's own folder, one per parent.
+#[cfg(not(test))]
+fn receipts(parent: &Utf8Path) -> Option<camino::Utf8PathBuf> {
+    let key = format!("{:x}", Sha256::digest(parent.as_str().as_bytes()));
+    Some(crate::prefs::dir()?.join("project-operations").join(key))
+}
+/// Tests keep theirs in their own scratch folder, never the machine's `~/.keel`.
+#[cfg(test)]
+fn receipts(parent: &Utf8Path) -> Option<camino::Utf8PathBuf> {
+    Some(parent.join(".receipts"))
+}
+
 /// A receipt reserves an operation before filesystem writes and replays only a confirmed outcome.
 pub(super) fn run(
     root: &Utf8Path,
@@ -25,9 +37,13 @@ pub(super) fn run(
     {
         return Err(bad("Invalid project operation identity".into()));
     }
-    let rel = format!(".keel/project-operations/{id}.json");
-    crate::writes::no_link_under(root, &rel).map_err(bad)?;
-    let path = root.join(&rel);
+    // Under Keel's own folder, never the one the person chose: that may be inside a repository,
+    // where `.keel/project-operations/*.json` was committed by its next checkpoint. The id is
+    // unique per request, so the parent need not be part of the key.
+    let dir =
+        receipts(root).ok_or_else(|| bad("No home directory is available for Keel.".into()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
+    let path = dir.join(format!("{id}.json"));
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(bad("Project operation receipt is a symbolic link.".into()));
     }

@@ -48,16 +48,33 @@ pub(crate) async fn status(
         })
         .await
         .map_err(bad)?;
-    let (connection_state, connection_message) = if let Some(installation) = &installation {
+    // Oya's connection is only this lane's business when it browses there. Checking it for every
+    // lane put up to 20 s of handshake (and, on Windows, PowerShell) in front of every Browser tab
+    // and opened an Oya session per refresh that nothing closed.
+    let oya_lane = effective.backend == Some(Backend::LocalOya);
+    let lane_connected = query
+        .lane
+        .as_deref()
+        .and_then(bindings::get)
+        .is_some_and(|b| b.page.try_lock().is_ok_and(|page| page.connected()));
+    let (connection_state, connection_message) = if !oya_lane {
+        ("not_used".into(), String::new())
+    } else if lane_connected {
+        ("ready".into(), "Connected to Oya Browser.".into())
+    } else if let Some(installation) = &installation {
         let installation = installation.clone();
         let connection =
             crate::serve::in_blocking(move || connection::discover(&project, &installation)).await;
         match connection {
             Ok(connection) => match connection::Client::new(connection) {
-                Ok(mut client) => match client.initialize().await {
-                    Ok(()) => ("ready".into(), "Connected to local Oya Browser.".into()),
-                    Err(error) => ("unavailable".into(), error),
-                },
+                Ok(mut client) => {
+                    let checked = client.initialize().await;
+                    client.close().await;
+                    match checked {
+                        Ok(()) => ("ready".into(), "Connected to Oya Browser.".into()),
+                        Err(error) => ("unavailable".into(), error),
+                    }
+                }
                 Err(error) => ("unavailable".into(), error),
             },
             Err(error) => ("setup_needed".into(), error),

@@ -10,9 +10,13 @@ const ended = new Set(["done", "failed", "cancelled", "interrupted"]);
 export function liveInvocations(before: Invocation[], snapshot?: ChildState): Invocation[] {
   const current = new Map((snapshot?.invocations ?? []).map((child) => [child.id, child]));
   const result: Invocation[] = [];
+  // A child the daemon now reports under another id — Antigravity's `:pending` placeholder becomes
+  // `:<run>` once its database opens — is the same child, not a lost one left "unconfirmed".
+  const reported = new Set((snapshot?.invocations ?? []).map((child) => child.child).filter(Boolean));
   for (const prior of before) {
     const next = current.get(prior.id);
     current.delete(prior.id);
+    if (!next && prior.child && reported.has(prior.child)) continue;
     if (next && ended.has(next.status)) continue;
     result.push(next ? { ...next, status: snapshot?.connected ? next.status : "unknown" } : { ...prior, status: "unknown" });
   }

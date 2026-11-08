@@ -10,7 +10,9 @@ pub(super) struct Page {
 }
 impl Page {
     pub fn reset(&mut self) {
-        self.client = None;
+        if let Some(client) = self.client.take() {
+            tokio::spawn(client.close());
+        }
         self.tab = None;
         self.url = None;
         self.analyzed = false;
@@ -28,8 +30,11 @@ impl Page {
     }
     pub async fn run(&mut self, op: Op) -> Result<String, String> {
         let result = self.perform(op).await;
-        if result.is_err() {
-            self.analyzed = false;
+        match &result {
+            // Its tab ids belong to an Oya that is gone: start clean, and the next step reconnects.
+            Err(why) if why == super::connection::RESTARTED => self.reset(),
+            Err(_) => self.analyzed = false,
+            Ok(_) => {}
         }
         result
     }

@@ -75,8 +75,17 @@ fn register_in(store: &mut Store, source: Source) -> Result<String, String> {
         return Ok(task.id.clone());
     }
     guard_in(store, &source.lane, &source.checkout)?;
+    // Every lane registers a task and none is ever removed by hand, so at the limit the one
+    // touched longest ago goes — never one carrying a handoff, which another lane depends on.
     if store.tasks.len() >= TASK_LIMIT {
-        return Err("Shared task storage is full. Existing handoffs were preserved.".into());
+        let oldest = store
+            .tasks
+            .values()
+            .filter(|t| t.continuation.is_none())
+            .min_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            .map(|t| t.id.clone())
+            .ok_or("Shared task storage is full of handed-off tasks. Finish or discard one, then retry.")?;
+        store.tasks.remove(&oldest);
     }
     let id = key(&source);
     let task = Task {

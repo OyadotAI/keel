@@ -254,8 +254,10 @@ fn run(
     program: &std::ffi::OsStr,
     stop: &AtomicBool,
 ) -> Done {
-    let budget = crate::ci::Budget::new(CEILING, stop);
-    let since = budget.started;
+    // Two clocks: waiting for the turn's own commit has `WAIT`, and the review gets its whole
+    // `CEILING` from when it actually starts — a slow gate must not spend the review's minutes.
+    let waiting = crate::ci::Budget::new(WAIT, stop);
+    let since = waiting.started;
     let expired = |e: std::io::Error| {
         none(
             if e.kind() == std::io::ErrorKind::Interrupted {
@@ -272,22 +274,35 @@ fn run(
     // for is a turn's own commit: with nothing uncommitted there is none to come. Waiting for the
     // tree to go quiet as well never ended in a terminal lane kept busy — measured, the agent's
     // `gh pr create` started a review, the person typed "cont", and it sat waiting until it gave up.
+    let waited_out = || {
+        none(
+            "wait",
+            format!(
+                "The turn did not end within {} minutes, so the review did not start.",
+                WAIT.as_secs() / 60
+            ),
+            since,
+        )
+    };
     while state.writer_of(dir).is_some() {
-        if let Err(e) = budget.check() {
-            return expired(e);
+        if stop.load(Ordering::Relaxed) {
+            return cancelled();
         }
-        match budget.git(dir, &["status", "--porcelain"]) {
+        if waiting.check().is_err() {
+            return waited_out();
+        }
+        match waiting.git(dir, &["status", "--porcelain"]) {
             Ok(status) if status.trim().is_empty() => break,
             Err(why) => {
-                if let Err(e) = budget.check() {
-                    return expired(e);
+                if stop.load(Ordering::Relaxed) {
+                    return cancelled();
+                }
+                if waiting.check().is_err() {
+                    return waited_out();
                 }
                 return none("prepare", why, since);
             }
             _ => {}
-        }
-        if stop.load(Ordering::Relaxed) {
-            return cancelled();
         }
         if since.elapsed() > WAIT {
             return none(
@@ -301,6 +316,7 @@ fn run(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    let budget = crate::ci::Budget::new(CEILING, stop);
     set(id, dir, |r| r.phase = "checking");
     // Never the agent's `--base`: it could point the review at a branch with nothing on it and
     // get "Ship" over an empty diff, while Open opens against the default. The lane's own base,
@@ -614,7 +630,8 @@ fn target_metadata(
                 .into(),
         );
     }
-    let branch = crate::git::trimmed(dir, &["branch", "--show-current"])?;
+    // A folder that is not a repository has no branch: empty, not a 503 on every reconnect.
+    let branch = crate::git::trimmed(dir, &["branch", "--show-current"]).unwrap_or_default();
     Ok(serde_json::json!({"head":head.unwrap_or_default(), "branch":branch, "base":base}))
 }
 

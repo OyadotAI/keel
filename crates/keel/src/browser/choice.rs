@@ -59,6 +59,12 @@ pub(crate) fn oya_installed() -> bool {
     detection::installed().ok().flatten().is_some()
 }
 
+/// Whether detection positively found no Oya. A detection that failed — PowerShell slow to start,
+/// say — is not evidence of absence, and must never set off a download.
+fn oya_absent() -> bool {
+    matches!(detection::installed(), Ok(None))
+}
+
 /// What to hand the system's opener to reach the installed Oya: the `.app` bundle on macOS, the
 /// executable on Windows. Blocking. `None` when Oya is not installed.
 pub(crate) fn oya_app() -> Option<String> {
@@ -78,12 +84,22 @@ pub(super) async fn choose(
     bound: &Binding,
 ) -> Result<Backend, String> {
     let (p, l) = (project.to_owned(), lane.to_string());
-    match crate::serve::in_blocking(move || preference::resolve(&p, &l)).await? {
-        // Chosen in the Browser tab before Oya was installed ("installs on next step"): install it
-        // now, as the card would have. Only while not connected, so a working lane never re-checks.
+    let (own, resolved) = crate::serve::in_blocking(move || {
+        (
+            preference::lane_only(&p, &l).ok().flatten(),
+            preference::resolve(&p, &l),
+        )
+    })
+    .await;
+    match resolved? {
+        // This lane chose Oya in its Browser tab before Oya was installed ("installs on next step"):
+        // install it now, as the card would have. Only the lane's own choice — never the device's
+        // "Always Oya Browser", which would download unasked in every lane — only while not
+        // connected, so a working lane never re-checks, and only when Oya is positively absent.
         Some(Backend::LocalOya)
-            if !bound.page.try_lock().is_ok_and(|page| page.connected())
-                && !crate::serve::blocking(oya_installed, true).await =>
+            if own == Some(Backend::LocalOya)
+                && !bound.page.try_lock().is_ok_and(|page| page.connected())
+                && crate::serve::blocking(oya_absent, false).await =>
         {
             super::some_window(crate::events::windows())?;
             let installed = install_oya(project, lane).await;

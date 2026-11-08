@@ -1628,7 +1628,7 @@ fn program_of(provider: &str) -> &'static str {
 /// as the turn's own stderr lines — drawn the same way for every agent — and the turn carrying on
 /// when it lands, so the person's prompt is never theirs to send again. `false` when the install
 /// failed and the turn has already been failed with the reason.
-async fn install_missing(
+pub(crate) async fn install_missing(
     provider: &str,
     state: &Arc<AppState>,
     lane: &str,

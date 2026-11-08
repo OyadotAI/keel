@@ -4,7 +4,7 @@ import type { Lane, Project } from "./store";
 
 /// Why the daemon will not move a project, by its code (`relocate.rs`, `Refusal`).
 export type Refusal =
-  | { code: "inside" } | { code: "contains" } | { code: "link"; target: string } | { code: "worktree"; main: string }
+  | { code: "inside" } | { code: "contains" } | { code: "link"; target: string } | { code: "worktree"; main: string } | { code: "linked"; path: string }
   | { code: "submodule"; parent: string } | { code: "nested"; root: string } | { code: "taken"; to: string }
   | { code: "volume" } | { code: "turn"; lane: string } | { code: "terminal" } | { code: "live" } | { code: "dev" }
   | { code: "job"; command: string } | { code: "workspace"; error: string } | { code: "rename"; error: string }
@@ -26,7 +26,7 @@ export interface Moving {
 
 /// Refusals that are a property of the folder, not of the moment: never offered on open, since
 /// a submodule would otherwise ask every time it is opened. The menu item still says them.
-export const structural = (r?: Refusal | null) => !!r && ["inside", "contains", "link", "worktree", "submodule", "nested", "volume"].includes(r.code);
+export const structural = (r?: Refusal | null) => !!r && ["inside", "contains", "link", "worktree", "linked", "submodule", "nested", "volume"].includes(r.code);
 
 /// One sentence per refusal. `title` names a lane by what the person called it.
 export function refusalText(r: Refusal, from: string, workspace: string, name: string, title: (lane: string) => string | undefined): string {
@@ -35,6 +35,7 @@ export function refusalText(r: Refusal, from: string, workspace: string, name: s
     case "contains": return `${from} holds the Keel workspace itself, so it stays where it is.`;
     case "link": return `${from} is a link to ${r.target} — open the real folder and move that.`;
     case "worktree": return `This folder is a worktree of ${r.main}, so it stays with that repository.`;
+    case "linked": return `This project has a git worktree of its own at ${r.path}. Moving the project would break it, so the project stays where it is — remove that worktree first (git worktree remove) to move it.`;
     case "submodule": return `This folder is a submodule of ${r.parent}, so it stays with that repository.`;
     case "nested": return `This folder is inside the repository at ${r.root}, so it stays with that repository.`;
     case "taken": return `There is already a “${name}” in the Keel workspace — rename one of them, then move from the project menu.`;

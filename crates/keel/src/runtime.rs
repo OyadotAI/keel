@@ -521,6 +521,11 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     })
     .await
     .map_err(|e| e.to_string())??;
+    // The helper drives the agent's own CLI, so a missing one is installed here too — this is the
+    // path Claude Code and Codex chat lanes take, and without it only Antigravity's installed.
+    if !crate::agent::install_missing(provider, &state, lane, token, tx).await {
+        return Ok(());
+    }
     if state.was_interrupted(lane, token) {
         emit(tx, "done", json!(-1)).await;
         return Ok(());

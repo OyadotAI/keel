@@ -108,7 +108,17 @@ pub(super) fn occupied(state: &AppState, task: &Task) -> Result<(), String> {
             checkout.to_owned(),
             task.owner.session.clone(),
         );
-        if observer.snapshot().invocations.iter().any(|i| {
+        // For Claude every way the source could still run was ruled out above — no Keel PTY, no
+        // runtime session, no pid file — and a subagent runs inside its parent's process, so one
+        // still marked working after a crash was interrupted; the raw snapshot left the handoff
+        // refused with nothing Stop could reach. Codex and Antigravity have no pid file: one
+        // resumed in the person's own terminal is invisible here, so they keep the strict read.
+        let children = if task.owner.provider == "claude" {
+            observer.interrupted()
+        } else {
+            observer.snapshot()
+        };
+        if children.invocations.iter().any(|i| {
             matches!(
                 i.status,
                 keel_workspace::subagents::Status::Working

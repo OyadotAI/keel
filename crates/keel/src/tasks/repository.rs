@@ -45,11 +45,16 @@ impl Repository {
                 "Task storage exceeds its size limit; the previous record was preserved.".into(),
             );
         }
-        let store: Store = serde_json::from_slice(&bytes).map_err(|_| {
+        let mut store: Store = serde_json::from_slice(&bytes).map_err(|_| {
             "Could not read task storage. The existing file was preserved.".to_string()
         })?;
-        if store.project != self.root.as_str() || store.version != 1 {
-            return Err("Task storage belongs to another project or version.".into());
+        if store.version != 1 {
+            return Err("Task storage belongs to another version.".into());
+        }
+        // A project moved on disk (`relocate`) keeps its `.keel` folder and with it paths under
+        // the old location; re-root them rather than refusing every turn in the moved project.
+        if store.project != self.root.as_str() {
+            rebase(&mut store, self.root.as_str());
         }
         for task in store.tasks.values() {
             for source in task.members.iter().chain(std::iter::once(&task.owner)) {
@@ -68,7 +73,42 @@ impl Repository {
         Ok(store)
     }
     pub fn read(&self) -> Result<Store, String> {
-        self.load(&self.safe_path(".keel/tasks/state.json")?)
+        let path = self.safe_path(".keel/tasks/state.json")?;
+        // Unreadable storage reads as empty: task memory is notes about work, and a damaged file
+        // must not stop every turn in the project. `change` sets the file aside under its lock.
+        Ok(self.load(&path).unwrap_or_else(|_| self.fresh()))
+    }
+    fn fresh(&self) -> Store {
+        Store {
+            version: 1,
+            project: self.root.to_string(),
+            ..Default::default()
+        }
+    }
+    /// Load for a write: a file that cannot be loaded is renamed beside itself — kept, never
+    /// deleted — and a fresh store started, so one bad byte costs the history, not the project.
+    fn load_or_reset(&self, path: &Utf8Path) -> Result<Store, String> {
+        match self.load(path) {
+            Ok(store) => Ok(store),
+            // Damaged, not unavailable: a read that failed, or a store from a newer Keel, is left
+            // exactly where it is and the error stands.
+            Err(why)
+                if path.exists()
+                    && std::fs::read(path).is_ok()
+                    && !why.contains("another version") =>
+            {
+                let aside = path.with_extension(format!(
+                    "json.unreadable-{}",
+                    crate::turns::now().replace([':', '.'], "-")
+                ));
+                std::fs::rename(path, &aside).map_err(|_| why.clone())?;
+                tracing::warn!(
+                    "task storage was unreadable ({why}); kept it as {aside} and started fresh"
+                );
+                Ok(self.fresh())
+            }
+            Err(why) => Err(why),
+        }
     }
     pub fn change<T>(
         &self,
@@ -87,7 +127,7 @@ impl Repository {
                 }
             }
             crate::writes::replace(ignore.as_std_path(), patterns.as_bytes())?;
-            let mut store = self.load(&path)?;
+            let mut store = self.load_or_reset(&path)?;
             let out = action(&mut store)?;
             let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
             if bytes.len() as u64 > STORE_BYTES {
@@ -113,6 +153,26 @@ impl Repository {
         crate::writes::replace(path.as_std_path(), text.as_bytes())
     }
 }
+/// Point every path a store holds at `root`, the project's new location after a move.
+fn rebase(store: &mut Store, root: &str) {
+    let old = std::mem::replace(&mut store.project, root.to_string());
+    let move_path = |path: &mut String| {
+        if let Some(rest) = path.strip_prefix(old.as_str()) {
+            *path = format!("{root}{rest}");
+        }
+    };
+    for task in store.tasks.values_mut() {
+        move_path(&mut task.owner.checkout);
+        task.members
+            .iter_mut()
+            .for_each(|s| move_path(&mut s.checkout));
+    }
+    store
+        .events
+        .iter_mut()
+        .for_each(|e| move_path(&mut e.source.checkout));
+}
+
 pub(super) fn event(store: &mut Store, task: &Task, kind: &str, summary: String) {
     store.sequence = store.sequence.saturating_add(1);
     store.events.push(Event {

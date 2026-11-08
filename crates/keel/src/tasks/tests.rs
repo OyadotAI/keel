@@ -381,3 +381,48 @@ fn concurrent_continuations_create_one_checkout_owner_and_preserve_the_source_re
         saved.text
     );
 }
+
+/// Every lane registers a task and none is removed by hand: at the limit the oldest goes, so the
+/// 129th lane still starts — the store being full once refused every turn in the project.
+#[test]
+fn a_full_task_store_evicts_the_oldest_instead_of_refusing_new_lanes() {
+    let (_temp, root, source) = fixture();
+    for i in 0..TASK_LIMIT + 3 {
+        let lane = format!("lane-{i}");
+        let next = Source {
+            lane: lane.clone(),
+            session: format!("session-{i}"),
+            ..source.clone()
+        };
+        tracking::register(&root, next).unwrap_or_else(|e| panic!("lane {i}: {e}"));
+    }
+    let store = Repository::new(&root).unwrap().read().unwrap();
+    assert_eq!(store.tasks.len(), TASK_LIMIT);
+}
+
+/// A project moved on disk keeps its `.keel` folder: its tasks are re-rooted, not refused.
+#[test]
+fn a_moved_project_keeps_its_task_store() {
+    let (_temp, root, source) = fixture();
+    let moved = tempfile::tempdir().unwrap();
+    let to = Utf8Path::from_path(moved.path())
+        .unwrap()
+        .real()
+        .unwrap()
+        .join("moved");
+    std::fs::rename(&root, &to).unwrap();
+    let next = Source {
+        checkout: to.to_string(),
+        ..source.clone()
+    };
+    tracking::register(&to, next).expect("the moved project still registers");
+    let store = Repository::new(&to).unwrap().read().unwrap();
+    assert_eq!(store.project, to.as_str());
+    assert!(
+        store
+            .tasks
+            .values()
+            .all(|t| t.owner.checkout.starts_with(to.as_str()))
+    );
+    std::fs::rename(&to, &root).unwrap();
+}

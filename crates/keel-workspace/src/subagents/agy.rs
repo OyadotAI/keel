@@ -23,6 +23,11 @@ pub(super) struct Reader {
     pending: std::collections::BTreeSet<i64>,
     children: BTreeMap<String, Option<String>>,
     deferred: discovery::Queue,
+    /// Each finished child's database as it was when last read (its modification time). A child
+    /// whose runs have all ended and whose database has not changed has nothing new to say, and
+    /// re-reading it on every pass — each 1–2 s, up to 256 children, up to 2 MB each — was all
+    /// cost. A new run writes the database, which changes the time, so it is read again.
+    settled: BTreeMap<String, std::time::SystemTime>,
 }
 impl Reader {
     fn note(&mut self, r: Value) {
@@ -96,7 +101,26 @@ impl Adapter for Reader {
             self.note(value);
         }
         for (child, member) in &self.children {
+            // The later of the database and its write-ahead log: in WAL mode a new run lands in
+            // `-wal` first and the `.db` itself may not change until a checkpoint.
+            let modified = context.parent.path().parent().and_then(|root| {
+                [format!("{child}.db"), format!("{child}.db-wal")]
+                    .iter()
+                    .filter_map(|f| std::fs::metadata(root.join(f)).ok()?.modified().ok())
+                    .max()
+            });
+            if modified.is_some() && self.settled.get(child) == modified.as_ref() {
+                continue;
+            }
             observe(context, child, member.clone(), entries);
+            let ended = entries
+                .values()
+                .filter(|e| e.invocation.child.as_deref() == Some(child.as_str()))
+                .all(|e| !e.invocation.status.active() && !e.invocation.id.ends_with(":pending"));
+            match modified {
+                Some(at) if ended => self.settled.insert(child.clone(), at),
+                _ => self.settled.remove(child),
+            };
         }
         for candidate in self.deferred.take() {
             if !discovery::admit(&mut self.children, entries, &candidate.id) {

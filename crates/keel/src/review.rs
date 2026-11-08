@@ -1092,7 +1092,7 @@ pub(crate) fn adopt_and_commit(
         crate::team::By::Open => theirs.clone(),
         crate::team::By::Click => Vec::new(),
     };
-    let mut done = adopt_skipping(repo, &agents, &leave)
+    let mut done = adopt_skipping(repo, &agents, &leave, matches!(by, crate::team::By::Open))
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))?;
     done.yours = leave;
     if commit {
@@ -1136,16 +1136,25 @@ pub fn adopt_for(
     repo: &Utf8Path,
     agents: &[keel_generator::team::Agent],
 ) -> Result<Adopted, String> {
-    adopt_skipping(repo, agents, &[])
+    adopt_skipping(repo, agents, &[], false)
 }
 
 /// [`adopt_for`], leaving the instructions files in `leave` (repository-relative, as resolved)
 /// unwritten: the automatic path's answer to a `CLAUDE.md` the person has uncommitted edits in.
+/// `on_open`: Keel adding the team on its own, not a click. Then a file whose deletion the person
+/// already committed stays deleted — `deleted_by_person` sees only HEAD and the index, so a
+/// committed `git rm` came back on the very next pass, every time. A click still restores it.
 pub(crate) fn adopt_skipping(
     repo: &Utf8Path,
     agents: &[keel_generator::team::Agent],
     leave: &[String],
+    on_open: bool,
 ) -> Result<Adopted, String> {
+    let removed = if on_open {
+        crate::team::deleted_in_history(repo)
+    } else {
+        Default::default()
+    };
     let name = repo.file_name().unwrap_or("project").to_string();
     let ctx = keel_scanner::RepoContext::load(repo).ok();
     let report = ctx
@@ -1169,7 +1178,9 @@ pub(crate) fn adopt_skipping(
         let rel = rel.as_str();
         // Tracked but not on disk is a file the person deleted — `rm`, or a staged `git rm` —
         // and writing the stock one back committed it over their decision.
-        if crate::writes::deleted_by_person(repo, rel) {
+        if crate::writes::deleted_by_person(repo, rel)
+            || (removed.contains(rel) && !repo.join(rel).exists())
+        {
             skipped.push(format!("{rel} (you deleted it — left alone)"));
             continue;
         }

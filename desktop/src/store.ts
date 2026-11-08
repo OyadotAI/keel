@@ -750,7 +750,11 @@ export const useStore = create<State>()((set, getState, api) => {
       url(ep, "/api/session/tail", { id: l.session, from: 0, ops: 1, wt: l.wt, agent: l.agent ?? "claude" }),
       ep.token,
       (events) =>
-        { const currentEndpoint = getState().projects[l.project]?.endpoint; if (follows.get(lid) !== stream || childScope(getState().lanes[lid]) !== childScope(l) || currentEndpoint?.port !== ep.port || currentEndpoint.token !== ep.token) return; const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
+        { const currentEndpoint = getState().projects[l.project]?.endpoint; if (follows.get(lid) !== stream) return;
+          // The endpoint or the lane's scope changed under a live stream. Dropping its batch lost
+          // those records for good — the daemon's cursor had already moved past them, so a turn's
+          // close could vanish and leave the lane busy. Start over instead: `follow` replays from 0.
+          if (childScope(getState().lanes[lid]) !== childScope(l) || currentEndpoint?.port !== ep.port || currentEndpoint.token !== ep.token) { stream.close(); follows.delete(lid); void follow(lid); return; } const ended: (string | null)[] = []; let settled = false; lane(lid, (l) => {
           // A replay starts over: what an earlier stream folded is let go once this one speaks,
           // not before, so a retry that fails does not blank the turns on screen.
           let conv = fresh && events.some((e) => e.event === "turn") ? empty : l.conv;

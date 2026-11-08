@@ -28,27 +28,33 @@ fn valid_name(name: &str) -> bool {
         })
 }
 
+/// The `owner/repo` the push remote names, whatever its host: `github.com`, an SSH host alias
+/// (`git@github-work:owner/repo` — the usual way to keep two accounts apart), a port, or a GitHub
+/// Enterprise host. Only the owner is used (`head`), and `gh` resolves the host itself; accepting
+/// `github.com` alone refused every one of those before anything was pushed.
 fn source(origin: &str) -> Result<String, String> {
-    let path = origin
-        .strip_prefix("git@github.com:")
-        .or_else(|| {
-            let (scheme, rest) = origin.split_once("://")?;
-            if !["https", "http", "ssh", "git"].contains(&scheme) {
-                return None;
-            }
-            let (host, path) = rest.split_once('/')?;
-            host.rsplit('@')
-                .next()?
-                .eq_ignore_ascii_case("github.com")
-                .then_some(path)
-        })
-        .ok_or(
-            "Could not identify origin's GitHub repository. Check its push URL before opening.",
-        )?;
-    let name = path
-        .trim_end_matches('/')
-        .strip_suffix(".git")
-        .unwrap_or(path.trim_end_matches('/'));
+    let unknown = || {
+        "Could not identify origin's GitHub repository. Check its push URL before opening."
+            .to_string()
+    };
+    if origin.contains('\n') {
+        return Err(unknown());
+    }
+    let path = if let Some((scheme, rest)) = origin.split_once("://") {
+        if !["https", "http", "ssh", "git"].contains(&scheme) {
+            return Err(unknown());
+        }
+        rest.split_once('/').ok_or_else(unknown)?.1
+    } else {
+        // scp-like `[user@]host:owner/repo`.
+        let (host, path) = origin.split_once(':').ok_or_else(unknown)?;
+        if host.is_empty() || host.contains('/') {
+            return Err(unknown());
+        }
+        path
+    };
+    let path = path.trim_end_matches('/');
+    let name = path.strip_suffix(".git").unwrap_or(path);
     valid_name(name)
         .then(|| name.to_string())
         .ok_or("Origin's GitHub repository is invalid.".into())
@@ -102,11 +108,14 @@ mod tests {
             "git@github.com:owner/repo.git",
             "https://github.com/owner/repo.git",
             "ssh://git@github.com/owner/repo.git",
+            // An SSH host alias, a port, and an Enterprise host: gh resolves the host itself.
+            "git@github-work:owner/repo.git",
+            "ssh://git@github.com:22/owner/repo.git",
+            "https://github.example.com/owner/repo",
         ] {
             assert_eq!(source(remote).unwrap(), "owner/repo");
         }
         for remote in [
-            "https://other.invalid/owner/repo",
             "https://github.com/owner/repo\nhttps://github.com/other/repo",
             "https://github.com/../repo",
             "file:///tmp/repo",

@@ -35,3 +35,9 @@ it("a pane plays its move from the box it had and nothing when it stayed put or 
   expect(flipFrom({ left: 0, top: 0, width: 400, height: 300 }, { left: 0, top: 0, width: 400, height: 300 })).toBeUndefined();
   expect(flipFrom({ left: 0, top: 0, width: 400, height: 300 }, { left: 0, top: 0, width: 0, height: 0 })).toBeUndefined();
 });
+
+it("a child re-keyed by the daemon is one pane, not a ghost left unconfirmed", () => {
+  const pending = { id: "antigravity:c1:pending", child: "c1", status: "working" as const, output: "waiting" as const };
+  const run = { id: "antigravity:c1:0", child: "c1", status: "working" as const, output: "waiting" as const };
+  expect(liveInvocations([pending], snapshot([run])).map((c) => c.id)).toEqual(["antigravity:c1:0"]);
+});

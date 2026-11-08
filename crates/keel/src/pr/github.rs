@@ -36,6 +36,10 @@ pub(super) struct Opened {
     pub head: String,
 }
 const COMMAND_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// A push runs the repository's `pre-push` hook — often the whole test suite — and a first push of
+/// a large branch on a slow uplink takes minutes. Sixty seconds killed both every time, so the pull
+/// request could never open; this is still a ceiling, so the wait still ends.
+const PUSH_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 pub(super) fn command(repo: &Utf8Path, program: &str, args: &[String]) -> Result<String, String> {
     if !["git", "gh"].contains(&program) {
@@ -52,7 +56,12 @@ pub(super) fn command(repo: &Utf8Path, program: &str, args: &[String]) -> Result
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
-    let output = crate::git::output_within(command, COMMAND_WAIT)
+    let wait = if program == "git" && args.first().is_some_and(|a| a == "push") {
+        PUSH_WAIT
+    } else {
+        COMMAND_WAIT
+    };
+    let output = crate::git::output_within(command, wait)
         .map_err(|e| format!("Could not run {program}: {e}"))?;
     if !output.status.success() {
         return Err(format!(

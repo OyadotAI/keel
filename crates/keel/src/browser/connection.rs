@@ -82,6 +82,9 @@ pub(super) fn discover(
     }
     candidates.iter().find_map(|v|candidate(v,installation).ok()).ok_or("Oya Browser is installed; its agent connection needs setup. In Oya’s footer, use Connect Claude Code or Connect Codex, then Retry connection. Keel does not copy or decrypt login credentials.".into())
 }
+/// What a call says when Oya restarted under it. `local::Page` matches it to drop the stale
+/// connection, so the next browser step reconnects on its own.
+pub(super) const RESTARTED: &str = "Oya Browser restarted, so this lane's tab is gone. Keel reconnects on the next browser step; open the page again with browser_open.";
 /// A distinct MCP session owns each lane's tabs, and redirects/proxies cannot forward its bearer.
 pub(super) struct Client {
     connection: Connection,
@@ -112,9 +115,22 @@ impl Client {
         let actual =
             crate::serve::in_blocking(move || detection::listener(port, &installation)).await?;
         if actual != expected {
-            return Err("Local Oya restarted; this session’s tab ownership is no longer current. Start a new session before browsing.".into());
+            return Err(RESTARTED.into());
         }
         Ok(())
+    }
+    /// End this client's Oya session (MCP's DELETE with its id), so a status check or a reset page
+    /// does not leave one open in Oya for each time it ran. Best effort: Oya may already be gone.
+    pub async fn close(self) {
+        if let Some(session) = &self.session {
+            let _ = self
+                .http
+                .delete(self.connection.url.clone())
+                .header("Authorization", &self.connection.authorization)
+                .header("Mcp-Session-Id", session)
+                .send()
+                .await;
+        }
     }
     pub async fn initialize(&mut self) -> Result<(), String> {
         self.rpc("initialize",serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Keel","version":env!("CARGO_PKG_VERSION")}})).await?;

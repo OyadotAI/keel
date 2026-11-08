@@ -138,6 +138,28 @@ fn wanted(root: &Utf8Path, agents: &[Agent]) -> Vec<(String, String)> {
     tmpl::files_for(agents, root.join(tmpl::FRONTEND_SKILL_PATH).is_file())
 }
 
+/// Team paths whose deletion is in the history: the person removed them on purpose and committed it.
+pub(crate) fn deleted_in_history(root: &Utf8Path) -> std::collections::HashSet<String> {
+    let args = [
+        "log",
+        "--diff-filter=D",
+        "--name-only",
+        "--format=",
+        "--",
+        ".claude",
+        ".agents",
+        ".codex",
+    ];
+    crate::git::run(root, &args)
+        .map(|text| {
+            text.lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Every path git knows under the team folders — in the index, at `HEAD`, or deleted in some
 /// commit: three git calls, not one per file. A deletion the person committed is as much their
 /// decision as one still staged, and offering the file back as "added" would undo it.
