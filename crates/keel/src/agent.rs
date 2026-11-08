@@ -1173,6 +1173,11 @@ pub async fn chat(
         if preparation_stopped(&stopper, &lane, token, &tx).await {
             return;
         }
+        if !install_missing(provider, &stopper, &lane, token, &tx).await
+            || preparation_stopped(&stopper, &lane, token, &tx).await
+        {
+            return;
+        }
         let mut child = match command.spawn() {
             Ok(child) => AgentChild { child },
             Err(e) => {
@@ -1607,8 +1612,97 @@ pub async fn chat(
 
 const AGY_UNFINISHED: &str = "Antigravity ended without finishing the turn. Run agy in a \
     terminal to see why — an expired sign-in or a spent quota fails like this and says so there.";
-const AGY_MISSING: &str = "Antigravity isn't installed. In a terminal, run curl -fsSL \
-    https://antigravity.google/cli/install.sh | bash, then run agy once to sign in, and send again.";
+const AGY_MISSING: &str = "Antigravity isn't installed, and Keel has no installer for it on this \
+    system. Install the agy CLI, run agy once to sign in, and send again.";
+
+/// The program a chat provider runs.
+fn program_of(provider: &str) -> &'static str {
+    match provider {
+        "codex" => "codex",
+        "antigravity" => "agy",
+        _ => "claude",
+    }
+}
+
+/// Install the turn's agent when it is missing, before it is spawned, with the installer's output
+/// as the turn's own stderr lines — drawn the same way for every agent — and the turn carrying on
+/// when it lands, so the person's prompt is never theirs to send again. `false` when the install
+/// failed and the turn has already been failed with the reason.
+async fn install_missing(
+    provider: &str,
+    state: &Arc<AppState>,
+    lane: &str,
+    token: u64,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
+) -> bool {
+    for program in crate::install::needed(program_of(provider)) {
+        if !install_one(program, state, lane, token, tx).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// One program from [`install_missing`]: git, then the agent.
+async fn install_one(
+    program: &'static str,
+    state: &Arc<AppState>,
+    lane: &str,
+    token: u64,
+    tx: &tokio::sync::mpsc::Sender<Result<Said, Infallible>>,
+) -> bool {
+    let Some(installer) = crate::install::missing(program) else {
+        return true;
+    };
+    let _ = tx
+        .send(Ok(said(
+            "err",
+            format!(
+                "{} isn't installed on this machine, so Keel is installing it…",
+                installer.who
+            ),
+        )))
+        .await;
+    // Stop, or the window going away, ends the installer: see `install::run`.
+    let (lines, state, lane) = (tx.clone(), state.clone(), lane.to_string());
+    let result = crate::serve::blocking(
+        move || {
+            let stopped = || lines.is_closed() || state.cancelled(&lane, token);
+            crate::install::run(
+                program,
+                |line| {
+                    let _ = lines.blocking_send(Ok(said("err", line.to_string())));
+                },
+                stopped,
+            )
+        },
+        Err(crate::install::STOPPED.into()),
+    )
+    .await;
+    match result {
+        // Stopped is not a failure: the caller's `preparation_stopped` ends the turn the way a
+        // stopped turn always ends.
+        Err(why) if why == crate::install::STOPPED => true,
+        Ok(()) => {
+            let _ = tx
+                .send(Ok(said("err", format!("Installed {}.", installer.who))))
+                .await;
+            true
+        }
+        Err(why) => {
+            let _ = tx
+                .send(Ok(said(
+                    "fatal",
+                    format!(
+                        "Couldn't install {}: {why}. Send again to retry.",
+                        installer.who
+                    ),
+                )))
+                .await;
+            false
+        }
+    }
+}
 const AGY_SIGNED_OUT: &str = "Antigravity isn't signed in. Run agy in a terminal and finish \
     signing in with your Google account, then send again.";
 const AGY_QUOTA: &str = "Antigravity is out of quota for now. It uses your Google AI Pro or \

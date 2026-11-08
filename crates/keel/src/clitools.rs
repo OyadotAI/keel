@@ -77,28 +77,25 @@ pub struct ClaudeStatus {
 /// matters: without `claude` there is no agent, and Keel is a window over a scanner.
 pub async fn install_claude() -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     // no-blocking: spawns a tokio process and streams it.
-    // Echoed before it runs. Piping a downloaded script into a shell is a reasonable thing to do
-    // with a vendor's own installer and an unreasonable thing to do invisibly.
-    const COMMAND: &str = "echo '$ curl -fsSL https://claude.ai/install.sh | bash'; \
-                           curl -fsSL https://claude.ai/install.sh | bash";
-
+    // Echoed before it runs, and taken from `install.rs`, the one table of agent installers.
+    let installer = crate::install::for_program("claude").expect("claude installs on every OS");
+    let shown = format!("$ {}", installer.command);
     #[cfg(not(windows))]
     let command = {
         let mut command = Command::new("bash");
         // A login shell, so the PATH the installer writes into is the one a terminal would read.
-        command.args(["-o", "pipefail", "-lc", COMMAND]);
+        command
+            .args(["-o", "pipefail", "-lc"])
+            .arg(format!("echo '{shown}'; {}", installer.command));
         command
     };
     // Windows has its own installer script, run the way the vendor documents it.
     #[cfg(windows)]
     let command = {
-        let _ = COMMAND;
         let mut command = Command::new("powershell");
-        command.args([
-            "-NoProfile",
-            "-Command",
-            "Write-Output '> irm https://claude.ai/install.ps1 | iex'; irm https://claude.ai/install.ps1 | iex",
-        ]);
+        command
+            .args(["-NoProfile", "-Command"])
+            .arg(format!("Write-Output '{shown}'; {}", installer.command));
         command
     };
     stream(command)

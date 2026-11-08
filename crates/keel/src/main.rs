@@ -31,6 +31,7 @@ mod gitroots;
 mod guidance;
 mod ignored;
 mod imports;
+mod install;
 mod license;
 mod lines;
 mod lock;

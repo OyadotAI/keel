@@ -12,6 +12,7 @@
 //! Every GUI developer tool has this problem and they all solve it the same way: ask the login
 //! shell what its `PATH` is, once, at startup.
 
+#[cfg(not(windows))]
 use std::collections::BTreeSet;
 
 /// Directories worth having whether or not the shell answers.
@@ -19,6 +20,7 @@ use std::collections::BTreeSet;
 /// The union is deliberate. A shell that fails, hangs, or has a profile that never sets `PATH`
 /// should leave Keel no worse off than a hardcoded list, and a shell that answers should be able
 /// to add to it rather than replace it.
+#[cfg(not(windows))]
 fn well_known() -> Vec<String> {
     let home = keel_workspace::home()
         .map(String::from)
@@ -52,6 +54,7 @@ fn well_known() -> Vec<String> {
 /// so neither alone is enough. Bounded, because an interactive shell runs somebody's whole
 /// `.zshrc`, which can be slow and can block on anything from a version manager to a prompt that
 /// asks a network for something.
+#[cfg(not(windows))]
 fn shell_path() -> Option<String> {
     let shell = std::env::var("SHELL").ok()?;
     if shell.is_empty() {
@@ -94,16 +97,44 @@ fn shell_path() -> Option<String> {
         .map(str::to_string)
 }
 
+/// A Windows app inherits the PATH the system keeps for the user; there is no login shell to ask
+/// and no Homebrew to add. Only the folders the agents' native installers write to, which Keel may
+/// install into after startup (`install.rs`) and must then find without a restart.
+#[cfg(windows)]
+pub fn adopt_shell_path() {
+    let mut dirs: Vec<_> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    // Where Claude Code, Codex and Antigravity install, each read from its own install.ps1.
+    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
+    let app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    let installs = [
+        home.map(|h| h.join(".local").join("bin")),
+        app_data
+            .as_ref()
+            .map(|a| a.join("Programs").join("OpenAI").join("Codex").join("bin")),
+        app_data.map(|a| a.join("agy").join("bin")),
+        // Git for Windows, which winget installs machine-wide (`install.rs`).
+        std::env::var_os("ProgramFiles")
+            .map(|p| std::path::PathBuf::from(p).join("Git").join("cmd")),
+    ];
+    for dir in installs.into_iter().flatten() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    if let Ok(joined) = std::env::join_paths(dirs) {
+        // Safety: called once, at the top of main, before any thread is spawned.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
+}
+
 /// Merge the shell's `PATH`, the well-known locations, and whatever we already had.
 ///
 /// Order is preserved and duplicates dropped, so a tool the user shadowed deliberately stays
 /// shadowed — appending our guesses after their `PATH` rather than in front of it.
+#[cfg(not(windows))]
 pub fn adopt_shell_path() {
-    // A Windows app inherits the PATH the system keeps for the user; there is no login shell to
-    // ask and no Homebrew to add.
-    if cfg!(windows) {
-        return;
-    }
     let mut seen = BTreeSet::new();
     let mut parts: Vec<String> = Vec::new();
 

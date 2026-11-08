@@ -22,13 +22,14 @@ export function open(
   token: string,
   onEvents: (events: Arrived[]) => void,
   onEnd: (error?: string) => void,
+  method: "GET" | "POST" = "GET",
 ): Stream {
   const id = ++ids;
   handlers.set(id, (events, end) => {
     if (events.length) onEvents(events);
     if (end) onEnd(end.error);
   });
-  worker.postMessage({ type: "open", id, url, token });
+  worker.postMessage({ type: "open", id, url, token, method });
   return {
     close() {
       handlers.delete(id);

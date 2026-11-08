@@ -17,52 +17,42 @@ fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
 }
 
-/// An agent CLI that is not on this machine, and the vendor's own installer for it. Both put
-/// the program in `~/.local/bin`. The one for Codex is the script it was installed with here.
-#[cfg(unix)]
-const INSTALLERS: &[(&str, &str, &str)] = &[
-    (
-        "codex",
-        "Codex",
-        "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-    ),
-    (
-        "claude",
-        "Claude Code",
-        "curl -fsSL https://claude.ai/install.sh | bash",
-    ),
-];
+/// When the lane's agent is not installed, install it in this terminal — where the person watches
+/// it happen — and then start it as it would have started. "Could not start it: is it installed?"
+/// left them to go and find the installer themselves. Through `install::run`, the one place that
+/// knows each agent's installer per OS, so Windows gets the same path. `false` means the install
+/// failed and the terminal already says why; the agent is not started.
+fn install_first(program: &std::ffi::OsStr, out: &tokio::sync::mpsc::Sender<Out>) -> bool {
+    let Some(name) = program.to_str() else {
+        return true;
+    };
+    crate::install::needed(name)
+        .into_iter()
+        .all(|needed| install_one(needed, out))
+}
 
-/// When the lane's agent is not installed, the shell line that installs it in this terminal —
-/// where the person watches it happen — and then starts it as it would have started. "Could not
-/// start it: is it installed?" left them to go and find the installer themselves; a Codex whose
-/// install folder a disk cleanup removed left a link pointing at nothing, and the same message.
-/// `None` when the program is there, or Keel knows no installer for it.
-#[cfg(unix)]
-fn install_first(program: &std::ffi::OsStr, args: &[String]) -> Option<Vec<String>> {
-    let name = program.to_str()?;
-    if crate::permissions::find_on_path(name).is_some() {
-        return None;
+/// One program from [`install_first`], said in the terminal as it happens.
+fn install_one(name: &str, out: &tokio::sync::mpsc::Sender<Out>) -> bool {
+    let Some(installer) = crate::install::missing(name) else {
+        return true;
+    };
+    let say = |text: &str| {
+        let _ = out.blocking_send(Out::Bytes(format!("{text}\r\n").into_bytes()));
+    };
+    say(&format!(
+        "{} is not installed on this machine, so Keel is installing it with its own installer.\r\n",
+        installer.who
+    ));
+    match crate::install::run(name, say, || out.is_closed()) {
+        Ok(()) => true,
+        Err(why) => {
+            say(&format!(
+                "\r\nCouldn't install {}: {why}. Close this tab and open the lane again to retry.",
+                installer.who
+            ));
+            false
+        }
     }
-    install_line(name, args)
-}
-
-/// The command itself, for a program known to be missing: `/bin/sh` with a script that is fixed
-/// text, and the agent's own argv as its positional parameters. Never quoted into a string for
-/// `$SHELL` — that may be fish, which does not read POSIX quoting the way it was written.
-#[cfg(unix)]
-fn install_line(name: &str, args: &[String]) -> Option<Vec<String>> {
-    let (_, who, install) = INSTALLERS.iter().find(|(p, _, _)| *p == name)?;
-    let script = format!(
-        "echo '{who} is not installed on this machine, so Keel is installing it with its own installer, then starting it.'; echo; echo '$ {install}'; {install} && PATH=\"$HOME/.local/bin:$PATH\" exec \"$@\""
-    );
-    let head = ["/bin/sh", "-c", &script, "sh", name].map(String::from);
-    Some(head.into_iter().chain(args.iter().cloned()).collect())
-}
-
-#[cfg(not(unix))]
-fn install_first(_program: &std::ffi::OsStr, _args: &[String]) -> Option<Vec<String>> {
-    None
 }
 
 /// `%COMSPEC%`, the shell Windows itself says is the command shell.
@@ -502,16 +492,17 @@ fn pty_thread(
                     {
                         *v = crate::agent::themed(std::mem::take(v), theme.as_deref());
                     }
-                    let mut c = match install_first(&program, &args) {
-                        Some(argv) => CommandBuilder::from_argv(
-                            argv.into_iter().map(std::ffi::OsString::from).collect(),
-                        ),
-                        None => {
-                            let mut c = CommandBuilder::new(program);
-                            c.args(args);
-                            c
-                        }
-                    };
+                    if !install_first(&program, &out) {
+                        return;
+                    }
+                    // Resolved again: on Windows the program is the file it resolves to, which
+                    // did not exist before the install.
+                    let program = program
+                        .to_str()
+                        .map(crate::permissions::program)
+                        .unwrap_or(program);
+                    let mut c = CommandBuilder::new(program);
+                    c.args(args);
                     // A question asked through `ask_user` waits for the person, not for 60 s.
                     c.env("MCP_TOOL_TIMEOUT", crate::askmcp::tool_timeout());
                     if agent == "antigravity" {
@@ -708,42 +699,6 @@ fn pty_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A missing agent is installed by its vendor's installer in the terminal, then started with
-    /// the arguments it would have had — quoted, so a prompt or a path with spaces survives.
-    #[cfg(unix)]
-    #[test]
-    fn a_missing_agent_is_installed_then_started() {
-        let args = vec!["--resume".to_string(), "a b".to_string()];
-        let argv = install_line("codex", &args).expect("codex has an installer");
-        assert_eq!(argv[..2], ["/bin/sh", "-c"]);
-        assert!(argv[2].contains("curl -fsSL https://chatgpt.com/codex/install.sh | sh &&"));
-        assert!(argv[2].contains("Codex is not installed"));
-        // The agent's argv is never part of the script: positional parameters, untouched.
-        assert_eq!(argv[3..], ["sh", "codex", "--resume", "a b"]);
-        let out = std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "printf '%s|' \"$@\"",
-                "sh",
-                "--resume",
-                "a b; echo pwned",
-            ])
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "--resume|a b; echo pwned|"
-        );
-        assert!(install_line("claude", &[]).unwrap()[2].contains("https://claude.ai/install.sh"));
-        assert_eq!(
-            install_line("agy", &[]),
-            None,
-            "no installer guessed for one Keel does not know"
-        );
-        // Something on PATH is started as it is.
-        assert_eq!(install_first(std::ffi::OsStr::new("sh"), &[]), None);
-    }
 
     /// What `ps -o comm=` actually prints, on both platforms and for a login shell.
     /// A conversation is live while any terminal holds it, and not after the last lets go.

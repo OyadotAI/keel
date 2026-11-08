@@ -48,6 +48,8 @@ export function ClaudeSection({ ep }: { ep: Endpoint }) {
         setBusy(undefined);
         void read();
       },
+      // The install runs a downloaded script, so its route takes POST only.
+      action === "install" ? "POST" : "GET",
     );
   }
   return (

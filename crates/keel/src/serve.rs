@@ -1081,7 +1081,12 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
             "/api/license",
             get(crate::license::api_status).post(crate::license::api_install),
         )
-        .route("/api/claude/install", get(crate::clitools::install_claude))
+        // POST: it runs a downloaded script, so it is never a GET, on top of `pair::guard`'s refusal of
+        // any cross-site or unauthenticated caller.
+        .route(
+            "/api/claude/install",
+            axum::routing::post(crate::clitools::install_claude),
+        )
         .route("/api/claude/login", get(crate::clitools::login_claude))
         .route("/api/cli", get(crate::clitools::status))
         .route("/api/cli/install", get(crate::clitools::install))

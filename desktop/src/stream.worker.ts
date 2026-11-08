@@ -10,6 +10,8 @@ interface Open {
   id: number;
   url: string;
   token: string;
+  /// POST for a stream that does something (an install), GET otherwise.
+  method?: "GET" | "POST";
 }
 interface Close {
   type: "close";
@@ -58,6 +60,7 @@ async function run(msg: Open) {
   streams.set(msg.id, abort);
   try {
     const response = await fetch(msg.url, {
+      method: msg.method ?? "GET",
       headers: { Authorization: `Bearer ${msg.token}`, Accept: "text/event-stream" },
       signal: abort.signal,
     });
