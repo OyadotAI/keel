@@ -334,7 +334,15 @@ pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (StatusCo
         if !(body.url.starts_with("https://") || body.url.starts_with("http://")) {
             return Err(bad("only http and https links can be opened"));
         }
-        open::that_detached(&body.url).map_err(|e| bad(e.to_string()))?;
+        // "Open in Oya Browser" from a lane browsing inside Keel: the person's own Oya, the `.app`
+        // on macOS and the detected `.exe` on Windows, never a name found on PATH.
+        if body.oya {
+            let app =
+                crate::browser::oya_app().ok_or_else(|| bad("Oya Browser isn't installed"))?;
+            open::with_detached(&body.url, app).map_err(|e| bad(e.to_string()))?;
+        } else {
+            open::that_detached(&body.url).map_err(|e| bad(e.to_string()))?;
+        }
         Ok(Json(true))
     })
     .await
@@ -343,6 +351,9 @@ pub async fn open_url(Json(body): Json<OpenUrl>) -> Result<Json<bool>, (StatusCo
 #[derive(serde::Deserialize)]
 pub struct OpenUrl {
     pub url: String,
+    /// Open it in the person's Oya Browser rather than their default browser.
+    #[serde(default)]
+    pub oya: bool,
 }
 
 #[cfg(test)]

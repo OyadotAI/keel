@@ -1,44 +1,61 @@
-// Browser selection is device-local and does not redirect an already-running session.
-import { useState } from "react";
+// Where agents browse: each lane chooses, on its first browser step (the card) or in its Browser
+// tab; Settings holds the device's default — ask each lane, or always one browser.
 import "./BrowserPreference.css";
 import { useBrowserPreference, type BrowserBackend } from "../browser-preference";
 
-function Choice({ state }: { state: ReturnType<typeof useBrowserPreference> }) {
-  const [selected, setSelected] = useState<BrowserBackend | "">(state.value?.selected ?? "");
-  return <div className="browser-choice" role="group" aria-label="Where should agents browse?">
-    <h3>Where should agents browse?</h3>
-    <label><input type="radio" name="agent-browser" checked={selected === "embedded"} onChange={() => setSelected("embedded")} /> <strong>Inside Keel</strong><span>Keep pages inside Keel. Sign-ins stay with each project.</span></label>
-    <label><input type="radio" name="agent-browser" checked={selected === "local_oya"} disabled={!state.value?.installation} onChange={() => setSelected("local_oya")} /> <strong>Local Oya Browser</strong><span>Use your installed Oya Browser and its existing signed-in profile.</span></label>
-    <p className="muted small">Saved on this device for all projects and coding agents.</p>
-    <div className="handoff-actions"><button className="primary" disabled={!selected || state.busy} onClick={() => selected && void state.save(selected)}>Save browser choice</button><button disabled={state.busy} onClick={state.defer}>Not now</button></div>
-  </div>;
-}
-/** Show installation, connection and session state separately so a preference is not mistaken for readiness. */
+type State = ReturnType<typeof useBrowserPreference>;
+const NAMES: Record<BrowserBackend, string> = { embedded: "Inside Keel", local_oya: "Oya Browser" };
+
+/** Settings: the device default. "Ask each lane" is what a new person gets; lanes that chose keep it. */
 export function BrowserPreference({ lane }: { lane?: string }) {
   const state = useBrowserPreference(lane);
-  return <BrowserPreferenceView state={state} lane={lane} />;
+  return <BrowserPreferenceView state={state} />;
 }
-export function BrowserPreferenceView({ state, lane }: { state: ReturnType<typeof useBrowserPreference>; lane?: string }) {
+export function BrowserPreferenceView({ state }: { state: State }) {
   const value = state.value;
-  const names = { embedded: "Inside Keel", local_oya: "Local Oya Browser" };
+  const option = (selected: BrowserBackend | null, title: string, detail: string, disabled = false) => (
+    <label>
+      <input type="radio" name="agent-browser" checked={value?.selected === selected} disabled={disabled || state.busy} onChange={() => void state.save(selected)} />{" "}
+      <strong>{title}</strong>
+      <span>{detail}</span>
+    </label>
+  );
   return <section className="settings-section browser-preference">
     <h2>Browser for coding agents</h2>
     {!value && !state.error && <p className="muted">Checking for Oya Browser…</p>}
-    {value && <><p>Saved default: {value.selected ? names[value.selected] : "Inside Keel (default)"}.</p>
-      <p className="muted small">{value.detection_error ?? value.connection_message}</p>
-      {lane && value.selected && value.effective.backend !== value.selected && <p className="muted small">This session uses {names[value.effective.backend]}. {names[value.selected]} will be used for new sessions.</p>}
-      <div className="handoff-actions"><button disabled={state.busy} onClick={state.choose}>Change…</button><button disabled={state.busy} onClick={() => void state.refresh()}>Check again</button></div>
-    </>}
-    {state.choosing && <Choice state={state} />}
+    {value && <div className="browser-choice" role="radiogroup" aria-label="Browser for coding agents">
+      {option(null, "Ask each lane (recommended)", "The first time an agent in a lane needs a browser, Keel asks where that lane should browse.")}
+      {option("embedded", "Always Inside Keel", "A browser in each lane's Browser tab. Sign-ins stay with each project.")}
+      {option("local_oya", "Always Oya Browser", value.installation ? "The Oya app on your computer, with the accounts you're already signed into." : "Oya Browser isn't installed. Choose “Ask each lane” and Keel offers to install it.", !value.installation)}
+      <p className="muted small">Lanes that already chose keep their choice. Change one in its Browser tab.</p>
+    </div>}
     {state.error && <p className="error" role="alert">{state.error}</p>}
   </section>;
 }
-/** A local session exposes only the page it owns; personal tabs remain in Oya. */
-export function LocalOyaView({ state }: { state: ReturnType<typeof useBrowserPreference> }) {
+
+/** The lane's own switch, in the Browser tab's status row. Applies to the lane's next browser step. */
+export function BrowseIn({ state }: { state: State }) {
+  const effective = state.value?.effective;
+  if (!state.value) return null;
+  const value = effective?.source === "none" ? "" : effective?.backend ?? "";
+  return <label className="browse-in small">
+    <span className="muted">Browse in</span>
+    <select value={value} disabled={state.busy} onChange={(e) => e.target.value && void state.setLane(e.target.value as BrowserBackend)} aria-label="Where this lane browses">
+      {value === "" && <option value="">Asks on first browser step</option>}
+      <option value="embedded">{NAMES.embedded}</option>
+      <option value="local_oya">{state.value.installation ? NAMES.local_oya : "Oya Browser (installs on next step)"}</option>
+    </select>
+  </label>;
+}
+
+/** A lane browsing in the person's own Oya: Keel shows only the page this lane owns there. */
+export function LocalOyaView({ state }: { state: State }) {
   const value = state.value;
   if (!value || value.effective.backend !== "local_oya") return null;
-  return <div className="preview browser local-oya"><h2>Local Oya Browser</h2><p>{value.connection_message}</p>
-    <p>{value.effective.url ?? "This session has not opened a page yet."}</p>
+  return <div className="preview browser local-oya">
+    <div className="browser-status idle"><span className="browser-status-text">{value.connection_message}</span><BrowseIn state={state} /></div>
+    <h2>This lane browses in your Oya Browser</h2>
+    <p>{value.effective.url ?? "The agent hasn't opened a page yet."}</p>
     <div className="handoff-actions"><button disabled={!value.effective.url || state.busy} onClick={() => void state.show()}>Show in Oya</button><button disabled={state.busy} onClick={() => void state.reconnect()}>Retry connection</button></div>
     {state.error && <p className="error" role="alert">{state.error}</p>}
   </div>;

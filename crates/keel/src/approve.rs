@@ -1363,6 +1363,54 @@ async fn monitor_request(state: &Arc<AppState>, hook: &HookInput) -> Decision {
 /// The name a finished plan travels under: the tool Claude Code would have used, if it had one.
 pub const PLAN: &str = "ExitPlanMode";
 
+/// The card that asks where a lane browses, the first time an agent in it reaches for a browser.
+/// Not a tool any agent calls: Keel holds the agent's own `browser_*` call on it (`browser::call`),
+/// which is how one card covers Claude Code, Codex and Antigravity, chat and terminal alike.
+pub const BROWSER_CHOICE: &str = "BrowserChoice";
+
+/// Ask where `lane` should browse and wait for the answer: `embedded`, `local_oya` or
+/// `install_oya`. `oya` tells the card which Oya button to draw: `installed` or `installable`.
+/// `None` when nobody answered within [`WAIT`]; the card is withdrawn either way.
+pub async fn choose_browser(lane: &str, session: &str, oya: &str) -> Option<String> {
+    // no-blocking: queues a card in memory and waits on a oneshot.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = format!(
+        "browser-choice-{}",
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let pending = Pending {
+        id: id.clone(),
+        lane: lane.into(),
+        tool: BROWSER_CHOICE.into(),
+        command: String::new(),
+        // A choice about this lane, not a permission: nothing to remember as a rule.
+        rules: Vec::new(),
+        input: serde_json::json!({ "oya": oya }),
+        session_id: session.into(),
+        reason: String::new(),
+        subagent: false,
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    waiters().locked().insert(id.clone(), (tx, lane.into()));
+    queue().locked().push(pending);
+    crate::events::emit(
+        "pending",
+        None,
+        serde_json::json!({ "lane": lane, "session": session }),
+    );
+    let _withdraw = Withdraw(id);
+    let decision = tokio::time::timeout(WAIT, rx).await.ok()?.ok()?;
+    Some(
+        decision
+            .reason
+            .split_once("do not ask again.\n\n")
+            .map(|(_, a)| a.to_string())
+            .unwrap_or(decision.reason)
+            .trim()
+            .to_string(),
+    )
+}
+
 /// What the Approve button answers a plan with.
 ///
 /// A sentinel rather than prose, so every word the agent reads is written here with the rest of

@@ -127,6 +127,8 @@ export interface Lane {
   /** Authoritative terminal child evidence is scoped to the current parent and checkout. */
   subagents?: import("./subagents").ChildState;
   browserRevision?: number;
+  /** Oya Browser being installed for this lane from the browser card: the installer's last line, then how it ended. */
+  browserInstall?: { line?: string; done?: boolean; error?: string | null };
   /// Native CLI prompts are answered in its terminal, never through a synthetic approval card.
   attention?: { id: string; kind: "permission" | "question" };
   attentionSeen?: string;
@@ -503,6 +505,11 @@ export const useStore = create<State>()((set, getState, api) => {
       // Followed now, whichever lane is on screen: the sidebar says what it is doing.
       void follow(l.id);
     },
+    "browser.install": (path, _ep, data) => {
+      const d = (data as { data?: { lane?: string; line?: string; done?: boolean; error?: string | null } })?.data;
+      if (!d?.lane || getState().lanes[d.lane]?.project !== path) return;
+      lane(d.lane, (current) => ({ browserInstall: d.done ? { ...current.browserInstall, done: true, error: d.error } : { line: d.line } }));
+    },
     "browser.binding": (path, _ep, data) => {
       const id = (data as { data?: { lane?: string } })?.data?.lane;
       if (id && getState().lanes[id]?.project === path) lane(id, (current) => ({ browserRevision: (current.browserRevision ?? 0) + 1 }));
@@ -712,7 +719,7 @@ export const useStore = create<State>()((set, getState, api) => {
     if (announced.has(p.id)) return;
     announced.add(p.id);
     const title = `${getState().lanes[lid]?.title ?? "A lane"} is waiting for you`;
-    void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
+    void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : p.tool === "BrowserChoice" ? "The agent wants to use a browser. Choose where this lane browses." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
   }
 
   /// Whose transcripts Keel follows: Claude's anywhere, and a Codex or Antigravity terminal's —

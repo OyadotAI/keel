@@ -9,6 +9,7 @@ import { post } from "../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Markdown } from "./Markdown";
 import { Questions, QuestionRecoveries } from "./Questions";
+import { BROWSER_CHOICE } from "../browser-preference";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
@@ -47,6 +48,7 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const [all, setAll] = useState(false);
   if (p.tool === "AskUserQuestion") return <Questions lane={lane} p={p} />;
   if (p.tool === "ExitPlanMode") return <PlanApproval lane={lane} p={p} />;
+  if (p.tool === BROWSER_CHOICE) return <BrowserChoice lane={lane} p={p} />;
   if (p.provider) return <RuntimeRequest lane={lane} p={p} />;
   const lines = p.command.split("\n");
   return (
@@ -85,6 +87,36 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
       </div>
     </div>
   );
+}
+
+/** Where this lane browses, asked on the agent's first browser step and saved for the lane. When Oya
+ * Browser isn't installed its button installs it; the agent's step waits and then runs there. */
+function BrowserChoice({ lane, p }: { lane: string; p: Pending }) {
+  const answer = useStore((s) => s.answer);
+  const [sending, setSending] = useState(false);
+  const installed = p.input.oya === "installed";
+  async function choose(choice: "embedded" | "local_oya" | "install_oya") {
+    setSending(true);
+    await answer(lane, p, "allow", choice);
+    setSending(false);
+    after();
+  }
+  return <div className="strip-row browser-choice-card">
+    <div className="strip-title"><Icon name="hand" className="hand" /><span style={{ flex: 1 }}>{who(p)} wants to use a browser. Where should this lane browse?</span></div>
+    <div className="actions">
+      <button className="primary" disabled={sending} onClick={() => void choose("embedded")} title="A browser in Keel's Browser tab. Sign-ins stay with this project.">
+        Inside Keel <kbd>{label({ key: "a", shift: true })}</kbd>
+      </button>
+      <button disabled={sending} onClick={() => void choose(installed ? "local_oya" : "install_oya")} title={installed ? "Uses the Oya app on your computer and the accounts you're already signed into." : "Downloads and installs Oya Browser, then uses it for this lane."}>
+        {installed ? "Your Oya Browser" : "Install Oya Browser"}
+      </button>
+    </div>
+    <p className="small muted">
+      <strong>Inside Keel</strong>: a browser in the Browser tab; sign-ins stay with this project.{" "}
+      <strong>{installed ? "Oya Browser" : "Install Oya Browser"}</strong>: {installed ? "the Oya app on your computer, with the accounts you're already signed into." : "installs the Oya app, then this lane browses there with your own sign-ins."}{" "}
+      Saved for this lane — change it any time in the Browser tab.
+    </p>
+  </div>;
 }
 
 function PlanApproval({ lane, p }: { lane: string; p: Pending }) {

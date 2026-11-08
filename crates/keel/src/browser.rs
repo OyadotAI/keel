@@ -17,6 +17,7 @@
 //! frame only, synthetic input only, and none of the person's logins.
 
 mod bindings;
+mod choice;
 mod connection;
 mod detection;
 mod local;
@@ -25,8 +26,9 @@ mod settings;
 pub(crate) use bindings::{
     alias as session_alias, id as binding_id, instructions, prepare, release,
 };
+pub(crate) use choice::{oya_app, oya_installed};
 pub(crate) use settings::{
-    reconnect, save as preference_save, show as show_local, status as preference_status,
+    reconnect, save as preference_save, set_lane, show as show_local, status as preference_status,
 };
 
 use crate::lock::Locked;
@@ -218,9 +220,10 @@ pub async fn call(
         .filter(|l| !l.is_empty())
         .ok_or("The Browser tab belongs to a lane, and this call came from none.")?;
     let op = op(name, args)?;
+    // Which browser runs this call is the lane's, read now — or asked now, the first time.
     if let Some(project) = project
         && let Some(bound) = bindings::authorize(project, lane, binding)?
-        && bound.backend == preference::Backend::LocalOya
+        && choice::choose(&bound.project, lane, &bound).await? == preference::Backend::LocalOya
     {
         return bindings::local(bound, op).await.map(capped);
     }
@@ -385,12 +388,12 @@ pub(crate) fn validate_binding(
 ) -> Result<(), String> {
     bindings::authorize(project, lane, binding).map(|_| ())
 }
-/// Tool descriptions reflect the captured browser and never promise the wrong profile or surface.
+/// Tool descriptions name no browser: the person picks one per lane and may switch between calls.
 pub(crate) fn session_schemas(lane: Option<&str>) -> Vec<Value> {
     let mut tools = schemas();
     for tool in &mut tools {
         let current = tool["description"].as_str().unwrap_or_default();
-        tool["description"]=format!("{} {}",instructions(lane),current.replace("in this lane's Browser tab inside Keel", "in this session's selected browser").replace("It has none of the person's logins: if a page needs a sign-in, ask the person with ask_user to sign in in the Browser tab.", "The selected browser's profile is used; request any missing sign-in from the person.")).into();
+        tool["description"]=format!("{} {}",instructions(lane),current.replace("in this lane's Browser tab inside Keel", "in the browser the person chose for this lane").replace("It has none of the person's logins: if a page needs a sign-in, ask the person with ask_user to sign in in the Browser tab.", "If a page needs a sign-in, ask the person with ask_user to sign in.")).into();
     }
     tools
 }

@@ -3,3 +3,7 @@
 .browser-choice label span { display: block; margin-left: 22px; color: var(--dim); font-size: 12px; }
 .local-oya { padding: 20px; overflow-wrap: anywhere; }
 .browser-preference .handoff-actions, .local-oya .handoff-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+/* The lane's "Browse in" switch sits at the right of the 26 px status row and never grows it. */
+.browser-status .browse-in { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
+.browse-in select { height: 20px; font-size: 11px; padding: 0 4px; }
+.browser-status .browser-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

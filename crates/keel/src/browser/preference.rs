@@ -70,33 +70,36 @@ fn change_at<T>(
         Ok(result)
     })?
 }
-pub(super) fn save(selected: Backend, revision: u64) -> Result<Preference, String> {
+/// `None` is "Ask each lane", the default; `Some` is "Always …", which every lane without a
+/// choice of its own follows and so never sees the card.
+pub(super) fn save(selected: Option<Backend>, revision: u64) -> Result<Preference, String> {
     change(|record| {
         if record.revision != revision {
             return Err(
                 "Browser preferences changed in another window. Refresh before saving.".into(),
             );
         }
-        record.selected = Some(selected);
+        record.selected = selected;
         record.revision = record.revision.saturating_add(1);
         Ok(record.clone())
     })
 }
-fn key(project: &Utf8Path, provider: &str, session: &str) -> String {
-    format!("{project}\n{provider}\n{session}")
-}
-fn session_path(path: &Utf8Path, key: &str) -> Result<Utf8PathBuf, String> {
+/// Where one lane's choice lives: its own small file, so a thousand lanes never grow the device
+/// record, keyed by the project's real path and the lane's id (the app's UUID, which every hook and
+/// `/mcp` URL already carries as `?lane=`).
+fn lane_path(path: &Utf8Path, project: &Utf8Path, lane: &str) -> Result<Utf8PathBuf, String> {
     use sha2::{Digest, Sha256};
     let root = path.parent().ok_or("Missing browser preference folder")?;
-    let name = format!("browser-sessions/{:x}.json", Sha256::digest(key.as_bytes()));
+    let key = format!("{project}\n{lane}");
+    let name = format!("browser-lanes/{:x}.json", Sha256::digest(key.as_bytes()));
     crate::writes::no_link_under(root, &name)?;
     let file = root.join(name);
     if std::fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err("Browser session preference is a symbolic link.".into());
+        return Err("Browser lane preference is a symbolic link.".into());
     }
     Ok(file)
 }
-fn session_choice(path: &Utf8Path) -> Result<Option<Backend>, String> {
+fn lane_choice(path: &Utf8Path) -> Result<Option<Backend>, String> {
     use std::io::Read;
     match std::fs::File::open(path) {
         Ok(file) => {
@@ -105,73 +108,121 @@ fn session_choice(path: &Utf8Path) -> Result<Option<Backend>, String> {
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
             if bytes.len() > 128 {
-                return Err("Session browser preference exceeds its limit.".into());
+                return Err("Lane browser preference exceeds its limit.".into());
             }
             serde_json::from_slice(&bytes)
                 .map(Some)
-                .map_err(|_| "Couldn’t read the saved session browser choice.".into())
+                .map_err(|_| "Couldn’t read this lane’s saved browser choice.".into())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
-fn store_session(path: &Utf8Path, backend: Backend) -> Result<(), String> {
-    crate::writes::replace(
-        path.as_std_path(),
-        &serde_json::to_vec(&backend).map_err(|e| e.to_string())?,
-    )
+
+/// The browser this lane uses for its next call: its own choice, else the device's "Always …"
+/// setting, else `None` — ask the person. Read on every call, so a switch in the Browser tab or a
+/// card answered a moment ago applies to the very next step, in every session the lane runs.
+pub(super) fn resolve(project: &Utf8Path, lane: &str) -> Result<Option<Backend>, String> {
+    resolve_at(&path()?, project, lane)
 }
-pub(super) fn capture(
-    project: &Utf8Path,
-    provider: &str,
-    session: &str,
-    resume: bool,
-) -> Result<Backend, String> {
-    let path = path()?;
-    crate::writes::locked(path.as_std_path(), || {
-        let record = load(&path)?;
-        let key = key(project, provider, session);
-        let session_path = session_path(&path, &key)?;
-        if resume
-            && let Some(backend) =
-                session_choice(&session_path)?.or_else(|| record.sessions.get(&key).copied())
-        {
-            return Ok(backend);
-        }
-        let backend = record.selected.unwrap_or_default();
-        store_session(&session_path, backend)?;
-        Ok(backend)
-    })?
+fn resolve_at(path: &Utf8Path, project: &Utf8Path, lane: &str) -> Result<Option<Backend>, String> {
+    Ok(lane_choice(&lane_path(path, project, lane)?)?.or(load(path)?.selected))
 }
-pub(super) fn alias(
+
+/// Remember `backend` for this lane, from the card or the Browser tab.
+pub(super) fn set_lane(project: &Utf8Path, lane: &str, backend: Backend) -> Result<(), String> {
+    set_lane_at(&path()?, project, lane, backend)
+}
+fn set_lane_at(
+    path: &Utf8Path,
     project: &Utf8Path,
-    provider: &str,
-    session: &str,
+    lane: &str,
     backend: Backend,
 ) -> Result<(), String> {
-    let path = path()?;
-    crate::writes::locked(path.as_std_path(), || {
-        let session_path = session_path(&path, &key(project, provider, session))?;
-        store_session(&session_path, backend)
+    let file = lane_path(path, project, lane)?;
+    crate::writes::locked(file.as_std_path(), || {
+        crate::writes::replace(
+            file.as_std_path(),
+            &serde_json::to_vec(&backend).map_err(|e| e.to_string())?,
+        )
     })?
+}
+
+/// Forget this lane's own choice, so its next browser step follows the device setting or asks.
+pub(super) fn clear_lane(project: &Utf8Path, lane: &str) -> Result<(), String> {
+    match std::fs::remove_file(lane_path(&path()?, project, lane)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// Only the lane's own choice, for the Browser tab's switch: a device default is not the lane's.
+pub(super) fn lane_only(project: &Utf8Path, lane: &str) -> Result<Option<Backend>, String> {
+    lane_choice(&lane_path(&path()?, project, lane)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn session_choices_are_independent_and_do_not_fill_the_preference_record() {
+    fn fixture() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8Path::from_path(dir.path())
             .unwrap()
             .join("browser.json");
+        (dir, path)
+    }
+    #[test]
+    fn a_lane_choice_outlives_its_session_and_two_lanes_differ() {
+        let (_dir, path) = fixture();
+        let project = Utf8Path::new("/repo");
+        set_lane_at(&path, project, "a", Backend::LocalOya).unwrap();
+        set_lane_at(&path, project, "b", Backend::Embedded).unwrap();
+        assert_eq!(
+            resolve_at(&path, project, "a").unwrap(),
+            Some(Backend::LocalOya)
+        );
+        assert_eq!(
+            resolve_at(&path, project, "b").unwrap(),
+            Some(Backend::Embedded)
+        );
+        assert_eq!(
+            resolve_at(&path, Utf8Path::new("/other"), "a").unwrap(),
+            None,
+            "per project"
+        );
         for index in 0..600 {
-            let file = session_path(&path, &format!("session-{index}")).unwrap();
-            store_session(&file, Backend::LocalOya).unwrap();
+            set_lane_at(&path, project, &format!("lane-{index}"), Backend::LocalOya).unwrap();
         }
-        let original = session_path(&path, "session-0").unwrap();
-        assert_eq!(session_choice(&original).unwrap(), Some(Backend::LocalOya));
-        assert_eq!(load(&path).unwrap().sessions.len(), 0);
+        assert_eq!(
+            load(&path).unwrap().sessions.len(),
+            0,
+            "lanes never fill the device record"
+        );
+    }
+    #[test]
+    fn a_lane_with_no_choice_asks_unless_the_device_says_always() {
+        let (_dir, path) = fixture();
+        let project = Utf8Path::new("/repo");
+        assert_eq!(
+            resolve_at(&path, project, "new").unwrap(),
+            None,
+            "ask each lane by default"
+        );
+        change_at(&path, |r| {
+            r.selected = Some(Backend::Embedded);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            resolve_at(&path, project, "new").unwrap(),
+            Some(Backend::Embedded)
+        );
+        set_lane_at(&path, project, "new", Backend::LocalOya).unwrap();
+        assert_eq!(
+            resolve_at(&path, project, "new").unwrap(),
+            Some(Backend::LocalOya),
+            "the lane wins"
+        );
     }
     #[test]
     fn choice_and_session_binding_survive_reopening_without_storing_credentials() {

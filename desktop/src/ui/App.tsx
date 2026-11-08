@@ -7,6 +7,7 @@ import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
 import { useStore, agentName, projectTrust } from "../store";
+import { BROWSER_CHOICE } from "../browser-preference";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
 import { Extensions } from "./Extensions";
@@ -361,6 +362,8 @@ function answerOldest(lane: string, decision: "allow" | "deny", scope: "once" | 
     return;
   }
   if (p.tool === "AskUserQuestion") return void document.querySelector<HTMLElement>(".strip-row .actions button")?.focus();
+  // Where to browse is a choice, not a permission: ⌘⇧A picks Inside Keel, the card's first answer.
+  if (p.tool === BROWSER_CHOICE) return void (decision === "allow" && scope === "once" && s.answer(lane, p, "allow", "embedded"));
   if (scope === "session" && !p.rules.length) return;
   void s.answer(lane, p, decision, undefined, scope);
 }
@@ -377,7 +380,7 @@ function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal,
   const out: Command[] = [];
   const l = lane ? s.lanes[lane] : undefined;
   for (const p of l?.pending ?? []) {
-    if (p.tool === "AskUserQuestion") continue;
+    if (p.tool === "AskUserQuestion" || p.tool === BROWSER_CHOICE) continue;
     out.push({ id: `allow-${p.id}`, title: `Allow once: ${p.tool} ${p.command.slice(0, 60)}`, keys: label({ key: "a", shift: true }), run: () => void s.answer(lane!, p, "allow") });
     if (p.rules.length) {
       out.push({ id: `session-${p.id}`, title: `Allow ${p.rules.join(", ")} for this session`, keys: label({ key: "s", shift: true }), run: () => void s.answer(lane!, p, "allow", undefined, "session") });

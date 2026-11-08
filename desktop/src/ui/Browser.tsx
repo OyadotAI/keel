@@ -1,6 +1,6 @@
 // The lane's Browser tab: the page the agent is using, with the person's own back, forward, reload
 import { useBrowserPreference } from "../browser-preference";
-import { BrowserPreferenceView, LocalOyaView } from "./BrowserPreference";
+import { BrowseIn, LocalOyaView } from "./BrowserPreference";
 // and address. The page is a native webview laid inside `.browser-page`, inset by its ring; it is
 // moved off-screen whenever this tab is not showing it or something is drawn on top.
 //
@@ -10,7 +10,7 @@ import { BrowserPreferenceView, LocalOyaView } from "./BrowserPreference";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useStore } from "../store";
+import { useStore, type Lane } from "../store";
 import { useCovered } from "../cover";
 import { toWindow } from "../zoom";
 import { act, address, setError, useTab, type Op, type Tab } from "../browser";
@@ -63,7 +63,7 @@ function Place({ lane, working }: { lane: string; working: boolean }) {
 /// The address as a person reads it: the lock or globe says the scheme, so it is not repeated.
 const shown = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-function Bar({ url, loading, run }: { url?: string; loading?: boolean; run: (op: Op) => void }) {
+function Bar({ url, loading, run, openInOya }: { url?: string; loading?: boolean; run: (op: Op) => void; openInOya?: (url: string) => void }) {
   const [typed, setTyped] = useState<string>();
   const go = () => {
     if (!typed?.trim()) return;
@@ -102,7 +102,9 @@ function Bar({ url, loading, run }: { url?: string; loading?: boolean; run: (op:
           onBlur={() => setTyped(undefined)}
         />
       </label>
-      {url && <button className="ghost icon-button" onClick={() => void openUrl(url)} title="Open in your browser" aria-label="Open in your browser"><Icon name="external-link" size={14} /></button>}
+      {url && (openInOya
+        ? <button className="ghost icon-button" onClick={() => openInOya(url)} title="Open in Oya Browser" aria-label="Open in Oya Browser"><Icon name="external-link" size={14} /></button>
+        : <button className="ghost icon-button" onClick={() => void openUrl(url)} title="Open in your browser" aria-label="Open in your browser"><Icon name="external-link" size={14} /></button>)}
     </div>
   );
 }
@@ -116,10 +118,13 @@ const hostOf = (url?: string) => {
 };
 
 /// What is happening in the tab, in a row that is always there.
-function Status({ tab, working }: { tab?: Tab; working: boolean }) {
-  const status = tab?.error ? "error" : working ? "working" : tab?.loading ? "loading" : "idle";
+function Status({ tab, working, install, children }: { tab?: Tab; working: boolean; install?: Lane["browserInstall"]; children?: React.ReactNode }) {
+  const installing = install && !install.done;
+  const status = tab?.error || install?.error ? "error" : working || installing ? "working" : tab?.loading ? "loading" : "idle";
   const text =
-    status === "error" ? tab?.error
+    installing ? <><strong>Installing Oya Browser</strong>{install.line && <span className="faint"> · {install.line}</span>}</>
+    : install?.error ? `Couldn't install Oya Browser: ${install.error}`
+    : status === "error" ? tab?.error
     : status === "working" ? <><strong>Agent is browsing</strong>{tab?.activity && <span className={tab.acting ? undefined : "faint"}> · {tab.activity}</span>}</>
     : status === "loading" ? `Loading ${hostOf(tab?.url)}…`
     : tab?.url ? "Agent's browser · logins here stay with this project"
@@ -128,6 +133,7 @@ function Status({ tab, working }: { tab?: Tab; working: boolean }) {
     <div className={`browser-status ${status}`} role="status" aria-live="polite">
       {status === "working" ? <span className="busy-dot" aria-hidden="true" /> : <span className={`browser-status-dot ${status}`} aria-hidden="true" />}
       <span className="browser-status-text">{text}</span>
+      {children}
     </div>
   );
 }
@@ -136,21 +142,24 @@ export function Browser({ lane }: { lane: string }) {
   const project = useStore((s) => s.lanes[lane]?.project);
   const running = useStore((s) => !!s.lanes[lane]?.running);
   const tab = useTab(lane);
+  const install = useStore((s) => s.lanes[lane]?.browserInstall);
   const browserPreference = useBrowserPreference(lane);
   // Held across a run, and only while the lane's turn runs, so it cannot outlive the agent.
   const working = !!tab?.browsing && running;
   const run = (op: Op) => {
     if (!project) return;
     setError(lane, undefined);
+    // A finished install's error has said its piece once the person acts in the tab.
+    useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], browserInstall: undefined } } }));
     act(lane, project, op).catch((e) => setError(lane, e instanceof Error ? e.message : String(e)));
   };
   if (!browserPreference.value) return <div className="preview browser"><p>{browserPreference.error || "Checking browser preference…"}</p><button onClick={() => void browserPreference.refresh()}>Retry</button></div>;
-  if (browserPreference.value.effective.backend === "local_oya") return <LocalOyaView state={browserPreference} />;
+  if (browserPreference.value.effective.backend === "local_oya" && browserPreference.value.installation) return <LocalOyaView state={browserPreference} />;
+  const oya = browserPreference.value.installation ? browserPreference.openInOya : undefined;
   return (
     <div className="preview browser">
-      <Bar url={tab?.url} loading={tab?.loading} run={run} />
-      <Status tab={tab} working={working} />
-      {browserPreference.choosing && <BrowserPreferenceView state={browserPreference} lane={lane} />}
+      <Bar url={tab?.url} loading={tab?.loading} run={run} openInOya={oya} />
+      <Status tab={tab} working={working} install={install}><BrowseIn state={browserPreference} /></Status>
       {tab?.url ? (
         <Place lane={lane} working={working} />
       ) : tab?.room ? (

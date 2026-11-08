@@ -1,4 +1,5 @@
-//! Opaque per-process browser bindings keep saved preferences from redirecting running conversations.
+//! Opaque per-process browser bindings: which session a lane's browser calls belong to. Which
+//! browser runs a call is the lane's choice, resolved per call (`preference::resolve`).
 use super::{
     Op, connection, detection,
     local::Page,
@@ -20,7 +21,6 @@ pub(super) struct Binding {
     pub session: Mutex<String>,
     pub project: Utf8PathBuf,
     pub provider: String,
-    pub backend: Backend,
     pub page: tokio::sync::Mutex<Page>,
 }
 #[derive(Default)]
@@ -31,7 +31,7 @@ fn registry() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(Default::default)
 }
-/// Capture on launch/resume only; status reads and preference saves do not mutate active sessions.
+/// On launch/resume: a fresh unguessable id ties this lane's browser calls to this session.
 pub(crate) fn prepare(
     project: &Utf8Path,
     lane: &str,
@@ -49,7 +49,6 @@ pub(crate) fn prepare(
     {
         return Ok(());
     }
-    let backend = preference::capture(&project, provider, session, resume)?;
     if registry.by_lane.len() >= BINDING_LIMIT && !registry.by_lane.contains_key(lane) {
         return Err(
             "Browser session capacity reached. Close an inactive lane before starting another."
@@ -67,7 +66,6 @@ pub(crate) fn prepare(
             session: Mutex::new(session.into()),
             project,
             provider: provider.into(),
-            backend,
             page: Default::default(),
         }),
     );
@@ -75,7 +73,7 @@ pub(crate) fn prepare(
     changed(lane);
     Ok(())
 }
-fn changed(lane: &str) {
+pub(super) fn changed(lane: &str) {
     crate::events::emit("browser.binding", None, serde_json::json!({"lane":lane}));
 }
 pub(crate) fn id(lane: &str) -> Option<String> {
@@ -101,12 +99,6 @@ pub(super) fn authorize(
 pub(crate) fn alias(lane: &str, session: &str) -> Result<(), String> {
     if let Some(binding) = get(lane) {
         *binding.session.locked() = session.into();
-        preference::alias(
-            &binding.project,
-            &binding.provider,
-            session,
-            binding.backend,
-        )?;
     }
     Ok(())
 }
@@ -122,12 +114,15 @@ pub(crate) fn release(lane: &str, id: Option<&str>) {
         changed(lane);
     }
 }
-pub(crate) fn instructions(lane: Option<&str>) -> String {
-    match lane.and_then(get).map(|b|b.backend).unwrap_or_default(){
-        Backend::Embedded=>"This session uses Inside Keel. Use only Keel browser_* tools; its embedded page has this project’s sign-ins, separate from local Oya. Never switch browser providers when a call fails.".into(),
-        Backend::LocalOya=>"This session uses Local Oya Browser with its existing signed-in profile, through Keel browser_* tools and the project’s permission gate. Open an owned page first; personal tabs are unavailable. Read the page before using element IDs. Respect Human Mode and report connection failures without switching browsers or replaying uncertain actions.".into(),
-    }
+/// The same words whichever browser the lane uses: the person chooses it, per lane, and can change
+/// it between two calls, so text naming one would be wrong the moment they switch.
+pub(crate) fn instructions(_lane: Option<&str>) -> String {
+    "Browse only with Keel's browser_* tools. The person chooses, per lane, whether they run inside \
+     Keel or in their own Oya Browser, and Keel may ask them the first time; never switch browsers \
+     yourself, and when a call fails, report it rather than replaying an uncertain action."
+        .into()
 }
+
 /// The adapter is serialized per binding; extra concurrent operations fail before producing effects.
 pub(super) async fn local(binding: Arc<Binding>, op: Op) -> Result<String, String> {
     let mut page = binding
@@ -153,29 +148,35 @@ pub(super) async fn local(binding: Arc<Binding>, op: Op) -> Result<String, Strin
     }
     result
 }
+/// What the Browser tab shows for a lane: the browser its next call would use — `None` when it
+/// has not chosen and will ask — and whether that is the lane's own choice or the device's.
 #[derive(Serialize)]
 pub(crate) struct Effective {
-    pub backend: Backend,
+    pub backend: Option<Backend>,
+    /// `lane`, `default` (the device's "Always …"), or `none` (asks on the next browser step).
+    pub source: &'static str,
     pub binding: Option<String>,
     pub url: Option<String>,
     pub busy: bool,
 }
-pub(crate) fn effective(lane: Option<&str>) -> Effective {
-    let Some(binding) = lane.and_then(get) else {
-        return Effective {
-            backend: Backend::Embedded,
-            binding: None,
-            url: None,
-            busy: false,
-        };
+pub(crate) fn effective(project: &Utf8Path, lane: Option<&str>) -> Effective {
+    let own = lane.and_then(|l| preference::lane_only(project, l).ok().flatten());
+    let backend = lane.and_then(|l| preference::resolve(project, l).ok().flatten());
+    let source = match (own, backend) {
+        (Some(_), _) => "lane",
+        (None, Some(_)) => "default",
+        _ => "none",
     };
-    let (url, busy) = match binding.page.try_lock() {
-        Ok(page) => (page.url.clone(), false),
-        Err(_) => (None, true),
+    let binding = lane.and_then(get);
+    let (url, busy) = match binding.as_ref().map(|b| b.page.try_lock()) {
+        Some(Ok(page)) => (page.url.clone(), false),
+        Some(Err(_)) => (None, true),
+        None => (None, false),
     };
     Effective {
-        backend: binding.backend,
-        binding: Some(binding.id.clone()),
+        backend,
+        source,
+        binding: binding.map(|b| b.id.clone()),
         url,
         busy,
     }
@@ -196,7 +197,6 @@ mod tests {
             session: Mutex::new("session".into()),
             project: project.clone(),
             provider: "codex".into(),
-            backend: Backend::LocalOya,
             page: Default::default(),
         });
         registry().locked().by_lane.insert(lane.into(), binding);

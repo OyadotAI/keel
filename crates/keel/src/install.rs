@@ -13,6 +13,9 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// The longest installer command shown as it is; past this it is named rather than echoed.
+const SHOWN: usize = 160;
+
 /// How often an install, or a wait for one, looks at whether its caller stopped it.
 const POLL: Duration = Duration::from_millis(200);
 
@@ -69,8 +72,23 @@ const TABLE: &[(&str, &str, &str, &str)] = &[
         // %LOCALAPPDATA%\agy\bin
         "irm https://antigravity.google/cli/install.ps1 | iex",
     ),
+    // Oya Browser, offered on the browser card when a lane would browse in it and it isn't here.
+    // Not a program on PATH: `present` asks Keel's own detection. The current release is read from
+    // the update feed it ships (electron-builder's latest*.yml), so no version is pinned here, and
+    // the download is checked against the SHA-512 that feed carries before anything is installed.
+    // That checksum shares the download's origin, so on macOS the app must also carry Oya's own
+    // Developer ID signature (Team 68267DX5UC, notarized) before it is copied into place. The
+    // Windows build is unsigned today (no Authenticode block, measured on 1.0.210), so there is
+    // nothing to pin there yet; the file name is taken as a leaf inside a fresh temp folder.
+    // macOS: the .zip into ~/Applications, where detection looks, with no admin prompt. Windows:
+    // the NSIS installer with /S, which registers it under the Uninstall key detection reads.
+    (
+        "oya",
+        "Oya Browser",
+        r#"set -e; b=https://oyabrowser.com/downloads; c='curl --proto =https --tlsv1.2 -fsSL'; y=$($c $b/latest-mac.yml); f=$(printf '%s\n' "$y" | sed -n 's/^path: *//p'); h=$(printf '%s\n' "$y" | sed -n 's/^sha512: *//p'); t=$(mktemp -d); echo "Downloading $f"; $c -o "$t/o.zip" "$b/$f"; [ "$(shasum -a 512 -b "$t/o.zip" | cut -d' ' -f1 | xxd -r -p | base64)" = "$h" ] || { echo 'The download did not match its checksum.'; exit 1; }; ditto -x -k "$t/o.zip" "$t/x"; codesign --verify --deep --strict -R='anchor apple generic and certificate leaf[subject.OU] = "68267DX5UC"' "$t/x/Oya Browser.app" || { echo 'The download is not signed by Oya.'; rm -rf "$t"; exit 1; }; mkdir -p "$HOME/Applications"; rm -rf "$HOME/Applications/Oya Browser.app"; ditto "$t/x/Oya Browser.app" "$HOME/Applications/Oya Browser.app"; rm -rf "$t"; echo 'Installed Oya Browser in ~/Applications.'"#,
+        r#"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $b='https://oyabrowser.com/downloads'; $m=Join-Path $env:TEMP 'oya-latest.yml'; Invoke-WebRequest "$b/latest.yml" -OutFile $m -UseBasicParsing; $y=Get-Content -Raw $m; Remove-Item $m; $f=[regex]::Match($y,'(?m)^path:\s*(\S+)').Groups[1].Value; $h=[regex]::Match($y,'(?m)^sha512:\s*(\S+)').Groups[1].Value; $w=Join-Path $env:TEMP ([guid]::NewGuid()); New-Item -ItemType Directory $w | Out-Null; $t=Join-Path $w (Split-Path -Leaf $f); Write-Output "Downloading $f"; Invoke-WebRequest "$b/$f" -OutFile $t -UseBasicParsing; $s=[IO.File]::OpenRead($t); $d=[Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($s)); $s.Close(); if ($d -ne $h) { Remove-Item -Recurse $w; throw 'The download did not match its checksum.' }; $p=Start-Process $t -ArgumentList '/S' -Wait -PassThru; Remove-Item -Recurse $w; if ($p.ExitCode) { exit $p.ExitCode }; Write-Output 'Installed Oya Browser.'"#,
+    ),
 ];
-
 /// The installer for `program` on this OS, whether or not it is installed.
 pub fn for_program(program: &str) -> Option<Installer> {
     let (_, who, unix, windows) = TABLE.iter().find(|(p, ..)| *p == program)?;
@@ -87,12 +105,17 @@ pub fn needed(program: &str) -> [&str; 2] {
     ["git", program]
 }
 
-/// The installer to run when `program` is not on `PATH`; `None` when it is there or Keel knows none.
+/// Whether `program` is installed: on `PATH`, or — for Oya Browser, an app — found by detection.
+fn present(program: &str) -> bool {
+    match program {
+        "oya" => crate::browser::oya_installed(),
+        _ => crate::permissions::find_on_path(program).is_some(),
+    }
+}
+
+/// The installer to run when `program` is not installed; `None` when it is or Keel knows none.
 pub fn missing(program: &str) -> Option<Installer> {
-    crate::permissions::find_on_path(program)
-        .is_none()
-        .then(|| for_program(program))
-        .flatten()
+    (!present(program)).then(|| for_program(program)).flatten()
 }
 
 /// One install at a time. Two lanes opening on a fresh machine would otherwise run one installer
@@ -125,12 +148,17 @@ pub fn run(
             Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(POLL),
         }
     };
-    if crate::permissions::find_on_path(program).is_some() {
+    if present(program) {
         return Ok(());
     }
-    line(&format!("$ {}", installer.command));
+    // The command when it is a line a person can read; a long script is named instead.
+    if installer.command.len() <= SHOWN {
+        line(&format!("$ {}", installer.command));
+    } else {
+        line(&format!("Running the {} installer…", installer.who));
+    }
     execute(installer, &mut line, &stopped)?;
-    if crate::permissions::find_on_path(program).is_none() {
+    if !present(program) {
         return Err(format!(
             "the {} installer finished, but `{program}` still isn't where Keel looks for it",
             installer.who
@@ -242,8 +270,8 @@ mod tests {
     #[test]
     fn every_agent_installs_on_every_os() {
         let programs: Vec<_> = TABLE.iter().map(|(p, ..)| *p).collect();
-        assert_eq!(programs, ["git", "claude", "codex", "agy"]);
-        for (program, _, unix, windows) in &TABLE[1..] {
+        assert_eq!(programs, ["git", "claude", "codex", "agy", "oya"]);
+        for (program, _, unix, windows) in &TABLE[1..4] {
             assert!(unix.starts_with("curl --proto =https"), "{program}: {unix}");
             assert!(windows.starts_with("irm https://"), "{program}: {windows}");
         }
@@ -253,6 +281,14 @@ mod tests {
             "no installer guessed for a program Keel doesn't drive"
         );
         assert!(TABLE[0].3.starts_with("winget install --id Git.Git"));
+        // Oya: both OSes read the vendor's feed and refuse a download whose checksum differs.
+        for script in [TABLE[4].2, TABLE[4].3] {
+            assert!(
+                script.contains("https://oyabrowser.com/downloads"),
+                "{script}"
+            );
+            assert!(script.contains("did not match its checksum"), "{script}");
+        }
         assert_eq!(needed("codex"), ["git", "codex"], "git before the agent");
     }
 
