@@ -24,9 +24,10 @@ const GROUPS = [
   ["global", "Global"],
 ] as const;
 
-/// Whether the automatic setup's record needs the person: it failed, or it is waiting on their
-/// uncommitted edit. Running, done and waiting on a turn are Keel's business, and say so in Git.
-const needsYou = (r: SetupRecord) => r.phase === "failed" || (r.phase === "waiting" && r.waiting?.on === "you");
+/// Whether the automatic setup's record needs the person: only when it failed. Running, done and
+/// waiting — on a turn, a merge, or files with their uncommitted edits — all resolve on their own
+/// (Keel retries once the tree frees), so a chip for them is a question with nothing to answer.
+const needsYou = (r: SetupRecord) => r.phase === "failed";
 
 /// Ask the daemon to run its setup pass again, failures forgotten.
 async function retrySetup(project: string) {
@@ -71,12 +72,12 @@ export function SetupList({ project, close }: { project: string; close: () => vo
     useStore.getState().select(laneIn(project));
     useStore.setState({ settings: false, extensions: false, creating: false, panelTab: "git" });
   };
-  const lines = auto && (auto.phase === "done" || auto.phase === "failed" || auto.phase === "waiting") ? resultLines(auto) : [];
+  const lines = auto?.phase === "failed" ? [`Couldn't finish: ${auto.error ?? "no reason given"}`, ...resultLines(auto)] : [];
   if (!warnings.length && !lines.length) return <div className="small muted" style={{ padding: 8 }}>Nothing is stopping this project's lanes.</div>;
   return (
     <div className="setup-list">
       <div className="setup-head">
-        <span className="eyebrow">{auto?.phase === "failed" ? "Setup · failed" : auto && needsYou(auto) ? "Setup · waiting on you" : `Setup · ${warnings.length} to look at`}</span>
+        <span className="eyebrow">{auto?.phase === "failed" ? "Setup · failed" : `Setup · ${warnings.length} to look at`}</span>
         {auto?.phase === "failed" && <button className="primary" onClick={() => void retrySetup(project)} title="Run Keel's setup again">Retry</button>}
       </div>
       {lines.length > 0 && (
