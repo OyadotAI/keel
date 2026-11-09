@@ -9,7 +9,12 @@ const RUNS_ANYTHING = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'env', 'xarg
   'start', 'gradlew', 'mvnw', 'poetry', 'pdm', 'hatch', 'nox', 'invoke', 'turbo', 'nx', 'lerna', 'tsx', 'ts-node', 'vite', 'webpack', 'next']);
 /** The program a name runs, as the list knows it: macOS and Windows match names without case, Windows
  *  adds an extension, and `python3.12` is python. */
-const program = (name) => name.toLowerCase().replace(/\.(exe|cmd|bat|ps1|com)$/, '').replace(/[0-9.]+$/, '');
+const program = (name) => {
+  // Stripped until nothing changes, as Windows resolves `node.exe.` and `python3.exe` alike.
+  let now = name.toLowerCase(), was;
+  do { was = now; now = now.replace(/[. ]+$/, '').replace(/\.(exe|cmd|bat|ps1|com|vbs|js|msc)$/, '').replace(/[0-9.]+$/, ''); } while (now !== was);
+  return now;
+};
 
 const FILE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
