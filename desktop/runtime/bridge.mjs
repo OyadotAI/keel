@@ -8,6 +8,7 @@ import { ContextInspector } from './context.mjs';
 import { Requests } from './requests.mjs';
 import { ClaudeCompletion } from './claude-completion.mjs';
 import { Initialization } from './initialization.mjs';
+import { sessionKey } from './session-allow.mjs';
 
 const emit = (event, data) => process.stdout.write(JSON.stringify({ event, data }) + '\n');
 const initialization = new Initialization(emit);
@@ -19,7 +20,11 @@ let codex;
 let session;
 let config;
 let busy = false;
-completion = new ClaudeCompletion((code) => { busy = false; emit('end', { code }); }, (reason) => requests.cancelAll(reason));
+/** The turn's own prompt has gone in, so a steer lands after it. */
+let accepting = false;
+/** The effort the live Claude session runs at, so a change is applied once and only when it is one. */
+let effort = null;
+completion = new ClaudeCompletion((code) => { busy = false; accepting = false; emit('end', { code }); }, (reason) => requests.cancelAll(reason));
 let inspector;
 let contextRead;
 function contextSummary() {
@@ -61,6 +66,7 @@ async function daemonDecision(tool, input, toolUseID, from = 'claude-sdk', threa
   } catch { /* the local card asks */ }
   return undefined;
 }
+const allowedThisSession = new Set();
 async function startClaude(q) {
   if (!claude) completion.processStart();
   else completion.begin();
@@ -70,9 +76,12 @@ async function startClaude(q) {
     inspector = new ContextInspector('claude', q.cwd, emit);
     await inspector.catalog();
     q.assertLaunch();
+    effort = q.effort || null;
+    // A new provider session starts with nothing allowed: a rule belongs to the session it was given in.
+    allowedThisSession.clear();
     claude = query({ prompt: messages(), options: {
       cwd: q.cwd, pathToClaudeCodeExecutable: q.executable,
-      resume: q.session || undefined, model: q.model || undefined,
+      resume: q.session || undefined, model: q.model || undefined, effort: q.effort || undefined,
       permissionMode: q.mode === 'acceptEdits' ? 'acceptEdits' : 'plan',
       settingSources: ['user', 'project', 'local'],
       includePartialMessages: true,
@@ -92,13 +101,16 @@ async function startClaude(q) {
           if (decided === 'allow') return { behavior: 'allow', updatedInput: input };
           if (decided) return { behavior: 'deny', message: decided.reason || 'Not approved in Keel.' };
         }
+        const key = question ? undefined : sessionKey(tool, input);
+        if (key && allowedThisSession.has(key)) return { behavior: 'allow', updatedInput: input };
         let answer;
         try {
           answer = await ask(tool, input.command ?? '', input,
-            [{ label: 'Allow once', value: 'allow' }, { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission', options.signal, options.agentID);
+            [{ label: 'Allow once', value: 'allow' }, ...(key ? [{ label: key.startsWith('Bash:') ? 'Allow this command again this session' : `Allow ${key.replace(/^WebFetch:/, '')} for this session`, value: 'session' }] : []), { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission', options.signal, options.agentID);
         } catch (error) { return { behavior: 'deny', message: error.message }; }
         if (question) return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers ?? {} }, toolUseID: options.toolUseID };
-        return answer.decision === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: answer.reason || 'Denied by the user' };
+        if (answer.decision === 'session' && key) allowedThisSession.add(key);
+        return ['allow', 'session'].includes(answer.decision) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: answer.reason || 'Denied by the user' };
       },
     }});
     void (async () => {
@@ -128,6 +140,10 @@ async function startClaude(q) {
   } else {
     await claude.setPermissionMode(q.mode === 'acceptEdits' ? 'acceptEdits' : 'plan');
     await claude.setModel(q.model || undefined);
+    // Effort lives in the session's flag layer; null goes back to the model's default.
+    if ((q.effort || null) !== effort) {
+      await claude.applyFlagSettings({ effortLevel: q.effort || null }).then(() => { effort = q.effort || null; }, (error) => emit('err', `effort not applied: ${error}`));
+    }
   }
   inspector.requested(q.prompt);
   const content = [{ type: 'text', text: q.prompt }];
@@ -139,7 +155,31 @@ async function startClaude(q) {
   }
   inputs.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: session ?? '' });
   wake?.(); wake = undefined;
+  // Only now can words join the turn: before this they would reach the model ahead of its prompt.
+  accepting = true;
 }
+/** Words typed while a turn runs join that turn, as they do in the CLI — measured: a user message
+ *  pushed into the SDK's streaming input mid-turn is read at the next step and answered in the
+ *  same result. Refused once the turn has ended: then it would start a turn nobody is listening
+ *  to, and the page queues it instead. */
+async function steer(prompt) {
+  const text = String(prompt ?? '').trim();
+  if (!busy || !text) return { ok: false, error: 'No turn is running.' };
+  try {
+    // After the result, while background agents still hold the turn, the words start the next
+    // reply inside the same turn: its output is still attached, and the turn ends when they do.
+    if (provider === 'claude' && claude && accepting && !completion.done && !completion.interrupted) {
+      completion.steer();
+      inputs.push({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] }, parent_tool_use_id: null, session_id: session ?? '' });
+      wake?.(); wake = undefined;
+    } else if (provider === 'codex' && codex?.turn) await codex.steer(text);
+    else return { ok: false, error: 'This turn is finishing.' };
+  } catch (error) { return { ok: false, error: String(error?.message ?? error) }; }
+  steers += 1;
+  emit('turn', [{ turn: null, op: 'text', step: `steer:${steers}`, kind: 'you', append: text }]);
+  return { ok: true };
+}
+let steers = 0;
 async function command(message) {
   if (message.method === 'initialized') { initialization.complete(message); return; }
   if (message.method === 'inspect_context') {
@@ -155,8 +195,13 @@ async function command(message) {
   if (message.method === 'answer') {
     emit('answer_ack', { id: message.delivery, ...requests.answer(message.id, message.answer) }); return;
   }
-  if (message.method === 'interrupt') { initialization.cancel('The turn was cancelled.', true); if (claude) await claude.interrupt(); if (codex) await codex.interrupt(); return; }
-  if (message.method === 'steer') { if (!codex) throw new Error('Steering is not available in this session'); await codex.steer(message.prompt); return; }
+  if (message.method === 'interrupt') {
+    initialization.cancel('The turn was cancelled.', true);
+    if (claude && provider === 'claude' && busy) { completion.interrupt(); await claude.interrupt(); }
+    if (codex && provider === 'codex') await codex.interrupt();
+    return;
+  }
+  if (message.method === 'steer') { emit('answer_ack', { id: message.delivery, ...await steer(message.prompt) }); return; }
   if (message.method !== 'start') throw new Error('Unknown runtime command');
   if (busy) throw new Error('A turn is already active');
   busy = true;

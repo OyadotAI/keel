@@ -35,8 +35,14 @@ impl Decoder {
                 if item["type"] == "UserMessage" {
                     let said = crate::codex::said(item);
                     if (turn_id.is_some() && turn_id == key) || ended {
-                        // Typed while Codex was working: more of this turn, not a new one.
-                        self.raw(out, &format!("You: {said}"), Stream::Out, false, None);
+                        // Typed while Codex was working: more of this turn, not a new one, drawn as
+                        // the person's words in it — as Claude's `queued_command` is — not a raw line.
+                        if self.turn.is_some() && !said.trim().is_empty() {
+                            let step =
+                                format!("queued:{}", item["id"].as_str().unwrap_or_default());
+                            self.text(step, TextKind::You, &said, out, now);
+                            self.flush_into(out);
+                        }
                     } else {
                         self.open_rollout(Some(said), turn_id, at, out);
                     }
@@ -194,12 +200,12 @@ impl Decoder {
             }
             "SubAgentActivity" => self.subagent(item, at, out),
             "ContextCompaction" => {
-                self.raw(
+                self.flush_into(out);
+                self.push(
                     out,
-                    "the conversation was compacted",
-                    Stream::Out,
-                    false,
-                    None,
+                    Op::Notice {
+                        text: "The conversation was compacted".into(),
+                    },
                 );
             }
             _ => {
@@ -427,7 +433,7 @@ mod tests {
         assert!(
             frames
                 .iter()
-                .any(|f| matches!(&f.op, Op::Raw { lines } if lines[0].text == "You: also this"))
+                .any(|f| matches!(&f.op, Op::Text { kind: TextKind::You, append, .. } if append == "also this"))
         );
     }
 

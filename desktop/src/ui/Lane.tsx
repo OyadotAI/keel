@@ -1,3 +1,4 @@
+import { SubagentsPane } from "./SubagentsPane";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { post } from "../api";
@@ -35,7 +36,7 @@ export function Agents() {
     <Suspense fallback={<div className="terminal-state muted">Loading terminal…</div>}>
       {terminalLanes.split(",").filter(Boolean).map((id) => <Terminal key={id} lane={id} agent hidden={!showing || active !== id} />)}
     </Suspense>
-    {active && surface !== "terminal" && <Chat key={active} lane={active} />}
+    {active && surface !== "terminal" && <SubagentsPane key={active} lane={active} hidden={!showing} surface="chat"><Chat lane={active} /></SubagentsPane>}
   </>;
 }
 

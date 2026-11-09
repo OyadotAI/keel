@@ -90,6 +90,9 @@ pub enum Ending {
 pub enum TextKind {
     Say,
     Think,
+    /// What the person typed while the turn ran, which joined it — Claude Code records it as a
+    /// `queued_command` attachment, and Keel's chat sends it live as the same step.
+    You,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -210,6 +213,9 @@ pub enum Op {
     /// Everything the agent emitted that is not a token, so there is no state in which Keel saw
     /// something and the person cannot.
     Raw { lines: Vec<RawLine> },
+    /// Something the CLI tells the person between replies — the conversation was compacted —
+    /// drawn as a line in the conversation where a terminal prints it, not counted among raw lines.
+    Notice { text: String },
     /// The conversation part of the turn is over (the gate and the commit are facts, not ops).
     /// Every call still running was answered `interrupted` immediately before this.
     Close {
@@ -431,6 +437,21 @@ impl Decoder {
                     },
                 );
             }
+            // Words typed mid-turn and folded into it (measured on a recorded SDK turn: an
+            // `attachment` of type `queued_command`, between a tool result and the next reply).
+            // Dropping them made a reopened conversation forget what the person said mid-turn.
+            if record["type"] == "attachment"
+                && record["attachment"]["type"] == "queued_command"
+                && self.turn.is_some()
+            {
+                let said = flat_text(&record["attachment"]["prompt"]);
+                if !said.trim().is_empty() && !said.contains("<task-notification>") {
+                    let step = format!("queued:{}", record["uuid"].as_str().unwrap_or_default());
+                    self.text(step, TextKind::You, &said, &mut out, now);
+                    self.flush_into(&mut out);
+                }
+                return out;
+            }
             // Claude Code's queue says nothing else a turn is made of.
             if delivered && record["type"] != "user" {
                 return out;
@@ -618,12 +639,12 @@ impl Decoder {
                 out.extend(self.close(Ending::Done));
             }
             Some("compact_boundary") => {
-                self.raw(
+                self.flush_into(out);
+                self.push(
                     out,
-                    "the conversation was compacted",
-                    Stream::Out,
-                    false,
-                    None,
+                    Op::Notice {
+                        text: "The conversation was compacted".into(),
+                    },
                 );
             }
             _ if r["level"] == "warning" => {

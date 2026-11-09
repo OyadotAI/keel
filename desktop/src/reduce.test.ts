@@ -102,6 +102,24 @@ describe("terminal history handoff", () => {
   });
 });
 
+describe("restoring a transcript over the live view", () => {
+  const done = (prompt: string) => [f("open", { prompt }), f("text", { step: prompt, kind: "say", append: "ok" }), f("close", { reason: "done" })];
+  it("keeps a turn refused before it started, and matches the turns after it", () => {
+    let previous = applyFrames(empty, [...done("one"), f("open", { prompt: "refused" }), f("close", { reason: "failed" }), ...done("two")]);
+    previous = { turns: previous.turns.map((t) => ({ ...t, commit: `c-${t.prompt}` })) };
+    const restored = restoreTranscript(previous, [...done("one"), ...done("two")]);
+    expect(restored.turns.map((t) => t.prompt)).toEqual(["one", "refused", "two"]);
+    expect(restored.turns[2].commit).toBe("c-two");
+    expect(restored.turns[2].id).toBe(previous.turns[2].id);
+  });
+  it("matches a prompt the daemon sent with its referenced files", () => {
+    const previous = { turns: applyFrames(empty, done("change this")).turns.map((t) => ({ ...t, gate: { status: "passed" } })) };
+    const restored = restoreTranscript(previous, done('change this\n\nReferenced files in this checkout (JSON paths):\n["a.ts"]'));
+    expect(restored.turns[0].gate?.status).toBe("passed");
+    expect(restored.turns[0].prompt).toBe("change this");
+  });
+});
+
 describe("background agents", () => {
   it("work across turns until their notification, and survive a fact", () => {
     let c = applyFrames(empty, [
@@ -114,5 +132,31 @@ describe("background agents", () => {
     expect(c.background).toEqual({ c1: "pm" });
     c = applyFrames(c, [f("background", { id: "c1", running: false })]);
     expect(c.background).toEqual({});
+  });
+});
+
+describe("review fixes", () => {
+  const done = (prompt: string) => [f("open", { prompt }), f("close", { reason: "done" })];
+  it("a prompt resent after a refusal keeps its own turn", () => {
+    let previous = applyFrames(empty, [f("open", { prompt: "fix it" }), f("close", { reason: "failed" }), ...done("fix it")]);
+    previous = { turns: previous.turns.map((t, i) => (i === 1 ? { ...t, commit: "abc" } : t)) };
+    const restored = restoreTranscript(previous, done("fix it"));
+    expect(restored.turns.map((t) => t.closed)).toEqual(["failed", "done"]);
+    expect(restored.turns[1].commit).toBe("abc");
+  });
+  it("a close with nothing open draws no turn", () => {
+    expect(applyFrames(applyFrames(empty, done("a")), [f("close", { reason: "interrupted" })]).turns).toHaveLength(1);
+  });
+  it("closing a turn left open keeps the background agents", () => {
+    const conv = { ...applyFrames(empty, [f("open", { prompt: "a" })]), background: { x: "agent" } };
+    expect(interrupt(conv).background).toEqual({ x: "agent" });
+  });
+});
+
+describe("notices", () => {
+  it("a notice between turns joins the turn on screen, not a new one", () => {
+    const c = applyFrames(applyFrames(empty, [f("open", { prompt: "a" }), f("close", { reason: "done" })]), [f("notice", { text: "The conversation was compacted" })]);
+    expect(c.turns).toHaveLength(1);
+    expect(Object.values(c.turns[0].blocks).map((b) => b.kind)).toEqual(["notice"]);
   });
 });

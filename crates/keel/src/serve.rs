@@ -643,17 +643,36 @@ impl AppState {
     }
 
     pub fn interrupt(&self, lane: &str) -> bool {
-        let mut map = self.running.locked();
-        let Some(turn) = map.get_mut(lane).filter(|turn| !turn.finished) else {
+        let Some((token, _)) = self.mark_interrupted(lane) else {
             return false;
         };
+        self.signal_if_running(lane, token);
+        true
+    }
+
+    /// Mark the lane's turn as stopped without signalling anything, returning its token and
+    /// whether a child is attached. A runtime lane asks its helper to interrupt the turn itself —
+    /// a signal would end the helper, its session and every background agent with it — and
+    /// signals only if that does not land (`signal_if_running`).
+    pub(crate) fn mark_interrupted(&self, lane: &str) -> Option<(u64, bool)> {
+        let mut map = self.running.locked();
+        let turn = map.get_mut(lane).filter(|turn| !turn.finished)?;
         turn.interrupted = true;
+        Some((turn.token, turn.pid.is_some()))
+    }
+
+    /// SIGINT the turn's process group if that same turn is still running.
+    pub(crate) fn signal_if_running(&self, lane: &str, token: u64) {
+        let map = self.running.locked();
         // The group, not the process: `claude` spawns the tools it runs, and a bare `kill(pid)`
         // leaves a `cargo test` it started alive and holding the terminal. See `crate::signals`.
-        if let Some(pid) = turn.pid {
+        if let Some(pid) = map
+            .get(lane)
+            .filter(|t| t.token == token && !t.finished)
+            .and_then(|t| t.pid)
+        {
             crate::signals::group(pid, crate::signals::INTERRUPT);
         }
-        true
     }
 
     pub fn set_repo(&self, path: Utf8PathBuf) {
@@ -829,6 +848,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/frontend/importers", get(api_importers))
         .route("/api/session/tail", get(api_session_tail))
+        .route("/api/session/subagents", get(crate::subagents::live))
         .route(
             "/api/session/subagent/output",
             get(crate::subagents::output),

@@ -11,13 +11,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url, isRejected, HttpError } from "./api";
 import { decline, declined, rekey, rekeyDrafts, structural, type Moved, type MovePlan, type Moving, type Refusal } from "./relocate";
 import { useEditorFiles } from "./editor-files";
-import { applyFact, applyFrames, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
+import { applyFact, applyFrames, interrupt, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
 import { endBanner, needsYou, notify } from "./notify";
 import type { Observation } from "./session-usage";
 import { sessionEnded } from "./activity";
 import { createLaneNames, restoredNaming, sessionForLane, type Naming } from "./lane-names";
-import { composerAfterSend, submissionBlock, type FileReference } from "./chat-files";
+import { backToComposer, composerAfterSend, submissionBlock, type FileReference } from "./chat-files";
 import { requestChatFocus } from "./chat-focus";
 import { createReferenceActions } from "./reference-actions";
 import { createQuestionActions } from "./question-actions";
@@ -108,6 +108,9 @@ export interface Project {
 }
 
 export type ChatInterface = "chat" | "terminal";
+/** Effort levels both runtimes take; `max` is Claude's, and Codex runs it as `xhigh`. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
 export type Agent = "claude" | "codex" | "antigravity";
 export const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
 export const agentName = (agent?: Agent) => AGENT_NAME[agent ?? "claude"];
@@ -115,8 +118,19 @@ export const agentName = (agent?: Agent) => AGENT_NAME[agent ?? "claude"];
 export interface Attachment { path: string; name: string; mime?: string; preview?: string }
 export interface QueuedMessage { id: string; text: string; attachments: Attachment[]; references?: FileReference[]; system?: string; failed?: boolean }
 
+const COMMANDS_KEY = "keel.commands.";
+/** The slash commands an agent last reported, so `/` in a lane that has not run a turn yet offers
+ *  them — the CLI knows its commands before you type, and the runtime only says at its first turn. */
+export function rememberCommands(agent: Agent | undefined, commands?: string[]) {
+  if (!commands?.length) return;
+  try { localStorage.setItem(COMMANDS_KEY + (agent ?? "claude"), JSON.stringify(commands)); } catch { /* this lane still has them */ }
+}
+export function rememberedCommands(agent: Agent | undefined): string[] | undefined {
+  try { const saved = JSON.parse(localStorage.getItem(COMMANDS_KEY + (agent ?? "claude")) ?? "null"); return Array.isArray(saved) ? saved.filter((c) => typeof c === "string") : undefined; } catch { return undefined; }
+}
+
 function makeReceipt(lane: Lane, prompt: string, attachments: Attachment[], wt?: string, system?: string, references?: FileReference[]): NonNullable<Lane["receipt"]> {
-  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, wt, system, references, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, effort: lane.effort, wt, system, references, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
 }
 
 function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachment[], references: FileReference[]): boolean {
@@ -191,6 +205,8 @@ export interface Lane {
   draft?: string;
   mode?: "plan" | "acceptEdits";
   model?: string;
+  /// Reasoning effort for the next message, as `/model` sets it in the CLI; absent is the default.
+  effort?: Effort;
   models?: { value?: string; id?: string; displayName?: string; display_name?: string; name?: string }[];
   commands?: string[];
   managed?: boolean;
@@ -202,7 +218,7 @@ export interface Lane {
   cursor?: number;
   submitting?: boolean;
   disconnected?: boolean;
-  receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; wt?: string; system?: string; attachments?: Attachment[]; references?: FileReference[] };
+  receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; effort?: Effort; wt?: string; system?: string; attachments?: Attachment[]; references?: FileReference[] };
 }
 
 interface State {
@@ -292,6 +308,8 @@ interface State {
   stop(lane: string): Promise<void>;
   editQueued(lane: string, id: string): void;
   removeQueued(lane: string, id: string): void;
+  /** Give up on a submission the daemon never confirmed; its text goes back into the composer. */
+  discardReceipt(lane: string): void;
   draft(lane: string, text: string): void;
   /// `scope`: "once" lets this call through; "session" and "project" also remember `p.rules`.
   answer(lane: string, p: Pending, decision: "allow" | "deny", answer?: string, scope?: "once" | "session" | "project"): Promise<void>;
@@ -304,7 +322,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; interface?: ChatInterface; draft?: string; model?: string; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
+  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; interface?: ChatInterface; draft?: string; model?: string; effort?: Effort; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
   active?: string;
 }
 
@@ -329,7 +347,7 @@ function save(s: State): boolean {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, queued, draft, model, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, draft, model, mode, managed, receipt })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, queued, draft, model, effort, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, draft, model, effort, mode, managed, receipt })),
     active: s.active,
   };
   try {
@@ -444,6 +462,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const busy = !!s && s.live && (s.busy || !!l.transcriptOpen);
       // A session that ended took its background agents with it.
       if (l && s && !s.live) forgetEnded(lid, l);
+      outsideKeel(lid, l, s);
       if (!l || (l.managed && l.interface !== "terminal") || l.submitting || (l.running === busy && (!s || l.known))) continue;
       // Idle again: whatever it was asking is no longer being waited on — Esc in the terminal,
       // or the hook's own wait ran out — and what was queued goes next.
@@ -458,6 +477,16 @@ export const useStore = create<State>()((set, getState, api) => {
         drain(lid);
       }
     }
+  }
+  /// A chat lane Keel is not driving is following a conversation someone else runs for exactly as
+  /// long as that session is live. Only the terminal pane ever cleared this, so a chat lane opened
+  /// from History said "stop it there first" and refused every send until a relaunch.
+  function outsideKeel(lid: string, l?: Lane, s?: Session) {
+    if (!l || !s || l.interface === "terminal") return;
+    const outside = s.live && !l.managed;
+    if (!!l.elsewhere === outside) return;
+    lane(lid, { elsewhere: outside });
+    chatSource(lid);
   }
   /// A reconnect restores waiting quietly; only a new live native request asks for attention.
   function nativeAttention(path: string, lid: string, attention: Lane["attention"], revision: number, live: boolean) {
@@ -733,7 +762,7 @@ export const useStore = create<State>()((set, getState, api) => {
   /// typed into has no transcript yet; that is a wait, retried, never an error on screen.
   async function follow(lid: string) {
     const l = getState().lanes[lid];
-    if (!l?.session || (l.managed && l.interface !== "terminal") || follows.has(lid) || !followable(l) || !l.known) return;
+    if (!l?.session || (l.interface !== "terminal" && !l.elsewhere) || follows.has(lid) || !followable(l) || !l.known) return;
     let ep: Endpoint;
     try {
       ep = await endpoint(l.project);
@@ -835,16 +864,72 @@ export const useStore = create<State>()((set, getState, api) => {
     follows.set(lid, stream);
   }
 
+  /// Words typed while a turn runs join it, as they do in the CLI. Claude and Codex take them
+  /// mid-turn; the runtime says whether they landed, and what did not (the turn was already
+  /// finishing, an Antigravity turn, attachments, a message of Keel's own) is queued as before.
+  async function steered(lid: string, l: Lane, prompt: string, with_: { attachments: Attachment[]; references: FileReference[]; system?: string; ownsDraft: boolean }): Promise<boolean> {
+    const ep = getState().projects[l.project]?.endpoint;
+    const plain = !with_.attachments.length && !with_.references.length && !with_.system && !prompt.trim().startsWith("/");
+    if (!ep || !l.running || l.submitting || !l.managed || l.agent === "antigravity" || l.queued.length || !plain) return false;
+    try {
+      if (!(await post<{ ok?: boolean }>(ep, "/api/chat/control", { lane: lid, method: "steer", prompt })).ok) return false;
+    } catch { return false; }
+    if (with_.ownsDraft) lane(lid, (now) => composerAfterSend(now, l, true, with_));
+    save(getState());
+    return true;
+  }
+
+  /// One source feeds a chat lane's conversation: the transcript follower while the session runs
+  /// outside Keel, the chat stream otherwise. Both used to run on a lane opened from History, and
+  /// each reset the conversation on its first batch and set `running` by its own lights — so the
+  /// lane could read busy forever while the chat stream said idle, and queue every message.
+  function chatSource(lid: string) {
+    const l = getState().lanes[lid];
+    if (!l || l.interface === "terminal") return;
+    if (l.elsewhere) {
+      chats.get(lid)?.close();
+      chats.delete(lid);
+      void follow(lid);
+    } else {
+      follows.get(lid)?.close();
+      follows.delete(lid);
+      void listen(lid);
+    }
+  }
+
   const chats = new Map<string, Stream>();
   const connecting = new Set<string>();
+  /// A chat lane's live subagents, for the same panes a terminal lane draws. Keyed to the session
+  /// it reads, because a new chat learns its id only during its first turn.
+  const kids = new Map<string, { session: string; stream: Stream }>();
+  function syncChildren(lid: string, ep: Endpoint) {
+    const l = getState().lanes[lid];
+    const had = kids.get(lid);
+    if (!l?.known || !l.session || l.interface === "terminal" || !chats.has(lid)) { had?.stream.close(); kids.delete(lid); return; }
+    if (had?.session === l.session) return;
+    had?.stream.close();
+    const scope = childScope(l);
+    const stream = openStream(url(ep, "/api/session/subagents", { id: l.session, agent: l.agent, lane: lid, wt: l.wt }), ep.token, (events) => {
+      if (kids.get(lid)?.stream !== stream) return;
+      const latest = events.filter((e) => e.event === "subagents").at(-1);
+      if (latest) lane(lid, { subagents: { ...(latest.data as ChildSnapshot), scope, connected: true } });
+    }, () => {
+      if (kids.get(lid)?.stream !== stream) return;
+      kids.delete(lid);
+      lane(lid, (current) => ({ subagents: disconnectedChildren(current) }));
+      // The chat stream's own reconnect brings this back; on its own it retries once a chat is up.
+      setTimeout(() => { if (chats.has(lid)) syncChildren(lid, ep); }, 2000);
+    });
+    kids.set(lid, { session: l.session, stream });
+  }
   async function listen(lid: string) {
     if (chats.has(lid) || connecting.has(lid)) return;
     const l = getState().lanes[lid];
-    if (!l || l.interface === "terminal") return;
+    if (!l || l.interface === "terminal" || l.elsewhere) return;
     connecting.add(lid);
     try {
       const ep = await endpoint(l.project);
-      if (!getState().lanes[lid] || getState().lanes[lid].interface === "terminal") return;
+      if (!getState().lanes[lid] || getState().lanes[lid].interface === "terminal" || getState().lanes[lid].elsewhere) return;
       let caughtUp = false;
       const stream = openStream(url(ep, "/api/chat/events", { lane: lid, after: l.cursor ?? 0, session: l.known ? l.session : undefined, provider: l.agent, wt: l.wt }), ep.token, (events) => {
         let idle = false;
@@ -871,8 +956,10 @@ export const useStore = create<State>()((set, getState, api) => {
             if (e.seq <= cursor) continue;
             if (cursor === 0) conv = empty;
             cursor = e.seq;
-            patch.managed = true;
+            // Only a turn Keel accepted makes the lane Keel's to drive. A transcript snapshot is
+            // a reading, and marking that "managed" hid a later outside `--resume` for good.
             if (e.event === "accepted") {
+              patch.managed = true;
               patch.running = true;
               patch.error = undefined;
               const id = (e.data as { id: string }).id;
@@ -893,6 +980,7 @@ export const useStore = create<State>()((set, getState, api) => {
               const c = e.data as { models?: Lane["models"]; commands?: { name: string }[] };
               patch.models = c.models;
               patch.commands = c.commands?.map((c) => c.name);
+              rememberCommands(current.agent, patch.commands);
             } else if (e.event === "fact") {
               conv = applyFact(conv, e.data as Fact);
               seen.push({ live: caughtUp, fact: e.data as Fact });
@@ -904,6 +992,9 @@ export const useStore = create<State>()((set, getState, api) => {
               patch.running = false;
               patch.pending = [];
               idle = true;
+              // Idle is the end of every way a turn can end; one the daemon could not close (an
+              // older journal, a stream that broke before `close`) is closed here, not left ticking.
+              conv = interrupt(conv);
             }
           }
           return { ...patch, conv, cursor };
@@ -911,18 +1002,25 @@ export const useStore = create<State>()((set, getState, api) => {
         announce(lid, seen.filter((x) => x.live));
         const now = getState().lanes[lid];
         if (now?.known && now.session !== previousSession) void names.register(lid);
+        if (now?.known && now.session && kids.get(lid)?.session !== now.session) syncChildren(lid, ep);
         if (now?.managed) { follows.get(lid)?.close(); follows.delete(lid); }
         if (idle || events.some((e) => e.event === "record" && ["accepted", "capabilities"].includes((e.data as { event: string }).event))) save(getState());
         if (idle && caughtUp) { gitSoon(lid); drain(lid); }
       }, (error) => {
         if (chats.get(lid) !== stream) return;
         chats.delete(lid);
+        kids.get(lid)?.stream.close(); kids.delete(lid);
         if (!getState().lanes[lid]) return;
         lane(lid, { disconnected: true, ...(error ? { error: `Connection interrupted. Reconnecting… ${error}` } : {}) });
         lost(l.project, ep);
         setTimeout(() => void listen(lid), 1500);
       });
       chats.set(lid, stream);
+      // Every way a chat stream is closed — a lane closed, an interface switched, a reconnect —
+      // closes its subagent stream with it.
+      const closeChat = stream.close.bind(stream);
+      stream.close = () => { closeChat(); kids.get(lid)?.stream.close(); kids.delete(lid); };
+      syncChildren(lid, ep);
     } catch (error) {
       lane(lid, { disconnected: true, error: String(error) });
       setTimeout(() => void listen(lid), 2000);
@@ -1140,7 +1238,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const current = getState().lanes[lid];
       if (!current) return;
       const next = getState().newLane(current.project, current.isolated, current.agent, current.interface);
-      lane(next, { model: current.model, mode: current.mode });
+      lane(next, { model: current.model, effort: current.effort, mode: current.mode });
       requestChatFocus(next);
       getState().select(next);
       return next;
@@ -1390,10 +1488,19 @@ export const useStore = create<State>()((set, getState, api) => {
       if (l?.interface === "terminal") { interruptTerminal(lid); return; }
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
-      lane(lid, { queued: [] });
+      // Nothing queued goes next — the person pressed Stop — and nothing queued is lost either.
+      lane(lid, (now) => ({ queued: [], ...backToComposer(now, now.queued.filter((q) => !q.system)) }));
       save(getState());
       try { await post(ep, "/api/chat/stop", {}, { lane: lid }); }
       catch (error) { lane(lid, { error: `Could not stop the turn: ${error}` }); }
+    },
+
+    discardReceipt(lid) {
+      const r = getState().lanes[lid]?.receipt;
+      if (!r) return;
+      lane(lid, (now) => ({ receipt: undefined, running: false, error: undefined, ...backToComposer(now, now.draft === r.prompt ? [] : [{ text: r.prompt, attachments: r.attachments, references: r.references }]) }));
+      save(getState());
+      drain(lid);
     },
 
     async send(lid, prompt, attachments = [], system, references = []) {
@@ -1406,6 +1513,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const blocked = submissionBlock(l, prompt);
       if (blocked) { lane(lid, { error: blocked }); return false; }
       const ownsDraft = isComposerSubmission(l, prompt, attachments, references);
+      if (await steered(lid, l, prompt, { attachments, references, system, ownsDraft })) return true;
       if (l.running || l.submitting) {
         lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments, references, system }], ...(ownsDraft ? { draft: "", attachments: [], references: [] } : {}) });
         save(getState());

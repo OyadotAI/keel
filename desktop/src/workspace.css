@@ -447,3 +447,50 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 
 /* Project destinations remain selectable and readable on both platform path formats. */
 .project-location { overflow-wrap: anywhere; user-select: text; }
+
+/* The chat, alive. Each effect is transform or opacity only, written `from`-only so the resting
+   state is the finished one and the global reduced-motion reset leaves a correct still frame.
+   `.is-fresh` marks a row that arrived while the lane was open — never one scrolled back into view. */
+.chat-composer { position: relative; isolation: isolate; }
+.chat-composer.is-working { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--line)), 0 5px 24px #202b3b0b; }
+.chat-composer.is-working::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 28px 2px color-mix(in srgb, var(--accent) 30%, transparent); opacity: .6;
+  animation: aura 2.4s ease-in-out infinite alternate;
+}
+@keyframes aura { from { opacity: .25; transform: scale(.985); } }
+
+.chat-item.is-streaming .chat-markdown > :last-child:not(pre, ul, ol, table, .chat-code, .chat-table)::after {
+  content: ""; display: inline-block; width: .45em; height: 1.05em; margin-left: 3px; vertical-align: -.17em;
+  border-radius: 2px; background: var(--accent); animation: caret 1s steps(2, jump-none) infinite;
+}
+@keyframes caret { from { opacity: .15; } }
+
+.chat-item.is-fresh > .chat-row { animation: rise var(--t-base) var(--spring); }
+.chat-item.is-fresh > .chat-user > p { animation: lift 420ms var(--spring); }
+@keyframes lift { from { opacity: 0; transform: translateY(14px) scale(.97); } }
+
+.activity-dot.running { position: relative; }
+.activity-dot.running::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: pulse .9s ease-out infinite; }
+.activity-dot.ok { background: var(--accent); }
+.chat-item.is-fresh .activity-dot.ok { animation: settle 360ms var(--spring); }
+@keyframes settle { from { transform: scale(1.8); } }
+
+.chat-turn-meta { position: relative; border-top: 0; }
+.chat-turn-meta::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, var(--accent), var(--line) 60%); transform-origin: left; }
+.chat-item.is-fresh .chat-turn-meta::before { animation: draw 700ms var(--ease); }
+@keyframes draw { from { transform: scaleX(0); } }
+.chat-item.is-fresh .chat-turn-meta > * { animation: rise var(--t-base) var(--spring) 200ms backwards; }
+
+.chat-todos li.in_progress > span { display: inline-block; animation: spin 1.6s linear infinite; }
+.chat-item.is-fresh .chat-todos li.completed > span { display: inline-block; animation: settle 300ms var(--spring); }
+
+.chat-empty > * { animation: rise var(--t-base) var(--spring) backwards; }
+.chat-empty > :nth-child(2) { animation-delay: 60ms; }
+.chat-empty > :nth-child(3) { animation-delay: 120ms; }
+.chat-empty > :nth-child(4) { animation-delay: 180ms; }
+.chat-empty-mark { position: relative; }
+.chat-empty-mark::after { content: ""; position: absolute; inset: -10px; border-radius: 50%; pointer-events: none; box-shadow: 0 0 28px 2px color-mix(in srgb, var(--accent) 30%, transparent); opacity: 0; animation: halo 1.2s var(--ease); }
+@keyframes halo { from { opacity: .9; transform: scale(.8); } }
+
+.chat-item.is-fresh .chat-code { animation: fade var(--t-fast) var(--ease); }

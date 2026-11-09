@@ -87,3 +87,6 @@
   .terminal-grid-main .main-pane-chrome { transition: none; }
   .child-terminal-pane .member-avatar.is-working::after { animation: none; }
 }
+/* A chat lane's main pane is the conversation, on the page's own colours; helpers tile beside it. */
+.chat-grid, .chat-grid .terminal-grid-main, .chat-grid .terminal-main-viewport { background: var(--bg); color: var(--text); }
+.chat-grid .terminal-main-content > .chat-transcript, .chat-grid .terminal-main-content > .chat-empty { flex: 1; height: auto; min-height: 0; }

@@ -81,6 +81,85 @@ pub(crate) async fn snapshot(
     .await
 }
 
+/// How often a chat lane's subagents are read again. The terminal's tail is woken by a file
+/// watch; this one only draws panes, and a second is what the output stream already polls at.
+const LIVE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[derive(Deserialize)]
+pub struct LiveQuery {
+    /// The parent conversation.
+    id: String,
+    agent: Option<String>,
+    lane: Option<String>,
+}
+
+/// A chat lane's subagents, as the snapshots a terminal lane's tail sends — so a chat shows the
+/// same live panes. Read-only and nothing else: no follower, no facts, no commit; the chat
+/// journal owns the turn. Alive is the lane's runtime or one-shot turn being up, so a child of a
+/// process that has gone is shown interrupted rather than working forever.
+pub async fn live(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::serve::AppState>>,
+    Checkout(dir): Checkout,
+    Query(query): Query<LiveQuery>,
+) -> Response {
+    if query.id.is_empty() || query.id.len() > ID_LIMIT {
+        return (StatusCode::BAD_REQUEST, "Invalid conversation.").into_response();
+    }
+    let agent = match Follows::from_query(query.agent.as_deref()) {
+        Ok(a) => a,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(4);
+    tokio::spawn(async move {
+        let lane = query.lane.unwrap_or_default();
+        let mut reader: Option<Handle> = None;
+        let mut last: Option<Snapshot> = None;
+        let mut seen_up = false;
+        loop {
+            if reader.is_none() {
+                let (d, id) = (dir.clone(), query.id.clone());
+                // Not written yet is normal for a conversation that has said nothing; asked again.
+                reader = blocking(move || agent.locate(&d, &id), None)
+                    .await
+                    .map(|t| watch(t, &dir, &query.id));
+            }
+            if let Some(r) = &reader {
+                // Gone is only said of a process this stream saw running: a lane idle on a session
+                // someone else resumed has no process of Keel's, and calling that the end would
+                // mark that session's children interrupted for good, in the reader the terminal
+                // tail shares.
+                let up =
+                    crate::runtime::has_session(&state, &lane) || state.owned_pid(&lane).is_some();
+                seen_up |= up;
+                let alive = if up {
+                    Some(true)
+                } else if seen_up {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(now) = snapshot(r.clone(), alive, None).await
+                    && last.as_ref() != Some(&now)
+                {
+                    let json = serde_json::to_string(&now).unwrap_or_default();
+                    if tx
+                        .send(Ok(Event::default().event("subagents").data(json)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    last = Some(now);
+                }
+            }
+            tokio::select! { _ = tx.closed() => return, _ = tokio::time::sleep(LIVE_POLL) => {} }
+        }
+    });
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
 /// A child is selected by execution ID within an authorized parent, never by arbitrary path.
 #[derive(Deserialize)]
 pub struct OutputQuery {

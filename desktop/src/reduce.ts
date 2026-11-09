@@ -6,7 +6,8 @@
 // re-renders when that block changes and never because a sibling did — which is the whole of what
 // made the Swift transcript slow while a reply streamed.
 
-export type StepKind = "say" | "think";
+/// `you` is what the person typed while the turn ran, which joined it as the CLI's mid-turn input does.
+export type StepKind = "say" | "think" | "you" | "notice";
 
 export interface Block {
   kind: StepKind;
@@ -149,7 +150,17 @@ export function applyFrames(conv: Conversation, frames: Frame[]): Conversation {
       else turns.push(fresh(f.turn, prompt));
       continue;
     }
+    if (f.op === "notice") {
+      // Said between replies, often before the next turn opens: it belongs where it was said,
+      // after the turn on screen, never to a new headless turn of its own.
+      const at = Math.max(locate(turns, f.turn), turns.length - 1);
+      if (at >= 0) turns[at] = notice(turns[at], f.text as string);
+      continue;
+    }
     let i = locate(turns, f.turn);
+    // A keyless close with nothing open closes nothing: a broken stream's backstop `close` can
+    // follow one the turn already had, and folding it drew a phantom empty "interrupted" turn.
+    if (i < 0 && f.op === "close" && !f.turn) continue;
     if (i < 0) {
       // Ops for a turn this view never saw open — the head of a cut replay.
       turns.push(fresh(f.turn, null));
@@ -240,6 +251,11 @@ function op(t: Turn, f: Frame): Turn {
   }
 }
 
+function notice(turn: Turn, text: string): Turn {
+  const step = `notice:${turn.steps.length}`;
+  return { ...turn, blocks: { ...turn.blocks, [step]: { kind: "notice", text } }, steps: [...turn.steps, `b:${step}`] };
+}
+
 function settle(calls: Record<string, Call>): Record<string, Call> {
   let out = calls;
   for (const [id, c] of Object.entries(calls)) {
@@ -258,7 +274,7 @@ export function interrupt(conv: Conversation): Conversation {
   if (!last || last.closed) return conv;
   const turns = conv.turns.slice();
   turns[turns.length - 1] = { ...last, closed: "interrupted", calls: settle(last.calls) };
-  return { turns };
+  return { ...conv, turns };
 }
 
 export function applyFact(conv: Conversation, fact: Fact): Conversation {
@@ -300,13 +316,36 @@ export function applyFact(conv: Conversation, fact: Fact): Conversation {
   return { ...conv, turns };
 }
 
-/** Refresh provider history after a terminal handoff, retaining Keel's matching turn metadata. */
+/// What the daemon appends to a prompt that carried file references (`references::provider_prompt`):
+/// the transcript holds the long form, the view the short one.
+const REFERENCES = "\n\nReferenced files in this checkout (JSON paths):\n";
+
+function samePrompt(shown: string | null, written: string | null): boolean {
+  return shown === written || (!!shown && !!written && written.startsWith(shown + REFERENCES));
+}
+
+/// A turn Keel drew that the provider never wrote: refused before it started, so it has no
+/// steps. The transcript cannot bring it back, and dropping it lost the message and its reason.
+const keelOnly = (t: Turn) => t.closed === "failed" && t.steps.length === 0;
+
+/** Refresh provider history after a terminal handoff, retaining Keel's matching turn metadata.
+ *  Turns are matched in order by prompt, not by position: one Keel-only turn earlier in the view
+ *  shifted every index after it, and each turn after that lost its checks, commit and id — a
+ *  new id is a remount, which is the scroll jumping. */
 export function restoreTranscript(previous: Conversation, frames: Frame[]): Conversation {
   const restored = applyFrames({ turns: [] }, frames);
-  return { turns: restored.turns.map((turn, index) => {
-    const old = previous.turns[index];
-    if (!old || old.prompt !== turn.prompt) return turn;
-    return { ...turn, id: old.id, closed: turn.closed === "superseded" && old.closed ? old.closed : turn.closed, files: old.files, gate: old.gate, commit: old.commit,
-      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended };
-  }) };
+  const turns: Turn[] = [];
+  let j = 0;
+  for (const turn of restored.turns) {
+    // A Keel-only turn is never what the provider wrote, even when the same words were sent again.
+    const at = previous.turns.findIndex((old, i) => i >= j && !keelOnly(old) && samePrompt(old.prompt, turn.prompt));
+    if (at < 0) { turns.push(turn); continue; }
+    turns.push(...previous.turns.slice(j, at).filter(keelOnly));
+    const old = previous.turns[at];
+    j = at + 1;
+    turns.push({ ...turn, id: old.id, prompt: old.prompt, closed: turn.closed === "superseded" && old.closed ? old.closed : turn.closed, files: old.files, gate: old.gate, commit: old.commit,
+      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended });
+  }
+  turns.push(...previous.turns.slice(j).filter(keelOnly));
+  return restored.background ? { turns, background: restored.background } : { turns };
 }

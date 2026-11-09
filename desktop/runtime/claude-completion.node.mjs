@@ -68,3 +68,31 @@ test('provider failure cancels callbacks before its single completion', () => {
   completion.callback('start', 'q', {}); completion.message(result); completion.shutdown(); completion.shutdown();
   assert.deepEqual(events, ['cancel', 'end']);
 });
+test('a stopped turn ends at its result while background agents keep running', () => {
+  const f = fixture();
+  f.completion.message(system('task_started', { task_id: 'bg', subagent_type: 'general', is_backgrounded: true }));
+  f.completion.interrupt(); assert.deepEqual(f.ends, []);
+  f.completion.message(result); assert.deepEqual(f.ends, [-1]);
+});
+test('a stop after the result ends a turn held by background agents at once', () => {
+  const f = fixture();
+  f.completion.message(system('task_started', { task_id: 'bg', subagent_type: 'general', is_backgrounded: true }));
+  f.completion.message(result); assert.deepEqual(f.ends, []);
+  f.completion.interrupt(); assert.deepEqual(f.ends, [-1]);
+  f.completion.begin(); f.completion.message(result); assert.deepEqual(f.ends, [-1, 0]);
+});
+function steered() {
+  const ends = [], timers = [];
+  const clock = { set: (fn) => { timers.push(fn); return timers.length; }, clear: () => {} };
+  const completion = new ClaudeCompletion((code) => ends.push(code), () => {}, clock);
+  return { completion, ends, fire: () => timers.splice(0).forEach((fn) => fn()) };
+}
+test('a steered turn ends only when its result stands with no new reply', () => {
+  const f = steered(); f.completion.steer(); f.completion.message(result);
+  assert.deepEqual(f.ends, []); f.fire(); assert.deepEqual(f.ends, [0]);
+});
+test('a steer answered as a reply of its own keeps the turn open until that reply ends', () => {
+  const f = steered(); f.completion.steer(); f.completion.message(result);
+  f.completion.message({ type: 'stream_event' }); f.fire(); assert.deepEqual(f.ends, [], 'the first result ended a turn still replying');
+  f.completion.message(result); f.fire(); assert.deepEqual(f.ends, [0]);
+});

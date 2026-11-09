@@ -1,7 +1,7 @@
 // Native chat composition keeps file references, uploads, and queued messages as separate intent.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { get, url } from "../api";
-import { AGENT_NAME, useStore, type Lane } from "../store";
+import { AGENT_NAME, EFFORTS, rememberedCommands, useStore, type Effort, type Lane } from "../store";
 import { LaneDock } from "./PreReview";
 import { Working } from "./Working";
 import { activity } from "./StatusBar";
@@ -30,8 +30,12 @@ export function Composer({ lane }: { lane: string }) {
   const dragOver = useFileDrag((s) => s.drag?.target === lane);
   const queued = useStore((s) => s.lanes[lane]?.queued);
   const models = useStore((s) => s.lanes[lane]?.models);
-  const commands = useStore((s) => s.lanes[lane]?.commands);
+  const agentId = useStore((s) => s.lanes[lane]?.agent);
+  const reported = useStore((s) => s.lanes[lane]?.commands);
+  const commands = useMemo(() => reported ?? rememberedCommands(agentId), [reported, agentId]);
   const receipt = useStore((s) => s.lanes[lane]?.receipt);
+  // Claude and Codex take words mid-turn; Antigravity's one-shot turn can only queue them.
+  const joins = useStore((s) => s.lanes[lane]?.agent !== "antigravity" && !s.lanes[lane]?.queued.length);
   const [uploading, setUploading] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [subagents, setSubagents] = useState<{ name: string; display_name: string }[]>([]);
@@ -93,8 +97,8 @@ export function Composer({ lane }: { lane: string }) {
     <LaneDock lane={lane} />
     {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
-    {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Retry same message</button></div>}
-    <div className={`chat-composer${dragOver ? " reference-over" : ""}`}>
+    {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Retry same message</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
+    <div className={composerClass(dragOver, busy)}>
       {dragOver && <div className="reference-drop-hint">Drop to reference this file.</div>}
       {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => {
         const agent = c.startsWith("@agent:") ? subagents.find((a) => a.name === c.slice(7)) : undefined;
@@ -111,19 +115,53 @@ export function Composer({ lane }: { lane: string }) {
           if (candidates.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); setChoice((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + candidates.length) % candidates.length); return; }
           if (e.key === "Escape" && candidates.length) { e.preventDefault(); setDismissed(true); return; }
           if (candidates.length && (e.key === "Tab" || e.key === "Enter") && !e.shiftKey) { e.preventDefault(); choose(candidates[choice]); return; }
-          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); return; }
+          if (e.key === "Escape" && busy) { e.preventDefault(); void useStore.getState().stop(lane); return; }
+          if (e.key === "ArrowUp" && !draft) { const last = lastPrompt(lane); if (last) { e.preventDefault(); write(last); } }
         }} />
       <div className="composer-tools"><input ref={picker} type="file" multiple hidden onChange={(e) => { void upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
         <button className="ghost composer-attach" disabled={uploading} onClick={() => picker.current?.click()} aria-label="Attach files"><Icon name="plus" size={16} /></button>
-        <select aria-label="Execution mode" value={mode} disabled={busy || submitting} onChange={(e) => patchLane(lane, { mode: e.target.value as Lane["mode"] })}><option value="plan">Plan</option><option value="acceptEdits">Build</option></select>
-        <input list="chat-models" className="composer-model" aria-label="Model override" placeholder="Default model" value={model} disabled={busy || submitting} onChange={(e) => patchLane(lane, { model: e.target.value })} />
-        <datalist id="chat-models">{models?.map((m) => <option key={m.value ?? m.id} value={m.value ?? m.id}>{m.displayName ?? m.display_name ?? m.name}</option>)}</datalist>
-        <span className="spacer" /><button className="primary composer-send" disabled={!hasMessage || unavailable} onClick={send}>{busy ? "Queue" : "Send"}<span aria-hidden="true">↑</span></button>
+        <ComposerSettings lane={lane} mode={mode} model={model} models={models} busy={busy} />
+        <span className="spacer" /><button className="primary composer-send" disabled={!hasMessage || unavailable} onClick={send}>{busy && !joins ? "Queue" : "Send"}<span aria-hidden="true">↑</span></button>
       </div>
     </div>
-    <div className="composer-hint">Enter to {busy ? "queue" : "send"} · Shift+Enter for a new line</div>
+    <div className="composer-hint">{busy ? (joins ? "Enter adds to the running turn" : "Enter to queue") : "Enter to send"} · Shift+Enter for a new line{busy && " · Esc to stop"}</div>
   </div>;
 }
+
+/** The composer's look: a file held over it, or the agent at work (its aura). */
+function composerClass(dragOver: boolean, busy: boolean): string {
+  return ["chat-composer", dragOver && "reference-over", busy && "is-working"].filter(Boolean).join(" ");
+}
+
+/** The last thing typed in this lane, for ↑ in an empty composer as in the CLI. */
+function lastPrompt(lane: string): string | undefined {
+  const turns = useStore.getState().lanes[lane]?.conv.turns ?? [];
+  for (let i = turns.length - 1; i >= 0; i--) { const p = turns[i].prompt; if (p?.trim()) return p; }
+}
+
+/** Mode first, in plain words; model and effort behind Options, since the defaults are right
+ *  for nearly everyone and every visible control is one more thing to decide before typing.
+ *  All of it can change while a turn runs: the next message takes it, as in the CLI. */
+function ComposerSettings({ lane, mode, model, models, busy }: { lane: string; mode: Lane["mode"]; model: string; models: Lane["models"]; busy: boolean }) {
+  const effort = useStore((s) => s.lanes[lane]?.effort ?? "");
+  const agent = useStore((s) => s.lanes[lane]?.agent);
+  const [more, setMore] = useState(!!model || !!effort);
+  const next = busy ? " — applies to your next message" : "";
+  return <>
+    <select aria-label="What the agent may do" title={`Plan first: it looks around and proposes; nothing changes until you approve. Build: it makes the changes.${next}`} value={mode} onChange={(e) => patchLane(lane, { mode: e.target.value as Lane["mode"] })}><option value="plan">Plan first</option><option value="acceptEdits">Build</option></select>
+    {!more && <button className="ghost composer-more" onClick={() => setMore(true)} title="Choose the model and how hard it thinks">Options</button>}
+    {more && <>
+      <input list="chat-models" className="composer-model" aria-label="Model" title={`Model${next}`} placeholder="Best model" value={model} onChange={(e) => patchLane(lane, { model: e.target.value })} />
+      <datalist id="chat-models">{models?.map((m) => <option key={m.value ?? m.id} value={m.value ?? m.id}>{m.displayName ?? m.display_name ?? m.name}</option>)}</datalist>
+      {/* Every agent takes it: Claude's session flag, Codex's turn option, agy's `--effort`. */}
+      {<select aria-label="How hard it thinks" title={`How hard it thinks${next}`} value={effort} onChange={(e) => patchLane(lane, { effort: (e.target.value || undefined) as Lane["effort"] })}>
+        <option value="">Normal thinking</option>{EFFORTS.filter((level) => agent !== "codex" || level !== "max").map((level) => <option key={level} value={level}>{EFFORT_LABEL[level]}</option>)}
+      </select>}
+    </>}
+  </>;
+}
+const EFFORT_LABEL: Record<Effort, string> = { low: "Quick", medium: "Balanced", high: "Think hard", xhigh: "Think harder", max: "Think hardest" };
 
 async function readSubagents(lane: string) {
   const current = useStore.getState().lanes[lane];
@@ -163,7 +201,7 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
   const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
-  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan · Explore before making changes" : "Build · Changes stay in this lane’s checkout";
+  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan first · it proposes, you approve, then it builds" : "Build · it makes the changes";
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span>{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;
 }
 

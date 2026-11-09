@@ -50,7 +50,7 @@ struct History {
     fingerprint: Option<String>,
     /// Length and mtime of the transcript when `fingerprint` was last checked, so a reconnect
     /// with nothing new does not read and hash the whole transcript again.
-    stamp: Option<(u64, SystemTime)>,
+    stamp: Option<Vec<(u64, SystemTime)>>,
 }
 
 #[derive(Deserialize)]
@@ -58,21 +58,30 @@ struct Fingerprint {
     fingerprint: String,
 }
 
-/// Only Claude Code writes a transcript Keel can seed a conversation from. Codex and Antigravity
-/// conversations live in the journal alone, and looking for a Claude transcript under their id
-/// fails the second message with "the original conversation could not be found".
-fn reads_a_transcript(q: &ChatQuery) -> bool {
-    q.provider.as_deref().is_none_or(|p| p == "claude")
-}
+use keel_workspace::{Follows as Agent, Transcript};
 
-fn stamp(path: &std::path::Path) -> Option<(u64, SystemTime)> {
-    let meta = std::fs::metadata(path).ok()?;
-    Some((meta.len(), meta.modified().ok()?))
+/// Length and mtime of every file whose change means the transcript moved. Antigravity writes
+/// its write-ahead log before the database, so stamping the database alone missed turns taken
+/// outside Keel until the next checkpoint.
+fn stamp(t: &Transcript) -> Option<Vec<(u64, SystemTime)>> {
+    let mut files = t.watched();
+    if files.is_empty() {
+        files.push(t.path().to_owned());
+    }
+    files
+        .iter()
+        .map(|f| {
+            let meta = std::fs::metadata(f).ok();
+            Some(meta.map_or((0, SystemTime::UNIX_EPOCH), |m| {
+                (m.len(), m.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+            }))
+        })
+        .collect()
 }
 
 impl History {
     fn seed(&mut self, state: &AppState, q: &ChatQuery, refresh: bool) -> Result<(), String> {
-        if self.running || (!refresh && !self.records.is_empty()) || !reads_a_transcript(q) {
+        if self.running || (!refresh && !self.records.is_empty()) {
             return Ok(());
         }
         match transcript(state, q)? {
@@ -81,28 +90,26 @@ impl History {
         }
     }
     /// Append the transcript as a `snapshot` unless the journal already holds what it says.
-    fn snapshot(&mut self, path: &std::path::Path) -> Result<(), String> {
-        let now = stamp(path);
+    /// Every agent's, through the one reader that knows each format (`follow`): this was Claude's
+    /// alone, so a Codex or Antigravity lane opened in chat showed nothing it had said before.
+    fn snapshot(&mut self, t: &Transcript) -> Result<(), String> {
+        let now = stamp(t);
         if now.is_some() && now == self.stamp {
             return Ok(());
         }
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let fingerprint = format!("transcript-v2:{:x}", Sha256::digest(&bytes));
+        let (lines, _, start) = t
+            .tail_last(keel_workspace::MAX_READ)
+            .ok_or("The conversation could not be read.")?;
+        let fingerprint = fingerprint(&lines, start);
         self.stamp = now;
         if self.fingerprint.as_deref() == Some(fingerprint.as_str()) {
             return Ok(());
         }
-        use keel_workspace::conversation::{Decoder, Ending, Provider, Source};
-        use std::io::BufRead;
-        let mut decoder = Decoder::new(Provider::Claude, Source::Transcript);
-        let file = bytes.as_slice();
+        use keel_workspace::conversation::Ending;
+        let mut decoder = t.agent().decoder();
         let mut frames = Vec::new();
-        for line in std::io::BufReader::new(file).lines() {
-            frames.extend(decoder.feed(
-                &line.map_err(|e| e.to_string())?,
-                None,
-                std::time::Instant::now(),
-            ));
+        for line in &lines {
+            frames.extend(decoder.feed(line, None, std::time::Instant::now()));
         }
         frames.extend(decoder.close(Ending::Done));
         if !frames.is_empty() {
@@ -118,23 +125,32 @@ impl History {
     /// already replay. Recording its fingerprint keeps the next reconnect from appending a whole
     /// second copy of the conversation as a `snapshot` — which is how one journal reached 58 MB.
     fn seen(&mut self, state: &AppState, q: &ChatQuery) -> Result<(), String> {
-        if !reads_a_transcript(q) {
-            return Ok(());
-        }
         match transcript(state, q)? {
-            Some(path) => self.mark(&path),
+            Some(t) => self.mark(&t),
             None => Ok(()),
         }
     }
-    fn mark(&mut self, path: &std::path::Path) -> Result<(), String> {
-        let now = stamp(path);
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let fingerprint = format!("transcript-v2:{:x}", Sha256::digest(&bytes));
+    fn mark(&mut self, t: &Transcript) -> Result<(), String> {
+        let now = stamp(t);
+        let (lines, _, start) = t
+            .tail_last(keel_workspace::MAX_READ)
+            .ok_or("The conversation could not be read.")?;
+        let fingerprint = fingerprint(&lines, start);
         self.stamp = now;
         if self.fingerprint.as_deref() != Some(fingerprint.as_str()) {
             self.push("seen", json!({"fingerprint": fingerprint}))?;
         }
         Ok(())
+    }
+    /// A turn whose stream broke ends like any other: closed, then the reason. Without the
+    /// `close` the page's last turn stayed open — its clock ticking, its calls spinning — for as
+    /// long as the lane was open. A keyless `close` with nothing open folds to nothing (`reduce.ts`).
+    fn end_broken(&mut self, reason: &str) -> Result<(), String> {
+        self.push(
+            "turn",
+            json!([{"turn": null, "op": "close", "reason": "interrupted"}]),
+        )?;
+        self.push("fatal", json!(reason))
     }
     fn push(&mut self, event: &str, data: Value) -> Result<(), String> {
         if let Some(Ok(f)) = matches!(event, "snapshot" | "seen")
@@ -190,13 +206,29 @@ impl History {
     }
 }
 
-fn transcript(state: &AppState, q: &ChatQuery) -> Result<Option<std::path::PathBuf>, String> {
-    let (Some(session), Some(home)) = (&q.session, keel_workspace::claude_home()) else {
+/// What the transcript said, as one value: its records and where they started, so a cut head
+/// that moved is a change too.
+fn fingerprint(lines: &[String], start: u64) -> String {
+    let mut hash = Sha256::new();
+    hash.update(start.to_le_bytes());
+    for line in lines {
+        hash.update(line.as_bytes());
+        hash.update(b"\n");
+    }
+    format!("transcript-v3:{:x}", hash.finalize())
+}
+
+fn transcript(state: &AppState, q: &ChatQuery) -> Result<Option<Transcript>, String> {
+    let Some(session) = &q.session else {
         return Ok(None);
     };
+    let agent = Agent::from_query(q.provider.as_deref()).map_err(str::to_string)?;
     let cwd = state.checkout(q.wt.as_deref())?;
-    match keel_workspace::transcript_path(&cwd, &home, session) {
-        Some(path) => Ok(Some(path.into())),
+    match agent.locate(&cwd, session) {
+        Some(t) => Ok(Some(t)),
+        // Codex and Antigravity name a conversation only once it has been written; a lane with
+        // nothing on disk yet has nothing to seed. Claude's id is chosen first, so missing is lost.
+        None if agent != Agent::Claude => Ok(None),
         None => Err(
             "The original conversation could not be found. Open it from History before resuming."
                 .into(),
@@ -286,12 +318,8 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
         stamp: None,
     };
     if h.records.last().is_some_and(|r| r.event != "idle") {
-        h.push(
-            "turn",
-            json!([{"turn": null, "op": "close", "reason": "interrupted"}]),
-        )
-        .map_err(internal)?;
-        h.push("fatal", json!("The daemon restarted during this turn. Review the partial result before sending again.")).map_err(internal)?;
+        h.end_broken("The daemon restarted during this turn. Review the partial result before sending again.")
+            .map_err(internal)?;
         h.push("idle", Value::Null).map_err(internal)?;
     }
     let h = Arc::new(Mutex::new(h));
@@ -367,7 +395,11 @@ pub async fn send(
         // Always against the transcript, not only on a lane's first send: `seen` at this turn's
         // end vouches for the whole transcript, so turns taken in a terminal since must be in the
         // journal first. Unchanged costs one `stat`.
-        h.seed(&owner, &seed, true).map_err(internal)?;
+        // A transcript that cannot be read is the runtime's to report, as a failed turn the
+        // person can read — not a 500 that leaves the submission unconfirmed and the lane stuck.
+        if let Err(e) = h.seed(&owner, &seed, true) {
+            tracing::debug!("chat send: transcript not read: {e}");
+        }
         h.accept(&receipt, &fingerprint)
     })
     .await
@@ -410,7 +442,7 @@ pub async fn send(
             let _ = tokio::task::spawn_blocking(move || {
                 let mut h = h.locked();
                 if let Some(error) = failure {
-                    let _ = h.push("fatal", json!(error));
+                    let _ = h.end_broken(error);
                 }
                 // A new conversation learns its session id during the turn; its first reconnect
                 // takes one snapshot, which is right, since the journal had no transcript yet.
@@ -442,12 +474,18 @@ pub async fn events(
 ) -> Result<axum::response::Response, Error> {
     let h = tokio::task::spawn_blocking(move || {
         let h = history(&state, &q.lane)?;
-        if q.session.is_some() && q.provider.as_deref().is_none_or(|p| p == "claude") {
+        if q.session.is_some() {
             let query = serde_json::from_value::<ChatQuery>(
                 json!({"prompt":"", "session": q.session, "provider":q.provider, "wt":q.wt}),
             )
             .map_err(internal)?;
-            h.locked().seed(&state, &query, true).map_err(internal)?;
+            // The journal is the conversation; the transcript only adds turns taken elsewhere.
+            // A transcript that cannot be found (a checkout moved, a project renamed) must not
+            // refuse the stream: the page read a 500 as a dropped connection and retried every
+            // 1.5 s for good, composer locked, while the journal it wanted was right here.
+            if let Err(e) = h.locked().seed(&state, &query, true) {
+                tracing::debug!("chat events: transcript not read: {e}");
+            }
         }
         Ok::<_, Error>(h)
     })
@@ -545,16 +583,21 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// A second Antigravity or Codex message must not go looking for a Claude transcript.
+    /// A Codex or Antigravity lane with nothing written yet seeds nothing and fails nothing; a
+    /// Claude conversation that is missing says so.
     #[test]
-    fn only_claude_conversations_are_seeded_from_a_transcript() {
-        let q = |p: Option<&str>| {
-            serde_json::from_value::<ChatQuery>(json!({"prompt": "x", "provider": p})).unwrap()
+    fn a_conversation_not_written_yet_is_only_missing_for_claude() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let q = |p: &str| {
+            serde_json::from_value::<ChatQuery>(
+                json!({"prompt": "x", "provider": p, "session": "no-such-session-0000"}),
+            )
+            .unwrap()
         };
-        assert!(reads_a_transcript(&q(None)));
-        assert!(reads_a_transcript(&q(Some("claude"))));
-        assert!(!reads_a_transcript(&q(Some("codex"))));
-        assert!(!reads_a_transcript(&q(Some("antigravity"))));
+        assert!(transcript(&state, &q("codex")).unwrap().is_none());
+        assert!(transcript(&state, &q("antigravity")).unwrap().is_none());
+        assert!(transcript(&state, &q("claude")).is_err());
     }
     #[test]
     fn receipt_is_idempotent_and_survives_reopening() {
@@ -612,6 +655,12 @@ mod tests {
             ]
         );
     }
+    fn claude(path: &std::path::Path) -> Transcript {
+        Transcript::at(
+            Agent::Claude,
+            camino::Utf8PathBuf::from_path_buf(path.into()).unwrap(),
+        )
+    }
     fn transcript_file(dir: &std::path::Path, prompts: &[&str]) -> std::path::PathBuf {
         let path = dir.join("t.jsonl");
         let lines: String = prompts
@@ -633,12 +682,12 @@ mod tests {
         let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
         let h = history(&state, "seed-lane").unwrap();
         let path = transcript_file(root.path(), &["hello"]);
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         let after_first = h.locked().records.len();
         assert!(after_first > 0);
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         h.locked().stamp = None;
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         assert_eq!(h.locked().records.len(), after_first);
     }
     #[test]
@@ -647,19 +696,19 @@ mod tests {
         let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
         let h = history(&state, "seen-lane").unwrap();
         let path = transcript_file(root.path(), &["hello"]);
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         // The turn's own records went to the journal; the transcript grew by the same turn.
         let path = transcript_file(root.path(), &["hello", "and again"]);
-        h.locked().mark(&path).unwrap();
+        h.locked().mark(&claude(&path)).unwrap();
         state.chats.0.locked().clear();
         drop(h);
         let h = history(&state, "seen-lane").unwrap();
         let before = h.locked().records.len();
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         assert_eq!(h.locked().records.len(), before);
         // Something written outside Keel is still picked up.
         let path = transcript_file(root.path(), &["hello", "and again", "from the terminal"]);
-        h.locked().snapshot(&path).unwrap();
+        h.locked().snapshot(&claude(&path)).unwrap();
         assert!(h.locked().records.len() > before);
     }
     #[test]
@@ -676,6 +725,17 @@ mod tests {
         let h = history(&state, "weak-lane").unwrap();
         assert_eq!(h.locked().records.len(), 2);
         assert!(!h.locked().accept("send-one", "prompt-a").unwrap());
+    }
+    #[test]
+    fn a_broken_stream_closes_its_turn_before_saying_why() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "broken-lane").unwrap();
+        h.locked().accept("send-one", "prompt-a").unwrap();
+        h.locked().end_broken("gone").unwrap();
+        let events: Vec<_> = h.locked().records.iter().map(|r| r.event.clone()).collect();
+        assert_eq!(events, ["accepted", "turn", "fatal"]);
+        assert!(h.locked().records[1].data.get().contains("\"close\""));
     }
     #[test]
     fn lane_ids_cannot_escape_storage() {

@@ -37,6 +37,21 @@ function matchingReferences(a: FileReference[] = [], b: FileReference[] = []): b
   return a.length === b.length && a.every((item, index) => sameReference(item, b[index]));
 }
 
+type Unsent = { text: string; attachments?: Lane["attachments"]; references?: FileReference[] };
+
+/** Messages that will not be sent go back into the composer, after whatever is being typed, the
+ *  way the CLI hands queued input back on Esc. Stop used to empty the queue and a discarded
+ *  submission had nowhere to go, so either way what was typed was simply gone. */
+export function backToComposer(lane: Lane, unsent: Unsent[]): Partial<Lane> {
+  if (!unsent.length) return {};
+  const texts = [lane.draft ?? "", ...unsent.map((u) => u.text)].filter((t) => t.trim());
+  return {
+    draft: texts.join("\n\n"),
+    attachments: [...(lane.attachments ?? []), ...unsent.flatMap((u) => u.attachments ?? [])],
+    references: [...(lane.references ?? []), ...unsent.flatMap((u) => u.references ?? [])],
+  };
+}
+
 /** A new submission must not overwrite an external owner's turn or an unconfirmed receipt. */
 export function submissionBlock(lane: Lane, prompt: string): string | undefined {
   if (lane.elsewhere) return "This session is running outside Keel. Stop it there before resuming here.";

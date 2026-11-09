@@ -16,8 +16,9 @@ export interface ChildDetail { items: { kind: string; text: string }[]; availabi
 export const childScope = (lane?: Pick<Lane, "project" | "wt" | "agent" | "session">): string => lane ? JSON.stringify([lane.project, lane.wt, lane.agent, lane.session]) : "";
 /** Unknown or disconnected work stays inspectable but is not advertised as confirmed activity. */
 export const childActive = (child: Invocation): boolean => child.status === "working" || child.status === "waiting";
-/** Only terminal snapshots supersede legacy native-chat/background activity. */
-export function childrenOf(lane: Lane): ChildState | undefined { return lane.interface === "terminal" && lane.subagents?.scope === childScope(lane) ? lane.subagents : undefined; }
+/** A lane's live children, read from the agent's own transcripts — a terminal lane's through its
+ *  tail, a chat lane's through `/api/session/subagents` — and only for the parent it was read for. */
+export function childrenOf(lane: Lane): ChildState | undefined { return lane.subagents?.scope === childScope(lane) ? lane.subagents : undefined; }
 /** Connection loss retains history; process exit is explicit interruption, not fabricated completion. */
 export function disconnectedChildren(lane: Lane, interrupted = false): ChildState | undefined {
   const state = childrenOf(lane);

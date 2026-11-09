@@ -188,3 +188,11 @@ test('an MCP call is named the way Claude Code names one', () => {
   c.item({ type: 'mcpToolCall', id: 'x', server: 'keel', tool: 'browser_read', status: 'completed', result: {} }, true);
   assert.equal(events.find((o) => o.op === 'call').tool, 'mcp__keel__browser_read');
 });
+test('going back to the default effort after a raised one resets it', () => {
+  const c = new Codex(() => {}, () => {}, () => {}, () => {}, () => {});
+  assert.equal(c.effortFor(undefined), null);
+  assert.equal(c.effortFor('high'), 'high');
+  assert.equal(c.effortFor(undefined), 'medium');
+  assert.equal(c.effortFor(undefined), null);
+  assert.equal(c.effortFor('max'), 'xhigh');
+});

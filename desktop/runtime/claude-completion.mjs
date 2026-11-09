@@ -3,20 +3,39 @@ const TERMINAL = new Set(['completed', 'failed', 'stopped']);
 const isAgent = (task) => !task.ambient && !task.skip_transcript && (typeof task.subagent_type === 'string' || /agent|teammate/i.test(task.task_type ?? ''));
 
 /** Finish once from actual lifecycle evidence; accepting an answer is never completion evidence. */
+/** How long a result after a steer must stand with no new reply before the turn ends. The CLI
+ *  starts a queued message's reply immediately after a result, so quiet this long means the steer
+ *  was folded into the reply that just ended. */
+export const STEER_QUIET_MS = 2000;
+/** What says a new reply is under way: anything the model says, not bookkeeping. */
+const REPLYING = new Set(['assistant', 'stream_event', 'user']);
 export class ClaudeCompletion {
-  constructor(finish, cancel) { this.finish = finish; this.cancel = cancel; this.processStart(); }
+  constructor(finish, cancel, clock = { set: setTimeout, clear: clearTimeout }) { this.finish = finish; this.cancel = cancel; this.clock = clock; this.processStart(); }
   processStart() { this.level = false; this.agents = new Map(); this.callbacks = new Map(); this.begin(); }
-  begin() { this.result = undefined; this.done = false; this.questionBarrier = false; this.agents.clear(); this.callbacks.clear(); }
+  begin() { this.clock.clear(this.quiet); this.quiet = undefined; this.steered = false; this.result = undefined; this.done = false; this.interrupted = false; this.questionBarrier = false; this.agents.clear(); this.callbacks.clear(); }
+  /** Stop was pressed: the turn ends at its result, as Esc ends it in the CLI. Background agents
+   *  keep running in the session; they no longer hold the person's turn. */
+  interrupt() { this.interrupted = true; if (this.result !== undefined) this.complete(-1, 'The turn was cancelled.'); }
   callback(event, id, fields) {
     if (event === 'start') {
       this.callbacks.set(id, fields);
       if (this.result !== undefined) this.questionBarrier = true;
     } else this.callbacks.delete(id);
   }
+  /** Words were pushed into this turn. A result no longer ends it on its own: the CLI may answer
+   *  them as a reply of their own after that result, and a turn that ended first left that reply
+   *  running with nobody listening — and no claim on the tree it could write. */
+  steer() { this.steered = true; }
   message(message) {
     if (this.done) return;
+    if (this.quiet !== undefined && REPLYING.has(message.type)) {
+      // The steer's own reply has started: the turn is not over until it is.
+      this.clock.clear(this.quiet); this.quiet = undefined; this.result = undefined;
+    }
     if (message.type === 'result') {
       this.result = message.is_error ? 1 : 0;
+      if (this.interrupted) { this.complete(-1, 'The turn was cancelled.'); return; }
+      if (this.steered) { this.clock.clear(this.quiet); this.quiet = this.clock.set(() => { this.quiet = undefined; this.check('result'); }, STEER_QUIET_MS); return; }
       if (this.callbacks.size) this.questionBarrier = true;
       this.check('result'); return;
     }
@@ -43,13 +62,14 @@ export class ClaudeCompletion {
     this.check('task');
   }
   check(source) {
-    if (this.done || this.result === undefined || this.callbacks.size) return;
+    if (this.done || this.result === undefined || this.callbacks.size || this.quiet !== undefined) return;
     if ([...this.agents.values()].some((task) => !task.ended && task.is_backgrounded !== false)) return;
     if (this.questionBarrier && source !== 'snapshot') return;
     this.complete(this.result, 'The provider completed its background work.');
   }
   complete(code, reason) {
     if (this.done) return;
+    this.clock.clear(this.quiet); this.quiet = undefined;
     this.done = true; this.cancel(reason); this.callbacks.clear(); this.agents.clear(); this.finish(code);
   }
   shutdown(reason = 'The provider session closed.') { this.complete(1, reason); }

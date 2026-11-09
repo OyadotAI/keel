@@ -47,10 +47,10 @@ impl Fold {
             match &f.op {
                 Op::Text { step, kind, append } => {
                     if !t.text.contains_key(step) {
-                        let k = if *kind == TextKind::Say {
-                            "say"
-                        } else {
-                            "think"
+                        let k = match kind {
+                            TextKind::Say => "say",
+                            TextKind::Think => "think",
+                            TextKind::You => "you",
                         };
                         t.steps.push((k.into(), step.clone()));
                     }
@@ -781,4 +781,39 @@ fn a_codex_mcp_call_is_a_row_named_like_claudes() {
             .any(|f| matches!(&f.op, Op::Call { tool, .. } if tool == "mcp__keel__browser_read"))
     );
     assert!(frames.iter().any(|f| matches!(&f.op, Op::Result { id, state: CallState::Failed, output, .. } if id == "item_1" && output == "No Keel window is open.")));
+}
+
+/// Compaction is said in the conversation, as the terminal prints it, not hidden among raw lines.
+#[test]
+fn compaction_is_a_notice() {
+    let (_, frames) = live(
+        &[json!({"type": "system", "subtype": "compact_boundary"}).to_string()],
+        Duration::from_millis(1),
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(&f.op, Op::Notice { text } if text.contains("compacted")))
+    );
+}
+
+/// What the person typed mid-turn survives a replay, in the turn it joined — the record shape
+/// measured on a real SDK turn.
+#[test]
+fn words_typed_mid_turn_replay_in_their_turn() {
+    let queued =
+        json!({"type": "attachment", "uuid": "q1", "attachment": {"type": "queued_command",
+        "prompt": [{"type": "text", "text": "Also say BANANA."}]}})
+        .to_string();
+    let f = transcript(&[
+        opener("u1", "run it"),
+        tool_use("m1", "c1", "Bash", json!({"command": "sleep 6"})),
+        tool_result("c1", "one"),
+        queued,
+        said("m2", "One. BANANA."),
+    ]);
+    assert_eq!(f.turns.len(), 1);
+    let t = &f.turns[0];
+    assert!(t.steps.iter().any(|(k, _)| k == "you"));
+    assert!(t.text.values().any(|v| v == "Also say BANANA."));
 }

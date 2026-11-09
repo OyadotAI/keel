@@ -50,6 +50,9 @@ pub struct ChatQuery {
     pub lane: Option<String>,
     /// `--model`, when the person chose one; absent means the CLI's own default.
     pub model: Option<String>,
+    /// Reasoning effort the person chose (`low` … `max`); absent is the agent's own default.
+    /// Only a known level reaches a runtime (`effort_arg`).
+    pub effort: Option<String>,
     /// Agent runtime. Unsupported values fail rather than silently selecting another provider.
     pub provider: Option<String>,
     /// The turn carries pins, so the app will post their pixel verdicts and the commit waits.
@@ -82,9 +85,9 @@ pub async fn stop(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StopQuery>,
 ) -> Json<Stopped> {
-    // no-blocking: a signal to a pid the state already holds.
+    // no-blocking: a signal to a pid the state already holds, or one line to a runtime's stdin.
     Json(Stopped {
-        stopped: state.interrupt(query.lane.as_deref().unwrap_or_default()),
+        stopped: crate::runtime::stop(&state, query.lane.as_deref().unwrap_or_default()).await,
     })
 }
 
@@ -724,7 +727,7 @@ pub async fn chat(
         })
         .await
         {
-            Ok(Ok(prompt)) => prompt,
+            Ok(Ok(prompt)) => with_attachments(prompt, &query.attachments),
             result => {
                 let why = match result {
                     Ok(Err(why)) => why,
@@ -904,6 +907,25 @@ pub async fn chat(
             Some(extra) => format!("{}\n\n{extra}\n\nTask:\n{}", base_system, provider_prompt),
             None => format!("{}\n\nTask:\n{}", base_system, provider_prompt),
         };
+        // The models agy offers, for the composer's list as Claude's and Codex's runtimes send theirs.
+        // Off to the side: it fetches over the network, and the turn does not wait for it.
+        if provider == "antigravity" {
+            // Weak: a strong sender here kept the stream open past the turn's end, and the lane
+            // read busy until `agy models` came back — up to its whole wait, every turn it failed.
+            let tx = tx.downgrade();
+            tokio::spawn(async move {
+                if let Some(models) = agy_models().await
+                    && let Some(tx) = tx.upgrade()
+                {
+                    let _ = tx
+                        .send(Ok(said(
+                            "capabilities",
+                            serde_json::json!({"models": models, "commands": []}).to_string(),
+                        )))
+                        .await;
+                }
+            });
+        }
         // The gate, written before anything can run: an `agy` without it has no gate at all.
         let agy_hooks = if provider == "antigravity" {
             let made = crate::serve::blocking(
@@ -1032,6 +1054,11 @@ pub async fn chat(
                 } else {
                     "accept-edits"
                 })
+                .args(
+                    effort_arg(query.effort.as_deref())
+                        .map(|e| vec!["--effort", e])
+                        .unwrap_or_default(),
+                )
                 .arg("--add-dir")
                 .arg(hooks)
                 .arg("--add-dir")
@@ -2119,6 +2146,7 @@ pub(crate) fn translate(
     });
     let prompt = query.prompt.clone();
     let mut stopped = false;
+    let mut opened = false;
     let frame = |frames: Vec<Frame>| {
         (!frames.is_empty())
             .then(|| serde_json::to_string(&frames).ok())
@@ -2199,13 +2227,25 @@ pub(crate) fn translate(
                     continue;
                 }
                 let before = match name {
-                    "starting" if !d.is_open() => d.open(Some(prompt.clone()), None, None, None),
+                    "starting" if !d.is_open() => {
+                        opened = true;
+                        d.open(Some(prompt.clone()), None, None, None)
+                    }
                     "done" => d.close(match data.as_str() {
                         _ if stopped => Ending::Stopped,
                         "0" => Ending::Done,
                         "-1" => Ending::Stopped,
                         _ => Ending::Failed,
                     }),
+                    // Refused before it started — open elsewhere, a claim, a reference. The
+                    // composer was already cleared, so with no turn the message was simply gone;
+                    // as a failed turn it stays on screen, in the replay too, beside its reason.
+                    "fatal" if !opened => {
+                        opened = true;
+                        let mut frames = d.open(Some(prompt.clone()), None, None, None);
+                        frames.extend(d.close(Ending::Failed));
+                        frames
+                    }
                     "fatal" => d.close(Ending::Failed),
                     _ => Vec::new(),
                 };
@@ -2294,6 +2334,70 @@ mod attach_tests {
 /// The character filter is the older half and stays: a model name is a word, and anything else
 /// arriving on that argument is somebody putting a shell fragment where a model goes. `.` is
 /// allowed because real names have it (`claude-sonnet-4.5`, `gpt-5.6-sol`).
+/// A one-shot turn (`agy -p`) takes no image blocks, so its attachments are named in the prompt,
+/// where the agent reads them with its own file tool. They were dropped without a word before —
+/// the person attached a screenshot and the agent never heard of it. Only Keel's own upload
+/// folder is named: anything else in the list did not come from `attach`.
+fn with_attachments(prompt: String, attachments: &[Attachment]) -> String {
+    let paths: Vec<&str> = attachments
+        .iter()
+        .map(|a| a.path.as_str())
+        .filter(|p| p.starts_with(".keel/attachments/") && !p.contains(".."))
+        .collect();
+    if paths.is_empty() {
+        return prompt;
+    }
+    format!(
+        "{prompt}\n\nAttached files in this checkout (read them):\n{}",
+        paths.join("\n")
+    )
+}
+
+/// How long `agy models` may take; it fetches the list, and a hung fetch must not linger.
+const AGY_MODELS_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// `agy models`, read once per daemon and kept: the list changes with agy's releases, not turns.
+/// A failure is not kept, so the next turn asks again.
+async fn agy_models() -> Option<Vec<serde_json::Value>> {
+    static MODELS: tokio::sync::OnceCell<Vec<serde_json::Value>> =
+        tokio::sync::OnceCell::const_new();
+    MODELS
+        .get_or_try_init(|| async {
+            let run = tokio::process::Command::new(crate::permissions::program("agy"))
+                .arg("models")
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output();
+            let out = tokio::time::timeout(AGY_MODELS_WAIT, run)
+                .await
+                .map_err(|_| ())?
+                .map_err(|_| ())?;
+            let models = parse_agy_models(&String::from_utf8_lossy(&out.stdout));
+            if models.is_empty() {
+                Err(())
+            } else {
+                Ok(models)
+            }
+        })
+        .await
+        .ok()
+        .cloned()
+}
+
+/// `id<TAB>name` lines into the shape the composer's model list reads; anything else is skipped.
+fn parse_agy_models(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter(|(id, _)| model_arg(Some(id.trim())).is_some())
+        .map(|(id, name)| serde_json::json!({"value": id.trim(), "displayName": name.trim()}))
+        .collect()
+}
+
+/// An effort level both runtimes understand, or nothing: the value comes from the page.
+pub(crate) fn effort_arg(effort: Option<&str>) -> Option<&str> {
+    effort.filter(|e| ["low", "medium", "high", "xhigh", "max"].contains(e))
+}
+
 fn model_arg(model: Option<&str>) -> Option<&str> {
     model.filter(|m| {
         !m.is_empty()
@@ -2676,6 +2780,51 @@ mod stream_tests {
             .expect("a close op");
         assert!(close < done, "{names:?}");
         assert!(got[close].1.contains("interrupted") && got[close].1.contains("stopped"));
+    }
+
+    #[test]
+    fn agy_models_are_read_from_its_listing() {
+        let got = super::parse_agy_models(
+            "Fetching available models...\ngemini-4-argon-high\tGemini 4 Argon (High)\nnot a row\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                serde_json::json!({"value": "gemini-4-argon-high", "displayName": "Gemini 4 Argon (High)"})
+            ]
+        );
+    }
+
+    #[test]
+    fn a_one_shot_turn_names_its_attachments() {
+        let a = |p: &str| super::Attachment {
+            path: p.into(),
+            name: "x".into(),
+            mime: None,
+        };
+        let said = super::with_attachments(
+            "look".into(),
+            &[
+                a(".keel/attachments/shot.png"),
+                a("/etc/passwd"),
+                a(".keel/attachments/../x"),
+            ],
+        );
+        assert!(said.starts_with("look\n\n") && said.contains(".keel/attachments/shot.png"));
+        assert!(!said.contains("passwd") && !said.contains(".."));
+        assert_eq!(super::with_attachments("look".into(), &[]), "look");
+    }
+
+    /// Refused before it started: the prompt still appears, as a failed turn, before the reason.
+    #[tokio::test]
+    async fn a_turn_refused_before_it_starts_keeps_its_prompt() {
+        let got = run(true, vec![super::said("fatal", "open elsewhere")], true).await;
+        let open = got
+            .iter()
+            .position(|(_, w)| w.contains("\\\"op\\\":\\\"open\\\"") && w.contains("ask"))
+            .expect("the prompt opens a turn");
+        let fatal = got.iter().position(|(n, _)| n == "fatal").expect("fatal");
+        assert!(open < fatal && got[open].1.contains("\\\"op\\\":\\\"close\\\""));
     }
 
     /// The task vanishing without a terminal event still closes the turn.

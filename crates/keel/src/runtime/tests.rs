@@ -74,7 +74,9 @@ fn offline_runtime_child() {
                     json!({"ready":q["launch"]["system"].is_string(),"url":q["launch"]["mcp"]["mcpServers"]["keel"]["url"]}),
                 );
             }
+            "interrupt" => emit("end", json!({"code":-1})),
             "steer" => {
+                emit("answer_ack", json!({"id":q["delivery"],"ok":true}));
                 emit(
                     "msg",
                     json!({"type":"system","subtype":"session_state_changed","state":"idle"}),
@@ -282,6 +284,28 @@ async fn stopping_a_background_question_releases_its_output_and_branch_protectio
     let _ = crate::serve::fixture_switch_branch(state.clone(), state.repo())
         .await
         .unwrap();
+}
+
+/// Stop asks the runtime to interrupt the turn and leaves it running: the session, its background
+/// agents and the warm process survive, and the next send needs no cold resume.
+#[tokio::test]
+async fn stop_interrupts_the_turn_and_keeps_the_runtime() {
+    let (_dir, state, runtime, _process) = fixture_runtime(false).await;
+    let mut stream = fixture_stream(state.clone()).await;
+    fixture_until(&mut stream, "parent-result-fixture").await;
+    assert!(stop(&state, FIXTURE_LANE).await);
+    fixture_until(&mut stream, "event: done").await;
+    tokio::time::timeout(FIXTURE_WAIT, async {
+        while stream.recv().await.is_some() {}
+    })
+    .await
+    .unwrap();
+    assert!(
+        runtime.alive.load(Ordering::Acquire),
+        "Stop ended the runtime"
+    );
+    assert!(!stop(&state, FIXTURE_LANE).await, "nothing left to stop");
+    fixture_control(state, "close").await;
 }
 
 #[tokio::test]

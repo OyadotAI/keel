@@ -37,7 +37,7 @@ export class Codex {
       this.write({ method: 'initialized', params: {} });
       const thread = await this.rpc(q.session ? 'thread/resume' : 'thread/start', {
         ...(q.session ? { threadId: q.session } : {}), cwd: q.cwd,
-        model: q.model || null, approvalPolicy: 'on-request', sandbox: q.mode === 'acceptEdits' ? 'workspace-write' : 'read-only',
+        model: q.model || null, effort: this.effortFor(q.effort), approvalPolicy: 'on-request', sandbox: q.mode === 'acceptEdits' ? 'workspace-write' : 'read-only',
         // Added to Codex's own instructions. `baseInstructions` replaced them: measured, every
         // Keel thread ran without Codex's base prompt and its tool guidance.
         developerInstructions: q.system || null,
@@ -65,7 +65,7 @@ export class Codex {
     this.inspector.requested(q.prompt);
     const result = await this.rpc('turn/start', {
       threadId: this.thread, input: [{ type: 'text', text: q.prompt }, ...(q.attachments ?? []).map((a) => /\.(png|jpe?g|webp|gif)$/i.test(extname(a.path)) ? { type: 'localImage', path: resolve(q.cwd, a.path) } : { type: 'text', text: `Attached file: ${resolve(q.cwd, a.path)}` })],
-      model: q.model || null, approvalPolicy: 'on-request',
+      model: q.model || null, effort: this.effortFor(q.effort), approvalPolicy: 'on-request',
       sandboxPolicy: q.mode === 'acceptEdits' ? { type: 'workspaceWrite', writableRoots: [q.cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } : { type: 'readOnly' },
     });
     this.turn = result.turn.id;
@@ -175,6 +175,14 @@ export class Codex {
       this.ops({ op: 'result', id, state: item.kind === 'completed' ? 'ok' : 'failed', output: '', cut: 0 },
         { op: 'background', id, running: false });
     }
+  }
+  /** Codex keeps an effort override for the rest of the thread, and `null` means "no change" — so
+   *  going back to Normal after High sends Codex's own default rather than nothing. */
+  effortFor(effort) {
+    const next = effort === 'max' ? 'xhigh' : (effort || null);
+    const sent = next ?? (this.effortSent ? 'medium' : null);
+    this.effortSent = !!next;
+    return sent;
   }
   interrupt() { return this.turn ? this.rpc('turn/interrupt', { threadId: this.thread, turnId: this.turn }) : Promise.resolve(); }
   steer(prompt) { return this.rpc('turn/steer', { threadId: this.thread, expectedTurnId: this.turn, input: [{ type: 'text', text: prompt }] }); }

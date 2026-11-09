@@ -119,18 +119,23 @@ pub async fn inspect_context(state: &AppState, lane: &str) -> Result<Value, Stri
 impl Runtime {
     /// The helper must accept the answer into its live callback before HTTP can acknowledge it.
     async fn answer(&self, id: &str, answer: Value) -> Result<Value, String> {
+        self.acked(json!({"method":"answer","id":id,"answer":answer}))
+            .await
+    }
+
+    /// Send a command the helper acknowledges with `answer_ack`, and wait for its verdict. A steer
+    /// needs one as an answer does: whether the words joined the turn decides whether the page
+    /// shows them in it or queues them for the next.
+    async fn acked(&self, mut command: Value) -> Result<Value, String> {
         let delivery = crate::context::request_id();
+        command["delivery"] = json!(delivery);
         let (tx, rx) = oneshot::channel();
         self.answers.locked().insert(delivery.clone(), tx);
         let _waiting = InspectionWait {
             pending: self.answers.clone(),
             id: delivery.clone(),
         };
-        answer_ack(
-            self.send(json!({"method":"answer","id":id,"answer":answer,"delivery":delivery})),
-            rx,
-        )
-        .await
+        answer_ack(self.send(command), rx).await
     }
 
     async fn send(&self, value: Value) -> Result<(), String> {
@@ -396,6 +401,13 @@ pub async fn control(
                 .map(Json)
                 .map_err(|e| (StatusCode::BAD_GATEWAY, e));
         }
+        if q.method == "steer" {
+            return r
+                .acked(json!({"method":"steer","prompt":q.prompt}))
+                .await
+                .map(Json)
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e));
+        }
         r.send(json!({"method":q.method, "id":q.id, "answer":q.answer, "prompt":q.prompt}))
             .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
@@ -434,6 +446,46 @@ pub async fn chat(state: Arc<AppState>, q: ChatQuery) -> axum::response::Respons
         }
     });
     crate::agent::alive(out)
+}
+
+/// How long a runtime has to end a turn it was asked to interrupt before the turn's process group
+/// gets SIGINT. The SDK and the App Server answer an interrupt in well under a second; a helper
+/// still running at this point is wedged, and a Stop that does nothing is the worse failure.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Stop a lane's turn the way Esc does in the CLI: the runtime interrupts the turn and stays up,
+/// with its session, its background agents and its warm process. SIGINT to the helper's group
+/// ended all three, and the next send resumed cold and replayed the transcript over the view.
+/// A lane with no live runtime (Antigravity's one-shot `agy`, a turn still preparing) is
+/// signalled as before. Returns whether there was a turn to stop.
+pub async fn stop(state: &Arc<AppState>, lane: &str) -> bool {
+    let runtime = state
+        .runtimes
+        .0
+        .locked()
+        .get(lane)
+        .filter(|r| r.alive.load(Ordering::Acquire))
+        .cloned();
+    let Some(runtime) = runtime else {
+        return state.interrupt(lane);
+    };
+    let Some((token, attached)) = state.mark_interrupted(lane) else {
+        return false;
+    };
+    // Still preparing: `run` checks `was_interrupted` before it hands the runtime a turn.
+    if !attached {
+        return true;
+    }
+    if runtime.send(json!({"method":"interrupt"})).await.is_err() {
+        state.signal_if_running(lane, token);
+        return true;
+    }
+    let (state, lane) = (state.clone(), lane.to_owned());
+    tokio::spawn(async move {
+        tokio::time::sleep(STOP_GRACE).await;
+        state.signal_if_running(&lane, token);
+    });
+    true
 }
 
 /// Only daemon-owned runtimes may be signalled by a task handoff.
@@ -565,7 +617,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     let mut supplied_guidance = false;
     r.send(json!({"method":"start", "query": {
         "lane":lane, "provider":provider, "cwd":cwd, "repo":repo, "prompt":provider_prompt, "session":q.session,
-        "mode":q.mode, "model":q.model, "attachments":q.attachments, "settings":settings, "port":state.port(),
+        "mode":q.mode, "model":q.model, "effort":crate::agent::effort_arg(q.effort.as_deref()), "attachments":q.attachments, "settings":settings, "port":state.port(),
         "executable":crate::permissions::program(provider).to_string_lossy(),
     }})).await?;
     let run_usage = crate::license::run(repo.clone()).await;
