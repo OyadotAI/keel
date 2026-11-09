@@ -25,7 +25,11 @@ export class ClaudeCompletion {
   /** Words were pushed into this turn. A result no longer ends it on its own: the CLI may answer
    *  them as a reply of their own after that result, and a turn that ended first left that reply
    *  running with nobody listening — and no claim on the tree it could write. */
-  steer() { this.steered = true; }
+  steer() { this.steered = true; if (this.result !== undefined && !this.done) this.hush(); }
+  /** Hold a result for the quiet window: a reply starting inside it reopens the turn. Armed by a
+   *  result after a steer, and by a steer landing on a result already held by a helper or a
+   *  question, which would otherwise end the turn the moment that hold let go. */
+  hush() { this.clock.clear(this.quiet); this.quiet = this.clock.set(() => { this.quiet = undefined; this.check('result'); }, STEER_QUIET_MS); }
   message(message) {
     if (this.done) return;
     if (this.quiet !== undefined && REPLYING.has(message.type)) {
@@ -35,12 +39,12 @@ export class ClaudeCompletion {
     if (message.type === 'result') {
       this.result = message.is_error ? 1 : 0;
       if (this.interrupted) { this.complete(-1, 'The turn was cancelled.'); return; }
-      if (this.steered) { this.clock.clear(this.quiet); this.quiet = this.clock.set(() => { this.quiet = undefined; this.check('result'); }, STEER_QUIET_MS); return; }
+      if (this.steered) { this.hush(); return; }
       if (this.callbacks.size) this.questionBarrier = true;
       this.check('result'); return;
     }
     if (message.type !== 'system') return;
-    if (message.subtype === 'session_state_changed' && message.state === 'idle' && this.result !== undefined && !this.callbacks.size) {
+    if (message.subtype === 'session_state_changed' && message.state === 'idle' && this.result !== undefined && !this.callbacks.size && this.quiet === undefined) {
       this.complete(this.result, 'The provider completed this session’s work.'); return;
     }
     if (message.subtype === 'background_tasks_changed') {

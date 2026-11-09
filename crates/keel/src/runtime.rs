@@ -575,7 +575,11 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     .map_err(|e| e.to_string())??;
     // The helper drives the agent's own CLI, so a missing one is installed here too — this is the
     // path Claude Code and Codex chat lanes take, and without it only Antigravity's installed.
-    if !crate::agent::install_missing(provider, &state, lane, token, tx).await {
+    // A lane whose helper is already up got past this on its first turn; asking again only costs
+    // a PATH walk per turn (and, on a runner with no agent, ran an installer under a live helper).
+    if !has_session(&state, lane)
+        && !crate::agent::install_missing(provider, &state, lane, token, tx).await
+    {
         return Ok(());
     }
     if state.was_interrupted(lane, token) {

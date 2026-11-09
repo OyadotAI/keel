@@ -96,3 +96,11 @@ test('a steer answered as a reply of its own keeps the turn open until that repl
   f.completion.message({ type: 'stream_event' }); f.fire(); assert.deepEqual(f.ends, [], 'the first result ended a turn still replying');
   f.completion.message(result); f.fire(); assert.deepEqual(f.ends, [0]);
 });
+test('a steer landing on a held result keeps the turn open for its reply', () => {
+  const f = steered(); f.completion.callback('start', 'q', {}); f.completion.message(result);
+  f.completion.steer(); f.completion.callback('end', 'q'); f.completion.message({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.deepEqual(f.ends, [], 'the turn ended under a steered reply');
+  f.completion.message({ type: 'stream_event' }); f.fire(); assert.deepEqual(f.ends, []);
+  f.completion.message(result); f.fire(); f.completion.message({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.deepEqual(f.ends, [0]);
+});

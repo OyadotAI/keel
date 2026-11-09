@@ -8,7 +8,7 @@ import { ContextInspector } from './context.mjs';
 import { Requests } from './requests.mjs';
 import { ClaudeCompletion } from './claude-completion.mjs';
 import { Initialization } from './initialization.mjs';
-import { sessionKey } from './session-allow.mjs';
+import { sessionKey, sessionLabel } from './session-allow.mjs';
 
 const emit = (event, data) => process.stdout.write(JSON.stringify({ event, data }) + '\n');
 const initialization = new Initialization(emit);
@@ -106,7 +106,7 @@ async function startClaude(q) {
         let answer;
         try {
           answer = await ask(tool, input.command ?? '', input,
-            [{ label: 'Allow once', value: 'allow' }, ...(key ? [{ label: key.startsWith('Bash:') ? 'Allow this command again this session' : `Allow ${key.replace(/^WebFetch:/, '')} for this session`, value: 'session' }] : []), { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission', options.signal, options.agentID);
+            [{ label: 'Allow once', value: 'allow' }, ...(key ? [{ label: sessionLabel(key), value: 'session' }] : []), { label: 'Deny', value: 'deny' }], question ? 'question' : 'permission', options.signal, options.agentID);
         } catch (error) { return { behavior: 'deny', message: error.message }; }
         if (question) return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers ?? {} }, toolUseID: options.toolUseID };
         if (answer.decision === 'session' && key) allowedThisSession.add(key);
