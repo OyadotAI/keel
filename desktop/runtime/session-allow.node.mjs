@@ -13,7 +13,7 @@ test('a compound command, an environment prefix or a flag value is never offered
     assert.equal(sessionKey('Bash', { command }), undefined, command);
 });
 test('nothing that runs other code is offered', () => {
-  for (const command of ['node app.js', 'python3 x.py', 'npm test', 'pnpm install', 'env ls', 'xargs rm', 'find . -delete', './script', 'cargo run', 'bash -c ls', 'pytest', 'command ls', 'open x', 'ls\u00a0-la'])
+  for (const command of ['node app.js', 'python3 x.py', 'npm test', 'pnpm install', 'env ls', 'xargs rm', 'find . -delete', './script', 'cargo run', 'bash -c ls', 'pytest', 'command ls', 'open x', 'ls\u00a0-la', 'python3.12 x.py', 'Bash -c ls', 'node.exe a', 'pwsh -c x', 'NPM test'])
     assert.equal(sessionKey('Bash', { command }), undefined, command);
 });
 test('a web page is allowed by its host, a plan is always asked', () => {

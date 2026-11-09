@@ -5,7 +5,11 @@ const RUNS_ANYTHING = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'env', 'xarg
   'node', 'deno', 'bun', 'python', 'python3', 'ruby', 'perl', 'php', 'lua', 'osascript', 'awk', 'sed', 'make', 'npm', 'pnpm', 'yarn', 'npx', 'pnpx', 'bunx', 'uv', 'uvx',
   'cargo', 'go', 'ssh', 'docker', 'kubectl', 'command', 'builtin', 'source', '.', 'setsid', 'flock', 'stdbuf',
   'strace', 'ltrace', 'caffeinate', 'chroot', 'script', 'parallel', 'java', 'pip', 'pip3', 'pytest', 'jest', 'vitest', 'tsc', 'gradle',
-  'mvn', 'rake', 'bundle', 'just', 'tox', 'cmake', 'ninja', 'dotnet', 'swift', 'Rscript', 'open']);
+  'mvn', 'rake', 'bundle', 'just', 'tox', 'cmake', 'ninja', 'dotnet', 'swift', 'rscript', 'open', 'cmd', 'powershell', 'pwsh', 'wsl',
+  'start', 'gradlew', 'mvnw', 'poetry', 'pdm', 'hatch', 'nox', 'invoke', 'turbo', 'nx', 'lerna', 'tsx', 'ts-node', 'vite', 'webpack', 'next']);
+/** The program a name runs, as the list knows it: macOS and Windows match names without case, Windows
+ *  adds an extension, and `python3.12` is python. */
+const program = (name) => name.toLowerCase().replace(/\.(exe|cmd|bat|ps1|com)$/, '').replace(/[0-9.]+$/, '');
 
 const FILE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
@@ -26,7 +30,7 @@ export function sessionKey(tool, input) {
   const command = String(input?.command ?? '').trim();
   if (!command || /[;&|`$<>()\\\n'"*?{}~=]/.test(command)) return undefined;
   const argv = command.split(/[ \t]+/);
-  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(argv[0]) || RUNS_ANYTHING.has(argv[0])) return undefined;
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(argv[0]) || RUNS_ANYTHING.has(program(argv[0]))) return undefined;
   return `Bash:${argv.join(' ')}`;
 }
 
