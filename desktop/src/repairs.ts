@@ -5,7 +5,7 @@ export function repairLane(project: string, title = "Readiness fixes"): string {
   const store = useStore.getState();
   const usable = (id?: string) => {
     const lane = id ? store.lanes[id] : undefined;
-    return !!lane && lane.project === project && !lane.isolated && lane.interface === "chat" && lane.mode === "acceptEdits";
+    return !!lane && lane.project === project && !lane.isolated && lane.interface === "chat" && lane.mode !== "plan";
   };
   if (usable(store.active)) return store.active!;
   const existing = store.projects[project]?.lanes.find((id) => usable(id));

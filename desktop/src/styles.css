@@ -2815,3 +2815,6 @@ button.primary kbd, button.danger kbd { color: inherit; background: #ffffff18; }
 
 /* Announce asynchronous saves without adding a second visible name label. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* `button.ghost` is a 24px icon square; this one carries a word. */
+.composer-tools .composer-more { width: auto; padding: 0 8px; }
+.composer-stop { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 8px; }

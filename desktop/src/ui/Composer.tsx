@@ -22,7 +22,6 @@ export function Composer({ lane }: { lane: string }) {
   const submitting = useStore((s) => !!s.lanes[lane]?.submitting);
   const disconnected = useStore((s) => !!s.lanes[lane]?.disconnected);
   const elsewhere = useStore((s) => !!s.lanes[lane]?.elsewhere);
-  const mode = useStore((s) => s.lanes[lane]?.mode ?? "plan");
   const model = useStore((s) => s.lanes[lane]?.model ?? "");
   const attachments = useStore((s) => s.lanes[lane]?.attachments);
   const references = useStore((s) => s.lanes[lane]?.references);
@@ -51,7 +50,7 @@ export function Composer({ lane }: { lane: string }) {
   useEffect(() => { setChoice(0); setDismissed(false); }, [token]);
   useEffect(() => {
     const el = input.current;
-    if (el) { el.style.height = "auto"; el.style.height = `${Math.min(220, Math.max(66, el.scrollHeight))}px`; }
+    if (el) { el.style.height = "auto"; el.style.height = `${Math.min(COMPOSER_MAX_PX, Math.max(COMPOSER_MIN_PX, el.scrollHeight))}px`; }
   }, [draft]);
   useEffect(() => {
     const l = useStore.getState().lanes[lane];
@@ -96,7 +95,7 @@ export function Composer({ lane }: { lane: string }) {
   return <div className="chat-dock" data-reference-target={lane}>
     <LaneDock lane={lane} />
     {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
-    <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} mode={mode} />
+    <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} />
     {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Retry same message</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
     <div className={composerClass(dragOver, busy)}>
       {dragOver && <div className="reference-drop-hint">Drop to reference this file.</div>}
@@ -121,13 +120,17 @@ export function Composer({ lane }: { lane: string }) {
         }} />
       <div className="composer-tools"><input ref={picker} type="file" multiple hidden onChange={(e) => { void upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
         <button className="ghost composer-attach" disabled={uploading} onClick={() => picker.current?.click()} aria-label="Attach files"><Icon name="plus" size={16} /></button>
-        <ComposerSettings lane={lane} mode={mode} model={model} models={models} busy={busy} />
-        <span className="spacer" /><button className="primary composer-send" disabled={!hasMessage || unavailable} onClick={send}>{busy && !joins ? "Queue" : "Send"}<span aria-hidden="true">↑</span></button>
+        <ComposerSettings lane={lane} model={model} models={models} busy={busy} />
+        <span className="spacer" />{busy && <button className="composer-stop" onClick={() => void useStore.getState().stop(lane)} title="Stop the turn (Esc)">Stop</button>}<button className="primary composer-send" disabled={!hasMessage || unavailable} onClick={send}>{busy && !joins ? "Queue" : "Send"}<span aria-hidden="true">↑</span></button>
       </div>
     </div>
-    <div className="composer-hint">{busy ? (joins ? "Enter adds to the running turn" : "Enter to queue") : "Enter to send"} · Shift+Enter for a new line{busy && " · Esc to stop"}</div>
+    {busy && <div className="composer-hint">{joins ? "Enter adds to the running turn" : "Enter to queue"} · Esc to stop</div>}
   </div>;
 }
+
+/** The message box grows with what is typed, from one comfortable line to a cap that leaves the
+ *  conversation most of a small screen. */
+const COMPOSER_MIN_PX = 44, COMPOSER_MAX_PX = 160;
 
 /** The composer's look: a file held over it, or the agent at work (its aura). */
 function composerClass(dragOver: boolean, busy: boolean): string {
@@ -140,16 +143,16 @@ function lastPrompt(lane: string): string | undefined {
   for (let i = turns.length - 1; i >= 0; i--) { const p = turns[i].prompt; if (p?.trim()) return p; }
 }
 
-/** Mode first, in plain words; model and effort behind Options, since the defaults are right
- *  for nearly everyone and every visible control is one more thing to decide before typing.
+/** Model and effort behind Options, since the defaults are right for nearly everyone and every
+ *  visible control is one more thing to decide before typing. There is no plan/build choice: a
+ *  chat lane builds, because people did not know what the modes meant.
  *  All of it can change while a turn runs: the next message takes it, as in the CLI. */
-function ComposerSettings({ lane, mode, model, models, busy }: { lane: string; mode: Lane["mode"]; model: string; models: Lane["models"]; busy: boolean }) {
+function ComposerSettings({ lane, model, models, busy }: { lane: string; model: string; models: Lane["models"]; busy: boolean }) {
   const effort = useStore((s) => s.lanes[lane]?.effort ?? "");
   const agent = useStore((s) => s.lanes[lane]?.agent);
   const [more, setMore] = useState(!!model || !!effort);
   const next = busy ? " — applies to your next message" : "";
   return <>
-    <select aria-label="What the agent may do" title={`Plan first: it looks around and proposes; nothing changes until you approve. Build: it makes the changes.${next}`} value={mode} onChange={(e) => patchLane(lane, { mode: e.target.value as Lane["mode"] })}><option value="plan">Plan first</option><option value="acceptEdits">Build</option></select>
     {!more && <button className="ghost composer-more" onClick={() => setMore(true)} title="Choose the model and how hard it thinks">Options</button>}
     {more && <>
       <input list="chat-models" className="composer-model" aria-label="Model" title={`Model${next}`} placeholder="Best model" value={model} onChange={(e) => patchLane(lane, { model: e.target.value })} />
@@ -194,15 +197,16 @@ function Attachments({ lane }: { lane: string }) {
   </div>)}</div>;
 }
 
-function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, busy, mode }: {
-  lane: string; disconnected: boolean; elsewhere: boolean; submitting: boolean; uploading: boolean; busy: boolean; mode: Lane["mode"];
+function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, busy }: {
+  lane: string; disconnected: boolean; elsewhere: boolean; submitting: boolean; uploading: boolean; busy: boolean;
 }) {
   const waiting = useStore((s) => !!s.lanes[lane]?.pending.length);
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
   const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
-  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : mode === "plan" ? "Plan first · it proposes, you approve, then it builds" : "Build · it makes the changes";
-  return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span>{busy && <button onClick={() => void useStore.getState().stop(lane)}>Stop</button>}</div>;
+  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
+  if (!text) return null;
+  return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span></div>;
 }
 
 async function uploadFiles(lane: string, picked: File[]) {

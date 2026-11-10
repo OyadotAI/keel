@@ -494,3 +494,9 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 @keyframes halo { from { opacity: .9; transform: scale(.8); } }
 
 .chat-item.is-fresh .chat-code { animation: fade var(--t-fast) var(--ease); }
+/* A compact composer: one line until there is more to say, so a small screen keeps the conversation. */
+.chat-dock { padding: 6px 28px 12px; }
+.chat-composer textarea { min-height: 40px; padding: 11px 14px 4px; }
+.composer-tools { padding: 2px 8px 6px; }
+.chat-status { padding: 0 4px 6px; }
+.chat-status:empty { display: none; }

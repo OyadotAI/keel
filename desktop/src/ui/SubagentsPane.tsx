@@ -1,7 +1,7 @@
 // Active children occupy temporary panes while the parent PTY stays mounted and focused.
 // A child pane is read-only, so it carries no drop target of its own: a file dropped on it
 // goes to the lane (the `.terminal` ancestor), the one composer this surface has.
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { AGENT_NAME, useStore } from "../store";
 import { terminalLease } from "../typers";
 import { requestChatFocus } from "../chat-focus";
@@ -67,7 +67,9 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
   const returnToMain = () => { main.current?.scrollIntoView({ block: "nearest" }); focusMain(lane); };
   const agentName = current?.agent === "claude" ? "Claude Code" : AGENT_NAME[current?.agent ?? "claude"];
   const mainName = surface === "chat" ? "Conversation" : "Main terminal";
-  return <div className={"terminal-grid-shell" + (shown.length ? " split" : "") + (surface === "chat" ? " chat-grid" : "")} style={style}>
+  const panes = shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} span={child.id === lastOpen && surface !== "chat" ? span : 1} size={sizeOf(child.id)} onSize={(size) => resize(child.id, size)} />);
+  if (surface === "chat") return <ChatHelpers grid={grid} main={main} label={mainName} style={style} panes={panes} working={active.filter((c) => c.status === "working").length}>{children}</ChatHelpers>;
+  return <div className={"terminal-grid-shell" + (shown.length ? " split" : "")} style={style}>
     <div ref={grid} className="terminal-grid" onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}>
       <section key="main" ref={main} className="terminal-grid-main" data-pane="main" aria-label={mainName}>
         <div className="terminal-main-viewport" data-main-viewport>
@@ -76,9 +78,21 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
         <footer aria-hidden={!shown.length} className={"terminal-pane-footer main-pane-chrome" + (shown.length ? " is-visible" : "")}><span>{active.length} subagent{active.length === 1 ? "" : "s"} working</span><small>Esc in a pane returns here</small></footer>
         </div>
       </section>
-      {shown.map((child, index) => <ChildPane key={scope + ":" + child.id} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} connected={!!snapshot?.connected} output={view.outputs[child.id]} span={child.id === lastOpen ? span : 1} size={sizeOf(child.id)} onSize={(size) => resize(child.id, size)} />)}
+      {panes}
     </div>
     {shown.length > 0 && scrolled && <button className="terminal-grid-return" onClick={returnToMain}>{mainName}</button>}
+  </div>;
+}
+/** A chat lane keeps the conversation where it is and stacks its helpers in a column on the right;
+ *  the terminal's tiling grid rearranged the whole lane each time a helper started. */
+function ChatHelpers({ grid, main, label, style, panes, working, children }: { grid: RefObject<HTMLDivElement | null>; main: RefObject<HTMLElement | null>; label: string; style: CSSProperties; panes: ReactNode[]; working: number; children?: ReactNode }) {
+  return <div className={"terminal-grid-shell chat-grid" + (panes.length ? " has-helpers" : "")} style={style}>
+    <div ref={grid} className="chat-grid-row">
+      <section key="main" ref={main} className="chat-grid-main" data-pane="main" aria-label={label}>{children}</section>
+      {panes.length > 0 && <aside className="chat-helpers" aria-label="Subagents">
+        <header className="chat-helpers-head"><span className={"chat-helpers-dot" + (working ? " is-live" : "")} /><strong>Helpers</strong><small>{working || "none"} working</small></header>
+        {panes}</aside>}
+    </div>
   </div>;
 }
 function ChildPane({ lane, scope, child, reduced, order, connected, output, span, size, onSize }: { lane: string; scope: string; child: Shown; reduced: boolean; order: number; connected: boolean; output?: ChildOutput; span: number; size?: Size; onSize: (size: Size) => void }) {
@@ -94,7 +108,7 @@ function ChildPane({ lane, scope, child, reduced, order, connected, output, span
     };
   }, [lane]);
   const status = connected ? child.status : "unknown", started = startedAt(child);
-  return <section ref={pane} className={"child-terminal-pane" + (child.leaving ? " is-leaving" : "") + (size ? " is-" + size : "")} data-pane={child.id} data-child-invocation={child.id} aria-hidden={child.leaving || undefined} style={span > 1 ? { gridColumn: "span " + span } : undefined} aria-label={nameOf(child) + " " + shortId(child) + " terminal"} onKeyDown={(event) => {
+  return <section ref={pane} className={"child-terminal-pane" + (child.leaving ? " is-leaving" : "") + (size ? " is-" + size : "")} data-pane={child.id} data-child-invocation={child.id} data-status={child.leaving ? "leaving" : status} aria-hidden={child.leaving || undefined} style={span > 1 ? { gridColumn: "span " + span } : undefined} aria-label={nameOf(child) + " " + shortId(child) + " terminal"} onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (size === "max") onSize("max"); focusMain(lane); }
   }}>
     <div className="child-terminal-surface">

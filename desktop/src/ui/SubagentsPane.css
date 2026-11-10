@@ -87,6 +87,103 @@
   .terminal-grid-main .main-pane-chrome { transition: none; }
   .child-terminal-pane .member-avatar.is-working::after { animation: none; }
 }
-/* A chat lane's main pane is the conversation, on the page's own colours; helpers tile beside it. */
-.chat-grid, .chat-grid .terminal-grid-main, .chat-grid .terminal-main-viewport { background: var(--bg); color: var(--text); }
-.chat-grid .terminal-main-content > .chat-transcript, .chat-grid .terminal-main-content > .chat-empty { flex: 1; height: auto; min-height: 0; }
+/* A chat lane: the conversation keeps its place on the page's own colours; helpers stack in a
+   column on the right, drawn as page cards rather than terminal tiles. */
+.agents > .chat-grid { position: absolute; inset: 0; background: var(--bg); color: var(--text); }
+.chat-grid-row { display: flex; height: 100%; min-height: 0; }
+.chat-grid-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-grid-main > .chat-transcript, .chat-grid-main > .chat-empty { flex: 1; height: auto; min-height: 0; }
+.chat-helpers {
+  --child-bg: var(--bg); --child-fg: var(--text); --child-surface: var(--surface); --child-muted: var(--dim);
+  --child-line: var(--line); --child-link: var(--accent); --child-tool: var(--accent);
+  flex: none; width: min(360px, 40%); display: flex; flex-direction: column; gap: 8px; padding: 8px;
+  overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface);
+}
+.chat-helpers .child-terminal-pane { flex: 0 0 auto; height: 260px; }
+.chat-helpers .child-terminal-pane.is-min { height: auto; }
+.chat-helpers .child-terminal-pane.is-max { flex: 1 0 260px; height: auto; }
+.chat-helpers .terminal-pane-order { display: none; }
+.chat-helpers .child-terminal-output { font-family: inherit; font-size: 12px; }
+
+/* Helpers in a chat lane: the column glides open, each card arrives on a spring, a working card's
+   edge is a slow turning light, and a finished one settles to calm. Transform and opacity only,
+   except the column's one width glide, so the conversation beside it never stutters. */
+@property --helper-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.chat-helpers {
+  --helper-w: min(360px, 40%);
+  width: var(--helper-w); gap: 10px; padding: 0 12px 12px; border-left: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--surface)), var(--surface) 40%);
+  box-shadow: inset 1px 0 0 var(--line);
+  animation: helpers-open 520ms var(--ease) both;
+  scrollbar-width: thin;
+}
+@keyframes helpers-open { from { width: 0; opacity: 0; } to { width: var(--helper-w); opacity: 1; } }
+.chat-helpers-head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 8px;
+  margin: 0 -12px; padding: 14px 16px 10px; font-size: 12px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(14px) saturate(1.4);
+}
+.chat-helpers-head strong { font-weight: 600; letter-spacing: -.01em; color: var(--text); }
+.chat-helpers-head small { color: var(--dim); font-variant-numeric: tabular-nums; }
+.chat-helpers-dot { align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); transition: background 300ms var(--ease); }
+.chat-helpers-dot.is-live { background: var(--accent); animation: helper-beacon 1.8s var(--ease) infinite; }
+@keyframes helper-beacon { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+
+.chat-helpers .child-terminal-pane { height: 268px; animation: helper-arrive 640ms var(--spring) both; transition: height 360ms var(--ease); }
+.chat-helpers .child-terminal-pane:nth-of-type(2) { animation-delay: 60ms; }
+.chat-helpers .child-terminal-pane:nth-of-type(3) { animation-delay: 120ms; }
+@keyframes helper-arrive { from { opacity: 0; transform: translateX(28px) scale(.96); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+.chat-helpers .child-terminal-smoke { display: none; }
+
+/* The card: glass on the page, a soft lift, and a 1px ring that is the turning light while it works. */
+.chat-helpers .child-terminal-surface {
+  border: 0; border-radius: 14px; overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 92%, var(--accent) 2%);
+  box-shadow: 0 1px 0 color-mix(in srgb, #fff 6%, transparent) inset, 0 10px 30px -12px #0000005c, 0 2px 6px -2px #00000033;
+  transition: box-shadow 400ms var(--ease), transform 400ms var(--ease);
+}
+.chat-helpers .child-terminal-pane:hover .child-terminal-surface { transform: translateY(-2px); box-shadow: 0 1px 0 color-mix(in srgb, #fff 8%, transparent) inset, 0 18px 40px -14px #00000070, 0 3px 8px -2px #00000038; }
+.chat-helpers .child-terminal-surface::before {
+  content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; border-radius: inherit; padding: 1px;
+  background: conic-gradient(from var(--helper-angle), var(--line) 0deg, var(--line) 250deg, color-mix(in srgb, var(--accent) 90%, #fff) 310deg, var(--line) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: .9; transition: opacity 500ms var(--ease);
+}
+.chat-helpers [data-status="working"] .child-terminal-surface::before { animation: helper-orbit 3.2s linear infinite; }
+.chat-helpers [data-status="done"] .child-terminal-surface::before { background: color-mix(in srgb, var(--add) 45%, var(--line)); }
+.chat-helpers [data-status="failed"] .child-terminal-surface::before { background: color-mix(in srgb, var(--del) 55%, var(--line)); }
+@keyframes helper-orbit { to { --helper-angle: 360deg; } }
+
+/* A shimmer under the header while it works; gone, not frozen, when it is done. */
+.chat-helpers .terminal-pane-heading { position: relative; min-height: 38px; padding: 8px 10px 8px 12px; gap: 8px; font-size: 12px; background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.chat-helpers .terminal-pane-heading::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; opacity: 0; transition: opacity 400ms var(--ease);
+  background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 40% 100%; background-repeat: no-repeat; }
+.chat-helpers [data-status="working"] .terminal-pane-heading::after { opacity: 1; animation: helper-sweep 1.6s var(--ease) infinite; }
+@keyframes helper-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.chat-helpers .terminal-pane-heading strong { font-weight: 600; letter-spacing: -.01em; }
+.chat-helpers .terminal-pane-status { padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 550; letter-spacing: .01em;
+  background: color-mix(in srgb, var(--dim) 14%, transparent); color: var(--dim); transition: background 400ms var(--ease), color 400ms var(--ease); }
+.chat-helpers [data-status="working"] .terminal-pane-status { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.chat-helpers [data-status="done"] .terminal-pane-status { background: color-mix(in srgb, var(--add) 16%, transparent); color: var(--add); animation: helper-settle 500ms var(--spring); }
+.chat-helpers [data-status="failed"] .terminal-pane-status { background: color-mix(in srgb, var(--del) 16%, transparent); color: var(--del); }
+@keyframes helper-settle { from { transform: scale(.7); opacity: .3; } to { transform: none; opacity: 1; } }
+.chat-helpers .terminal-pane-control { opacity: 0; transition: opacity 200ms var(--ease), background 150ms; }
+.chat-helpers .child-terminal-pane:hover .terminal-pane-control, .chat-helpers .terminal-pane-control:focus-visible { opacity: 1; }
+
+/* Output reads like the chat: page font, room to breathe, and the oldest lines fading out above. */
+.chat-helpers .child-terminal-output { padding: 12px 14px 8px; line-height: 1.55; color: var(--text);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px); mask-image: linear-gradient(180deg, transparent 0, #000 28px); scroll-behavior: smooth; }
+.chat-helpers .child-line { animation: helper-line 360ms var(--ease) both; }
+@keyframes helper-line { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.chat-helpers .terminal-pane-footer { min-height: 30px; padding: 6px 12px; font-size: 11px; background: color-mix(in srgb, var(--surface) 60%, transparent); border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.chat-helpers [data-status="working"] .terminal-pane-footer > span::after { content: "…"; display: inline-block; width: 1.2em; overflow: hidden; vertical-align: bottom; animation: helper-dots 1.2s steps(4) infinite; }
+@keyframes helper-dots { from { width: 0; } to { width: 1.2em; } }
+.chat-helpers [data-status="done"], .chat-helpers [data-status="cancelled"], .chat-helpers [data-status="interrupted"] { --child-fg: var(--dim); }
+.chat-helpers .child-terminal-pane.is-min { height: auto; }
+.chat-helpers .child-terminal-pane.is-max { height: auto; flex: 1 0 320px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-helpers, .chat-helpers .child-terminal-pane, .chat-helpers .child-line, .chat-helpers-dot.is-live,
+  .chat-helpers .child-terminal-surface::before, .chat-helpers .terminal-pane-heading::after, .chat-helpers .terminal-pane-status,
+  .chat-helpers .terminal-pane-footer > span::after { animation: none !important; }
+}

@@ -130,7 +130,7 @@ export function rememberedCommands(agent: Agent | undefined): string[] | undefin
 }
 
 function makeReceipt(lane: Lane, prompt: string, attachments: Attachment[], wt?: string, system?: string, references?: FileReference[]): NonNullable<Lane["receipt"]> {
-  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "plan", model: lane.model, effort: lane.effort, wt, system, references, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
+  return { id: crypto.randomUUID(), prompt, session: lane.known ? lane.session : undefined, mode: lane.mode ?? "acceptEdits", model: lane.model, effort: lane.effort, wt, system, references, attachments: attachments.map(({ path, name, mime }) => ({ path, name, mime })) };
 }
 
 function isComposerSubmission(lane: Lane, prompt: string, attachments: Attachment[], references: FileReference[]): boolean {
@@ -335,7 +335,8 @@ function load(): Pick<State, "order" | "projects" | "lanes" | "active"> {
     const lanes: Record<string, Lane> = {};
     for (const l of s.lanes) {
       // A lane saved before lanes were the CLI has no session of its own yet; it gets one.
-      lanes[l.id] = { ...l, naming: restoredNaming(l.title, l.naming), interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: l.queued ?? [], questionDrafts: Object.fromEntries(Object.entries(l.questionDrafts ?? {}).map(([id, draft]) => [id, { ...draft, sending: false }])), conv: empty, running: false, loaded: !l.session, pending: [] };
+      // No plan mode on screen any more, so a lane saved in it builds rather than planning invisibly.
+      lanes[l.id] = { ...l, mode: l.mode === "plan" ? undefined : l.mode, naming: restoredNaming(l.title, l.naming), interface: l.interface ?? "terminal", session: l.session ?? crypto.randomUUID(), agent: l.agent ?? "claude", known: !!l.known, isolated: !!l.isolated, jobs: [], queued: l.queued ?? [], questionDrafts: Object.fromEntries(Object.entries(l.questionDrafts ?? {}).map(([id, draft]) => [id, { ...draft, sending: false }])), conv: empty, running: false, loaded: !l.session, pending: [] };
     }
     return { order: s.order.filter((p) => projects[p]), projects, lanes, active: s.active };
   } catch {
@@ -1263,8 +1264,8 @@ export const useStore = create<State>()((set, getState, api) => {
       if (!getState().lanes[lid]) {
         const wt = continuation.destination.wt;
         set((s) => ({
-          lanes: { ...s.lanes, [lid]: { id: lid, project: current.project, interface: "chat", session: id(), agent: continuation.destination.provider, known: false, naming: { revision: 0 }, title: `Continued: ${current.title}`, isolated: !!wt, wt, mode: current.mode ?? "plan", model: undefined, jobs: [], queued: [], conv: empty, running: false, loaded: true,
-            receipt: { id: continuation.id, prompt: continuation.prompt, mode: current.mode ?? "plan", wt, attachments: [], references: [] }, pending: [] } },
+          lanes: { ...s.lanes, [lid]: { id: lid, project: current.project, interface: "chat", session: id(), agent: continuation.destination.provider, known: false, naming: { revision: 0 }, title: `Continued: ${current.title}`, isolated: !!wt, wt, mode: current.mode ?? "acceptEdits", model: undefined, jobs: [], queued: [], conv: empty, running: false, loaded: true,
+            receipt: { id: continuation.id, prompt: continuation.prompt, mode: current.mode ?? "acceptEdits", wt, attachments: [], references: [] }, pending: [] } },
           projects: { ...s.projects, [current.project]: { ...s.projects[current.project], lanes: [...s.projects[current.project].lanes, lid] } },
         }));
         if (!save(getState())) throw new Error("Could not save the continuation locally. Your server-side handoff is preserved; retry the same continuation.");
