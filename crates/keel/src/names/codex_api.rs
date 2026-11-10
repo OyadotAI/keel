@@ -153,14 +153,27 @@ done
 "#,
         );
         let cwd = Utf8Path::from_path(tmp.path()).unwrap();
-        rename_program(
-            program.as_str(),
-            cwd,
-            "session-1",
-            "Saved",
-            Duration::from_secs(2),
-        )
-        .unwrap();
+        // ETXTBSY: another test thread forking while this script's write handle was still open
+        // keeps a copy of it until that child execs, and Linux refuses to run a file open for
+        // writing. It clears in milliseconds; it failed CI once, unrelated to the code under test.
+        let mut tries = 0;
+        let renamed = loop {
+            let result = rename_program(
+                program.as_str(),
+                cwd,
+                "session-1",
+                "Saved",
+                Duration::from_secs(2),
+            );
+            match result {
+                Err(e) if e.contains("Text file busy") && tries < 20 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                other => break other,
+            }
+        };
+        renamed.unwrap();
         let log = std::fs::read_to_string(cwd.join("requests.jsonl")).unwrap();
         assert!(log.contains("thread/name/set"));
         assert!(log.contains("thread/read"));
