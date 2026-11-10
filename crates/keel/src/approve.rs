@@ -270,6 +270,30 @@ fn looks_like_a_program(name: &str) -> bool {
 /// Leading environment assignments and wrappers are stepped over rather than treated as the
 /// program — `sudo rm -rf /` is a request to approve `rm`, and the first version of this returned
 /// nothing at all for it, which reads as "no rule needed".
+/// The simple commands in one shell line: split on `;`, `|`, `&` (so `&&`, `||` and a pipe) but
+/// only outside quotes. Splitting the raw text read `grep -v "transform\|platform\|perform"` as
+/// three commands and offered "allow `perform` this session" for a program that was never run.
+fn simple_commands(command: &str) -> Vec<&str> {
+    let (mut out, mut start, mut quote, mut escaped) = (Vec::new(), 0, None, false);
+    for (i, c) in command.char_indices() {
+        match (quote, c) {
+            _ if escaped => escaped = false,
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => escaped = true,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, ';' | '|' | '&') => {
+                out.push(&command[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&command[start..]);
+    out
+}
+
 pub(crate) fn program_of(segment: &str) -> Option<String> {
     let mut tokens = segment.split_whitespace();
     loop {
@@ -346,20 +370,18 @@ pub fn rules_for(tool: &str, input: &serde_json::Value) -> Vec<String> {
     // `Bash(the *)`. Two hundred rules in one real project, most of them meaningless, which is an
     // allowlist that has stopped meaning anything.
     let mut out: Vec<String> = Vec::new();
-    for segment in command.split(';').flat_map(|s| s.split("&&")) {
-        for part in segment.split("||").flat_map(|s| s.split('|')) {
-            let Some(program) = program_of(part) else {
-                continue;
-            };
-            let rule = format!("Bash({program} *)");
-            if !out.contains(&rule) {
-                out.push(rule);
-            }
-            // A command that needs five different programs approved is one to think about as a
-            // whole rather than to shred into rules.
-            if out.len() >= MAX_RULES {
-                return out;
-            }
+    for part in simple_commands(command) {
+        let Some(program) = program_of(part) else {
+            continue;
+        };
+        let rule = format!("Bash({program} *)");
+        if !out.contains(&rule) {
+            out.push(rule);
+        }
+        // A command that needs five different programs approved is one to think about as a
+        // whole rather than to shred into rules.
+        if out.len() >= MAX_RULES {
+            return out;
         }
     }
     out
@@ -2815,6 +2837,20 @@ pub(crate) mod tests {
     /// "Allow Bash(for *) Bash(do *) Bash(cat *) Bash(done *)" on a button, and approving it would
     /// have written all four. `Bash(do *)` matches nothing ever; `Bash(for *)` matches every
     /// command beginning with the word "for".
+    /// A `|` or `;` inside quotes is text, not a second command. Measured on a real card:
+    /// `grep -iv "transform\|platform\|perform"` offered "allow `perform` this session".
+    #[test]
+    fn a_separator_inside_quotes_is_not_a_command() {
+        let command =
+            r#"grep -iv "transform\|platform\|perform" a.txt | head -40; echo 'a;b|c' && ls"#;
+        let rules = rules_for("Bash", &serde_json::json!({ "command": command }));
+        assert_eq!(
+            rules,
+            ["Bash(grep *)", "Bash(head *)", "Bash(echo *)", "Bash(ls *)"],
+            "{rules:?}"
+        );
+    }
+
     #[test]
     fn a_shell_loop_does_not_become_a_rule_per_keyword() {
         let input = serde_json::json!({

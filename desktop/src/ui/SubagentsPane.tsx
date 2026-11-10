@@ -87,11 +87,11 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
  *  the terminal's tiling grid rearranged the whole lane each time a helper started. */
 function ChatHelpers({ grid, main, label, style, panes, working, children }: { grid: RefObject<HTMLDivElement | null>; main: RefObject<HTMLElement | null>; label: string; style: CSSProperties; panes: ReactNode[]; working: number; children?: ReactNode }) {
   return <div className={"terminal-grid-shell chat-grid" + (panes.length ? " has-helpers" : "")} style={style}>
-    <div ref={grid} className="chat-grid-row">
+    <div className="chat-grid-row">
       <section key="main" ref={main} className="chat-grid-main" data-pane="main" aria-label={label}>{children}</section>
-      {panes.length > 0 && <aside className="chat-helpers" aria-label="Subagents">
+      {panes.length > 0 && <div ref={grid} role="complementary" className="chat-helpers" aria-label="Subagents">
         <header className="chat-helpers-head"><span className={"chat-helpers-dot" + (working ? " is-live" : "")} /><strong>Helpers</strong><small>{working || "none"} working</small></header>
-        {panes}</aside>}
+        {panes}</div>}
     </div>
   </div>;
 }

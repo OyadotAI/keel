@@ -504,3 +504,11 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .review-commit { display: flex; gap: 8px; margin-top: 10px; }
 .review-commit input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; }
 .review-commit button { height: 32px; white-space: nowrap; }
+/* A command card fits beside the conversation: the command is a glance (four lines, then it
+   scrolls or opens), and the three answers are one row with Deny set apart at the end. */
+.command-approval .approval-command { max-height: 6.4em; overflow: auto; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
+.command-approval .approval-command.is-open { max-height: 320px; }
+.command-approval .approval-more { align-self: flex-start; margin-top: 4px; }
+.command-approval .actions { display: flex; flex-flow: row wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.command-approval .actions > button { height: 30px; font-size: 12px; white-space: nowrap; }
+.command-approval .approval-deny { margin-left: auto; }

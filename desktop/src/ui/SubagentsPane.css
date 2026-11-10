@@ -187,3 +187,25 @@
   .chat-helpers .child-terminal-surface::before, .chat-helpers .terminal-pane-heading::after, .chat-helpers .terminal-pane-status,
   .chat-helpers .terminal-pane-footer > span::after { animation: none !important; }
 }
+
+/* The helper column runs the lane's full height, beside the conversation, any question and the
+   composer, under the lane's header. The wrappers between the lane and the column step out of the
+   box tree (`display: contents`) so the column is the lane's own grid item; `.agents` is not a box
+   anyone sees, and a terminal lane kept mounted behind this one is hidden outright meanwhile. */
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) {
+  --helper-w: min(360px, 36%);
+  display: grid; grid-template-columns: minmax(0, 1fr) var(--helper-w);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+}
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .lane-header { grid-column: 1 / -1; grid-row: 1; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .banner { grid-column: 1; grid-row: 2; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) :is(.agents, .agents > .chat-grid, .chat-grid-row) { display: contents; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) .agents > :not(.chat-grid) { display: none; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) .chat-grid-main { grid-column: 1; grid-row: 3; min-height: 0; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .ide-chat-tools { grid-column: 1; grid-row: 4; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .chat-dock { grid-column: 1; grid-row: 5; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) .chat-helpers { grid-column: 2; grid-row: 2 / -1; width: auto; min-height: 0; animation-name: helpers-slide; }
+@keyframes helpers-slide { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+/* The tool-use id means nothing to a person; the helper's name and task are the label. */
+.chat-helpers .terminal-pane-heading small { display: none; }
+.chat-helpers .terminal-pane-status { margin-left: auto; }

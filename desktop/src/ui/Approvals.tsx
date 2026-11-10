@@ -43,6 +43,16 @@ function Arguments({ input }: { input: Record<string, unknown> }) {
   return <pre className="code" style={{ maxHeight: 200, overflow: "auto" }}>{text}</pre>;
 }
 
+/** Characters of a one-line command shown before "Show all": a long line wraps into a wall. */
+const COMMAND_GLANCE_CHARS = 240;
+
+/** The programs a session rule covers, as words: `grep, head and echo`, not `Bash(grep *), …`.
+ *  The exact rules stay in the button's title. */
+function sessionNames(rules: string[]): string {
+  const names = rules.map((r) => /^Bash\((\S+) \*\)$/.exec(r)?.[1] ?? r);
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const answer = useStore((s) => s.answer);
   const [all, setAll] = useState(false);
@@ -51,8 +61,9 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   if (p.tool === BROWSER_CHOICE) return <BrowserChoice lane={lane} p={p} />;
   if (p.provider) return <RuntimeRequest lane={lane} p={p} />;
   const lines = p.command.split("\n");
+  const long = lines.length > 6 || p.command.length > COMMAND_GLANCE_CHARS;
   return (
-    <div className="strip-row">
+    <div className="strip-row command-approval">
       <div className="strip-title">
         <Icon name="hand" className="hand" />
         <span style={{ flex: 1 }}>{who(p)} wants to run {p.tool === "Bash" ? "a command" : p.tool}</span>
@@ -61,13 +72,10 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
       {p.reason && <p className="small muted">{p.reason}</p>}
       {!p.command && <Arguments input={p.input} />}
       {p.command && (
-        <pre className="code" style={{ maxHeight: all ? 320 : undefined }}>
-          $ {all ? p.command : lines.slice(0, 6).join("\n")}
-          {!all && lines.length > 6 && "\n…"}
-        </pre>
+        <pre className={`code approval-command${all ? " is-open" : ""}`}>$ {all ? p.command : lines.slice(0, 6).join("\n")}{!all && lines.length > 6 && "\n…"}</pre>
       )}
-      {!all && lines.length > 6 && (
-        <button className="link small" onClick={() => setAll(true)}>
+      {!all && long && (
+        <button className="link small approval-more" onClick={() => setAll(true)}>
           Show all
         </button>
       )}
@@ -77,11 +85,11 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
         </button>
         {/* A card asked because a deny rule can't be checked asks every time: a session rule would do nothing. */}
         {p.rules.length > 0 && !p.reason && (
-          <button onClick={() => (void answer(lane, p, "allow", undefined, "session"), after())} title="Remembered for this conversation only. The palette has “Always allow” for the whole project.">
-            Allow <code>{p.rules.join(", ")}</code> this session <kbd>{label({ key: "s", shift: true })}</kbd>
+          <button onClick={() => (void answer(lane, p, "allow", undefined, "session"), after())} title={`${p.rules.join(", ")} — remembered for this conversation only. The palette has “Always allow” for the whole project.`}>
+            Allow {sessionNames(p.rules)} this session <kbd>{label({ key: "s", shift: true })}</kbd>
           </button>
         )}
-        <button onClick={() => (void answer(lane, p, "deny"), after())}>
+        <button className="approval-deny" onClick={() => (void answer(lane, p, "deny"), after())}>
           Deny <kbd>{label({ key: "d", shift: true })}</kbd>
         </button>
       </div>
