@@ -544,3 +544,6 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .chat-dock { display: flex; flex-direction: column; overflow: hidden; }
 .chat-dock > * { flex: none; }
 .chat-dock > .strip, .chat-dock > .chat-queue { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+/* An image queued behind the running turn shows beside its words. */
+.queue-attachments { display: flex; flex: none; gap: 4px; align-items: center; }
+.queue-attachments img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; box-shadow: 0 0 0 .5px var(--hairline); }

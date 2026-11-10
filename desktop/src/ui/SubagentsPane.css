@@ -209,3 +209,7 @@
 /* The tool-use id means nothing to a person; the helper's name and task are the label. */
 .chat-helpers .terminal-pane-heading small { display: none; }
 .chat-helpers .terminal-pane-status { margin-left: auto; }
+/* In this grid the dock's percentage caps (65%, 85%) resolve against its own auto row, so it showed
+   two-thirds of itself — the composer's buttons cut off over an empty band. Capped by the window. */
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .chat-dock { max-height: 65dvh; }
+.app:not(.ide-layout) .agent-pane:has(.chat-helpers) > .chat-dock:is(:has(.plan-approval), :has(.runtime-approval)) { max-height: 85dvh; }
