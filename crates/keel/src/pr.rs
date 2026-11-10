@@ -65,7 +65,18 @@ fn precheck_using(
              somewhere to merge from."
         ));
     }
-    if !run(&["status", "--porcelain"])?.trim().is_empty() {
+    // What Keel itself keeps out of every commit is not the person's uncommitted work.
+    let status = run(&["status", "--porcelain"])?;
+    let uncommitted = status.lines().any(|line| {
+        let path = line
+            .get(3..)
+            .unwrap_or("")
+            .rsplit(" -> ")
+            .next()
+            .unwrap_or("");
+        !path.is_empty() && !crate::worktree::kept_out(path.trim_matches('"'))
+    });
+    if uncommitted {
         return Err(
             "There are uncommitted changes. Commit them first — a pull request only carries what \
              is committed, and opening one now would leave the rest behind."
@@ -106,6 +117,26 @@ mod tests {
             crate::git::output(c).unwrap().status.success(),
             "git {args:?}"
         );
+    }
+
+    /// A quarantined file is never committed, so it cannot be what stops a pull request: the
+    /// precheck said "commit first" about a `.mcp.json` the commit would never take.
+    #[test]
+    fn what_keel_keeps_out_of_commits_does_not_block_a_pull_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".mcp.json"), "{}").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        git(&repo, &["checkout", "-qb", "feat"]);
+        std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "the change"]);
+        std::fs::remove_file(repo.join(".mcp.json")).unwrap();
+        assert_eq!(precheck(&repo, "main").unwrap(), "feat");
+        std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+        assert!(precheck(&repo, "main").unwrap_err().contains("uncommitted"));
     }
 
     /// A branch with nothing its base lacks is refused before anything is pushed, in words that

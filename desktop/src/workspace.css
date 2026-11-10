@@ -304,25 +304,34 @@ button.primary:focus-visible { box-shadow: var(--ring); }
 .appearance-options label.selected { color: var(--text); border-color: var(--accent); background: var(--tint); box-shadow: inset 0 0 0 .5px var(--accent); }
 .appearance-options label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
 .appearance-options input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.working-animation { position: relative; display: inline-block; flex: none; height: 18px; width: 30px; color: var(--accent); }
-.working-animation i { position: absolute; left: 0; top: 0; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 4px currentColor; offset-path: path("M4 9 C 4 2, 15 2, 15 9 S 26 16, 26 9 S 15 2, 15 9 S 4 16, 4 9"); offset-rotate: 0deg; animation: working-ants 1.8s linear infinite; }
-.working-animation i:nth-child(2) { animation-delay: -.36s; opacity: .9; }
-.working-animation i:nth-child(3) { animation-delay: -.72s; opacity: .8; }
-.working-animation i:nth-child(4) { animation-delay: -1.08s; opacity: .7; }
-.working-animation i:nth-child(5) { animation-delay: -1.44s; opacity: .6; }
+.working-animation { position: relative; display: inline-block; flex: none; height: 14px; width: 22px; color: var(--accent); }
+.working-animation i { position: absolute; left: 0; top: 0; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: currentColor; offset-path: path("M4 7 C 4 2, 11 2, 11 7 S 18 12, 18 7 S 11 2, 11 7 S 4 12, 4 7"); offset-rotate: 0deg; animation: working-ants 2.4s linear infinite; }
+.working-animation i:nth-child(2) { animation-delay: -.48s; opacity: .8; }
+.working-animation i:nth-child(3) { animation-delay: -.96s; opacity: .6; }
+.working-animation i:nth-child(4) { animation-delay: -1.44s; opacity: .45; }
+.working-animation i:nth-child(5) { animation-delay: -1.92s; opacity: .3; }
 @keyframes working-ants { from { offset-distance: 0%; } to { offset-distance: 100%; } }
-.chat-status.is-working { color: var(--text); font-weight: 500; background: radial-gradient(circle, var(--accent) 1.6px, transparent 2.2px) 0 100% / 10px 5px repeat-x; animation: ants-march .7s linear infinite; }
-@keyframes ants-march { to { background-position: 10px 100%; } }
+.chat-status.is-working { color: var(--dim); }
 .member-avatar.is-working { position: relative; color: var(--accent); background: var(--tint); overflow: visible; }
 .member-avatar.is-working::after { content: ""; position: absolute; inset: -3px; border: 1.5px solid transparent; border-top-color: var(--accent); border-right-color: color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 50%; animation: member-working 1.5s linear infinite; }
 @keyframes member-working { to { transform: rotate(360deg); } }
 .member-row.is-working .member-name { color: var(--text); }
-.member-row > .working-animation { margin-left: auto; transform: scale(.8); }
+.member-row > .working-animation { margin-left: auto; width: 16px; height: 16px; }
+/* In the sidebar: a comet orbiting, its tail tapering — a smaller, quieter shape than the chat's. */
+.member-row > .working-animation i { offset-path: path("M8 2.5 a5.5 5.5 0 1 1 0 11 a5.5 5.5 0 1 1 0 -11"); animation-duration: 1.1s; animation-timing-function: cubic-bezier(.45, .05, .55, .95); margin: 0; }
+.member-row > .working-animation i:nth-child(1) { width: 4px; height: 4px; opacity: 1; animation-delay: -.28s; box-shadow: 0 0 5px color-mix(in srgb, currentColor 60%, transparent); }
+.member-row > .working-animation i:nth-child(2) { width: 3.4px; height: 3.4px; opacity: .7; animation-delay: -.21s; }
+.member-row > .working-animation i:nth-child(3) { width: 2.8px; height: 2.8px; opacity: .5; animation-delay: -.14s; }
+.member-row > .working-animation i:nth-child(4) { width: 2.2px; height: 2.2px; opacity: .32; animation-delay: -.07s; }
+.member-row > .working-animation i:nth-child(5) { width: 1.6px; height: 1.6px; opacity: .18; animation-delay: 0s; }
+@media (prefers-reduced-motion: reduce) {
+  .member-row > .working-animation i:nth-child(n) { animation: none; offset-distance: 0%; }
+}
 .chat-status-text { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .chat-status-text > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-status > button { flex: none; }
 @media (prefers-reduced-motion: reduce) {
-  .working-animation i, .member-avatar.is-working::after, .chat-status.is-working { animation: none; }
+  .working-animation i, .member-avatar.is-working::after { animation: none; }
   .working-animation i:nth-child(2) { offset-distance: 20%; }
   .working-animation i:nth-child(3) { offset-distance: 40%; }
   .working-animation i:nth-child(4) { offset-distance: 60%; }
@@ -528,3 +537,10 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .chat-images .markdown-image img { max-width: 220px; max-height: 160px; object-fit: cover; border-radius: 8px; box-shadow: 0 0 0 .5px var(--hairline); }
 /* The one-click pull request: one sentence, one button. */
 .ship-card .ship-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
+.ship-card .ship-text { flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ship-card .ship-row > button { flex: none; }
+/* The composer and its status never scroll out of view: when the dock is capped (a short window,
+   several cards), only the cards and the queue above them shrink and scroll. */
+.chat-dock { display: flex; flex-direction: column; overflow: hidden; }
+.chat-dock > * { flex: none; }
+.chat-dock > .strip, .chat-dock > .chat-queue { flex: 0 1 auto; min-height: 0; overflow-y: auto; }

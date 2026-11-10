@@ -586,6 +586,22 @@ fn commit_every(
     commit_one(checkout, message, automatic, only)
 }
 
+/// What Keel never commits: the repository config it quarantined, and the quarantine itself.
+/// One answer, because the pull-request precheck has to agree with the commit — it refused on a
+/// quarantined `.mcp.json` the commit would never take, so "commit first" could never be met.
+pub fn kept_out(path: &str) -> bool {
+    keel_harness::trust::UNTRUSTED
+        .iter()
+        .chain(&[".keel/quarantine"])
+        .any(|q| path == *q || path.starts_with(&format!("{q}/")))
+}
+
+/// Whether `add -A` would leave `path` alone anyway: ignored, with nothing under it tracked.
+fn ignored_and_untracked(checkout: &Utf8Path, path: &str) -> bool {
+    git(checkout, &["check-ignore", "-q", "--", path]).is_ok()
+        && git(checkout, &["ls-files", "--", path]).is_ok_and(|out| out.trim().is_empty())
+}
+
 fn commit_one(
     checkout: &Utf8Path,
     message: &str,
@@ -629,13 +645,7 @@ fn commit_one(
             let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
             // The quarantine is excluded here rather than as `:(exclude)` pathspecs, which git
             // refuses beside `--pathspec-from-file`.
-            let quarantined = |p: &str| {
-                keel_harness::trust::UNTRUSTED
-                    .iter()
-                    .chain(&[".keel/quarantine"])
-                    .any(|q| p == *q || p.starts_with(&format!("{q}/")))
-            };
-            let keep: Vec<&String> = paths.iter().filter(|p| !quarantined(p)).collect();
+            let keep: Vec<&String> = paths.iter().filter(|p| !kept_out(p)).collect();
             wanted = Some(keep.iter().map(|p| p.to_string()).collect());
             for p in keep {
                 std::io::Write::write_all(&mut file, p.as_bytes()).map_err(|e| e.to_string())?;
@@ -663,9 +673,13 @@ fn commit_one(
     }
     // What Keel quarantined is Keel's doing, not the turn's or the person's: committing it
     // deleted the repository's shared config on the branch under somebody's prompt.
+    // Only what `add -A` would otherwise stage: git refuses the whole `add` when an exclude names
+    // a path `.gitignore` already ignores ("The following paths are ignored…"), and a project
+    // that ignores `.keel/quarantine/` — this one does — could then never commit at all.
     let excluded: Vec<String> = keel_harness::trust::UNTRUSTED
         .iter()
         .chain(&[".keel/quarantine"])
+        .filter(|p| !ignored_and_untracked(checkout, p))
         .map(|p| format!(":(exclude){p}"))
         .collect();
     if from_file.is_none() {
@@ -1091,6 +1105,24 @@ mod tests {
             "mine"
         );
         assert!(root.join(".git/MERGE_HEAD").exists());
+    }
+
+    /// A project that ignores the quarantine could not commit at all: the exclude named an ignored
+    /// path and git refused the whole `add`.
+    #[test]
+    fn an_ignored_quarantine_does_not_stop_a_commit() {
+        let (_d, root) = scratch_git();
+        std::fs::write(root.join(".gitignore"), ".keel/quarantine/\n").unwrap();
+        std::fs::create_dir_all(root.join(".keel/quarantine")).unwrap();
+        std::fs::write(root.join(".keel/quarantine/settings.json"), "{}").unwrap();
+        std::fs::write(root.join("f"), "changed\n").unwrap();
+        assert_eq!(commit_all(&root, "work"), Ok(true));
+        let files =
+            crate::git::trimmed(&root, &["show", "--name-only", "--format=", "HEAD"]).unwrap();
+        assert!(
+            files.contains('f') && !files.contains("quarantine"),
+            "{files}"
+        );
     }
 
     /// `stash pop` leaves a conflict and no MERGE_HEAD; the checkpoint committed the markers.
