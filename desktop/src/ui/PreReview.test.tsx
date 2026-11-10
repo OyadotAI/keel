@@ -61,14 +61,15 @@ describe("the review dock", () => {
     expect(buttons(html)).not.toContain("Open without review");
   });
 
-  it("a branch with uncommitted work is a step to take, with the commit right there", () => {
-    store.state.lanes = { l: { git: { changes: [{}, {}] } } };
-    const html = renderToStaticMarkup(<Ended {...base} r={review({ kind: "none", cause: "refused", line: "There are uncommitted changes.", took: 0 })} />);
-    store.state.lanes = {};
-    expect(html).toContain("Commit your changes first");
-    expect(html).toContain("2 files not committed");
-    expect(buttons(html)).toContain("Commit and review");
-    for (const gone of ["Couldn’t review", "Technical details", "after 0s"]) expect(html).not.toContain(gone);
+  it("uncommitted work or being on main is one step to take, with the save right there", () => {
+    for (const line of ["There are uncommitted changes.", "You are on `main`. Make a branch for the change first."]) {
+      store.state.lanes = { l: { git: { changes: [{}, {}] } } };
+      const html = renderToStaticMarkup(<Ended {...base} r={review({ kind: "none", cause: "refused", line, took: 0 })} />);
+      store.state.lanes = {};
+      expect(html).toContain("Save your work first");
+      expect(buttons(html)).toContain("Save and continue");
+      for (const gone of ["Couldn’t review", "Technical details", "after 0s", "Review again"]) expect(html).not.toContain(gone);
+    }
   });
 
   it("names a pull request as owner/repo#n, from gh's output whatever its result", () => {

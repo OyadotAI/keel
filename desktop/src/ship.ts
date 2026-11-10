@@ -34,14 +34,20 @@ export const needsBranch = (l: Pick<Lane, "wt" | "git">) => !l.wt && (!l.git?.br
  *  and its link are the pull-request run's, which the dock already draws. */
 export async function ship(lane: string, l: Lane, ep: Endpoint, step: (s: ShipStep) => void): Promise<boolean> {
   const title = shipTitle(l);
+  await prepare(l, ep, title, step);
+  step("open");
+  return openPullRequest(ep, l.wt, { title, draft: false }, lane);
+}
+
+/** The git half on its own: a branch off the main line, then everything committed as `message`.
+ *  Shared with "Commit your changes first", which otherwise had no way off `main`. */
+export async function prepare(l: Lane, ep: Endpoint, message: string, step: (s: ShipStep) => void = () => {}): Promise<void> {
   if (needsBranch(l)) {
     step("branch");
-    await post(ep, "/api/git/branch", { action: "create", name: branchName(title) });
+    await post(ep, "/api/git/branch", { action: "create", name: branchName(message) });
   }
   if (l.git?.changes.length) {
     step("commit");
-    await post(ep, "/api/git/commit", { message: title }, { wt: l.wt });
+    await post(ep, "/api/git/commit", { message }, { wt: l.wt });
   }
-  step("open");
-  return openPullRequest(ep, l.wt, { title, draft: false }, lane);
 }

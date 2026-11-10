@@ -28,8 +28,7 @@ export function ShipCard({ lane, ep, wt }: { lane: string; ep: Endpoint; wt?: st
   return (
     <div className="strip review-strip ship-card" role="region" aria-label="Share your changes">
       <div className="ship-row">
-        {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span>{error ? `Didn’t work: ${error}` : "Happy with it? Share it as a pull request."}</span>}
-        <span className="spacer" />
+        {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span className="ship-text" title={error}>{error ? `Didn’t work: ${error.split(/\n|\s+hint:/)[0].trim()}` : "Happy with it? Share it as a pull request."}</span>}
         {!step && <button className="primary" onClick={() => void go()}>{error ? "Try again" : "Open pull request"}</button>}
       </div>
     </div>

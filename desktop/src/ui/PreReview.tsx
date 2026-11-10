@@ -1,7 +1,7 @@
 // A full PR review tab and compact dock share confirmed facts, pending actions, and recovery.
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { post, type Endpoint } from "../api";
+import type { Endpoint } from "../api";
 import { useIde } from "../ide";
 import { useStore } from "../store";
 import { baseOf, clock, dismissReview, openPullRequest, prLabel, prLink, sorted, navigable, refreshReview, startReview, stopReview, sendFindings, useReview, usePrRun, prForTarget, type Review, type Finding, type PrRun } from "../prereview";
@@ -12,7 +12,7 @@ import { Markdown } from "./Markdown";
 import { deliverFindings, PreReviewFeedback, reviewFailure } from "./PreReviewFeedback";
 import { verdictPresentation } from "../prereview";
 import { ShipCard } from "./Ship";
-import { shipTitle } from "../ship";
+import { prepare, shipTitle } from "../ship";
 
 const MAX_ROWS = 50;
 const short = (sha: string) => sha.slice(0, 7);
@@ -148,22 +148,26 @@ export function Ended({ r, ...p }: Props & { r?: Review | null }) {
  *  a step still to take, not a failed review: no red, no timer, no details repeating the sentence,
  *  and when the step is a commit, the commit is right here — "Review again" alone was a dead end. */
 function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boolean; again: () => void }) {
-  const changes = useStore((s) => s.lanes[p.lane]?.git?.changes.length ?? 0);
+  // What the daemon refused for, not a count of git status: that count includes what Keel keeps
+  // out of every commit, so it never reached zero and the card could never be left.
+  const fixable = /^(There are uncommitted|You are on `)/.test(why);
   const [message, setMessage] = useState(() => { const l = useStore.getState().lanes[p.lane]; return l ? shipTitle(l) : ""; }), [committing, setCommitting] = useState(false), [error, setError] = useState("");
   const commit = async () => {
+    const l = useStore.getState().lanes[p.lane];
+    if (!l) return;
     setCommitting(true); setError("");
-    try { await post(p.ep, "/api/git/commit", { message: message.trim() }, { wt: p.wt }); again(); }
-    catch (e) { setError(`Couldn’t commit: ${e instanceof Error ? e.message : e}`); }
+    try { await prepare(l, p.ep, message.trim()); again(); }
+    catch (e) { setError(`Couldn’t save: ${e instanceof Error ? e.message : e}`); }
     finally { setCommitting(false); }
   };
-  return <><Head icon="hand" color="var(--warn)" title={changes ? "Commit your changes first" : "Not ready for a pull request"} />
-    <p className="review-body muted">{changes ? `${changes} file${changes === 1 ? "" : "s"} not committed. A pull request only carries what is committed.` : why}</p>
-    {changes > 0 && <form className="review-commit" onSubmit={(e) => { e.preventDefault(); if (message.trim()) void commit(); }}>
-      <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Commit message" aria-label="Commit message" disabled={committing} />
-      <button className="primary" type="submit" disabled={busy || committing || !message.trim()}>{committing ? "Committing…" : "Commit and review"}</button>
+  return <><Head icon="hand" color="var(--warn)" title={fixable ? "Save your work first" : "Not ready for a pull request"} />
+    <p className="review-body muted">{fixable ? "Keel puts it on its own branch and saves it — name the change:" : why}</p>
+    {fixable && <form className="review-commit" onSubmit={(e) => { e.preventDefault(); if (message.trim()) void commit(); }}>
+      <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What changed" aria-label="What changed" disabled={committing} />
+      <button className="primary" type="submit" disabled={busy || committing || !message.trim()}>{committing ? "Saving…" : "Save and continue"}</button>
     </form>}
     {error && <Banner tone="error">{error}</Banner>}
-    {!changes && <div className="actions"><button className="primary" disabled={busy} onClick={again}>Review again</button></div>}<Close {...p} /></>;
+    {!fixable && <div className="actions"><button className="primary" disabled={busy} onClick={again}>Review again</button></div>}<Close {...p} /></>;
 }
 
 /** An existing/created link wins over a lost response; retry first reconciles the immutable target. */
