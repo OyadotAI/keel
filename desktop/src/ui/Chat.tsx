@@ -6,6 +6,8 @@ import { AGENT_NAME, useStore } from "../store";
 import { Markdown, Copy } from "./Markdown";
 import { Icon } from "./icons";
 import { BrandMark } from "./BrandMark";
+import { DocumentImage } from "./MarkdownPreview";
+import { promptAttachments } from "../prompt-attachments";
 import { Working } from "./Working";
 import type { Turn } from "../reduce";
 import { duration, turnFacts } from "../turn-facts";
@@ -126,8 +128,14 @@ function rowContent(lane: string, row: Row) {
 }
 
 function Prompt({ lane, index }: { lane: string; index: number }) {
-  const text = useStore((s) => s.lanes[lane]?.conv.turns[index]?.prompt);
-  return <article className="chat-row chat-user"><div className="chat-speaker">You <Copy text={text ?? ""} /></div><p>{text ?? "Earlier in the conversation"}</p></article>;
+  const prompt = useStore((s) => s.lanes[lane]?.conv.turns[index]?.prompt);
+  const ep = useStore((s) => s.projects[s.lanes[lane]?.project ?? ""]?.endpoint);
+  const wt = useStore((s) => s.lanes[lane]?.wt);
+  const { text, images } = useMemo(() => promptAttachments(prompt ?? ""), [prompt]);
+  return <article className="chat-row chat-user"><div className="chat-speaker">You <Copy text={text} /></div>
+    {text ? <p>{text}</p> : !images.length && <p>Earlier in the conversation</p>}
+    {ep && images.length > 0 && <div className="chat-images">{images.map((path) => <DocumentImage key={path} ep={ep} wt={wt} path={path} alt={path.split("/").pop() ?? ""} revision={0} />)}</div>}
+  </article>;
 }
 
 function Block({ lane, index, step }: { lane: string; index: number; step: string }) {

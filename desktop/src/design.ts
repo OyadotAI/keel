@@ -5,8 +5,9 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useStore } from "./store";
+import { useStore, type Lane } from "./store";
 import { typeInto } from "./typers";
+import { urlIn } from "./devlog";
 
 import { prompt, type Picked, type Pin } from "./pins";
 export type { Pin, Verdict } from "./pins";
@@ -36,7 +37,47 @@ export const useDesign = (lane: string) =>
 let showing: string | undefined;
 export function showingLane(lane: string | undefined) {
   showing = lane;
+  told = undefined;
   if (lane) void send({ pins: get(lane).pins.map(({ id, selector }) => ({ id, selector })) });
+  tellWork();
+}
+
+// ── The live canvas ─────────────────────────────────────────────────────
+// When a turn writes a frontend file, the preview comes forward (once per turn, only for the lane
+// on screen) and the page ripples what re-renders until the turn ends. Agent-neutral: Claude and
+// Antigravity edits are `Write`/`Edit` calls, Codex's arrive as the turn's written files.
+const FRONTEND = /\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less|mdx)$/i;
+const WRITES = /^(Write|Edit|MultiEdit|Update)$/;
+const busy = (l: Lane) => l.observation?.running ?? l.running;
+
+/// The frontend file the lane's open turn wrote last, if it is running and wrote one.
+export function editingFrontend(l: Lane): string | undefined {
+  const t = l.conv.turns.at(-1);
+  if (!busy(l) || !t || t.closed) return undefined;
+  const calls = Object.values(t.calls).filter((c) => WRITES.test(c.tool)).map((c) => String(c.input?.file_path ?? c.subject));
+  return [...t.files, ...calls].reverse().find((p) => FRONTEND.test(p));
+}
+/// Whether there is a page to show: Keel's dev server for this lane, or one the agent started.
+const previewable = (l: Lane) => (!!l.dev?.running && !l.dev.elsewhere) || l.jobs.some((j) => !j.finished && !!(j.url ?? urlIn(j.log)));
+
+/// What the page was last told, so a store update that changes nothing sends nothing.
+let told: string | undefined;
+function tellWork() {
+  const l = showing ? useStore.getState().lanes[showing] : undefined;
+  const file = l && busy(l) ? editingFrontend(l) ?? "" : undefined;
+  const now = file === undefined ? "off" : `on:${file}`;
+  if (now === told) return;
+  told = now;
+  void send({ work: file === undefined ? { on: false } : { on: true, file: file || undefined } });
+}
+const revealed = new Map<string, string>();
+function revealPreview() {
+  const s = useStore.getState();
+  const l = s.active ? s.lanes[s.active] : undefined;
+  const t = l?.conv.turns.at(-1);
+  if (!l || !t || revealed.get(l.id) === t.id || !editingFrontend(l) || !previewable(l)) return;
+  revealed.set(l.id, t.id);
+  useStore.setState({ panelTab: "preview" });
 }
 
 const send = (msg: unknown) => invoke("preview_send", { msg }).catch(() => undefined);
@@ -139,5 +180,7 @@ export function watchDesign() {
       was.set(id, l.running);
       if (before && !l.running && get(id).waiting) setTimeout(() => check(id), 2500);
     }
+    revealPreview();
+    tellWork();
   });
 }

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { AGENT_NAME, useStore } from "../store";
 import { Floating } from "./Menu";
 import { Icon } from "./icons";
+import { AgentMark } from "./AgentMark";
 import { Dialog, restoreFocus } from "./kit";
 import { label } from "../keys";
 import { LaneViewSwitch } from "./LaneViewSwitch";
@@ -66,11 +67,12 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
         {renaming ? (
           <Rename lane={lane} title={title ?? ""} />
         ) : (
-          <span className="lane-name" onDoubleClick={() => setRenaming(true)} title="Double-click or F2 in the sidebar to rename">
-            {title}
-          </span>
+          <button className="lane-name" onClick={() => setRenaming(true)} title="Rename (F2 in the sidebar)">
+            <span>{title}</span>
+            <Icon name="pencil" size={12} />
+          </button>
         )}
-        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span>{AGENT_NAME[agent ?? "claude"]}</span>
+        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span><AgentMark agent={agent} />{AGENT_NAME[agent ?? "claude"]}</span>
       </div>
       <UpdateButton />
       <LaneViewSwitch lane={lane} />

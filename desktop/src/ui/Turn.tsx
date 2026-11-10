@@ -1,3 +1,4 @@
+import { promptAttachments } from "../prompt-attachments";
 import { memo, useEffect, useMemo, useState } from "react";
 import { shownTool } from "../browser";
 import { get, post } from "../api";
@@ -45,7 +46,7 @@ export function stateOf(t: Turn, waiting: boolean): State {
 
 /// What a prompt says, for one line: its text, or what it was when it had none.
 export function promptLine(prompt: string | null | undefined): string {
-  const text = (prompt ?? "").replace(/\[Image #\d+\]/g, "").trim();
+  const text = promptAttachments(prompt ?? "").text.replace(/\[Image #\d+\]/g, "").trim();
   if (!prompt) return "Earlier in the conversation";
   return text || "An image";
 }

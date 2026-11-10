@@ -1,4 +1,4 @@
-/** CSS motion changes only while real work is in progress; reduced motion retains a static mark. */
+/** Dots marching a loop, like ants at work; moves only while real work is in progress, and reduced motion keeps a static mark. */
 export function Working() {
-  return <span className="working-animation" aria-hidden="true"><i /><i /><i /></span>;
+  return <span className="working-animation" aria-hidden="true"><i /><i /><i /><i /><i /></span>;
 }

@@ -96,9 +96,15 @@ body { background: var(--workspace-bg); }
 .lane-header { height: 70px; padding: 0 22px; background: transparent; border-bottom-color: var(--line); gap: 12px; }
 .lane-heading { flex-direction: column; justify-content: center; align-items: flex-start; gap: 5px; overflow: hidden; }
 .lane-name { font-size: 15px; font-weight: 650; letter-spacing: -.025em; max-width: 100%; }
+.lane-heading button.lane-name { display: inline-flex; align-items: center; gap: 6px; height: auto; padding: 2px 6px; margin: -2px -6px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); cursor: text; min-width: 0; }
+.lane-heading button.lane-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lane-heading button.lane-name > svg { flex: none; color: var(--dim); opacity: 0; transition: opacity .12s; }
+.lane-heading button.lane-name:hover, .lane-heading button.lane-name:focus-visible { background: var(--hover); }
+.lane-heading button.lane-name:hover > svg, .lane-heading button.lane-name:focus-visible > svg { opacity: 1; }
+.agent-mark { flex: none; }
 .lane-heading .lane-rename { margin: 0; height: 28px; min-width: 0; width: 100%; }
-.lane-context { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--faint); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.lane-context-separator { opacity: .45; padding: 0 3px; }
+.lane-context { display: flex; gap: 6px; align-items: center; font-size: 12.5px; font-weight: 500; color: var(--dim); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.lane-context-separator { opacity: .6; padding: 0 2px; }
 .segmented { padding: 3px; background: var(--well); border-radius: 8px; box-shadow: inset 0 0 0 .5px var(--hairline); }
 .lane-view-switch button { font-size: 12px; height: 25px; padding: 0 9px; }
 .lane-view-switch button:disabled { opacity: 1; color: var(--faint); }
@@ -298,11 +304,15 @@ button.primary:focus-visible { box-shadow: var(--ring); }
 .appearance-options label.selected { color: var(--text); border-color: var(--accent); background: var(--tint); box-shadow: inset 0 0 0 .5px var(--accent); }
 .appearance-options label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
 .appearance-options input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.working-animation { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 3px; height: 16px; width: 20px; color: var(--accent); }
-.working-animation i { display: block; width: 3px; height: 11px; background: currentColor; border-radius: 2px; transform-origin: center; animation: working-bars 1s ease-in-out infinite; }
-.working-animation i:nth-child(2) { animation-delay: .13s; }
-.working-animation i:nth-child(3) { animation-delay: .26s; }
-@keyframes working-bars { 0%, 100% { transform: scaleY(.4); opacity: .45; } 50% { transform: scaleY(1); opacity: 1; } }
+.working-animation { position: relative; display: inline-block; flex: none; height: 18px; width: 30px; color: var(--accent); }
+.working-animation i { position: absolute; left: 0; top: 0; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 4px currentColor; offset-path: path("M4 9 C 4 2, 15 2, 15 9 S 26 16, 26 9 S 15 2, 15 9 S 4 16, 4 9"); offset-rotate: 0deg; animation: working-ants 1.8s linear infinite; }
+.working-animation i:nth-child(2) { animation-delay: -.36s; opacity: .9; }
+.working-animation i:nth-child(3) { animation-delay: -.72s; opacity: .8; }
+.working-animation i:nth-child(4) { animation-delay: -1.08s; opacity: .7; }
+.working-animation i:nth-child(5) { animation-delay: -1.44s; opacity: .6; }
+@keyframes working-ants { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+.chat-status.is-working { color: var(--text); font-weight: 500; background: radial-gradient(circle, var(--accent) 1.6px, transparent 2.2px) 0 100% / 10px 5px repeat-x; animation: ants-march .7s linear infinite; }
+@keyframes ants-march { to { background-position: 10px 100%; } }
 .member-avatar.is-working { position: relative; color: var(--accent); background: var(--tint); overflow: visible; }
 .member-avatar.is-working::after { content: ""; position: absolute; inset: -3px; border: 1.5px solid transparent; border-top-color: var(--accent); border-right-color: color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 50%; animation: member-working 1.5s linear infinite; }
 @keyframes member-working { to { transform: rotate(360deg); } }
@@ -310,12 +320,13 @@ button.primary:focus-visible { box-shadow: var(--ring); }
 .member-row > .working-animation { margin-left: auto; transform: scale(.8); }
 .chat-status-text { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .chat-status-text > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-status.is-working { color: var(--dim); }
 .chat-status > button { flex: none; }
 @media (prefers-reduced-motion: reduce) {
-  .working-animation i, .member-avatar.is-working::after { animation: none; }
-  .working-animation i:nth-child(1) { transform: scaleY(.45); }
-  .working-animation i:nth-child(3) { transform: scaleY(.7); }
+  .working-animation i, .member-avatar.is-working::after, .chat-status.is-working { animation: none; }
+  .working-animation i:nth-child(2) { offset-distance: 20%; }
+  .working-animation i:nth-child(3) { offset-distance: 40%; }
+  .working-animation i:nth-child(4) { offset-distance: 60%; }
+  .working-animation i:nth-child(5) { offset-distance: 80%; }
 }
 
 /* Plans have one scrolling reading area; the heading and decision stay in place. */
@@ -512,3 +523,6 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .command-approval .actions { display: flex; flex-flow: row wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .command-approval .actions > button { height: 30px; font-size: 12px; white-space: nowrap; }
 .command-approval .approval-deny { margin-left: auto; }
+/* Images the person attached, under their words: thumbnails, so a screenshot never fills the chat. */
+.chat-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.chat-images .markdown-image img { max-width: 220px; max-height: 160px; object-fit: cover; border-radius: 8px; box-shadow: 0 0 0 .5px var(--hairline); }

@@ -68,7 +68,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({ text, path, lane,
   </section>;
 });
 
-function DocumentImage({ ep, wt, path, alt, revision }: { ep: Endpoint; wt?: string; path: string; alt: string; revision: unknown }) {
+export function DocumentImage({ ep, wt, path, alt, revision }: { ep: Endpoint; wt?: string; path: string; alt: string; revision: unknown }) {
   const box = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
   const [image, setImage] = useState<{ path: string; url: string }>();

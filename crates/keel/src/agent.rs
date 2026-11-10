@@ -2144,7 +2144,9 @@ pub(crate) fn translate(
         };
         Decoder::new(provider, Source::Chat)
     });
-    let prompt = query.prompt.clone();
+    // The words the agent was given, attachments named, so the live turn's prompt is the one its
+    // transcript replays — and the chat can show the images it carried.
+    let prompt = with_attachments(query.prompt.clone(), &query.attachments);
     let mut stopped = false;
     let mut opened = false;
     let frame = |frames: Vec<Frame>| {

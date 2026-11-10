@@ -2,7 +2,8 @@
 // pins and re-locates elements; it never edits the page. Everything it draws carries `data-keel`
 // so it never reports itself as part of the page.
 //
-// Messages in (window.__keelPicker): {arm}, {disarm}, {clear}, {probe: [{id, selector}]}, {pins}.
+// Messages in (window.__keelPicker): {arm}, {disarm}, {clear}, {probe: [{id, selector}]}, {pins},
+// {work: {on, file}} — the lane's turn is editing the frontend: ripple what re-renders until it ends.
 // Messages out (preview_msg): {type: "pick", pin}, {type: "probe", results}, {type: "armed", on}.
 (() => {
   if (window.__keelPickerInstalled) return;
@@ -241,8 +242,101 @@
   window.addEventListener("scroll", later, true);
   window.addEventListener("resize", later);
 
+  // ── The agent at work ───────────────────────────────────────────────────
+  // While the lane's turn runs and has written a frontend file, every region the page actually
+  // re-renders gets a small swarm of dots walking its outline. Observed from the DOM, never
+  // inferred from the file: no framework knowledge, and nothing drawn that did not happen.
+  const ACCENT = "#2f5fb3";
+  const ANTS = 10;
+  const LAP_MS = 1600;
+  const SWARM_MS = 2600;
+  const REGIONS = 6;
+  const DONE_MS = 1800;
+  const calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let watcher = null;
+  let dirty = new Set();
+  let flush = 0;
+  const swarmed = new WeakMap();
+  const make = (css, parent = layer()) => {
+    const el = document.createElement("div");
+    el.setAttribute("data-keel", "");
+    el.style.cssText = css;
+    parent.appendChild(el);
+    return el;
+  };
+  const fade = (el, ms) => el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, fill: "forwards" }).finished.then(() => el.remove(), () => el.remove());
+  /// Dots that walk the rect's perimeter, spread along it by negative delays, then fade.
+  function swarm(r) {
+    const box = make(`position:fixed;left:${r.x}px;top:${r.y}px;width:${r.width}px;height:${r.height}px;outline:1.5px dashed ${ACCENT}99;background:${ACCENT}0d;border-radius:3px`);
+    if (!calm) {
+      const { width: w, height: h } = r;
+      const p = 2 * (w + h);
+      const at = (x, y, offset) => ({ transform: `translate(${x - 2.5}px,${y - 2.5}px)`, offset });
+      const lap = [at(0, 0, 0), at(w, 0, w / p), at(w, h, (w + h) / p), at(0, h, (2 * w + h) / p), at(0, 0, 1)];
+      for (let i = 0; i < ANTS; i++) {
+        const ant = make(`position:absolute;left:0;top:0;width:5px;height:5px;border-radius:50%;background:${ACCENT};box-shadow:0 0 4px ${ACCENT}`, box);
+        ant.animate(lap, { duration: LAP_MS, iterations: Infinity, delay: (-i * LAP_MS) / ANTS });
+      }
+    }
+    setTimeout(() => fade(box, 400), SWARM_MS);
+  }
+  const visible = (r) => r.width > 2 && r.height > 2 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+  function ripple() {
+    const now = Date.now();
+    const els = [...dirty].filter((el) => el.isConnected && ![...dirty].some((o) => o !== el && o.contains(el)));
+    dirty = new Set();
+    let n = 0;
+    for (const el of els) {
+      if (n >= REGIONS) break;
+      if (now - (swarmed.get(el) || 0) < SWARM_MS) continue;
+      const r = el.getBoundingClientRect();
+      if (!visible(r)) continue;
+      swarmed.set(el, now);
+      swarm(r);
+      n++;
+    }
+  }
+  const note = (records) => {
+    for (const m of records) {
+      for (const node of m.type === "childList" && (m.target === document.body || m.target === document.documentElement) ? m.addedNodes : [m.target]) {
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        if (el && !isOurs(el) && el !== document.body && el !== document.documentElement) dirty.add(el);
+      }
+    }
+    cancelAnimationFrame(flush);
+    flush = requestAnimationFrame(ripple);
+  };
+  /// The pill at the bottom of the page: who is working on what, then that it finished.
+  function pill(text, done) {
+    layer().querySelector('[data-id="work"]')?.remove();
+    const el = make(`position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:#1d2433e6;color:#fff;font:500 12px/16px -apple-system,system-ui,sans-serif;box-shadow:0 4px 16px #0003;white-space:nowrap;max-width:80vw;overflow:hidden;text-overflow:ellipsis`);
+    el.setAttribute("data-id", "work");
+    const dots = make("display:flex;gap:3px", el);
+    for (let i = 0; i < 3; i++) {
+      const d = make(`width:5px;height:5px;border-radius:50%;background:${done ? "#5ec46a" : "#8fb0ff"}`, dots);
+      if (!done && !calm) d.animate([{ transform: "translateY(0)", opacity: 0.4 }, { transform: "translateY(-3px)", opacity: 1 }, { transform: "translateY(0)", opacity: 0.4 }], { duration: 900, iterations: Infinity, delay: i * 150 });
+    }
+    el.appendChild(document.createTextNode(text));
+    if (done) setTimeout(() => fade(el, 400), DONE_MS);
+  }
+  function work(m) {
+    if (m.on) {
+      pill(m.file ? `Agent editing ${String(m.file).split("/").pop()}` : "Agent working", false);
+      if (!watcher) {
+        watcher = new MutationObserver(note);
+        watcher.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "src", "href"] });
+      }
+    } else {
+      watcher?.disconnect();
+      watcher = null;
+      dirty = new Set();
+      if (layer().querySelector('[data-id="work"]')) pill("Done", true);
+    }
+  }
+
   if (!top) return;
   window.__keelPicker = (m) => {
+    if (m.work) work(m.work);
     if (m.arm) {
       armed = true;
       document.documentElement.style.cursor = "crosshair";
