@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
-vi.mock("../store", () => ({ useStore: Object.assign(() => undefined, { getState: () => ({ lanes: {} }) }) }));
+const store = vi.hoisted(() => ({ state: { lanes: {} as Record<string, unknown> } }));
+vi.mock("../store", () => ({ useStore: Object.assign((pick?: (s: typeof store.state) => unknown) => pick?.(store.state), { getState: () => store.state }) }));
 vi.mock("./Approvals", () => ({ ApprovalStrip: () => null }));
 vi.mock("../streams", () => ({ open: vi.fn() }));
 vi.mock("../ide", () => ({ useIde: { getState: () => ({ navigate: () => undefined }) } }));
@@ -58,6 +59,16 @@ describe("the review dock", () => {
   it("does not offer Open where Open would be refused the same way", () => {
     const html = renderToStaticMarkup(<Ended {...base} r={review({ kind: "none", cause: "refused", line: "You are on `main`.", took: 0 })} />);
     expect(buttons(html)).not.toContain("Open without review");
+  });
+
+  it("a branch with uncommitted work is a step to take, with the commit right there", () => {
+    store.state.lanes = { l: { git: { changes: [{}, {}] } } };
+    const html = renderToStaticMarkup(<Ended {...base} r={review({ kind: "none", cause: "refused", line: "There are uncommitted changes.", took: 0 })} />);
+    store.state.lanes = {};
+    expect(html).toContain("Commit your changes first");
+    expect(html).toContain("2 files not committed");
+    expect(buttons(html)).toContain("Commit and review");
+    for (const gone of ["Couldn’t review", "Technical details", "after 0s"]) expect(html).not.toContain(gone);
   });
 
   it("names a pull request as owner/repo#n, from gh's output whatever its result", () => {

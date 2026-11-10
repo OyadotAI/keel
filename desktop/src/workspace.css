@@ -500,3 +500,7 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .composer-tools { padding: 2px 8px 6px; }
 .chat-status { padding: 0 4px 6px; }
 .chat-status:empty { display: none; }
+/* The commit a not-ready review asks for, inline: one field and the button that finishes it. */
+.review-commit { display: flex; gap: 8px; margin-top: 10px; }
+.review-commit input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; }
+.review-commit button { height: 32px; white-space: nowrap; }

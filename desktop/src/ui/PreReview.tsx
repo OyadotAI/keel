@@ -1,7 +1,7 @@
 // A full PR review tab and compact dock share confirmed facts, pending actions, and recovery.
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Endpoint } from "../api";
+import { post, type Endpoint } from "../api";
 import { useIde } from "../ide";
 import { useStore } from "../store";
 import { baseOf, clock, dismissReview, openPullRequest, prLabel, prLink, sorted, navigable, refreshReview, startReview, stopReview, sendFindings, useReview, usePrRun, prForTarget, type Review, type Finding, type PrRun } from "../prereview";
@@ -133,12 +133,35 @@ export function Finished({ r, head, o, ...p }: Props & { r: Review; head: string
 export function Ended({ r, ...p }: Props & { r?: Review | null }) {
   const { busy, open, again } = useControls(p, r);
   const o = r?.outcome?.kind === "none" ? r.outcome : undefined, cancelled = o?.cause === "cancelled";
+  if (o?.cause === "refused") return <NotReady {...p} why={o.line} busy={busy} again={again} />;
   const title = !r ? "Review interrupted" : cancelled ? "Review cancelled" : "Couldn’t review";
   const text = !r ? "The running review is no longer available. No verdict was confirmed." : cancelled ? "Nothing was opened." : reviewFailure(o?.cause ?? "", o?.line ?? "");
   return <><Head icon={cancelled ? "minus-circle" : "x-circle"} color={cancelled ? "var(--faint)" : "var(--del)"} title={title} meta={o ? `after ${clock(o.took)}` : undefined} />
     <div className="review-body"><Markdown text={text} /></div>
     <div className="actions"><button className="primary" disabled={busy} onClick={again}>Review again</button>{o?.cause !== "refused" && <button disabled={busy} onClick={open}>Open without review</button>}</div>
     {o?.line && <details><summary className="small">Technical details</summary><pre className="code">{o.line}</pre></details>}<Close {...p} /></>;
+}
+
+/** The branch cannot carry a pull request yet (uncommitted work, on `main`, nothing new). That is
+ *  a step still to take, not a failed review: no red, no timer, no details repeating the sentence,
+ *  and when the step is a commit, the commit is right here — "Review again" alone was a dead end. */
+function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boolean; again: () => void }) {
+  const changes = useStore((s) => s.lanes[p.lane]?.git?.changes.length ?? 0);
+  const [message, setMessage] = useState(""), [committing, setCommitting] = useState(false), [error, setError] = useState("");
+  const commit = async () => {
+    setCommitting(true); setError("");
+    try { await post(p.ep, "/api/git/commit", { message: message.trim() }, { wt: p.wt }); again(); }
+    catch (e) { setError(`Couldn’t commit: ${e instanceof Error ? e.message : e}`); }
+    finally { setCommitting(false); }
+  };
+  return <><Head icon="hand" color="var(--warn)" title={changes ? "Commit your changes first" : "Not ready for a pull request"} />
+    <p className="review-body muted">{changes ? `${changes} file${changes === 1 ? "" : "s"} not committed. A pull request only carries what is committed.` : why}</p>
+    {changes > 0 && <form className="review-commit" onSubmit={(e) => { e.preventDefault(); if (message.trim()) void commit(); }}>
+      <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Commit message" aria-label="Commit message" disabled={committing} />
+      <button className="primary" type="submit" disabled={busy || committing || !message.trim()}>{committing ? "Committing…" : "Commit and review"}</button>
+    </form>}
+    {error && <Banner tone="error">{error}</Banner>}
+    {!changes && <div className="actions"><button className="primary" disabled={busy} onClick={again}>Review again</button></div>}<Close {...p} /></>;
 }
 
 /** An existing/created link wins over a lost response; retry first reconciles the immutable target. */
