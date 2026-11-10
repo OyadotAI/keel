@@ -11,6 +11,8 @@ import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
 import { deliverFindings, PreReviewFeedback, reviewFailure } from "./PreReviewFeedback";
 import { verdictPresentation } from "../prereview";
+import { ShipCard } from "./Ship";
+import { shipTitle } from "../ship";
 
 const MAX_ROWS = 50;
 const short = (sha: string) => sha.slice(0, 7);
@@ -147,7 +149,7 @@ export function Ended({ r, ...p }: Props & { r?: Review | null }) {
  *  and when the step is a commit, the commit is right here — "Review again" alone was a dead end. */
 function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boolean; again: () => void }) {
   const changes = useStore((s) => s.lanes[p.lane]?.git?.changes.length ?? 0);
-  const [message, setMessage] = useState(""), [committing, setCommitting] = useState(false), [error, setError] = useState("");
+  const [message, setMessage] = useState(() => { const l = useStore.getState().lanes[p.lane]; return l ? shipTitle(l) : ""; }), [committing, setCommitting] = useState(false), [error, setError] = useState("");
   const commit = async () => {
     setCommitting(true); setError("");
     try { await post(p.ep, "/api/git/commit", { message: message.trim() }, { wt: p.wt }); again(); }
@@ -193,5 +195,5 @@ export function PreReview(p: Props) {
 export function LaneDock({ lane }: { lane: string }) {
   const ep = useStore((s) => { const l = s.lanes[lane]; return l ? s.projects[l.project]?.endpoint : undefined; });
   const wt = useStore((s) => s.lanes[lane]?.wt);
-  return <><ApprovalStrip lane={lane} />{ep && <PreReview lane={lane} ep={ep} wt={wt} place="dock" />}</>;
+  return <><ApprovalStrip lane={lane} />{ep && <PreReview lane={lane} ep={ep} wt={wt} place="dock" />}{ep && <ShipCard lane={lane} ep={ep} wt={wt} />}</>;
 }

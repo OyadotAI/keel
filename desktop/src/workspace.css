@@ -526,3 +526,5 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 /* Images the person attached, under their words: thumbnails, so a screenshot never fills the chat. */
 .chat-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .chat-images .markdown-image img { max-width: 220px; max-height: 160px; object-fit: cover; border-radius: 8px; box-shadow: 0 0 0 .5px var(--hairline); }
+/* The one-click pull request: one sentence, one button. */
+.ship-card .ship-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
