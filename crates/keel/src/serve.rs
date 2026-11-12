@@ -2502,16 +2502,25 @@ mod tests {
         // daemon was kept for `serve.rs` alone, and `dev::status` walked a checkout's
         // `package.json`s on the executor for its whole life; a hand-kept list later missed
         // thirteen modules, `project::create` among them.
+        // Recursive: the subfolders (`pr/`, `browser/`, `runtime/` …) hold handlers too.
+        fn collect(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+            let mut entries: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .collect();
+            entries.sort();
+            for p in entries {
+                if p.is_dir() {
+                    collect(&p, root, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                    out.push((name, std::fs::read_to_string(&p).unwrap()));
+                }
+            }
+        }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut sources: Vec<(String, String)> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
-            .map(|p| {
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                (name, std::fs::read_to_string(&p).unwrap())
-            })
-            .collect();
+        let mut sources = Vec::new();
+        collect(&dir, &dir, &mut sources);
         sources.sort();
         assert!(
             sources.iter().any(|(f, _)| f == "serve.rs"),
@@ -2539,8 +2548,12 @@ mod tests {
                 // A handler is a function axum routes to: `api_*` here, and every `pub async fn`
                 // in the modules that register their own. The private helpers between them are
                 // the handlers' own business.
-                let handler =
-                    name.starts_with("api_") || source.contains(&format!("pub async fn {name}"));
+                // A method (`&self`, `&mut self`) is never routed: the browser's client types
+                // have `pub async fn` methods that were read as handlers. Excluded by signature.
+                let signature = part.split('{').next().unwrap_or_default();
+                let handler = name.starts_with("api_")
+                    || (source.contains(&format!("pub async fn {name}"))
+                        && !signature.contains("self"));
                 if !handler {
                     continue;
                 }

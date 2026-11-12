@@ -112,8 +112,8 @@ reader means using these, not re-deriving them.
   own paths and nothing of the person's: not during a merge, not an ignored path, not an
   instructions file whose content (not `git diff`, which trusts `assume-unchanged`) differs from
   HEAD, and it backs out what `add` staged when anything fails.
-- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor` reads every top-level
-  module from disk** (not the subfolders yet: `pr/`, `browser/` and the rest are unchecked). A hand-kept list of ten missed thirteen modules; before that the test stopped reading
+- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor` reads every module from
+  disk, subfolders included** (`pr/`, `browser/` and the rest). A hand-kept list of ten missed thirteen modules; before that the test stopped reading
   at the first `#[cfg(test)]` attribute and checked a third of `serve.rs`.
 - **`lines::next()`** — never `Err(_) => continue` on `next_line()`. Undecodable bytes must be
   skipped, because stopping there leaves the pipe to fill and blocks the child mid-write; a reader
@@ -145,7 +145,7 @@ reader means using these, not re-deriving them.
   of it) took a lockfile diff from 3.83 MB to 380 KB. `monitor::SHOWN` (80) sends what the UI
   reads instead of all 400 lines it keeps.
 - **`serve::tests::every_handler_keeps_blocking_work_off_the_executor`** — reads the source of
-  every top-level module and fails on any handler that does its work inline. This is the rule with the worst
+  every module, subfolders included, and fails on any handler that does its work inline. This is the rule with the worst
   failure mode in the daemon, because breaking it fails no other test: axum's pool is small, so
   one handler reading a 33 MB transcript holds up every other request, and what that looks like
   is a window that is intermittently slow for reasons nobody can reproduce. It was kept for

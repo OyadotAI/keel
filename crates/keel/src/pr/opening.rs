@@ -24,6 +24,7 @@ pub async fn create(
     Checkout(repo): Checkout,
     Query(query): Query<PrQuery>,
 ) -> impl axum::response::IntoResponse {
+    // no-blocking: only creates the channel and spawns; every git call runs in `open` under spawn_blocking.
     let (tx, rx) = mpsc::channel(64);
     tokio::spawn(async move {
         let result = open(state, repo, query, &tx).await;
