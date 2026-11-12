@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFact, applyFrames, restoreTranscript, interrupt, type Conversation, type Frame } from "./reduce";
+import { appendTranscript, applyFact, applyFrames, restoreTranscript, interrupt, type Conversation, type Frame } from "./reduce";
 
 const empty: Conversation = { turns: [] };
 const f = (op: string, fields: Record<string, unknown> = {}, turn: string | null = null): Frame => ({ turn, op, ...fields });
@@ -146,6 +146,36 @@ describe("restoring a transcript over the live view", () => {
     const restored = restoreTranscript(previous, done('change this\n\nReferenced files in this checkout (JSON paths):\n["a.ts"]'));
     expect(restored.turns[0].gate?.status).toBe("passed");
     expect(restored.turns[0].prompt).toBe("change this");
+  });
+});
+
+describe("appending what a transcript gained", () => {
+  const done = (prompt: string) => [f("open", { prompt }), f("text", { step: prompt, kind: "say", append: "ok" }), f("close", { reason: "done" })];
+  it("keeps every turn the view has and adds the new ones after", () => {
+    const previous = applyFrames(empty, [...done("one"), ...done("two")]);
+    const next = appendTranscript(previous, done("from the terminal"));
+    expect(next.turns.map((t) => t.prompt)).toEqual(["one", "two", "from the terminal"]);
+    expect(next.turns[0]).toBe(previous.turns[0]);
+  });
+  it("never merges into an early turn that only shares its words", () => {
+    const previous = applyFrames(empty, [...done("continue"), ...done("other"), ...done("continue")]);
+    const next = appendTranscript(previous, [...done("continue"), ...done("later")]);
+    expect(next.turns.map((t) => t.prompt)).toEqual(["continue", "other", "continue", "later"]);
+    expect(next.turns[0]).toBe(previous.turns[0]);
+    expect(next.turns[2].id).toBe(previous.turns[2].id);
+  });
+  it("lets a gained notification settle a background agent", () => {
+    const running = applyFrames(empty, [...done("start one"), f("background", { id: "a1", subject: "x", running: true })]);
+    expect(running.background?.a1).toBeDefined();
+    const next = appendTranscript(running, [f("background", { id: "a1", running: false }), ...done("its reply")]);
+    expect(next.background?.a1).toBeUndefined();
+  });
+  it("merges a gained turn the view already drew, keeping its facts", () => {
+    const previous = { turns: applyFrames(empty, [...done("one"), ...done("two")]).turns.map((t) => ({ ...t, commit: `c-${t.prompt}` })) };
+    const next = appendTranscript(previous, [...done("two"), ...done("a background reply")]);
+    expect(next.turns.map((t) => t.prompt)).toEqual(["one", "two", "a background reply"]);
+    expect(next.turns[1].commit).toBe("c-two");
+    expect(next.turns[1].id).toBe(previous.turns[1].id);
   });
 });
 

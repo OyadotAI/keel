@@ -27,7 +27,6 @@ export function Composer({ lane }: { lane: string }) {
   const references = useStore((s) => s.lanes[lane]?.references);
   const checking = useStore((s) => !!s.lanes[lane]?.referencePending);
   const dragOver = useFileDrag((s) => s.drag?.target === lane);
-  const queued = useStore((s) => s.lanes[lane]?.queued);
   const models = useStore((s) => s.lanes[lane]?.models);
   const agentId = useStore((s) => s.lanes[lane]?.agent);
   const reported = useStore((s) => s.lanes[lane]?.commands);
@@ -94,7 +93,7 @@ export function Composer({ lane }: { lane: string }) {
   }
   return <div className="chat-dock" data-reference-target={lane}>
     <LaneDock lane={lane} />
-    {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><QueuedImages attachments={message.attachments} /><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
+    <QueuedMessages lane={lane} onEdit={(id) => { useStore.getState().editQueued(lane, id); input.current?.focus(); }} />
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} />
     {receipt && !submitting && <div className="chat-retry">Keel couldn’t confirm this message was sent. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Send again</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
     <div className={composerClass(dragOver, busy)}>
@@ -186,6 +185,15 @@ function suggestions(token: string | undefined, files: string[], commands: strin
   }
   return [...new Set(["/settings", "/extensions", "/clear", ...(commands ?? []).map((c) => `/${c}`)])]
     .filter((c) => c.toLowerCase().includes(token.toLowerCase())).slice(0, 8);
+}
+
+/** Messages waiting for the running turn to end, with their images. A terminal lane shows them
+ *  too — it queues what it could not type and used to show nothing — but has no composer to edit
+ *  one back into, so it offers Remove alone. */
+export function QueuedMessages({ lane, onEdit }: { lane: string; onEdit?: (id: string) => void }) {
+  const queued = useStore((s) => s.lanes[lane]?.queued);
+  if (!queued?.length) return null;
+  return <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><QueuedImages attachments={message.attachments} />{onEdit && <button onClick={() => onEdit(message.id)}>Edit</button>}<button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>;
 }
 
 /** A queued message's attachments, so an image sent mid-turn is seen waiting with its words. */

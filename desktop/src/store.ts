@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type Endpoint, get, post, url, isRejected, HttpError } from "./api";
 import { decline, declined, rekey, rekeyDrafts, structural, type Moved, type MovePlan, type Moving, type Refusal } from "./relocate";
 import { useEditorFiles } from "./editor-files";
-import { applyFact, applyFrames, interrupt, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
+import { applyFact, applyFrames, interrupt, appendTranscript, restoreTranscript, type Conversation, type Fact, type Frame } from "./reduce";
 import { open as openStream, type Stream } from "./streams";
 import { endBanner, needsYou, notify } from "./notify";
 import type { Observation } from "./session-usage";
@@ -980,6 +980,10 @@ export const useStore = create<State>()((set, getState, api) => {
               Object.assign(patch, acceptedReceipt(current, id));
             } else if (e.event === "snapshot") {
               conv = restoreTranscript(conv, (e.data as { frames: Frame[] }).frames);
+            } else if (e.event === "append") {
+              const frames = (e.data as { frames: Frame[] }).frames;
+              Object.assign(patch, sessionPatch(frames));
+              conv = appendTranscript(interrupt(conv), frames.filter((f) => f.op !== "session"));
             } else if (e.event === "turn") {
               const frames = e.data as Frame[];
               Object.assign(patch, sessionPatch(frames));

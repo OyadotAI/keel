@@ -97,7 +97,8 @@ pub const MCP_ARGS: &str = "This MCP call's arguments are too large, or not a JS
     person to read on an approval card, so Keel refused it. Call the tool with smaller, structured \
     arguments.";
 pub const SED: &str = "Keel does not run sed scripts for Antigravity lanes, because a script can \
-    write other files or run commands. Make the same change with replace_file_content.";
+    write other files or run commands. Make the same change with edit_file (replace_file_content \
+    on older versions).";
 pub const LINK: &str = "This path goes through a symbolic link, so Keel does not let Antigravity \
     write it. Write the file at its real location instead.";
 const NO_PATH: &str = "This file tool call names no file, so Keel could not ask about it and \
@@ -132,6 +133,9 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
             Route::Deny(UNREADABLE)
         }
         "write_to_file"
+        | "write_file"
+        | "create_file"
+        | "edit_file"
         | "replace_file_content"
         | "multi_replace_file_content"
         | "notebook_edit"
@@ -140,6 +144,9 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
             Route::Deny(PLANNING)
         }
         "write_to_file"
+        | "write_file"
+        | "create_file"
+        | "edit_file"
         | "replace_file_content"
         | "multi_replace_file_content"
         | "notebook_edit" => {
@@ -771,6 +778,32 @@ mod tests {
     }
 
     /// A planning lane cannot write, by shell or by edit.
+    /// Measured on agy 1.5.3: its file tools are `write_file {Path, Content, Overwrite}`,
+    /// `edit_file` and `create_file`. Refused as unknown, an Antigravity chat lane could change no
+    /// file at all; they take the same checks and card as 1.4's names.
+    #[test]
+    fn antigravity_1_5_file_tools_are_asked_like_writes() {
+        let write = json!({"Content": "hi\n", "Overwrite": true, "Path": "/r/hello.txt"});
+        for tool in ["write_file", "create_file", "edit_file"] {
+            match route(tool, &write, false) {
+                Route::Ask(claude, input) => {
+                    assert!(
+                        matches!(claude.as_str(), "Write" | "Edit"),
+                        "{tool}: {claude}"
+                    );
+                    assert_eq!(input["file_path"], "/r/hello.txt", "{tool}");
+                }
+                other => panic!("{tool}: {other:?}"),
+            }
+            assert_eq!(route(tool, &write, true), Route::Deny(PLANNING), "{tool}");
+            assert_eq!(
+                route(tool, &json!({"Path": "/r/.git/config"}), false),
+                Route::Deny(CONFIG),
+                "{tool}"
+            );
+        }
+    }
+
     #[test]
     fn a_planning_lane_writes_nothing() {
         assert_eq!(

@@ -1419,8 +1419,10 @@ pub fn antigravity_tool(name: &str, args: &Value) -> (String, Value) {
     let path = first(&["TargetFile", "AbsolutePath", "Path", "File"]);
     let (tool, mapped): (&str, Vec<(&str, Option<String>)>) = match name {
         "run_command" => ("Bash", vec![("command", first(&["CommandLine"]))]),
-        "write_to_file" => ("Write", vec![("file_path", path)]),
-        "replace_file_content" | "sed_file" => ("Edit", vec![("file_path", path)]),
+        // agy 1.5 renamed its file tools (`write_file`, `edit_file`, `create_file`); 1.4's names
+        // stay for conversations written before the update.
+        "write_to_file" | "write_file" | "create_file" => ("Write", vec![("file_path", path)]),
+        "replace_file_content" | "sed_file" | "edit_file" => ("Edit", vec![("file_path", path)]),
         "multi_replace_file_content" => ("MultiEdit", vec![("file_path", path)]),
         "notebook_edit" => ("NotebookEdit", vec![("notebook_path", path)]),
         "view_file" | "read_file" => ("Read", vec![("file_path", path)]),

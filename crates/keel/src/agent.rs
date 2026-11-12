@@ -363,6 +363,17 @@ pub(crate) fn redact(stderr: &str) -> String {
 
 #[cfg(test)]
 mod antigravity_prompt_tests {
+    #[test]
+    fn antigravitys_default_model_is_never_asked_for_more_than_high() {
+        assert_eq!(super::agy_effort(Some("max"), None), Some("high"));
+        assert_eq!(super::agy_effort(Some("xhigh"), Some("")), Some("high"));
+        assert_eq!(super::agy_effort(Some("medium"), None), Some("medium"));
+        assert_eq!(
+            super::agy_effort(Some("max"), Some("gemini-pro")),
+            Some("max")
+        );
+        assert_eq!(super::agy_effort(None, None), None);
+    }
     /// The reader cuts Keel's notes off a first prompt by how they begin; if the notes change
     /// their first words, a reopened lane shows them as the person's message again.
     #[test]
@@ -1071,7 +1082,7 @@ pub async fn chat(
                     "accept-edits"
                 })
                 .args(
-                    effort_arg(query.effort.as_deref())
+                    agy_effort(query.effort.as_deref(), query.model.as_deref())
                         .map(|e| vec!["--effort", e])
                         .unwrap_or_default(),
                 )
@@ -2450,6 +2461,20 @@ fn parse_agy_models(text: &str) -> Vec<serde_json::Value> {
 /// An effort level both runtimes understand, or nothing: the value comes from the page.
 pub(crate) fn effort_arg(effort: Option<&str>) -> Option<&str> {
     effort.filter(|e| ["low", "medium", "high", "xhigh", "max"].contains(e))
+}
+
+/// The effort for an `agy` turn. Its default model takes low, medium or high only, and anything
+/// above fails the whole turn ("gemini-4-argon has no \"max\" effort", measured on agy 1.5.3), so
+/// with no model chosen the higher levels are capped at high. A model the person picked gets
+/// what they asked for: some offer more, and agy says so if not.
+fn agy_effort<'a>(effort: Option<&'a str>, model: Option<&str>) -> Option<&'a str> {
+    let effort = effort_arg(effort)?;
+    let chosen = model.is_some_and(|m| !m.is_empty());
+    Some(if !chosen && matches!(effort, "xhigh" | "max") {
+        "high"
+    } else {
+        effort
+    })
 }
 
 fn model_arg(model: Option<&str>) -> Option<&str> {

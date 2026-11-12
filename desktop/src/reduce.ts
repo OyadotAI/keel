@@ -353,6 +353,35 @@ function ending(old: Turn, restored: Turn): string | undefined {
 /// steps. The transcript cannot bring it back, and dropping it lost the message and its reason.
 const keelOnly = (t: Turn) => t.closed === "failed" && t.steps.length === 0;
 
+/// A turn the transcript holds, carrying what only the live view knew: Keel's facts, the error a
+/// failed turn ended on, and the cost.
+function merged(old: Turn, turn: Turn): Turn {
+  const cost = turn.usage?.cost ?? old.usage?.cost;
+  return { ...turn, id: old.id, prompt: old.prompt, closed: ending(old, turn), files: old.files, gate: old.gate, commit: old.commit,
+    snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended,
+    failures: turn.failures.length ? turn.failures : old.failures,
+    ...(turn.usage || old.usage ? { usage: { ...(old.usage ?? turn.usage)!, ...turn.usage, cost } } : {}) };
+}
+
+/** What the transcript gained since the journal last read it (`append`): every turn the view has
+ *  stays, a gained turn the view already drew (the one that ended as the reply landed) is merged
+ *  into it, and the rest go after. */
+export function appendTranscript(previous: Conversation, frames: Frame[]): Conversation {
+  // Background agents carry over: a notification in the gained part is what settles one.
+  const gained = applyFrames({ turns: [], ...(previous.background ? { background: previous.background } : {}) }, frames);
+  const turns = previous.turns.slice();
+  // Only the view's last turns can be ones the gained part repeats — the turn that ended as it
+  // was read. Matching from the top merged a gained "continue" into the first "continue" ever sent.
+  let j = Math.max(0, previous.turns.length - gained.turns.length);
+  for (const turn of gained.turns) {
+    const at = turns.findIndex((old, i) => i >= j && i < previous.turns.length && !keelOnly(old) && samePrompt(old.prompt, turn.prompt));
+    if (at < 0) { turns.push(turn); j = previous.turns.length; continue; }
+    turns[at] = merged(turns[at], turn);
+    j = at + 1;
+  }
+  return gained.background ? { turns, background: gained.background } : { ...previous, turns };
+}
+
 /** Refresh provider history after a terminal handoff, retaining Keel's matching turn metadata.
  *  Turns are matched in order by prompt, not by position: one Keel-only turn earlier in the view
  *  shifted every index after it, and each turn after that lost its checks, commit and id — a
@@ -368,14 +397,8 @@ export function restoreTranscript(previous: Conversation, frames: Frame[]): Conv
     // The transcript is read from its tail, so a long one starts partway through: the turns the
     // view has from before its first one are kept, not dropped at the next redraw.
     turns.push(...(turns.length === 0 ? previous.turns.slice(0, at) : previous.turns.slice(j, at).filter(keelOnly)));
-    const old = previous.turns[at];
     j = at + 1;
-    // What only the live view knew: Keel's facts, the error a failed turn ended on, and the cost.
-    const cost = turn.usage?.cost ?? old.usage?.cost;
-    turns.push({ ...turn, id: old.id, prompt: old.prompt, closed: ending(old, turn), files: old.files, gate: old.gate, commit: old.commit,
-      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended,
-      failures: turn.failures.length ? turn.failures : old.failures,
-      ...(turn.usage || old.usage ? { usage: { ...(old.usage ?? turn.usage)!, ...turn.usage, cost } } : {}) });
+    turns.push(merged(previous.turns[at], turn));
   }
   turns.push(...previous.turns.slice(j).filter(keelOnly));
   return restored.background ? { turns, background: restored.background } : { turns };

@@ -17,7 +17,7 @@ import { LaneDock } from "./PreReview";
 import { listenPages } from "../browser";
 import { badge } from "../notify";
 import { InterfaceSetting } from "./InterfaceSetting";
-import { Composer } from "./Composer";
+import { Composer, QueuedMessages } from "./Composer";
 import { StatusBar } from "./StatusBar";
 import { Drop } from "./Drop";
 import { FileReferenceDrag } from "./FileReferenceDrag";
@@ -447,7 +447,7 @@ function Welcome() {
       )}
       <p>
         {none
-          ? "Each lane runs your own Claude Code or Codex in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
+          ? "Each lane runs your own Claude Code, Codex or Antigravity in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
           : "Each lane is one conversation. Open one on the left, or start a new one under a project."}
       </p>
       {none && <InterfaceSetting />}
@@ -459,5 +459,5 @@ function Welcome() {
 
 function LaneComposer({ lane }: { lane: string }) {
   const surface = useStore((s) => s.lanes[lane]?.interface);
-  return surface === "terminal" ? <LaneDock lane={lane} /> : <Composer lane={lane} />;
+  return surface === "terminal" ? <><LaneDock lane={lane} /><QueuedMessages lane={lane} /></> : <Composer lane={lane} />;
 }

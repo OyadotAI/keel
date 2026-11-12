@@ -51,6 +51,9 @@ struct History {
     /// Length and mtime of the transcript when `fingerprint` was last checked, so a reconnect
     /// with nothing new does not read and hash the whole transcript again.
     stamp: Option<Vec<(u64, SystemTime)>>,
+    /// Where the transcript ended as of the last reading, so the next one stores only what came
+    /// after it.
+    end: Option<u64>,
     /// A reply landed while a turn held the journal (its checks, usually). The turn's end must
     /// read the transcript rather than vouch for it, or that reply is marked seen and never shown.
     stale: bool,
@@ -59,7 +62,14 @@ struct History {
 #[derive(Deserialize)]
 struct Fingerprint {
     fingerprint: String,
+    /// Where the transcript ended when this was read: a byte offset, or a step index for
+    /// Antigravity. Absent in journals written before it was kept.
+    #[serde(default)]
+    end: Option<u64>,
 }
+
+/// The records that carry the transcript's fingerprint and where it ended.
+const READINGS: [&str; 3] = ["snapshot", "seen", "append"];
 
 use keel_workspace::{Follows as Agent, Transcript};
 
@@ -100,7 +110,9 @@ impl History {
         if now.is_some() && now == self.stamp {
             return Ok(());
         }
-        let (lines, _, start) = t
+        // Read through a reader of its own: Antigravity's notes which subagents it has seen
+        // finish, and reading the whole window first would leave none for the gained part.
+        let (lines, end, start) = Transcript::at(t.agent(), t.path().to_owned())
             .tail_last(keel_workspace::MAX_READ)
             .ok_or("The conversation could not be read.")?;
         let fingerprint = fingerprint(&lines, start);
@@ -108,17 +120,30 @@ impl History {
         if self.fingerprint.as_deref() == Some(fingerprint.as_str()) {
             return Ok(());
         }
-        use keel_workspace::conversation::Ending;
-        let mut decoder = t.agent().decoder();
-        let mut frames = Vec::new();
-        for line in &lines {
-            frames.extend(decoder.feed(line, None, std::time::Instant::now()));
+        // Only what the transcript gained, when it simply grew past the last reading. A whole
+        // copy for every change outside Keel — a terminal turn, a background reply — is what grew
+        // journals to 24 MB; the page adds an `append`'s turns after the ones it has.
+        // Only when the gained part starts a turn of its own: a reading taken mid-turn (an outside
+        // CLI still answering) would otherwise close that turn early and draw its rest as a
+        // second turn with no prompt and none of its results.
+        if let Some(from) = self.end.filter(|from| *from >= start && *from < end)
+            && let Some((suffix, next)) = t.tail(from)
+            && !suffix.is_empty()
+            && let frames = decode(t, &suffix)
+            && opens_a_turn(&frames)
+        {
+            self.push(
+                "append",
+                json!({"frames": frames, "fingerprint": fingerprint, "end": next}),
+            )?;
+            self.push("idle", Value::Null)?;
+            return Ok(());
         }
-        frames.extend(decoder.close(Ending::Done));
+        let frames = decode(t, &lines);
         if !frames.is_empty() {
             self.push(
                 "snapshot",
-                json!({"frames": frames, "fingerprint": fingerprint}),
+                json!({"frames": frames, "fingerprint": fingerprint, "end": end}),
             )?;
         }
         self.push("idle", Value::Null)?;
@@ -135,13 +160,13 @@ impl History {
     }
     fn mark(&mut self, t: &Transcript) -> Result<(), String> {
         let now = stamp(t);
-        let (lines, _, start) = t
+        let (lines, end, start) = t
             .tail_last(keel_workspace::MAX_READ)
             .ok_or("The conversation could not be read.")?;
         let fingerprint = fingerprint(&lines, start);
         self.stamp = now;
-        if self.fingerprint.as_deref() != Some(fingerprint.as_str()) {
-            self.push("seen", json!({"fingerprint": fingerprint}))?;
+        if self.fingerprint.as_deref() != Some(fingerprint.as_str()) || self.end != Some(end) {
+            self.push("seen", json!({"fingerprint": fingerprint, "end": end}))?;
         }
         Ok(())
     }
@@ -156,10 +181,12 @@ impl History {
         self.push("fatal", json!(reason))
     }
     fn push(&mut self, event: &str, data: Value) -> Result<(), String> {
-        if let Some(Ok(f)) = matches!(event, "snapshot" | "seen")
+        if let Some(Ok(f)) = READINGS
+            .contains(&event)
             .then(|| serde_json::from_value::<Fingerprint>(data.clone()))
         {
             self.fingerprint = Some(f.fingerprint);
+            self.end = f.end;
         }
         let record = Record {
             seq: self.records.len() + 1,
@@ -207,6 +234,26 @@ impl History {
         self.running = true;
         Ok(true)
     }
+}
+
+/// Whether decoded frames begin with a turn the person (or Keel) opened, prompt and all.
+fn opens_a_turn(frames: &[keel_workspace::conversation::Frame]) -> bool {
+    frames
+        .first()
+        .and_then(|f| serde_json::to_value(f).ok())
+        .is_some_and(|f| f["op"] == "open" && f["prompt"].as_str().is_some_and(|p| !p.is_empty()))
+}
+
+/// Transcript lines as the turns they make, every call closed.
+fn decode(t: &Transcript, lines: &[String]) -> Vec<keel_workspace::conversation::Frame> {
+    use keel_workspace::conversation::Ending;
+    let mut decoder = t.agent().decoder();
+    let mut frames = Vec::new();
+    for line in lines {
+        frames.extend(decoder.feed(line, None, std::time::Instant::now()));
+    }
+    frames.extend(decoder.close(Ending::Done));
+    frames
 }
 
 /// What the transcript said, as one value: its records and where they started, so a cut head
@@ -340,18 +387,22 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
             .map_err(internal)?;
     }
     let file = options.open(path).map_err(internal)?;
-    let fingerprint = records
+    let reading = records
         .iter()
         .rev()
-        .filter(|r| r.event == "snapshot" || r.event == "seen")
-        .find_map(|r| serde_json::from_str::<Fingerprint>(r.data.get()).ok())
-        .map(|f| f.fingerprint);
+        .filter(|r| READINGS.contains(&r.event.as_str()))
+        .find_map(|r| serde_json::from_str::<Fingerprint>(r.data.get()).ok());
+    let (fingerprint, end) = match reading {
+        Some(f) => (Some(f.fingerprint), f.end),
+        None => (None, None),
+    };
     let mut h = History {
         file,
         records,
         running: false,
         fingerprint,
         stamp: None,
+        end,
         stale: false,
     };
     if h.records.last().is_some_and(|r| r.event != "idle") {
@@ -825,8 +876,56 @@ mod tests {
         assert!(
             h.locked().records[before..]
                 .iter()
-                .any(|r| r.event == "snapshot")
+                .any(|r| r.event == "append" || r.event == "snapshot")
         );
+    }
+
+    /// A transcript that grew is journalled as what it gained, not as a second copy of itself;
+    /// one that was rewritten falls back to the whole thing. A reload reads the position back.
+    #[test]
+    fn a_grown_transcript_is_journalled_as_its_new_turns_only() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "grow-lane").unwrap();
+        let last = |h: &Journal| {
+            let h = h.locked();
+            let r = h.records.iter().rev().find(|r| r.event != "idle").unwrap();
+            (r.event.clone(), r.data.get().to_owned())
+        };
+        h.locked()
+            .snapshot(&claude(&transcript_file(root.path(), &["hello"])))
+            .unwrap();
+        assert_eq!(last(&h).0, "snapshot");
+        let grown = transcript_file(root.path(), &["hello", "from the terminal"]);
+        h.locked().snapshot(&claude(&grown)).unwrap();
+        let (event, data) = last(&h);
+        assert_eq!(event, "append");
+        assert!(
+            data.contains("from the terminal") && !data.contains("\"prompt\":\"hello\""),
+            "{data}"
+        );
+        // The position survives a reload: the next growth is an append again.
+        state.chats.0.locked().clear();
+        drop(h);
+        let h = history(&state, "grow-lane").unwrap();
+        let more = transcript_file(root.path(), &["hello", "from the terminal", "and again"]);
+        h.locked().snapshot(&claude(&more)).unwrap();
+        assert_eq!(last(&h).0, "append");
+        // Read mid-turn: what follows continues a turn rather than starting one, so it is not
+        // appended as a turn of its own; the whole transcript is read again.
+        let mut mid = std::fs::read_to_string(&more).unwrap();
+        mid.push_str(&format!(
+            "{}\n",
+            json!({"type":"assistant","uuid":"a9","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"still answering"}]}})
+        ));
+        std::fs::write(&more, mid).unwrap();
+        h.locked().snapshot(&claude(&more)).unwrap();
+        assert_eq!(last(&h).0, "snapshot");
+        // Rewritten shorter: nothing to continue from, so the whole transcript.
+        h.locked()
+            .snapshot(&claude(&transcript_file(root.path(), &["rewritten"])))
+            .unwrap();
+        assert_eq!(last(&h).0, "snapshot");
     }
 
     #[test]
