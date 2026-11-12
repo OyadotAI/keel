@@ -510,18 +510,26 @@ pub async fn events(
         let mut after = q.after;
         let mut first = true;
         loop {
-            let (batch, running) = {
-                let h = h.locked();
-                (
-                    h.records
-                        .iter()
-                        .skip(after)
-                        .take(128)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                    h.running,
-                )
-            };
+            // The journal's mutex is held across transcript reads and file writes by blocking
+            // threads, so taking it here would park an executor thread behind them.
+            let held = h.clone();
+            let cursor = after;
+            let (batch, running) = crate::serve::blocking(
+                move || {
+                    let h = held.locked();
+                    (
+                        h.records
+                            .iter()
+                            .skip(cursor)
+                            .take(128)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        h.running,
+                    )
+                },
+                (Vec::new(), false),
+            )
+            .await;
             let full = batch.len() == 128;
             for record in batch {
                 after = record.seq;
