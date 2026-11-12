@@ -8,9 +8,9 @@
 
 mod browser;
 mod dropped;
-mod preview;
 #[path = "../../../crates/keel-workspace/src/locations.rs"]
 mod locations;
+mod preview;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -31,7 +31,10 @@ struct Daemon {
 }
 
 #[derive(Default)]
-struct Daemons(Mutex<HashMap<String, Daemon>>, Mutex<HashMap<String, Arc<Mutex<()>>>>);
+struct Daemons(
+    Mutex<HashMap<String, Daemon>>,
+    Mutex<HashMap<String, Arc<Mutex<()>>>>,
+);
 
 impl Daemons {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Daemon>> {
@@ -59,7 +62,8 @@ struct Endpoint {
 /// 32 random bytes, hex. Written to the daemon's stdin — never argv, env or a URL.
 fn token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| format!("No randomness for the daemon's token: {e}"))?;
+    getrandom::fill(&mut bytes)
+        .map_err(|e| format!("No randomness for the daemon's token: {e}"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -74,19 +78,26 @@ fn keel_binary() -> Result<PathBuf, String> {
     // A development build uses the workspace's own daemon first: the copy staged beside this
     // executable is a snapshot from the last `make dev`, and goes stale with every daemon rebuild.
     if cfg!(debug_assertions) {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug").join(name);
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/debug")
+            .join(name);
         if dev.exists() {
             return Ok(dev);
         }
     }
     // Bundled beside this executable (Tauri's `externalBin`).
-    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(PathBuf::from))
+    {
         let beside = dir.join(name);
         if beside.exists() {
             return Ok(beside);
         }
     }
-    Err(format!("Could not find the `{name}` daemon next to the app."))
+    Err(format!(
+        "Could not find the `{name}` daemon next to the app."
+    ))
 }
 
 fn free_port() -> Result<u16, String> {
@@ -108,7 +119,10 @@ fn open_project(path: String, daemons: tauri::State<'_, Daemons>) -> Result<Endp
         let mut all = daemons.lock();
         if let Some(d) = all.get_mut(&path) {
             if matches!(d.child.try_wait(), Ok(None)) {
-                return Ok(Endpoint { port: d.port, token: d.token.clone() });
+                return Ok(Endpoint {
+                    port: d.port,
+                    token: d.token.clone(),
+                });
             }
             all.remove(&path);
         }
@@ -116,18 +130,34 @@ fn open_project(path: String, daemons: tauri::State<'_, Daemons>) -> Result<Endp
     let port = free_port()?;
     let mut command = Command::new(keel_binary()?);
     command
-        .args(["serve", &path, "--port", &port.to_string(), "--no-open", "--exit-on-stdin-eof"])
+        .args([
+            "serve",
+            &path,
+            "--port",
+            &port.to_string(),
+            "--no-open",
+            "--exit-on-stdin-eof",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(if cfg!(debug_assertions) { Stdio::inherit() } else { Stdio::null() });
+        .stderr(if cfg!(debug_assertions) {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        });
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         // No console window flashing up behind the app for a background process.
         command.creation_flags(0x0800_0000);
     }
-    let mut child = command.spawn().map_err(|e| format!("Could not start the daemon: {e}"))?;
-    let mut tie = child.stdin.take().ok_or("The daemon has no stdin to tie to.")?;
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Could not start the daemon: {e}"))?;
+    let mut tie = child
+        .stdin
+        .take()
+        .ok_or("The daemon has no stdin to tie to.")?;
     let token = token()?;
     {
         use std::io::Write;
@@ -143,7 +173,9 @@ fn open_project(path: String, daemons: tauri::State<'_, Daemons>) -> Result<Endp
             break;
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("The daemon for this project exited ({status}) before it started."));
+            return Err(format!(
+                "The daemon for this project exited ({status}) before it started."
+            ));
         }
         if Instant::now() > deadline {
             let _ = child.kill();
@@ -152,7 +184,15 @@ fn open_project(path: String, daemons: tauri::State<'_, Daemons>) -> Result<Endp
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    daemons.lock().insert(path, Daemon { port, token: token.clone(), child, _tie: Some(tie) });
+    daemons.lock().insert(
+        path,
+        Daemon {
+            port,
+            token: token.clone(),
+            child,
+            _tie: Some(tie),
+        },
+    );
     Ok(Endpoint { port, token })
 }
 
@@ -164,7 +204,9 @@ async fn close_project(path: String, daemons: tauri::State<'_, Daemons>) -> Resu
     // After any start in flight, so a close never races past the daemon it was meant to stop.
     let gate = daemons.gate(&path);
     let _starting = gate.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(d) = daemons.lock().remove(&path) else { return Ok(()) };
+    let Some(d) = daemons.lock().remove(&path) else {
+        return Ok(());
+    };
     stop(vec![d]);
     Ok(())
 }
@@ -187,7 +229,11 @@ fn stop(mut all: Vec<Daemon>) {
         d._tie.take();
     }
     let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && all.iter_mut().any(|d| matches!(d.child.try_wait(), Ok(None))) {
+    while Instant::now() < deadline
+        && all
+            .iter_mut()
+            .any(|d| matches!(d.child.try_wait(), Ok(None)))
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
     for d in &mut all {
@@ -209,13 +255,18 @@ fn scratch_dir() -> Result<String, String> {
         .tempdir()
         .map_err(|e| e.to_string())?
         .keep();
-    dir.to_str().map(str::to_string).ok_or_else(|| "The temp folder's path is not text.".into())
+    dir.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| "The temp folder's path is not text.".into())
 }
 
 /// Report the common project location without creating it or starting a daemon.
 #[tauri::command]
 fn projects_dir() -> Result<String, String> {
-    locations::projects()?.into_os_string().into_string().map_err(|_| "The workspace path is not text.".into())
+    locations::projects()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "The workspace path is not text.".into())
 }
 
 /// Whether a folder is already inside the Keel workspace, both sides resolved: the offer to move
@@ -232,7 +283,8 @@ fn in_workspace(path: String) -> bool {
 /// The device's review-packet key: made once, kept in the system's own credential store
 /// (Keychain, Windows Credential Manager), never in the page or on disk.
 fn signing_key() -> Result<ed25519_dalek::SigningKey, String> {
-    let entry = keyring::Entry::new("ai.oya.keel.review-packet", "desktop-signing-key-v1").map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new("ai.oya.keel.review-packet", "desktop-signing-key-v1")
+        .map_err(|e| e.to_string())?;
     let hex = match entry.get_password() {
         Ok(hex) => hex,
         Err(keyring::Error::NoEntry) => {
@@ -248,7 +300,9 @@ fn signing_key() -> Result<ed25519_dalek::SigningKey, String> {
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
         .collect();
-    let seed: [u8; 32] = bytes.try_into().map_err(|_| "The stored signing key is damaged.".to_string())?;
+    let seed: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| "The stored signing key is damaged.".to_string())?;
     Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
 }
 
@@ -276,7 +330,12 @@ fn sign_packet(payload: String) -> Result<Signed, String> {
 #[tauri::command(async)]
 fn save_text(app: tauri::AppHandle, name: String, contents: String) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
-    let Some(path) = app.dialog().file().set_file_name(&name).blocking_save_file() else {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_file_name(&name)
+        .blocking_save_file()
+    else {
         return Ok(false);
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
@@ -313,13 +372,30 @@ fn record_panics() {
         if let Some(path) = panic_log() {
             use std::io::Write;
             // Never unbounded: a log past 1 MB starts again rather than growing for ever.
-            let fresh = std::fs::metadata(&path).map(|m| m.len() > 1 << 20).unwrap_or(false);
-            let file = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&path);
+            let fresh = std::fs::metadata(&path)
+                .map(|m| m.len() > 1 << 20)
+                .unwrap_or(false);
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(!fresh)
+                .write(true)
+                .truncate(fresh)
+                .open(&path);
             if let Ok(mut file) = file {
-                let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+                let when = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let thread = std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .to_string();
                 let trace = std::backtrace::Backtrace::force_capture();
-                let _ = writeln!(file, "--- {when} keel-desktop {} thread '{thread}'\n{info}\n{trace}", env!("CARGO_PKG_VERSION"));
+                let _ = writeln!(
+                    file,
+                    "--- {when} keel-desktop {} thread '{thread}'\n{info}\n{trace}",
+                    env!("CARGO_PKG_VERSION")
+                );
             }
         }
         default(info);
@@ -337,7 +413,26 @@ fn main() {
         .manage(Daemons::default())
         .manage(dropped::Dropped::default())
         .on_webview_event(dropped::record)
-        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, in_workspace, sign_packet, save_text, is_dir, dropped::read_dropped, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![
+            open_project,
+            close_project,
+            scratch_dir,
+            projects_dir,
+            in_workspace,
+            sign_packet,
+            save_text,
+            is_dir,
+            dropped::read_dropped,
+            stop_all,
+            preview::preview_show,
+            preview::preview_bounds,
+            preview::preview_hide,
+            preview::preview_send,
+            preview::preview_msg,
+            browser::browser_act,
+            browser::browser_place,
+            browser::browser_close
+        ])
         .build(tauri::generate_context!())
         .expect("the window")
         .run(|app, event| {
@@ -362,6 +457,9 @@ mod tests {
         super::record_panics();
         let _ = std::thread::spawn(|| panic!("the original message")).join();
         let log = std::fs::read_to_string(super::panic_log().unwrap()).unwrap();
-        assert!(log.contains("the original message") && log.contains("main.rs"), "{log}");
+        assert!(
+            log.contains("the original message") && log.contains("main.rs"),
+            "{log}"
+        );
     }
 }

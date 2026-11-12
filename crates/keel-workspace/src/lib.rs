@@ -15,7 +15,7 @@
 //! explicit path for opening one session the user asked for by name, and it carries the id guard.
 
 mod agents;
-mod antigravity;
+pub mod antigravity;
 mod codex;
 mod config;
 pub mod conversation;

@@ -315,13 +315,17 @@ function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?
   </section>;
 }
 
+/** An error as a person reads it: a JavaScript error's class name ("TypeError: Load failed")
+ *  says nothing to them, wherever in the sentence `String(error)` put it. */
+export const plainError = (text: string) => text.replace(/\b(?:Type|Syntax|Range|Reference|Abort|Network)?Error: /g, (m, _k, at, all) => (m === "Error: " && at > 0 && /\w $/.test(all.slice(0, at)) ? m : ""));
+
 function LaneError({ lane }: { lane: string }) {
   const error = useStore((s) => s.lanes[lane]?.nameError ?? s.lanes[lane]?.error);
   const agent = useStore((s) => s.lanes[lane]?.agent);
   if (!error) return null;
   return (
     <div className="banner error" role="alert">
-      {error}{" "}
+      {plainError(error)}{" "}
       {agent !== "antigravity" && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
       <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined, nameError: undefined } } }))}>
         Dismiss

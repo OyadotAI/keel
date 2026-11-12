@@ -96,7 +96,7 @@ export function Composer({ lane }: { lane: string }) {
     <LaneDock lane={lane} />
     {!!queued?.length && <div className="chat-queue" aria-label="Queued messages">{queued.map((message, index) => <div key={message.id}><span className="small faint">{message.failed ? "Not sent · edit to retry" : "Queued"}</span><span>{message.text}</span><QueuedImages attachments={message.attachments} /><button onClick={() => { useStore.getState().editQueued(lane, message.id); input.current?.focus(); }}>Edit</button><button aria-label={`Remove queued message ${index + 1}`} onClick={() => useStore.getState().removeQueued(lane, message.id)}>×</button></div>)}</div>}
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} />
-    {receipt && !submitting && <div className="chat-retry">Submission not confirmed. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Retry same message</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
+    {receipt && !submitting && <div className="chat-retry">Keel couldn’t confirm this message was sent. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Send again</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
     <div className={composerClass(dragOver, busy)}>
       {dragOver && <div className="reference-drop-hint">Drop to reference this file.</div>}
       {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => {
@@ -210,7 +210,7 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
   const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
-  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "Following an external session — stop it there before resuming here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
+  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "This conversation is running in a terminal outside Keel — quit it there, then send from here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
   if (!text) return null;
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span></div>;
 }

@@ -16,6 +16,7 @@ import { Icon } from "./icons";
 /// A server the agent started in the background is a job of this lane, and is shown the same way.
 export function Preview({ lane }: { lane: string }) {
   const dev = useStore((s) => s.lanes[lane]?.dev);
+  const unknown = useStore((s) => !!s.lanes[lane]?.devUnknown);
   const wt = useStore((s) => s.lanes[lane]?.wt);
   const toggle = useStore((s) => s.dev);
   const fromJob = useStore((s) => {
@@ -26,7 +27,8 @@ export function Preview({ lane }: { lane: string }) {
     }
     return undefined;
   });
-  if (!dev) return <div className="panel-empty muted">Asking the daemon about the dev server…</div>;
+  if (!dev && unknown) return <div className="panel-empty muted">Couldn’t check the dev server. <button className="link" onClick={() => void useStore.getState().refreshDev(lane)}>Try again</button></div>;
+  if (!dev) return <div className="panel-empty muted">Checking for a dev server…</div>;
   if (dev.running && dev.elsewhere)
     return (
       <div className="panel-empty muted">

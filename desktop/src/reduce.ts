@@ -320,8 +320,33 @@ export function applyFact(conv: Conversation, fact: Fact): Conversation {
 /// the transcript holds the long form, the view the short one.
 const REFERENCES = "\n\nReferenced files in this checkout (JSON paths):\n";
 
+/// A prompt reduced to the person's words, the same from either side. The transcript joins a
+/// message's blocks with a space — so an image adds a trailing one and any other file adds
+/// " Attached file: <path>" — holds the referenced files the view leaves out, and both carry Keel's
+/// note naming the uploads. Compared raw, every turn that carried an attachment matched nothing
+/// after a redraw and came back without its files, checks, commit and rewind.
+const ATTACHED = /\s+Attached file: [\s\S]*$/;
+const UPLOADS = /\n*Attached files in this checkout \([^)]*\):\n[\s\S]*$/;
+function words(prompt: string): string {
+  const cut = prompt.replace(ATTACHED, "").replace(UPLOADS, "");
+  const references = cut.indexOf(REFERENCES);
+  return (references < 0 ? cut : cut.slice(0, references)).trim();
+}
+
+/// The images a prompt named in Keel's note, so the same words sent with two different screenshots
+/// stay two turns. A non-image file is named only on the transcript side, so it is not compared.
+const uploads = (prompt: string) => [...prompt.replace(ATTACHED, "").matchAll(/\.keel\/attachments\/[^\s"'<>]+/g)].map((m) => m[0]).sort().join("\n");
+
 function samePrompt(shown: string | null, written: string | null): boolean {
-  return shown === written || (!!shown && !!written && written.startsWith(shown + REFERENCES));
+  return shown === written || (!!shown && !!written && words(shown) === words(written) && uploads(shown) === uploads(written));
+}
+
+/// How a turn ended, kept from the live view when the transcript cannot say: a failed or stopped
+/// turn's history usually ends without its end marker, and redrawn as "done" it lost its error.
+const KEPT_ENDINGS = new Set(["failed", "stopped", "interrupted"]);
+function ending(old: Turn, restored: Turn): string | undefined {
+  if (old.closed && KEPT_ENDINGS.has(old.closed)) return old.closed;
+  return restored.closed === "superseded" && old.closed ? old.closed : restored.closed;
 }
 
 /// A turn Keel drew that the provider never wrote: refused before it started, so it has no
@@ -340,11 +365,17 @@ export function restoreTranscript(previous: Conversation, frames: Frame[]): Conv
     // A Keel-only turn is never what the provider wrote, even when the same words were sent again.
     const at = previous.turns.findIndex((old, i) => i >= j && !keelOnly(old) && samePrompt(old.prompt, turn.prompt));
     if (at < 0) { turns.push(turn); continue; }
-    turns.push(...previous.turns.slice(j, at).filter(keelOnly));
+    // The transcript is read from its tail, so a long one starts partway through: the turns the
+    // view has from before its first one are kept, not dropped at the next redraw.
+    turns.push(...(turns.length === 0 ? previous.turns.slice(0, at) : previous.turns.slice(j, at).filter(keelOnly)));
     const old = previous.turns[at];
     j = at + 1;
-    turns.push({ ...turn, id: old.id, prompt: old.prompt, closed: turn.closed === "superseded" && old.closed ? old.closed : turn.closed, files: old.files, gate: old.gate, commit: old.commit,
-      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended });
+    // What only the live view knew: Keel's facts, the error a failed turn ended on, and the cost.
+    const cost = turn.usage?.cost ?? old.usage?.cost;
+    turns.push({ ...turn, id: old.id, prompt: old.prompt, closed: ending(old, turn), files: old.files, gate: old.gate, commit: old.commit,
+      snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended,
+      failures: turn.failures.length ? turn.failures : old.failures,
+      ...(turn.usage || old.usage ? { usage: { ...(old.usage ?? turn.usage)!, ...turn.usage, cost } } : {}) });
   }
   turns.push(...previous.turns.slice(j).filter(keelOnly));
   return restored.background ? { turns, background: restored.background } : { turns };

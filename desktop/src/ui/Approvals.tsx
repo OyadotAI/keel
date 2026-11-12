@@ -9,6 +9,7 @@ import { post } from "../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Markdown } from "./Markdown";
 import { Questions, QuestionRecoveries } from "./Questions";
+import { shownTool } from "../browser";
 import { BROWSER_CHOICE } from "../browser-preference";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
@@ -66,7 +67,7 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
     <div className="strip-row command-approval">
       <div className="strip-title">
         <Icon name="hand" className="hand" />
-        <span style={{ flex: 1 }}>{who(p)} wants to run {p.tool === "Bash" ? "a command" : p.tool}</span>
+        <span style={{ flex: 1 }}>{who(p)} {p.tool === "Bash" ? "wants to run a command" : `wants to use ${shownTool(p.tool)}`}</span>
         {count > 1 && <span className="small faint">{count} waiting</span>}
       </div>
       {p.reason && <p className="small muted">{p.reason}</p>}
@@ -171,7 +172,12 @@ async function runtimeAnswer(lane: string, p: Pending, answer: unknown) {
   if (!ep) return;
   try {
     const receipt = await post<{ ok: boolean; reason?: string }>(ep, "/api/chat/control", { lane, method: "answer", id: p.id, answer });
-    if (!receipt.ok) throw new Error(receipt.reason ?? "That request is no longer pending.");
+    if (!receipt.ok) {
+      // Nothing is waiting on it any more: the card goes, as a stale question's does, rather than
+      // staying to fail on every click until the turn ends.
+      useStore.setState((s) => s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], pending: s.lanes[lane].pending.filter((x) => x.id !== p.id), error: receipt.reason ?? "That request is no longer waiting for an answer." } } } : s);
+      return;
+    }
   }
   catch (error) { useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: `Could not deliver your answer: ${error}` } } })); }
 }
@@ -189,7 +195,7 @@ function RuntimeRequest({ lane, p }: { lane: string; p: Pending }) {
     await runtimeAnswer(lane, p, { decision, content: value });
     setSending(false);
   }
-  return <div className="strip-row runtime-approval"><div className="strip-title"><Icon name="hand" />{p.tool}</div>
+  return <div className="strip-row runtime-approval"><div className="strip-title"><Icon name="hand" />{shownTool(p.tool)}</div>
     <div className="approval-context">
     {p.command && <pre className="code">{p.command}</pre>}
     {typeof p.input.reason === "string" && <p>{p.input.reason}</p>}
@@ -198,6 +204,7 @@ function RuntimeRequest({ lane, p }: { lane: string; p: Pending }) {
     {!!schema && <><pre className="code">{JSON.stringify(schema, null, 2)}</pre><textarea aria-label="Requested fields as JSON" value={content} onChange={(e) => setContent(e.target.value)} /></>}
     </div>
     {error && <p role="alert">{error}</p>}
-    <div className="actions">{p.choices?.map((choice, i) => <button key={i} disabled={sending} className={i === 0 ? "primary" : undefined} onClick={() => void answer(choice.value)}>{choice.label}</button>)}</div>
+    {/* A request that offers no choices still has to be answerable: a card with no buttons held the turn until it timed out. */}
+    <div className="actions">{p.choices?.length ? p.choices.map((choice, i) => <button key={i} disabled={sending} className={i === 0 ? "primary" : undefined} onClick={() => void answer(choice.value)}>{choice.label}</button>) : <>{!!schema && <button className="primary" disabled={sending} onClick={() => void answer("accept")}>Send</button>}<button disabled={sending} onClick={() => void answer("decline")}>Decline</button></>}</div>
   </div>;
 }

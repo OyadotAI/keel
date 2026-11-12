@@ -33,6 +33,22 @@ export class Codex {
       this.child.stderr.on('data', (bytes) => this.emit('err', bytes.toString()));
       this.child.on('error', (error) => { if (this.child === child) this.fail(error); });
       this.child.on('exit', () => { if (this.child === child) this.fail(new Error('Codex App Server exited')); });
+      // A closed pipe is an `error` on the stream, and an unheard one ends the whole helper.
+      this.child.stdin.on('error', (error) => { if (this.child === child) this.fail(error); });
+      try { await this.connect(q); }
+      catch (error) {
+        // A start that failed halfway (a deleted rollout refuses `thread/resume`) must not leave a
+        // child behind with no thread: every later turn then failed on it until the lane closed.
+        this.child = undefined; this.thread = undefined;
+        child.kill();
+        throw error;
+      }
+    }
+    await this.startTurn(q);
+  }
+  /** Initialise the App Server and open or resume the thread. */
+  async connect(q) {
+    {
       await this.rpc('initialize', { clientInfo: { name: 'keel', title: 'Keel', version: '0.3.6' }, capabilities: {} });
       this.write({ method: 'initialized', params: {} });
       const thread = await this.rpc(q.session ? 'thread/resume' : 'thread/start', {
@@ -61,6 +77,9 @@ export class Codex {
       this.emit('capabilities', { models: models.data, commands: [] });
       if (q.session && thread.thread.turns?.length) this.emit('snapshot', { frames: [...historyFrames(thread.thread.turns), { turn: null, op: 'open', prompt: q.prompt }] });
     }
+  }
+  /** The turn itself, on a connected thread. */
+  async startTurn(q) {
     this.text.clear();
     this.inspector.requested(q.prompt);
     const result = await this.rpc('turn/start', {

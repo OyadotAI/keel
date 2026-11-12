@@ -185,6 +185,8 @@ export interface Lane {
   /// Commands the daemon is running for this lane, outliving the turn that started them.
   jobs: Job[];
   dev?: Dev;
+  /** The last dev-server check failed: the Preview says so and offers to ask again. */
+  devUnknown?: boolean;
   /// Prompts waiting for the turn in flight to end — a finished job's report, mainly. Drained by
   /// every way a turn ends, not just the happy one.
   queued: QueuedMessage[];
@@ -903,6 +905,9 @@ export const useStore = create<State>()((set, getState, api) => {
   }
 
   const chats = new Map<string, Stream>();
+  /** Reconnects of a lane's chat stream since it last caught up, for the backoff. */
+  const listenTries = new Map<string, number>();
+  const LISTEN_FIRST_MS = 1500, LISTEN_CEILING_MS = 30_000;
   const connecting = new Set<string>();
   /// A chat lane's live subagents, for the same panes a terminal lane draws. Keyed to the session
   /// it reads, because a new chat learns its id only during its first turn.
@@ -949,6 +954,7 @@ export const useStore = create<State>()((set, getState, api) => {
           for (const incoming of events) {
             if (incoming.event === "caught-up") {
               caughtUp = true;
+              listenTries.delete(lid);
               patch.loaded = true;
               patch.disconnected = false;
               clearConnectionError(current, patch);
@@ -1016,9 +1022,17 @@ export const useStore = create<State>()((set, getState, api) => {
         chats.delete(lid);
         kids.get(lid)?.stream.close(); kids.delete(lid);
         if (!getState().lanes[lid]) return;
-        lane(lid, { disconnected: true, ...(error ? { error: `Connection interrupted. Reconnecting… ${error}` } : {}) });
-        lost(l.project, ep);
-        setTimeout(() => void listen(lid), 1500);
+        // `follow`'s rule. Only a dropped connection means the daemon is gone and its address
+        // should be forgotten; a refusal (a journal that will not load) is said once, and it was
+        // retried every 1.5 s for good with the endpoint forgotten each time, so Stop and answers
+        // did nothing while the composer read "Reconnecting".
+        const network = !error || /fetch|network|load failed/i.test(error);
+        if (network) lost(l.project, ep);
+        // The composer already says "Reconnecting — your draft is saved"; a banner beside it said it again.
+        lane(lid, { disconnected: true, ...(network ? {} : { error: `Couldn’t follow this conversation: ${error}` }) });
+        const tries = (listenTries.get(lid) ?? 0) + 1;
+        listenTries.set(lid, tries);
+        setTimeout(() => void listen(lid), Math.min(LISTEN_CEILING_MS, LISTEN_FIRST_MS * 2 ** Math.min(tries - 1, 5)));
       });
       chats.set(lid, stream);
       // Every way a chat stream is closed — a lane closed, an interface switched, a reconnect —
@@ -1326,7 +1340,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
       const dev = await get<Dev>(ep, "/api/dev", { wt: l.wt }).catch(() => undefined);
-      if (dev) lane(lid, { dev });
+      lane(lid, dev ? { dev, devUnknown: false } : { devUnknown: true });
     },
 
     async dev(lid, start) {
@@ -1556,7 +1570,8 @@ export const useStore = create<State>()((set, getState, api) => {
           lane(lid, (now) => ({ running: false, receipt: undefined, error: `Message was not sent: ${error.message}. Correct it and send again.`, ...(!ownsDraft && references.length ? { queued: [{ id: id(), text: prompt, attachments, references, system, failed: true }, ...now.queued] } : {}) }));
           return false;
         }
-        lane(lid, { running: false, error: `Message not confirmed: ${error}. Retry uses the same submission id.`, draft: getState().lanes[lid]?.draft || (ownsDraft ? prompt : "") });
+        // The row under the composer says it and offers Send again; a banner repeating it said it twice.
+        lane(lid, { running: false, draft: getState().lanes[lid]?.draft || (ownsDraft ? prompt : "") });
         return false;
       } finally { lane(lid, { submitting: false }); save(getState()); drain(lid); }
     },
@@ -1645,5 +1660,5 @@ function sessionPatch(frames: Frame[]): Partial<Lane> {
 }
 
 function clearConnectionError(current: Lane, patch: Partial<Lane>) {
-  if (current.error?.startsWith("Connection interrupted.") && !patch.error) patch.error = undefined;
+  if (/^(Connection interrupted\.|Couldn’t follow this conversation:)/.test(current.error ?? "") && !patch.error) patch.error = undefined;
 }

@@ -86,9 +86,10 @@ changes to them; say which rule a deviation breaks and why it is worth it.
   from one shared table; a value the environment can tune is read in one place with a named
   default.
 - **No new dependency** for something a few lines of the standard library cover.
-- **In JavaScript and TypeScript the linter holds these.** `tooling/eslint/index.js` has the rule
-  sets (file header, function and class length, no magic numbers, doc comments); import them into
-  the project's ESLint config rather than restating them.
+- **In JavaScript and TypeScript the linter holds these.** In a generated project
+  `tooling/eslint/index.js` has the rule sets (file header, function and class length, no magic
+  numbers, doc comments); import them into the project's ESLint config rather than restating them.
+  In this repository the page's linter is `desktop/eslint.config.mjs`.
 
 **Design**
 

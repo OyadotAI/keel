@@ -358,103 +358,117 @@ pub async fn send(
     let h = tokio::task::spawn_blocking(move || history(&owner, &lane))
         .await
         .map_err(internal)??;
-    let receipt = request.id.clone();
-    let held = h.clone();
-    let seed = request.query.clone();
-    let owner = state.clone();
-    let accepted = tokio::task::spawn_blocking(move || {
-        let mut h = held.locked();
-        // Existing receipts must remain idempotent even when their referenced file later changes.
-        let repeated = h
-            .records
-            .iter()
-            .filter(|r| r.event == "accepted")
-            .filter_map(|r| serde_json::from_str::<Value>(r.data.get()).ok())
-            .any(|r| r["id"] == receipt);
-        if !repeated {
-            let checkout = owner.checkout(seed.wt.as_deref()).map_err(internal)?;
-            let source = crate::tasks::Source {
-                lane: seed.lane.clone().unwrap_or_default(),
-                provider: seed.provider.clone().unwrap_or_else(|| "claude".into()),
-                session: seed
-                    .session
-                    .clone()
-                    .unwrap_or_else(|| seed.lane.clone().unwrap_or_default()),
-                checkout: checkout.to_string(),
-                wt: seed.wt.clone(),
-            };
-            let task_session = source.session.clone();
-            let task_provider = source.provider.clone();
-            crate::tasks::register(&owner.repo(), source).map_err(internal)?;
-            crate::guidance::prepare(&owner.repo()).map_err(internal)?;
-            crate::tasks::input(&owner.repo(), &task_provider, &task_session, &seed.prompt)
-                .map_err(internal)?;
-            crate::references::validate_query(&owner, &seed)
-                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-        }
-        // Always against the transcript, not only on a lane's first send: `seen` at this turn's
-        // end vouches for the whole transcript, so turns taken in a terminal since must be in the
-        // journal first. Unchanged costs one `stat`.
-        // A transcript that cannot be read is the runtime's to report, as a failed turn the
-        // person can read — not a 500 that leaves the submission unconfirmed and the lane stuck.
-        if let Err(e) = h.seed(&owner, &seed, true) {
-            tracing::debug!("chat send: transcript not read: {e}");
-        }
-        h.accept(&receipt, &fingerprint)
-    })
-    .await
-    .map_err(internal)??;
-    if accepted {
-        let h = h.clone();
-        tokio::spawn(async move {
-            let owner = state.clone();
-            let query = request.query.clone();
-            // Keep consuming after every subscriber disappears. The existing runner still owns
-            // checkout locking, cancellation, checkpoints and verification.
-            let response = crate::runtime::chat(state, request.query).await;
-            let mut stream = response.into_body().into_data_stream();
-            let mut parser = Parser::default();
-            let mut failure = None;
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(bytes) => {
-                        let events = parser.feed(&bytes);
-                        let held = h.clone();
-                        let result = tokio::task::spawn_blocking(move || {
-                            let mut h = held.locked();
-                            for (name, data) in events {
-                                h.push(&name, data)?;
+    // The receipt and the turn it starts are one task, awaited here but not owned by this
+    // request: a request dropped between the two (a reload, an aborted fetch, the window's own
+    // timeout) used to leave the journal `running` with no turn behind it, and every later send
+    // was refused as "still running" for the life of the daemon.
+    let id = request.id.clone();
+    let journal = h.clone();
+    let accepted = tokio::spawn(async move {
+        let receipt = request.id.clone();
+        let held = h.clone();
+        let seed = request.query.clone();
+        let owner = state.clone();
+        let accepted = tokio::task::spawn_blocking(move || {
+            let mut h = held.locked();
+            // Existing receipts must remain idempotent even when their referenced file later changes.
+            let repeated = h
+                .records
+                .iter()
+                .filter(|r| r.event == "accepted")
+                .filter_map(|r| serde_json::from_str::<Value>(r.data.get()).ok())
+                .any(|r| r["id"] == receipt);
+            if !repeated {
+                let checkout = owner.checkout(seed.wt.as_deref()).map_err(internal)?;
+                let source = crate::tasks::Source {
+                    lane: seed.lane.clone().unwrap_or_default(),
+                    provider: seed.provider.clone().unwrap_or_else(|| "claude".into()),
+                    session: seed
+                        .session
+                        .clone()
+                        .unwrap_or_else(|| seed.lane.clone().unwrap_or_default()),
+                    checkout: checkout.to_string(),
+                    wt: seed.wt.clone(),
+                };
+                let task_session = source.session.clone();
+                let task_provider = source.provider.clone();
+                crate::tasks::register(&owner.repo(), source).map_err(internal)?;
+                crate::guidance::prepare(&owner.repo()).map_err(internal)?;
+                crate::tasks::input(&owner.repo(), &task_provider, &task_session, &seed.prompt)
+                    .map_err(internal)?;
+                crate::references::validate_query(&owner, &seed)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+            }
+            // Always against the transcript, not only on a lane's first send: `seen` at this turn's
+            // end vouches for the whole transcript, so turns taken in a terminal since must be in the
+            // journal first. Unchanged costs one `stat`.
+            // A transcript that cannot be read is the runtime's to report, as a failed turn the
+            // person can read — not a 500 that leaves the submission unconfirmed and the lane stuck.
+            if let Err(e) = h.seed(&owner, &seed, true) {
+                tracing::debug!("chat send: transcript not read: {e}");
+            }
+            h.accept(&receipt, &fingerprint)
+        })
+        .await
+        .map_err(internal)??;
+        if accepted {
+            let h = h.clone();
+            tokio::spawn(async move {
+                let owner = state.clone();
+                let query = request.query.clone();
+                // Keep consuming after every subscriber disappears. The existing runner still owns
+                // checkout locking, cancellation, checkpoints and verification.
+                let response = crate::runtime::chat(state, request.query).await;
+                let mut stream = response.into_body().into_data_stream();
+                let mut parser = Parser::default();
+                let mut failure = None;
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(bytes) => {
+                            let events = parser.feed(&bytes);
+                            let held = h.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                let mut h = held.locked();
+                                for (name, data) in events {
+                                    h.push(&name, data)?;
+                                }
+                                Ok::<_, String>(())
+                            })
+                            .await;
+                            if !matches!(result, Ok(Ok(()))) {
+                                failure = Some("Could not persist the agent's output.");
+                                break;
                             }
-                            Ok::<_, String>(())
-                        })
-                        .await;
-                        if !matches!(result, Ok(Ok(()))) {
-                            failure = Some("Could not persist the agent's output.");
+                        }
+                        Err(_) => {
+                            failure = Some("The agent stream ended unexpectedly.");
                             break;
                         }
                     }
-                    Err(_) => {
-                        failure = Some("The agent stream ended unexpectedly.");
-                        break;
+                }
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mut h = h.locked();
+                    if let Some(error) = failure {
+                        let _ = h.end_broken(error);
                     }
-                }
-            }
-            let _ = tokio::task::spawn_blocking(move || {
-                let mut h = h.locked();
-                if let Some(error) = failure {
-                    let _ = h.end_broken(error);
-                }
-                // A new conversation learns its session id during the turn; its first reconnect
-                // takes one snapshot, which is right, since the journal had no transcript yet.
-                let _ = h.seen(&owner, &query);
-                let _ = h.push("idle", Value::Null);
-                h.running = false;
-            })
-            .await;
-        });
-    }
+                    // A new conversation learns its session id during the turn; its first reconnect
+                    // takes one snapshot, which is right, since the journal had no transcript yet.
+                    let _ = h.seen(&owner, &query);
+                    let _ = h.push("idle", Value::Null);
+                    h.running = false;
+                })
+                .await;
+            });
+        }
+        Ok::<_, Error>(accepted)
+    })
+    .await
+    .map_err(internal)??;
+    let running = tokio::task::spawn_blocking(move || journal.locked().running)
+        .await
+        .map_err(internal)?;
     Ok(Json(
-        json!({"id": request.id, "accepted": accepted, "running": h.locked().running}),
+        json!({"id": id, "accepted": accepted, "running": running}),
     ))
 }
 

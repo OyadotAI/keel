@@ -162,6 +162,22 @@ pub(crate) fn count(path: &Utf8Path) -> Option<u64> {
         .map(|n| n as u64)
 }
 
+/// How Keel's notes to an agent begin, and the line that ends them. A provider with no
+/// system-prompt flag (Antigravity) takes the notes ahead of the person's words on the first turn,
+/// so its own record of that turn holds both.
+pub const NOTES_START: &str = "Notes from Keel, the IDE this session runs in.";
+pub const TASK_MARKER: &str = "\n\nTask:\n";
+
+/// The person's words from a first prompt that carried Keel's notes ahead of them. Shown whole, a
+/// reopened lane's first message was Keel's system prompt, and the turn matched nothing the page
+/// had recorded for it — so its files, gate and commit were dropped.
+pub fn without_notes(prompt: &str) -> &str {
+    match prompt.find(TASK_MARKER) {
+        Some(at) if prompt.starts_with(NOTES_START) => &prompt[at + TASK_MARKER.len()..],
+        _ => prompt,
+    }
+}
+
 /// One step as the line the decoder and the follower read.
 /// Share protobuf decoding between settled transcripts and independent live child observations.
 pub(crate) fn line(idx: i64, kind: i64, status: i64, payload: &[u8]) -> Value {
@@ -171,7 +187,11 @@ pub(crate) fn line(idx: i64, kind: i64, status: i64, payload: &[u8]) -> Value {
         v["at"] = crate::iso(secs, (nanos / 1_000_000) as u32).into();
     }
     match kind {
-        USER_INPUT => put(&mut v, &f, "prompt", &[19, 2]),
+        USER_INPUT => {
+            if let Some(prompt) = f.text(&[19, 2]) {
+                v["prompt"] = without_notes(&prompt).into();
+            }
+        }
         RESPONSE => {
             put(&mut v, &f, "text", &[20, 1]);
             put(&mut v, &f, "thinking", &[20, 3]);
@@ -445,6 +465,19 @@ pub(crate) fn failed(v: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_first_prompt_shows_the_persons_words_not_keels_notes() {
+        let first = format!(
+            "{} Facts.\n- one{}fix the header",
+            super::NOTES_START,
+            super::TASK_MARKER
+        );
+        assert_eq!(super::without_notes(&first), "fix the header");
+        // Only Keel's own notes are cut: somebody's prompt that says "Task:" is theirs.
+        let theirs = format!("Do this{}and that", super::TASK_MARKER);
+        assert_eq!(super::without_notes(&theirs), theirs);
+    }
+
     use super::*;
 
     /// A tiny protobuf writer, for payloads in the shape agy writes.

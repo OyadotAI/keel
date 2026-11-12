@@ -363,6 +363,16 @@ pub(crate) fn redact(stderr: &str) -> String {
 
 #[cfg(test)]
 mod antigravity_prompt_tests {
+    /// The reader cuts Keel's notes off a first prompt by how they begin; if the notes change
+    /// their first words, a reopened lane shows them as the person's message again.
+    #[test]
+    fn keels_notes_begin_as_the_transcript_reader_expects() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = camino::Utf8Path::from_path(dir.path()).unwrap();
+        for notes in [super::system_prompt(repo), super::antigravity_prompt(repo)] {
+            assert!(notes.starts_with(keel_workspace::antigravity::NOTES_START));
+        }
+    }
     /// Every Claude-only instruction an agy lane would be refused for is gone, and the facts stay.
     #[test]
     fn the_antigravity_prompt_drops_what_its_refusals_contradict() {
@@ -904,8 +914,14 @@ pub async fn chat(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            Some(extra) => format!("{}\n\n{extra}\n\nTask:\n{}", base_system, provider_prompt),
-            None => format!("{}\n\nTask:\n{}", base_system, provider_prompt),
+            Some(extra) => format!(
+                "{base_system}\n\n{extra}{}{provider_prompt}",
+                keel_workspace::antigravity::TASK_MARKER
+            ),
+            None => format!(
+                "{base_system}{}{provider_prompt}",
+                keel_workspace::antigravity::TASK_MARKER
+            ),
         };
         // The models agy offers, for the composer's list as Claude's and Codex's runtimes send theirs.
         // Off to the side: it fetches over the network, and the turn does not wait for it.

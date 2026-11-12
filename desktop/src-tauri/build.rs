@@ -22,6 +22,9 @@ fn main() {
         "browser_place",
         "browser_close",
     ];
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)))
-        .expect("the Tauri build");
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    )
+    .expect("the Tauri build");
 }

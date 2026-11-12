@@ -112,8 +112,8 @@ reader means using these, not re-deriving them.
   own paths and nothing of the person's: not during a merge, not an ignored path, not an
   instructions file whose content (not `git diff`, which trusts `assume-unchanged`) differs from
   HEAD, and it backs out what `add` staged when anything fails.
-- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor` reads every module from
-  disk.** A hand-kept list of ten missed thirteen modules; before that the test stopped reading
+- **`serve::tests::every_handler_keeps_blocking_work_off_the_executor` reads every top-level
+  module from disk** (not the subfolders yet: `pr/`, `browser/` and the rest are unchecked). A hand-kept list of ten missed thirteen modules; before that the test stopped reading
   at the first `#[cfg(test)]` attribute and checked a third of `serve.rs`.
 - **`lines::next()`** — never `Err(_) => continue` on `next_line()`. Undecodable bytes must be
   skipped, because stopping there leaves the pipe to fill and blocks the child mid-write; a reader
@@ -145,7 +145,7 @@ reader means using these, not re-deriving them.
   of it) took a lockfile diff from 3.83 MB to 380 KB. `monitor::SHOWN` (80) sends what the UI
   reads instead of all 400 lines it keeps.
 - **`serve::tests::every_handler_keeps_blocking_work_off_the_executor`** — reads the source of
-  ten modules and fails on any handler that does its work inline. This is the rule with the worst
+  every top-level module and fails on any handler that does its work inline. This is the rule with the worst
   failure mode in the daemon, because breaking it fails no other test: axum's pool is small, so
   one handler reading a 33 MB transcript holds up every other request, and what that looks like
   is a window that is intermittently slow for reasons nobody can reproduce. It was kept for
@@ -207,9 +207,11 @@ These are enforced by tests. Changing any of them is a deliberate decision, not 
    not the same, so say which you mean. `keel-harness::invocation` is the locked one —
    `--permission-mode dontAsk` + `--strict-mcp-config`, built-in `Bash`/`Edit`/`Write` denied,
    every effect through a `keel-mcp` tool — and it is what `docs/guardrails.md` describes. **The
-   chat panel does not use it yet** (`agent::chat`, `--permission-mode acceptEdits` or `plan`): there
-   the decision is Keel's own `PreToolUse` hook plus the allowlist, which is a real gate but a
-   different one. Do not write prose claiming the locked surface for the shipping path until
+   chat panel does not use it yet**: Claude and Codex chat turns run in the per-lane helper
+   (`runtime.rs`, `desktop/runtime/`), where the SDK's `canUseTool` and the App Server's requests
+   ask the daemon (`/api/approve/ask`); Antigravity's is one `agy -p` through `agent::chat` with
+   Keel's hook. There the decision is Keel's own approval path plus the allowlist, which is a real
+   gate but a different one. Do not write prose claiming the locked surface for the shipping path until
    `keel-mcp` has a server behind its catalog and the spawn switches to `Invocation::args()`.
    Tests: `invocation::tests::locks_the_tool_surface` for the first, `approve::tests::*` for the
    second.
@@ -290,7 +292,7 @@ WebSocket cannot set headers. Loopback without an `Origin` (the hook, the CLI) i
 - `Conversation` is keyed by lane, so nothing in it outlives the lane it was drawn for — the
   Swift pane's scroll anchor named a row from the lane you had left and scrolled into nothing.
 - Diffs are prepared once on arrival (`git.ts`), never per render.
-- `pnpm budget` fails the build past 400 KB gzip at launch (150 KB now); the terminal is a lazy
+- `pnpm budget` fails the build past 400 KB gzip at launch (about 335 KB now); the terminal is a lazy
   chunk.
 - A long action started from a panel — a pull request, a check, a plugin install — lives in
   `runs.ts`, not the panel's state. A panel unmounts on a tab switch; a run held there came back
@@ -318,19 +320,25 @@ It was deleted only once the Swift app could do what it did. What is deliberatel
 over: file editing (there is no editor), and `/api/browse` and `/api/open-url`, which `NSOpenPanel`
 and `NSWorkspace` do better natively.
 
-**What the deletion left behind is a "never weird" violation.** Nothing served `/` any more, but
-the two things that *open* `/` were kept: `serve::open_ui` still opens a browser tab unless
-`--no-open` is passed, and `gui.rs` — 180 lines, plus `tao`, `wry` and `muda` — still builds a
-WKWebView window and points it there. So `keel serve .`, the command this file's own Contributing
-note recommends, greets you with a blank 404, and `keel app` does the same in a native frame. A
-window onto nothing is the exact failure the bar names, and it survived because deleting the thing
-a route served is not the same edit as deleting the code that navigates to it. The fix is a
-deletion, not a route.
+**What the deletion left behind was a "never weird" violation, since fixed.** Nothing served `/`
+any more, but the two things that *open* `/` were kept for a while — `serve::open_ui` and `gui.rs` —
+so `keel serve .` greeted you with a blank 404. Both are deleted now, and `--no-open` is accepted
+and ignored. The lesson stands: deleting the thing a route served is not the same edit as deleting
+the code that navigates to it.
 
 ## The conversation
 
 The chat pane is what a person watches while a turn runs, so the two failures it can have are the
 two the bar names: it can be slow, and it can show less than the terminal it replaced.
+
+**How a chat turn travels today.** The page posts `/api/chat/send` with a submission id and reads
+`/api/chat/events?after=<seq>`; the daemon journals every record per lane (`chat.rs`, outside the
+checkout), so a reconnect, a reload or a second window replays the same turn and a repeated send
+cannot start a second one. Claude and Codex turns run in a persistent per-lane helper
+(`runtime.rs` + `desktop/runtime/`: the Claude Agent SDK and the Codex App Server), which keeps the
+session warm between turns and lets typed words join a running turn; Antigravity runs one
+`agy -p` per turn through `agent::chat`. The `GET /api/chat` route is that same one-shot path for
+every agent and is what `tests/evals.rs` drives — the page does not call it.
 
 **The decoder is in Rust, and every ending closes every call.** Claude Code's stream-json (and
 Codex's events) become `turn` ops in `keel-workspace::conversation`: `open`, `text` appends,
@@ -1006,9 +1014,10 @@ changes to them; say which rule a deviation breaks and why it is worth it.
   from one shared table; a value the environment can tune is read in one place with a named
   default.
 - **No new dependency** for something a few lines of the standard library cover.
-- **In JavaScript and TypeScript the linter holds these.** `tooling/eslint/index.js` has the rule
-  sets (file header, function and class length, no magic numbers, doc comments); import them into
-  the project's ESLint config rather than restating them.
+- **In JavaScript and TypeScript the linter holds these.** In a generated project
+  `tooling/eslint/index.js` has the rule sets (file header, function and class length, no magic
+  numbers, doc comments); import them into the project's ESLint config rather than restating them.
+  In this repository the page's linter is `desktop/eslint.config.mjs`.
 
 **Design**
 

@@ -22,84 +22,60 @@ Everyone participating follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Prerequisites
 
-- A Mac with macOS 15 or later to run Keel.
-- Xcode 26 with its Swift 6.2 toolchain selected. The current native code uses isolated
-  conformances that older Swift toolchains do not support. Building needs a Mac compatible with
-  that Xcode version, even though the app's deployment target is macOS 15.
-- Current stable Rust, including Cargo, rustfmt, and Clippy; Git; Python 3.
-- Pillow for rendering the app icon. The isolated Python environment below keeps it local.
-- Optional: ffmpeg for media generation. A signed-in Claude Code account is needed only for
-  real agent runs, not ordinary unit tests.
+- macOS or Windows to run the app; the daemon and its tests also build on Linux.
+- Current stable Rust, including Cargo, rustfmt and Clippy; Node.js and pnpm; Git.
+- A signed-in Claude Code (or Codex, or Antigravity) is needed only for real agent runs, not for
+  `make check`.
 
-Check the selected tools with `xcrun swift --version`, `rustc --version`, and `python3 --version`.
-If Rust is already managed by rustup, `rustup component add rustfmt clippy` adds the check tools.
+If Rust is managed by rustup, `rustup component add rustfmt clippy` adds the check tools.
 
-1. Fork the source repository, clone your fork using its GitHub Clone button, and enter the
-   checkout. Create a branch for your change:
+1. Fork the source repository, clone your fork, and create a branch for your change:
 
    ```sh
    git switch -c fix/session-history
    ```
 
-2. Create the packaging environment and build the app:
+2. Run the app against a daemon built from your tree:
 
    ```sh
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python3 -m pip install Pillow
-   make app
+   make dev
    ```
 
-   This produces `dist/Keel.app`. The build uses an available Developer ID or falls back to
-   ad-hoc signing for local development. You do not need release credentials to contribute.
-
-3. Open your build:
-
-   ```sh
-   open dist/Keel.app
-   ```
-
-   You now have a local Keel build. For subsequent UI edits, `make dev` builds and launches
-   `dist/Keel-dev.app`. It quits the running Keel instance, so finish active work first.
+   It installs the page's dependencies, stages the daemon beside the app, and starts the Tauri
+   app with live reload. You do not need signing or release credentials to contribute.
 
 ### Troubleshooting
 
-- **Swift rejects an isolated conformance:** check `xcode-select -p` and `xcrun swift --version`.
-  Select your Xcode 26 installation in Xcode's Locations settings, then rebuild.
-- **`No module named 'PIL'`:** activate `.venv` in this shell and install Pillow with the command above.
-- **Bundle or resource tests fail after a bare `swift test`:** run `make app-test`. It builds the
-  release bundle before tests that inspect its size, resources, and process behavior.
-- **`make dev` says no bundle exists:** run `make app` once first.
-- **Claude is missing or signed out:** use Keel's setup screen. Do not paste account tokens into
+- **`pnpm: command not found`:** install pnpm (`npm install -g pnpm`), then run `make dev` again.
+- **An agent is missing or signed out:** use Keel's setup screen. Do not paste account tokens into
   an issue, a test fixture, or a repository config file.
-- **An old project asks for permissions again:** trust and approved rules are now machine-local.
+- **An old project asks for permissions again:** trust and approved rules are machine-local.
   Repository permission files are ignored. Review and reapprove needed rules in Settings → Permissions.
 
 ## How to verify a change
 
-The complete macOS gate is:
+The complete gate is:
 
 ```sh
 make check
 ```
 
-It checks Rust formatting, runs Clippy and Rust tests, builds the release app, and runs Swift tests.
-PR CI also builds and tests the native app on a hosted macOS runner without release credentials.
-Keep the packaging Python environment active. For faster feedback while editing:
+It checks Rust formatting, runs Clippy and the Rust tests, then type-checks, lints, tests, bundles
+and size-checks the app, runs the agent helper's tests, and tests the app shell. For faster
+feedback while editing:
 
 | Change | Focused check |
 | --- | --- |
 | Rust formatting | `cargo fmt --all -- --check` |
 | Rust lint | `cargo clippy --all-targets -- -D warnings` |
 | Claude session discovery and following | `cargo test -p keel-workspace sessions::` |
-| Native setup and command palette | `swift test --package-path app --filter SetupFlowTests` |
-| Native turn lifetime | `swift test --package-path app --filter TurnLifecycleTests` |
-| Complete native app, including bundle checks | `make app-test` |
-| README screenshots, GIFs, and videos | `make media` |
+| The app's page | `cd desktop && pnpm test` |
+| The agent helper (chat turns for Claude and Codex) | `cd desktop && pnpm test:runtime` |
+| The app shell | `cd desktop/src-tauri && cargo test` |
 
-Use `cargo fmt --all` to apply Rust formatting. Follow nearby Swift conventions and `.editorconfig`;
-do not reformat unrelated files. Rust-only contributors on Linux should follow the dependencies
-in [CI](.github/workflows/ci.yml) and run the Rust checks above. Native app checks still need a Mac.
+Use `cargo fmt --all` to apply Rust formatting, and `cargo fmt` inside `desktop/src-tauri` for the
+shell, which is its own workspace. Follow nearby conventions and `.editorconfig`; do not reformat
+unrelated files.
 
 `make evals` invokes real Claude sessions and can spend your account's usage. It is opt-in and is
 not covered by a passing `make check`. For provider-protocol changes, say whether you ran it;
@@ -124,7 +100,7 @@ otherwise request maintainer help validating the live flow. Never add credential
    generated volume does not substitute for evidence.
 
 The [PR template](.github/PULL_REQUEST_TEMPLATE.md) prompts for these details. Mark irrelevant
-items as not applicable with a short reason; documentation-only changes do not need a native rebuild.
+items as not applicable with a short reason; documentation-only changes do not need an app rebuild.
 
 ## Review and maintenance
 
@@ -132,7 +108,7 @@ items as not applicable with a short reason; documentation-only changes do not n
 Keel is sponsored by [OyaBrowser.com](https://oyabrowser.com).
 
 Maintainers decide scope and merge pull requests. A passing test suite is necessary for code
-changes but is not automatic approval. Review favors user-work safety, native UX, understandable
+changes but is not automatic approval. Review favors user-work safety, a fast and legible UI, understandable
 behavior, and compatibility with existing Claude sessions. Disagreements should focus on evidence
 and trade-offs; explain a concern in the PR or related issue.
 

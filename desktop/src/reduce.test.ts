@@ -112,6 +112,35 @@ describe("restoring a transcript over the live view", () => {
     expect(restored.turns[2].commit).toBe("c-two");
     expect(restored.turns[2].id).toBe(previous.turns[2].id);
   });
+  it("matches a turn that carried attachments, however each side wrote them", () => {
+    const shown = "look at this\n\nAttached files in this checkout (already shown to you above):\n.keel/attachments/1-shot.png";
+    const previous = { turns: applyFrames(empty, done(shown)).turns.map((t) => ({ ...t, commit: "abc", files: ["a.ts"] })) };
+    // The transcript: the text block, then an empty image block joined with a space.
+    for (const written of [shown + " ", "look at this\n\nReferenced files in this checkout (JSON paths):\n[\"a.ts\"]\n\nAttached files in this checkout (already shown to you above):\n.keel/attachments/1-shot.png"]) {
+      const restored = restoreTranscript(previous, done(written));
+      expect(restored.turns[0].commit).toBe("abc");
+      expect(restored.turns[0].id).toBe(previous.turns[0].id);
+    }
+    // A non-image file: the live view names nothing, the transcript adds its path as a block.
+    const plain = { turns: applyFrames(empty, done("read the notes")).turns.map((t) => ({ ...t, commit: "def" })) };
+    expect(restoreTranscript(plain, done("read the notes Attached file: /repo/.keel/attachments/2-notes.txt")).turns[0].commit).toBe("def");
+  });
+  it("keeps the same words sent with different screenshots apart", () => {
+    const with_ = (shot: string) => `fix this\n\nAttached files in this checkout (already shown to you above):\n.keel/attachments/${shot}`;
+    const previous = { turns: applyFrames(empty, [...done(with_("a.png")), ...done(with_("b.png"))]).turns.map((t, i) => ({ ...t, commit: `c${i}` })) };
+    const restored = restoreTranscript(previous, done(with_("b.png") + " "));
+    expect(restored.turns.at(-1)?.commit).toBe("c1");
+  });
+  it("keeps what only the live view knew: a failure, its error, the cost, the turns before the tail", () => {
+    let previous = applyFrames(empty, [...done("early"), f("open", { prompt: "broke" }), f("text", { step: "x", kind: "say", append: "half" }), f("failure", { text: "quota reached" }), f("close", { reason: "failed" })]);
+    previous = { turns: previous.turns.map((t) => ({ ...t, usage: { context: 0, input: 1, output: 1, cache_read: 0, cache_write: 0, cost: 0.25 } })) };
+    // A tail read that starts at the second turn, whose history has no end marker or failure.
+    const restored = restoreTranscript(previous, [f("open", { prompt: "broke" }), f("text", { step: "x", kind: "say", append: "half" }), f("close", { reason: "done" })]);
+    expect(restored.turns.map((t) => t.prompt)).toEqual(["early", "broke"]);
+    expect(restored.turns[1].closed).toBe("failed");
+    expect(restored.turns[1].failures).toEqual(previous.turns[1].failures);
+    expect(restored.turns[1].usage?.cost).toBe(0.25);
+  });
   it("matches a prompt the daemon sent with its referenced files", () => {
     const previous = { turns: applyFrames(empty, done("change this")).turns.map((t) => ({ ...t, gate: { status: "passed" } })) };
     const restored = restoreTranscript(previous, done('change this\n\nReferenced files in this checkout (JSON paths):\n["a.ts"]'));

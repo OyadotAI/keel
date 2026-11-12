@@ -111,7 +111,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
           Keel stopped for this project — Restart
         </button>
       ) : project && !project.endpoint && project.starting ? (
-        <button className="warn">Starting Keel…</button>
+        <span className="warn" role="status">Starting Keel…</span>
       ) : null}
       <span className="sb-sep" />
       <button className="sb-shortcuts" onClick={() => useStore.setState({ shortcuts: true })} title="Every keyboard shortcut">

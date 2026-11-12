@@ -3,7 +3,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { shownTool } from "../browser";
 import { get, post } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
-import { JOB_PREFIX, useStore } from "../store";
+import { AGENT_NAME, JOB_PREFIX, useStore } from "../store";
 import type { Call, Turn, Usage } from "../reduce";
 import { Icon, type IconName } from "./icons";
 import { InlineDiff } from "./InlineDiff";
@@ -381,6 +381,7 @@ function CommandDetail({ lane, index, call, depth }: { lane: string; index: numb
 /// is mid-turn, which would be two writers on one tree.
 function Rewind({ lane, turn, number }: { lane: string; turn: Turn; number: number }) {
   const [asking, setAsking] = useState(false);
+  const agent = useStore((s) => s.lanes[lane]?.agent);
   // Anyone writing this tree, not just this lane: the daemon refuses too, this says why first.
   const busy = useStore((s) => {
     const me = s.lanes[lane];
@@ -406,7 +407,7 @@ function Rewind({ lane, turn, number }: { lane: string; turn: Turn; number: numb
       {asking && (
         <Dialog title={`Rewind files to before turn ${number}?`} onClose={() => setAsking(false)}>
           <p>
-            Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. claude's conversation still remembers the edits; tell it, or use <code>/rewind</code> in the terminal.
+            Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. {AGENT_NAME[agent ?? "claude"]} still remembers these edits — tell it you rewound the files.
           </p>
           <div className="actions">
             <button className="primary" onClick={rewind}>

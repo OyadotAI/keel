@@ -121,8 +121,12 @@ async function startClaude(q) {
           if (message.type !== 'stream_event') inspector.update({}, message.type === 'result');
           emit('msg', message);
           if (message.type === 'system' && message.subtype === 'init') {
-            const [commands, models] = await Promise.all([claude.supportedCommands(), claude.supportedModels()]);
-            emit('capabilities', { commands, models });
+            // Off the message loop: awaited here, a slow answer held every message of the turn
+            // behind it, and a refusal ended the session.
+            const session = claude;
+            void Promise.all([session.supportedCommands(), session.supportedModels()])
+              .then(([commands, models]) => emit('capabilities', { commands, models }))
+              .catch((error) => emit('err', `capabilities not read: ${error}`));
           }
           if (message.type === 'result') {
             const owner = inspector;

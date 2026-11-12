@@ -38,7 +38,6 @@ impl Bounds {
             size: LogicalSize::new(self.width.max(1.0), self.height.max(1.0)).into(),
         }
     }
-
 }
 
 /// How far a child webview lands from where it is asked to go, learned on the first placement and
@@ -51,7 +50,13 @@ static CORRECTION: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
 
 /// Put a child webview exactly over `bounds`, in the page's logical pixels.
 pub(crate) async fn place(view: &tauri::Webview, bounds: &Bounds) -> Result<(), String> {
-    let at = |dy: f64| Bounds { y: bounds.y + dy, ..*bounds }.rect();
+    let at = |dy: f64| {
+        Bounds {
+            y: bounds.y + dy,
+            ..*bounds
+        }
+        .rect()
+    };
     let dy = *CORRECTION.lock().unwrap_or_else(|e| e.into_inner());
     view.set_bounds(at(dy)).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
@@ -94,7 +99,10 @@ async fn edge(view: &tauri::Webview) -> Option<(f64, f64)> {
         let _ = tx.send(top_of(platform.inner()));
     })
     .ok()?;
-    tokio::time::timeout(std::time::Duration::from_millis(250), rx).await.ok()?.ok()?
+    tokio::time::timeout(std::time::Duration::from_millis(250), rx)
+        .await
+        .ok()?
+        .ok()?
 }
 
 #[cfg(target_os = "macos")]
@@ -109,7 +117,10 @@ fn top_of(webview: *mut std::ffi::c_void) -> Option<(f64, f64)> {
     // Both in the window's base coordinates, origin at the bottom left.
     let c = content.convertRect_toView(content.bounds(), None);
     let v = view.convertRect_toView(view.bounds(), None);
-    Some(((c.origin.y + c.size.height) - (v.origin.y + v.size.height), v.size.height))
+    Some((
+        (c.origin.y + c.size.height) - (v.origin.y + v.size.height),
+        v.size.height,
+    ))
 }
 
 /// Only the dev server on this machine: the child webview may reach `preview_msg`, and nothing
@@ -138,7 +149,11 @@ pub(crate) fn web_only(url: &Url) -> bool {
 
 /// Show the preview at `url` over `bounds`, creating it the first time.
 #[tauri::command]
-pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) -> Result<(), String> {
+pub async fn preview_show(
+    app: tauri::AppHandle,
+    url: String,
+    bounds: Bounds,
+) -> Result<(), String> {
     let url = local(&url)?;
     let (view, existing) = show_or_create(&app, url, &bounds)?;
     place(&view, &bounds).await?;
@@ -151,13 +166,21 @@ pub async fn preview_show(app: tauri::AppHandle, url: String, bounds: Bounds) ->
 /// The preview's webview, navigated to `url` or created there, and whether it already existed. A
 /// function of its own so the lock is released before `place` awaits: a held std guard cannot
 /// cross an await, and the placement does not need it.
-fn show_or_create(app: &tauri::AppHandle, url: Url, bounds: &Bounds) -> Result<(tauri::Webview, bool), String> {
+fn show_or_create(
+    app: &tauri::AppHandle,
+    url: Url,
+    bounds: &Bounds,
+) -> Result<(tauri::Webview, bool), String> {
     // Held for the whole of this: two shows at once both found no webview and both created one.
     let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(view) = app.get_webview(LABEL) {
         // The URL Keel last loaded, not `view.url()`: wry unwraps WebKit's URL, which is nil
         // until the first load starts, and a second show in that window crashed the app.
-        if shown.as_ref().map(|u| u.origin() != url.origin()).unwrap_or(true) {
+        if shown
+            .as_ref()
+            .map(|u| u.origin() != url.origin())
+            .unwrap_or(true)
+        {
             view.navigate(url.clone()).map_err(|e| e.to_string())?;
             *shown = Some(url);
         }
@@ -174,7 +197,9 @@ fn show_or_create(app: &tauri::AppHandle, url: Url, bounds: &Bounds) -> Result<(
         .on_navigation(|to| web_only(to) || matches!(to.scheme(), "about" | "blob" | "data"))
         // Nothing the page offers lands in ~/Downloads unasked.
         .on_download(|_, _| false);
-    let view = window.add_child(builder, rect.position, rect.size).map_err(|e| e.to_string())?;
+    let view = window
+        .add_child(builder, rect.position, rect.size)
+        .map_err(|e| e.to_string())?;
     Ok((view, false))
 }
 
@@ -184,7 +209,9 @@ pub async fn preview_bounds(app: tauri::AppHandle, bounds: Bounds) -> Result<(),
     // Set the complete rectangle in one operation. Separate position/size calls
     // read native bounds back between updates; on macOS that can reflect the Y
     // coordinate and move the child over the toolbar.
-    let Some(view) = app.get_webview(LABEL) else { return Ok(()) };
+    let Some(view) = app.get_webview(LABEL) else {
+        return Ok(());
+    };
     place(&view, &bounds).await
 }
 
@@ -201,10 +228,15 @@ pub fn preview_hide(app: tauri::AppHandle) -> Result<(), String> {
 /// Tell the picker something: arm, disarm, probe the pins, reload.
 #[tauri::command]
 pub fn preview_send(app: tauri::AppHandle, msg: Value) -> Result<(), String> {
-    let Some(view) = app.get_webview(LABEL) else { return Err("The preview is not open.".into()) };
+    let Some(view) = app.get_webview(LABEL) else {
+        return Err("The preview is not open.".into());
+    };
     // Serialised, never interpolated: the message is JSON the script parses, not code.
     let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-    view.eval(format!("window.__keelPicker && window.__keelPicker({json})")).map_err(|e| e.to_string())
+    view.eval(format!(
+        "window.__keelPicker && window.__keelPicker({json})"
+    ))
+    .map_err(|e| e.to_string())
 }
 
 /// What the picker may say, and nothing else. The dev page can call `preview_msg` itself, so the
@@ -284,14 +316,24 @@ impl Msg {
     fn bounded(mut self) -> Result<Self, String> {
         match &mut self {
             Msg::Pick { pin } => {
-                for (s, max) in [(&mut pin.selector, 400), (&mut pin.tag, 40), (&mut pin.text, 200), (&mut pin.print, 16), (&mut pin.url, 400)] {
+                for (s, max) in [
+                    (&mut pin.selector, 400),
+                    (&mut pin.tag, 40),
+                    (&mut pin.text, 200),
+                    (&mut pin.print, 16),
+                    (&mut pin.url, 400),
+                ] {
                     cap(s, max);
                 }
                 if let Some(f) = &mut pin.frame {
                     cap(f, 400);
                 }
                 pin.sources.truncate(5);
-                if pin.sources.iter().any(|s| !KINDS.contains(&s.kind.as_str())) {
+                if pin
+                    .sources
+                    .iter()
+                    .any(|s| !KINDS.contains(&s.kind.as_str()))
+                {
                     return Err("Unknown source kind.".into());
                 }
                 for s in &mut pin.sources {
@@ -321,7 +363,11 @@ impl Msg {
 /// Refused from any other webview: the main page has no reason to call it, and it must not be a
 /// way for anything else to speak as the picker.
 #[tauri::command]
-pub fn preview_msg(app: tauri::AppHandle, webview: tauri::Webview, msg: Value) -> Result<(), String> {
+pub fn preview_msg(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    msg: Value,
+) -> Result<(), String> {
     if webview.label() != LABEL {
         return Err("Only the preview may send picker messages.".into());
     }
@@ -330,7 +376,8 @@ pub fn preview_msg(app: tauri::AppHandle, webview: tauri::Webview, msg: Value) -
         return Err("Picker message too large.".into());
     }
     let msg: Msg = serde_json::from_value(msg).map_err(|_| "Not a picker message.".to_string())?;
-    app.emit_to("main", "preview", msg.bounded()?).map_err(|e| e.to_string())
+    app.emit_to("main", "preview", msg.bounded()?)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -343,14 +390,29 @@ mod tests {
         let pick = serde_json::json!({"type":"pick","pin":{"selector":"a","exact":true,"tag":"a","text":"t",
             "rect":{"x":0,"y":0,"width":1,"height":1},"sources":[{"kind":"react","file":"src/a.tsx","line":3}],
             "styles":{},"print":"ab","url":"http://localhost:3000/"}});
-        assert!(serde_json::from_value::<Msg>(pick.clone()).unwrap().bounded().is_ok());
+        assert!(
+            serde_json::from_value::<Msg>(pick.clone())
+                .unwrap()
+                .bounded()
+                .is_ok()
+        );
         let mut forged = pick.clone();
         forged["pin"]["verdict"] = "x".into();
-        assert!(serde_json::from_value::<Msg>(forged).is_err(), "a verdict is Keel's to give");
+        assert!(
+            serde_json::from_value::<Msg>(forged).is_err(),
+            "a verdict is Keel's to give"
+        );
         let mut odd = pick;
         odd["pin"]["sources"] = serde_json::json!([{"kind":"curl|sh"}]);
-        assert!(serde_json::from_value::<Msg>(odd).unwrap().bounded().is_err());
-        assert!(serde_json::from_value::<Msg>(serde_json::json!({"type":"eval","js":"x"})).is_err());
+        assert!(
+            serde_json::from_value::<Msg>(odd)
+                .unwrap()
+                .bounded()
+                .is_err()
+        );
+        assert!(
+            serde_json::from_value::<Msg>(serde_json::json!({"type":"eval","js":"x"})).is_err()
+        );
     }
 
     /// The top frame of a child webview never navigates to Keel's own page, whichever spelling the
@@ -358,7 +420,11 @@ mod tests {
     #[test]
     fn a_child_webview_stays_on_the_web() {
         let go = |u: &str| web_only(&u.parse().unwrap());
-        for ok in ["http://localhost:3000/a", "https://127.0.0.1:5173/", "https://example.com/x"] {
+        for ok in [
+            "http://localhost:3000/a",
+            "https://127.0.0.1:5173/",
+            "https://example.com/x",
+        ] {
             assert!(go(ok), "refused {ok}");
         }
         for no in [
@@ -388,12 +454,23 @@ mod tests {
             if path.extension().is_none_or(|e| e != "json") {
                 continue;
             }
-            let cap: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let cap: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             read += 1;
-            assert!(cap.get("windows").is_none(), "{} grants by window; grant by webview label", path.display());
-            let webviews = cap["webviews"].as_array().expect("a capability names its webviews");
+            assert!(
+                cap.get("windows").is_none(),
+                "{} grants by window; grant by webview label",
+                path.display()
+            );
+            let webviews = cap["webviews"]
+                .as_array()
+                .expect("a capability names its webviews");
             assert!(!webviews.is_empty(), "{} names no webview", path.display());
         }
-        assert!(read >= 2, "read {read} capability files from {}", dir.display());
+        assert!(
+            read >= 2,
+            "read {read} capability files from {}",
+            dir.display()
+        );
     }
 }

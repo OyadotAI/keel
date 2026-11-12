@@ -38,7 +38,7 @@ export function PreReviewFeedback({ scope, snapshot }: { scope: Scope; snapshot?
   };
   const label = error.action === "fix" ? "Retry sending" : error.action === "cancel" ? "Retry cancellation" : error.action === "dismiss" ? "Retry closing" : error.action === "open" ? "Retry opening" : "Retry connection";
   return <div className="review-error" role="alert"><strong>{error.message}</strong>
-    <p className="small">{error.details}</p><button onClick={() => void retry()}>{label}</button>
+    <button onClick={() => void retry()}>{label}</button>
     <details><summary className="small">Technical details</summary><pre className="code">{error.details}</pre></details>
   </div>;
 }

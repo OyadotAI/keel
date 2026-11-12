@@ -39,7 +39,8 @@ struct Live {
 
 static LIVE: Mutex<Vec<Live>> = Mutex::new(Vec::new());
 /// Per label: who is waiting for the page to finish loading.
-static LOADS: Mutex<Option<HashMap<String, Vec<tokio::sync::oneshot::Sender<()>>>>> = Mutex::new(None);
+static LOADS: Mutex<Option<HashMap<String, Vec<tokio::sync::oneshot::Sender<()>>>>> =
+    Mutex::new(None);
 /// Per label: one op at a time. Claude Code issues tool calls in parallel, and a click landing
 /// between another call's read and its type is two agents in one page.
 static TURNS: Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = Mutex::new(None);
@@ -50,7 +51,12 @@ fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// The webview's label for a lane, or why the lane id is not one.
 fn label(lane: &str) -> Result<String, String> {
-    if lane.is_empty() || lane.len() > 64 || !lane.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if lane.is_empty()
+        || lane.len() > 64
+        || !lane
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("Not a lane.".into());
     }
     Ok(format!("browser-{lane}"))
@@ -74,7 +80,10 @@ fn hex(key: [u8; 16]) -> String {
 }
 
 fn page_loaded(label: &str) {
-    if let Some(waiting) = locked(&LOADS).get_or_insert_with(HashMap::new).remove(label) {
+    if let Some(waiting) = locked(&LOADS)
+        .get_or_insert_with(HashMap::new)
+        .remove(label)
+    {
         for tx in waiting {
             let _ = tx.send(());
         }
@@ -83,7 +92,11 @@ fn page_loaded(label: &str) {
 
 fn await_load(label: &str) -> tokio::sync::oneshot::Receiver<()> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    locked(&LOADS).get_or_insert_with(HashMap::new).entry(label.to_string()).or_default().push(tx);
+    locked(&LOADS)
+        .get_or_insert_with(HashMap::new)
+        .entry(label.to_string())
+        .or_default()
+        .push(tx);
     rx
 }
 
@@ -96,7 +109,11 @@ fn touch(label: &str, shown: Option<bool>) {
                 l.shown = s;
             }
         }
-        None => live.push(Live { label: label.to_string(), used: Instant::now(), shown: shown.unwrap_or(false) }),
+        None => live.push(Live {
+            label: label.to_string(),
+            used: Instant::now(),
+            shown: shown.unwrap_or(false),
+        }),
     }
 }
 
@@ -107,7 +124,13 @@ fn make_room(app: &tauri::AppHandle) {
         if live.len() < MAX_LIVE {
             return;
         }
-        let Some(at) = live.iter().enumerate().filter(|(_, l)| !l.shown).min_by_key(|(_, l)| l.used).map(|(i, _)| i) else {
+        let Some(at) = live
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| !l.shown)
+            .min_by_key(|(_, l)| l.used)
+            .map(|(i, _)| i)
+        else {
             return;
         };
         live.remove(at).label
@@ -116,7 +139,11 @@ fn make_room(app: &tauri::AppHandle) {
         let _ = view.close();
     }
     let lane = gone.trim_start_matches("browser-").to_string();
-    let _ = app.emit_to("main", "browser-page", serde_json::json!({ "lane": lane, "closed": "room" }));
+    let _ = app.emit_to(
+        "main",
+        "browser-page",
+        serde_json::json!({ "lane": lane, "closed": "room" }),
+    );
 }
 
 fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Result<(), String> {
@@ -164,13 +191,22 @@ fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Resul
     }
     #[cfg(windows)]
     {
-        let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("browser").join(hex(store_key(project)));
+        let dir = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("browser")
+            .join(hex(store_key(project)));
         builder = builder.data_directory(dir);
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = project;
     window
-        .add_child(builder, LogicalPosition::new(OFF.0, OFF.1), LogicalSize::new(1280.0, 800.0))
+        .add_child(
+            builder,
+            LogicalPosition::new(OFF.0, OFF.1),
+            LogicalSize::new(1280.0, 800.0),
+        )
         .map_err(|e| e.to_string())?;
     touch(label, Some(false));
     Ok(())
@@ -188,7 +224,10 @@ async fn script(view: &tauri::Webview, op: &serde_json::Value) -> Result<String,
     .map_err(|e| e.to_string())?;
     let raw = tokio::time::timeout(SCRIPT_WAIT, rx)
         .await
-        .map_err(|_| "The page did not answer within 10 s; it may be busy or still loading. Read it again.".to_string())?
+        .map_err(|_| {
+            "The page did not answer within 10 s; it may be busy or still loading. Read it again."
+                .to_string()
+        })?
         .map_err(|_| "The page closed before it answered.".to_string())?;
     // The script runs in the page's own realm, so a page can hand back anything at all — hundreds
     // of MB through an overridden `JSON.stringify`. Nothing that size is carried to the agent.
@@ -197,20 +236,38 @@ async fn script(view: &tauri::Webview, op: &serde_json::Value) -> Result<String,
     }
     // The script returns a JSON string; the platform serialises that value once more on macOS.
     let inner = serde_json::from_str::<String>(&raw).unwrap_or(raw);
-    let answer: serde_json::Value = serde_json::from_str(&inner).map_err(|_| "The page gave an answer Keel could not read.".to_string())?;
+    let answer: serde_json::Value = serde_json::from_str(&inner)
+        .map_err(|_| "The page gave an answer Keel could not read.".to_string())?;
     let text = answer["text"].as_str().unwrap_or_default().to_string();
-    if answer["ok"] == true { Ok(text) } else { Err(text) }
+    if answer["ok"] == true {
+        Ok(text)
+    } else {
+        Err(text)
+    }
 }
 
 /// Do one op in the lane's tab: the agent's, or the person's own back, forward, reload or address.
 #[tauri::command]
-pub async fn browser_act(app: tauri::AppHandle, lane: String, project: String, op: serde_json::Value) -> Result<String, String> {
+pub async fn browser_act(
+    app: tauri::AppHandle,
+    lane: String,
+    project: String,
+    op: serde_json::Value,
+) -> Result<String, String> {
     let label = label(&lane)?;
-    let turn = locked(&TURNS).get_or_insert_with(HashMap::new).entry(label.clone()).or_default().clone();
+    let turn = locked(&TURNS)
+        .get_or_insert_with(HashMap::new)
+        .entry(label.clone())
+        .or_default()
+        .clone();
     let _turn = turn.lock().await;
     let kind = op["op"].as_str().unwrap_or_default();
     if kind == "open" {
-        let url: Url = op["url"].as_str().unwrap_or_default().parse().map_err(|_| "Not an address.".to_string())?;
+        let url: Url = op["url"]
+            .as_str()
+            .unwrap_or_default()
+            .parse()
+            .map_err(|_| "Not an address.".to_string())?;
         if !web_only(&url) {
             return Err("Only http and https addresses open in the Browser tab.".into());
         }
@@ -238,7 +295,11 @@ pub async fn browser_act(app: tauri::AppHandle, lane: String, project: String, o
                     let _ = browser_close(app.clone(), lane.clone());
                 }
                 let said = format!("{host} did not finish loading within 30 s.");
-                let _ = app.emit_to("main", "browser-page", serde_json::json!({ "lane": lane, "error": said }));
+                let _ = app.emit_to(
+                    "main",
+                    "browser-page",
+                    serde_json::json!({ "lane": lane, "error": said }),
+                );
                 Err(said)
             }
         };
@@ -263,16 +324,23 @@ pub async fn browser_act(app: tauri::AppHandle, lane: String, project: String, o
 
 /// Show the lane's tab over `bounds`, or put it away with `None`.
 #[tauri::command]
-pub async fn browser_place(app: tauri::AppHandle, lane: String, bounds: Option<Bounds>) -> Result<(), String> {
+pub async fn browser_place(
+    app: tauri::AppHandle,
+    lane: String,
+    bounds: Option<Bounds>,
+) -> Result<(), String> {
     let label = label(&lane)?;
-    let Some(view) = app.get_webview(&label) else { return Ok(()) };
+    let Some(view) = app.get_webview(&label) else {
+        return Ok(());
+    };
     match bounds {
         Some(b) => {
             crate::preview::place(&view, &b).await?;
             touch(&label, Some(true));
         }
         None => {
-            view.set_position(LogicalPosition::new(OFF.0, OFF.1)).map_err(|e| e.to_string())?;
+            view.set_position(LogicalPosition::new(OFF.0, OFF.1))
+                .map_err(|e| e.to_string())?;
             touch(&label, Some(false));
         }
     }
@@ -284,7 +352,9 @@ pub async fn browser_place(app: tauri::AppHandle, lane: String, bounds: Option<B
 pub fn browser_close(app: tauri::AppHandle, lane: String) -> Result<(), String> {
     let label = label(&lane)?;
     locked(&LIVE).retain(|l| l.label != label);
-    locked(&TURNS).get_or_insert_with(HashMap::new).remove(&label);
+    locked(&TURNS)
+        .get_or_insert_with(HashMap::new)
+        .remove(&label);
     page_loaded(&label);
     if let Some(view) = app.get_webview(&label) {
         view.close().map_err(|e| e.to_string())?;
@@ -316,9 +386,17 @@ mod tests {
     #[test]
     fn the_page_script_is_one_function() {
         assert!(SCRIPT.trim_start().starts_with("//") && SCRIPT.contains("(op) =>"));
-        for op in ["read", "click", "type", "key", "scroll", "back", "forward", "reload"] {
-            assert!(SCRIPT.contains(&format!("case \"{op}\"")), "{op} is not handled in browser.js");
+        for op in [
+            "read", "click", "type", "key", "scroll", "back", "forward", "reload",
+        ] {
+            assert!(
+                SCRIPT.contains(&format!("case \"{op}\"")),
+                "{op} is not handled in browser.js"
+            );
         }
-        assert!(!SCRIPT.contains("op.text}"), "typed text is never echoed back");
+        assert!(
+            !SCRIPT.contains("op.text}"),
+            "typed text is never echoed back"
+        );
     }
 }

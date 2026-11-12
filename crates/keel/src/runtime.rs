@@ -274,7 +274,14 @@ async fn spawn_runtime(
     let errors = output.clone();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        // `lines::next`: undecodable bytes are skipped, not taken as the end of the pipe — a
+        // helper whose stderr stopped being read fills it and blocks mid-write.
+        loop {
+            let line = match crate::lines::next(&mut lines).await {
+                crate::lines::Next::Line(line) => line,
+                crate::lines::Next::Skipped => continue,
+                crate::lines::Next::Done => break,
+            };
             let tx = errors.locked().clone();
             if let Some(tx) = tx {
                 let _ = tx.send(json!({"event":"err", "data":line})).await;
@@ -285,7 +292,14 @@ async fn spawn_runtime(
     let context_lane = lane.to_owned();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        // A turn's whole output is this pipe: one undecodable byte must not end it and leave the
+        // turn waiting on an `end` that was never going to be read.
+        loop {
+            let line = match crate::lines::next(&mut lines).await {
+                crate::lines::Next::Line(line) => line,
+                crate::lines::Next::Skipped => continue,
+                crate::lines::Next::Done => break,
+            };
             let Ok(record) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
@@ -642,6 +656,23 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             if let Some(id) = data["session_id"].as_str() {
                 session = Some(id.into());
             }
+            // Claude's `result` and the helper's `turn.completed` for Codex: the same token counts
+            // (Codex reports no price). Reading only the first left Codex chat turns with no usage.
+            if data["type"] == "turn.completed" {
+                let u = &data["usage"];
+                // Codex counts cached tokens inside its input; the decoder subtracts them too.
+                let cached = u["cached_input_tokens"].as_u64().unwrap_or(0);
+                usage = Some(crate::turns::Usage {
+                    input: u["input_tokens"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .saturating_sub(cached),
+                    output: u["output_tokens"].as_u64().unwrap_or(0),
+                    cache_read: cached,
+                    cache_write: 0,
+                    cost_usd: None,
+                });
+            }
             if data["type"] == "result" {
                 let u = &data["usage"];
                 usage = Some(crate::turns::Usage {
@@ -691,11 +722,29 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             }
             state.keyed(lane, token, session, &key);
             let mut bus = crate::turns::subscribe(session);
-            crate::turns::emit(&repo, session, &key, started.clone());
+            {
+                // A file write under the store's lock: off the executor.
+                let (repo, session, key, started) =
+                    (repo.clone(), session.clone(), key.clone(), started.clone());
+                crate::serve::blocking(
+                    move || {
+                        crate::turns::emit(&repo, &session, &key, started);
+                    },
+                    (),
+                )
+                .await;
+            }
             let tx = tx.clone();
             let key = key.clone();
             forward = Some(tokio::spawn(async move {
-                while let Ok(fact) = bus.recv().await {
+                loop {
+                    // A burst of facts can outrun this reader; missing some is better than
+                    // missing the gate, the commit and the end, which `while let Ok` did.
+                    let fact = match bus.recv().await {
+                        Ok(fact) => fact,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
                     if fact.turn.as_deref() != Some(&key) {
                         continue;
                     }
