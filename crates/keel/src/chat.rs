@@ -236,6 +236,38 @@ fn transcript(state: &AppState, q: &ChatQuery) -> Result<Option<Transcript>, Str
     }
 }
 
+/// A reply that landed while no turn was listening (see `runtime::idle_reply`). Its words are in
+/// the transcript and in no turn, so the journal takes a snapshot of the transcript: a page with
+/// the lane open draws it from the stream, and one that opens later reads it from the journal.
+/// Skipped while a turn is running, which owns the journal until it is marked seen. Blocking:
+/// reads the journal and the transcript, so it is called from `serve::blocking`.
+pub(crate) fn refresh_idle(
+    state: &AppState,
+    lane: &str,
+    transcript: Option<Transcript>,
+) -> Result<(), String> {
+    let Some(transcript) = transcript else {
+        return Ok(());
+    };
+    let journal = history(state, lane).map_err(|(_, e)| e)?;
+    let mut h = journal.locked();
+    if h.running {
+        return Ok(());
+    }
+    h.snapshot(&transcript)
+}
+
+/// The journal's records as `(event, data)` text, for tests of what a lane's chat was given.
+#[cfg(test)]
+pub(crate) fn journal_of(state: &AppState, lane: &str) -> Vec<(String, String)> {
+    let journal = history(state, lane).expect("the lane's journal");
+    let h = journal.locked();
+    h.records
+        .iter()
+        .map(|r| (r.event.clone(), r.data.get().to_owned()))
+        .collect()
+}
+
 fn internal(e: impl ToString) -> Error {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }

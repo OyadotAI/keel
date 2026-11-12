@@ -216,8 +216,12 @@ fn helper_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     )
 }
 
+/// Where a session's Claude transcript is, as the daemon finds it. Passed in rather than read from
+/// the environment here, so a test can point it at its own file instead of the user's `~/.claude`.
+type Locate = Arc<dyn Fn(&str) -> Option<keel_workspace::Transcript> + Send + Sync>;
+
 async fn runtime(
-    state: &AppState,
+    state: &Arc<AppState>,
     lane: &str,
     cwd: &camino::Utf8Path,
 ) -> Result<Arc<Runtime>, String> {
@@ -233,15 +237,42 @@ async fn runtime(
     let (node, helper) = tokio::task::spawn_blocking(helper_paths)
         .await
         .map_err(|e| e.to_string())??;
-    spawn_runtime(state, lane, cwd, runtime_command(node, helper, cwd)).await
+    let dir = cwd.to_owned();
+    let locate: Locate = Arc::new(move |id: &str| keel_workspace::Follows::Claude.locate(&dir, id));
+    spawn_runtime(state, lane, cwd, runtime_command(node, helper, cwd), locate).await
+}
+
+/// A reply that arrived while no turn listened for it: Claude answering a background task on its
+/// own after the turn that started the task had ended. Its words reach the transcript and no turn,
+/// so the lane's journal takes a fresh snapshot of the transcript and the page draws it. Spawned,
+/// so the helper's pipe keeps being read while the transcript is.
+fn idle_reply(state: &Arc<AppState>, lane: &str, locate: &Locate, record: &Value) {
+    if record["event"] != "msg" || record["data"]["type"] != "result" {
+        return;
+    }
+    let Some(session) = record["data"]["session_id"].as_str().map(str::to_owned) else {
+        return;
+    };
+    let (state, lane, locate) = (state.clone(), lane.to_owned(), locate.clone());
+    tokio::spawn(async move {
+        let refreshed = crate::serve::blocking(
+            move || crate::chat::refresh_idle(&state, &lane, locate(&session)),
+            Ok(()),
+        )
+        .await;
+        if let Err(error) = refreshed {
+            tracing::debug!("reply with no turn not shown: {error}");
+        }
+    });
 }
 
 // Keep process ownership and protocol forwarding identical for packaged helpers and offline tests.
 async fn spawn_runtime(
-    state: &AppState,
+    state: &Arc<AppState>,
     lane: &str,
     cwd: &camino::Utf8Path,
     mut command: Command,
+    locate: Locate,
 ) -> Result<Arc<Runtime>, String> {
     let mut child = command
         .spawn()
@@ -290,6 +321,9 @@ async fn spawn_runtime(
     });
     let context_repo = cwd.to_owned();
     let context_lane = lane.to_owned();
+    let reply_state = state.clone();
+    let locate_reply = locate;
+    let reply_lane = lane.to_owned();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         // A turn's whole output is this pipe: one undecodable byte must not end it and leave the
@@ -331,8 +365,11 @@ async fn spawn_runtime(
                 continue;
             }
             let tx = output.locked().clone();
-            if let Some(tx) = tx {
-                let _ = tx.send(record).await;
+            match tx {
+                Some(tx) => {
+                    let _ = tx.send(record).await;
+                }
+                None => idle_reply(&reply_state, &reply_lane, &locate_reply, &record),
             }
         }
         let status = child.wait().await;

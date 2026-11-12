@@ -61,6 +61,11 @@ fn offline_runtime_child() {
                     json!({"type":"result","result":"parent-result-fixture"}),
                 );
             }
+            // A reply to a background task, sent with no turn running.
+            "idle" => emit(
+                "msg",
+                json!({"type":"result","session_id":"idle-reply-fixture","result":"background done"}),
+            ),
             "answer" => {
                 emit(
                     "resolved",
@@ -148,6 +153,18 @@ async fn fixture_runtime(
     Arc<Runtime>,
     FixtureProcess,
 ) {
+    fixture_runtime_at(break_metadata, Arc::new(|_: &str| None)).await
+}
+
+async fn fixture_runtime_at(
+    break_metadata: bool,
+    locate: Locate,
+) -> (
+    tempfile::TempDir,
+    Arc<AppState>,
+    Arc<Runtime>,
+    FixtureProcess,
+) {
     let dir = tempfile::tempdir().unwrap();
     let root = camino::Utf8Path::from_path(dir.path()).unwrap();
     for args in [
@@ -169,7 +186,7 @@ async fn fixture_runtime(
     if break_metadata {
         command.env("KEEL_OFFLINE_BREAK_METADATA", "1");
     }
-    let runtime = spawn_runtime(&state, FIXTURE_LANE, root, command)
+    let runtime = spawn_runtime(&state, FIXTURE_LANE, root, command, locate)
         .await
         .unwrap();
     let guard = FixtureProcess(runtime.pid);
@@ -327,6 +344,47 @@ async fn metadata_failure_during_a_turn_keeps_checkout_protection_until_completi
         .await
         .unwrap();
     assert_eq!(fixture_control(state, "close").await["ok"], true);
+}
+
+/// Claude answers a background task after the turn that started it has ended, and nothing listens
+/// for that reply. Its words are in the transcript and in no turn, so the lane's journal must take
+/// a snapshot of the transcript, or the chat shows nothing until the next send.
+#[tokio::test]
+async fn a_reply_with_no_turn_listening_is_snapshotted_into_the_journal() {
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let path = transcript_dir.path().join("idle-reply-fixture.jsonl");
+    let lines = [
+        json!({"type":"user","uuid":"u0","message":{"role":"user","content":"start the server"}}),
+        json!({"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"background done"}]}}),
+    ];
+    std::fs::write(
+        &path,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let transcript = camino::Utf8PathBuf::from_path_buf(path).unwrap();
+    let locate: Locate = Arc::new(move |_: &str| {
+        Some(keel_workspace::Transcript::at(
+            keel_workspace::Follows::Claude,
+            transcript.clone(),
+        ))
+    });
+    let (_dir, state, runtime, _process) = fixture_runtime_at(false, locate).await;
+    runtime.send(json!({"method":"idle"})).await.unwrap();
+    let snapshot = tokio::time::timeout(FIXTURE_WAIT, async {
+        loop {
+            let found = crate::chat::journal_of(&state, FIXTURE_LANE)
+                .into_iter()
+                .find(|(event, _)| event == "snapshot");
+            if let Some((_, data)) = found {
+                return data;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the journal never took a snapshot of the reply");
+    assert!(snapshot.contains("background done"), "{snapshot}");
 }
 
 #[test]
