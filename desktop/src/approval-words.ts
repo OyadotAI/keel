@@ -33,6 +33,12 @@ const COMPOUND = /[;&|$`<>()\n\\'"]/;
 // Case-insensitive: macOS and Windows file systems are, so `.Git/hooks` is `.git/hooks`.
 const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/i;
 
+/** An http(s) address that parses as one — not a string that merely contains `://`. */
+function webAddress(a: string): boolean {
+  if (!/^https?:\/\/[^\s]+$/i.test(a)) return false;
+  try { return ["http:", "https:"].includes(new URL(a).protocol); } catch { return false; }
+}
+
 /** A path as Windows and macOS resolve it, with `/` separators: a part's trailing dots and spaces
  *  and an NTFS stream (`config::$DATA`, `x:stream`) name the same file without them, so they are
  *  dropped before anything is matched. The drive (`C:`) keeps its colon. */
@@ -175,8 +181,10 @@ export function commandWords(command: string, root?: string): Summary {
   const [first, second] = w;
   if (!first || first === "sudo" || first === "su") return UNKNOWN;
   const paths = w.slice(1).filter((a) => !a.startsWith("-"));
-  // A web address is not a path: `curl` names its site, and git checks its remotes itself.
-  if (paths.some((p) => !p.includes("://") && !inside(p, root))) return UNKNOWN;
+  // A web address is not a path, but only where a program takes one: `curl`/`wget`, and only an
+  // address that parses as http(s). Everything else — `rm a://../x` included — is a path.
+  const fetches = first === "curl" || first === "wget";
+  if (paths.some((p) => !(fetches && webAddress(p)) && !inside(p, root))) return UNKNOWN;
   if (beyondItsWords(w.slice(1), root)) return UNKNOWN;
   const c = { w, first, second, paths };
   for (const family of FAMILIES) {

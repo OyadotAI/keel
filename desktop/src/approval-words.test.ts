@@ -84,6 +84,12 @@ describe("approval words", () => {
       expect(approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root).title, p).toBe("Change a file outside this project?");
     }
   });
+  it("only a real web address, given to a program that fetches, skips the path check", () => {
+    for (const c of ["rm a://../../etc/x", "cat x://../../etc/passwd", "curl -o ../../.zshrc https://example.com/x"]) {
+      expect(commandWords(c, root), c).toEqual(unknown);
+    }
+    expect(commandWords("curl https://example.com/x.json", root).title).toBe("Download something from example.com?");
+  });
   it("git_push_force_is_risky", () => {
     expect(commandWords("git push").title).toBe("Send your saved versions to GitHub?");
     expect(commandWords("git push --force origin main").open).toBe(true);
