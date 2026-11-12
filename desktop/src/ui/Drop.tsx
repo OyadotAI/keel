@@ -3,10 +3,30 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
 import { pasteInto } from "../typers";
 import { useStore } from "../store";
+import { uploadFiles } from "./Composer";
 
 
 /// A path as a shell word: quoted, so a space or a quote in it stays one argument.
 const quote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
+
+const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", svg: "image/svg+xml", pdf: "application/pdf" };
+
+/// A drop on a chat lane becomes uploads, like a paste: the lane used to keep the path, so the
+/// chat had no image to draw and Antigravity never heard of the file. Each file stands alone —
+/// one that cannot be read says why and the rest still attach.
+export async function attachDropped(lane: string, paths: string[], read = (path: string) => invoke<ArrayBuffer>("read_dropped", { path }), upload = uploadFiles) {
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop() || path;
+    try {
+      const type = MIME[name.split(".").pop()?.toLowerCase() ?? ""] ?? "";
+      await upload(lane, [new File([await read(path)], name, { type })]);
+    } catch (error) {
+      // The app's refusals are whole sentences; anything else is named for the file.
+      const why = error instanceof Error ? error.message : String(error);
+      useStore.setState((s) => s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: /^(Folders can’t|Folders can't|Could not attach )|exceeds the /.test(why) ? why : `Could not attach ${name}: ${why}` } } } : s);
+    }
+  }
+}
 
 /// Files dropped on the window. The webview takes a file drop itself and says so as its own
 /// event, so the page's `drop` never fires — that was "drag and drop does nothing".
@@ -42,9 +62,7 @@ export function Drop() {
         pasteInto(lane, p.paths.map(quote).join(" ") + " ");
         return;
       }
-      const current = useStore.getState().lanes[lane];
-      useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], attachments: [...(current?.attachments ?? []), ...p.paths.map((path) => ({ path, name: path.split(/[\\/]/).pop() ?? path }))] } } }));
-      useStore.getState().draft(lane, current?.draft ?? "");
+      void attachDropped(lane, p.paths);
     });
     return () => void unlisten.then((f) => f());
   }, []);

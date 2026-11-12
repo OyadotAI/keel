@@ -617,12 +617,7 @@ fn target_metadata(
     dir: &Utf8Path,
     require_head: bool,
 ) -> Result<serde_json::Value, String> {
-    let wt = dir
-        .strip_prefix(state.repo().join(crate::worktree::DIR))
-        .ok();
-    let base = wt
-        .map(|w| crate::worktree::base_of(&state.repo(), w.as_str()))
-        .unwrap_or_else(|| remote_default(dir));
+    let base = crate::pr::base_for(&state.repo(), dir);
     let head = crate::git::trimmed(dir, &["rev-parse", "HEAD"]);
     if require_head && head.is_err() {
         return Err(

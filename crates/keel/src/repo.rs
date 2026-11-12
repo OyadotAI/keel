@@ -40,6 +40,16 @@ pub struct GitStatus {
     /// their directories, and the list cut at `MAX_CHANGES`. The app says so; a list that is
     /// silently not the whole list is the "never weird" failure.
     pub collapsed: bool,
+    /// `HEAD`'s commit, so a dismissed share card can tell that new work landed.
+    pub head: Option<String>,
+    /// Commits the base lacks; `None` where git cannot say, and in a workspace of repositories.
+    pub ahead: Option<u64>,
+    /// The pull request already opened from this branch. These are filled by the status route
+    /// alone (`pr::sharing`): `git_status` also runs for every turn's fingerprint.
+    pub pr: Option<crate::pr::Shared>,
+    /// Changes a commit would take: `changes` without what Keel keeps out of every commit, which
+    /// never reaches zero and so kept "you have work to share" on screen for good.
+    pub unsaved: Option<usize>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -571,6 +581,7 @@ pub fn git_status(root: &Utf8Path) -> GitStatus {
         changes: all,
         repos,
         collapsed,
+        ..Default::default()
     }
 }
 
@@ -675,6 +686,7 @@ fn git_status_in(root: &Utf8Path) -> GitStatus {
         changes,
         repos: Vec::new(),
         collapsed,
+        ..Default::default()
     }
 }
 

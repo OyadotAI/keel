@@ -7,12 +7,20 @@ const isAgent = (task) => !task.ambient && !task.skip_transcript && (typeof task
  *  starts a queued message's reply immediately after a result, so quiet this long means the steer
  *  was folded into the reply that just ended. */
 export const STEER_QUIET_MS = 2000;
+/** How long a result that answers a background-task notice, not the prompt, must stand before the
+ *  turn ends. On a cold resume the CLI reports the shells the last session left behind and closes
+ *  that with a result ~40 ms in; taken as the turn's end, the prompt's reply was written with
+ *  nobody listening and the person asked twice. 10 s is 2.6x the slowest first token measured
+ *  (3.8 s): too short loses the answer again, too long only delays the end of a turn whose prompt
+ *  was folded into the notice's reply. */
+export const NOTIFICATION_QUIET_MS = 10_000;
+const noticed = (message) => message.origin?.kind === 'task-notification';
 /** What says a new reply is under way: anything the model says, not bookkeeping. */
 const REPLYING = new Set(['assistant', 'stream_event', 'user']);
 export class ClaudeCompletion {
   constructor(finish, cancel, clock = { set: setTimeout, clear: clearTimeout }) { this.finish = finish; this.cancel = cancel; this.clock = clock; this.processStart(); }
   processStart() { this.level = false; this.agents = new Map(); this.callbacks = new Map(); this.begin(); }
-  begin() { this.clock.clear(this.quiet); this.quiet = undefined; this.steered = false; this.result = undefined; this.done = false; this.interrupted = false; this.questionBarrier = false; this.agents.clear(); this.callbacks.clear(); }
+  begin() { this.clock.clear(this.quiet); this.quiet = undefined; this.steered = false; this.own = false; this.notice = false; this.result = undefined; this.done = false; this.interrupted = false; this.questionBarrier = false; this.agents.clear(); this.callbacks.clear(); }
   /** Stop was pressed: the turn ends at its result, as Esc ends it in the CLI. Background agents
    *  keep running in the session; they no longer hold the person's turn. */
   interrupt() { this.interrupted = true; if (this.result !== undefined) this.complete(-1, 'The turn was cancelled.'); }
@@ -28,17 +36,25 @@ export class ClaudeCompletion {
   steer() { this.steered = true; if (this.result !== undefined && !this.done) this.hush(); }
   /** Hold a result for the quiet window: a reply starting inside it reopens the turn. Armed by a
    *  result after a steer, and by a steer landing on a result already held by a helper or a
-   *  question, which would otherwise end the turn the moment that hold let go. */
-  hush() { this.clock.clear(this.quiet); this.quiet = this.clock.set(() => { this.quiet = undefined; this.check('result'); }, STEER_QUIET_MS); }
+   *  question, which would otherwise end the turn the moment that hold let go. A notice's result
+   *  keeps its longer window whatever arms the hold again. */
+  hush() { this.clock.clear(this.quiet); this.quiet = this.clock.set(() => { this.quiet = undefined; this.check('result'); }, this.notice ? NOTIFICATION_QUIET_MS : STEER_QUIET_MS); }
   message(message) {
     if (this.done) return;
     if (this.quiet !== undefined && REPLYING.has(message.type)) {
       // The steer's own reply has started: the turn is not over until it is.
-      this.clock.clear(this.quiet); this.quiet = undefined; this.result = undefined;
+      this.clock.clear(this.quiet); this.quiet = undefined; this.result = undefined; this.own = false; this.notice = false;
+    } else if (this.notice && this.quiet !== undefined && message.type !== 'result' && !message.task_id && message.subtype !== 'background_tasks_changed') {
+      // The session is still doing something, so the quiet has not started. Task bookkeeping is
+      // not that: a background shell's progress would hold the turn for as long as it ran.
+      this.hush();
     }
     if (message.type === 'result') {
       this.result = message.is_error ? 1 : 0;
       if (this.interrupted) { this.complete(-1, 'The turn was cancelled.'); return; }
+      // Not the prompt's result: hold it, and let the prompt's reply reopen the turn.
+      if (noticed(message) && !this.own) { this.notice = true; this.hush(); return; }
+      this.own = true; this.notice = false;
       if (this.steered) { this.hush(); return; }
       if (this.callbacks.size) this.questionBarrier = true;
       this.check('result'); return;

@@ -15,6 +15,22 @@ const SLUG_LIMIT = 40;
 export type ShipStep = "branch" | "commit" | "open";
 export const STEP_WORDS: Record<ShipStep, string> = { branch: "Putting your work on its own branch…", commit: "Saving your changes…", open: "Opening it on GitHub…" };
 
+type Git = NonNullable<Lane["git"]>;
+/** Changes a commit would take; an older daemon reports only the whole list. */
+const unsaved = (git: Git) => git.unsaved ?? git.changes.length;
+/** The work as it stands, so a closed card stays closed until this changes. */
+export const shareKey = (git: Git) => `${git.head ?? ""}:${unsaved(git)}`;
+
+/** What the share card offers: a first pull request, more changes for the one already open, or
+ *  nothing — when there is no work the base or the pull request lacks, or it was closed at this
+ *  state. It used to show for any lane that had ever changed a file, for good. */
+export function shareOffer(git: Lane["git"], dismissed?: string): "open" | "update" | undefined {
+  if (!git?.is_repo || dismissed === shareKey(git)) return undefined;
+  const dirty = unsaved(git) > 0;
+  if (git.pr) return dirty || (!!git.head && git.pr.head !== git.head) ? "update" : undefined;
+  return dirty || (git.ahead ?? 0) > 0 ? "open" : undefined;
+}
+
 /** What the work is called: the lane's name, else its first prompt. Becomes the commit and the title. */
 export function shipTitle(l: Pick<Lane, "title" | "conv">): string {
   const named = l.title && !/^untitled/i.test(l.title) ? l.title : promptAttachments(l.conv?.turns[0]?.prompt ?? "").text;
@@ -46,7 +62,7 @@ export async function prepare(l: Lane, ep: Endpoint, message: string, step: (s: 
     step("branch");
     await post(ep, "/api/git/branch", { action: "create", name: branchName(message) });
   }
-  if (l.git?.changes.length) {
+  if (l.git && unsaved(l.git)) {
     step("commit");
     await post(ep, "/api/git/commit", { message }, { wt: l.wt });
   }

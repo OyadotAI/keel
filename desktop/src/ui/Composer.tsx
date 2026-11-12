@@ -215,7 +215,8 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span></div>;
 }
 
-async function uploadFiles(lane: string, picked: File[]) {
+/** Put files where the agent can read them and add each as a chip. Shared with a drop. */
+export async function uploadFiles(lane: string, picked: File[]) {
   if (!picked.length || !useStore.getState().lanes[lane]) return;
   const ready = await useStore.getState().prepare(lane);
   if (!ready) throw new Error("Could not prepare the checkout");

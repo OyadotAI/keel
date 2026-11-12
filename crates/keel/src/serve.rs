@@ -1987,8 +1987,27 @@ fn watch_session(
     Some(watcher)
 }
 
-async fn api_git_status(Checkout(repo): Checkout) -> Json<crate::repo::GitStatus> {
-    Json(blocking(move || crate::repo::git_status(&repo), Default::default()).await)
+async fn api_git_status(
+    State(state): State<Arc<AppState>>,
+    Checkout(repo): Checkout,
+) -> Json<crate::repo::GitStatus> {
+    Json(
+        blocking(
+            move || {
+                let mut status = crate::repo::git_status(&repo);
+                // One repository at the opened folder: a workspace has no single branch to share.
+                if matches!(status.repos.as_slice(), [one] if one.dir.is_empty()) {
+                    (status.head, status.ahead, status.pr) =
+                        crate::pr::sharing(&state.repo(), &repo, status.branch.as_deref());
+                    let kept = |c: &&crate::repo::Change| !crate::worktree::kept_out(&c.path);
+                    status.unsaved = Some(status.changes.iter().filter(kept).count());
+                }
+                status
+            },
+            Default::default(),
+        )
+        .await,
+    )
 }
 
 async fn api_git_diff(

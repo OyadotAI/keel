@@ -202,6 +202,8 @@ export interface Lane {
   error?: string;
   pending: Pending[];
   questionDrafts?: QuestionDrafts;
+  /** The share card was closed at this state of the work (`shareKey`); new work brings it back. */
+  shipDismissed?: string;
   draft?: string;
   mode?: "plan" | "acceptEdits";
   model?: string;
@@ -293,6 +295,8 @@ interface State {
   closeLane(lane: string): Promise<void>;
   renameLane(lane: string, name: string): Promise<boolean>;
   refreshGit(lane: string): Promise<void>;
+  /** Close the share card at this state of the work; it stays closed until the work changes. */
+  dismissShip(lane: string, key: string): void;
   openDiff(lane: string, path?: string, staged?: boolean): Promise<void>;
   merge(lane: string): Promise<void>;
   refreshJobs(lane: string): Promise<void>;
@@ -322,7 +326,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; interface?: ChatInterface; draft?: string; model?: string; effort?: Effort; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
+  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; shipDismissed?: string; interface?: ChatInterface; draft?: string; model?: string; effort?: Effort; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
   active?: string;
 }
 
@@ -348,7 +352,7 @@ function save(s: State): boolean {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, queued, draft, model, effort, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, draft, model, effort, mode, managed, receipt })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, shipDismissed, queued, draft, model, effort, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, shipDismissed, draft, model, effort, mode, managed, receipt })),
     active: s.active,
   };
   try {
@@ -1381,6 +1385,10 @@ export const useStore = create<State>()((set, getState, api) => {
       if (next) getState().select(next);
     },
 
+    dismissShip(lid, key) {
+      lane(lid, { shipDismissed: key });
+      save(getState());
+    },
     async refreshGit(lid) {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;

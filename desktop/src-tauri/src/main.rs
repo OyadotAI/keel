@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod dropped;
 mod preview;
 #[path = "../../../crates/keel-workspace/src/locations.rs"]
 mod locations;
@@ -334,7 +335,9 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Daemons::default())
-        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, in_workspace, sign_packet, save_text, is_dir, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
+        .manage(dropped::Dropped::default())
+        .on_webview_event(dropped::record)
+        .invoke_handler(tauri::generate_handler![open_project, close_project, scratch_dir, projects_dir, in_workspace, sign_packet, save_text, is_dir, dropped::read_dropped, stop_all, preview::preview_show, preview::preview_bounds, preview::preview_hide, preview::preview_send, preview::preview_msg, browser::browser_act, browser::browser_place, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("the window")
         .run(|app, event| {

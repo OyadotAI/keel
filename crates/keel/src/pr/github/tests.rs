@@ -10,7 +10,43 @@ fn hosting() -> Repository {
     }
 }
 fn existing(source: &str) -> String {
-    serde_json::json!([{"url":LINK,"headRepository":{"nameWithOwner":source},"headRepositoryOwner":{"login":source.split('/').next().unwrap()},"headRefName":"feature","baseRefName":"main","headRefOid":"f".repeat(40)}]).to_string()
+    existing_at(source, &"f".repeat(40))
+}
+fn existing_at(source: &str, head: &str) -> String {
+    serde_json::json!([{"url":LINK,"headRepository":{"nameWithOwner":source},"headRepositoryOwner":{"login":source.split('/').next().unwrap()},"headRefName":"feature","baseRefName":"main","headRefOid":head}]).to_string()
+}
+
+/// Work done after a pull request was opened reaches it: the branch is pushed, and the pull
+/// request comes back at the new commit. It used to be returned untouched as "already open".
+#[test]
+fn an_existing_pr_behind_the_branch_gets_the_new_commits() {
+    let (_dir, root, target, query) = repository();
+    let (mut pushed, sha) = (false, target.sha.clone());
+    let behind = crate::git::trimmed(&root, &["rev-parse", "HEAD~1"]).unwrap();
+    let opened = publish(
+        &root,
+        &target,
+        &hosting(),
+        &query,
+        &mut |program, args| {
+            if program == "git" && args[0] == "remote" {
+                return Ok(String::new());
+            }
+            if program == "git" && args[0] == "push" {
+                pushed = true;
+                return Ok(String::new());
+            }
+            assert_eq!((program, args[1].as_str()), ("gh", "list"));
+            Ok(existing_at(
+                "example/project",
+                if pushed { &sha } else { &behind },
+            ))
+        },
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(pushed && opened.existing);
+    assert_eq!(opened.head, target.sha);
 }
 
 fn repository() -> (tempfile::TempDir, camino::Utf8PathBuf, Target, PrQuery) {

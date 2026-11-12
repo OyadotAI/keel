@@ -38,3 +38,14 @@ export function clock(seconds: number): string {
   const m = Math.floor(seconds / 60);
   return m ? `${m}m ${seconds % 60}s` : `${seconds}s`;
 }
+
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+/// What a pull request carried, for somebody who has never read a git log: one commit is named,
+/// several are counted, and with neither known the branch is still said.
+export function prSaved(saved: { title?: string; commits?: number; files?: number } | undefined, branch?: string): string {
+  const where = branch ? `on branch ${branch}` : "";
+  const files = saved?.files !== undefined ? count(saved.files, "file") : "";
+  const what = saved?.commits === 1 && saved.title ? `Saved as “${saved.title}”` : saved?.commits ? count(saved.commits, "commit") : "";
+  const parts = [what, what && files, where].filter(Boolean).join(" · ");
+  return what ? parts : where.replace(/^on/, "On");
+}

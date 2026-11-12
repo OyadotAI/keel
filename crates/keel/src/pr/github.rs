@@ -133,7 +133,7 @@ fn lookup(
         .transpose()
 }
 
-fn valid_link(url: &str) -> bool {
+pub(super) fn valid_link(url: &str) -> bool {
     let Some(path) = url.strip_prefix("https://github.com/") else {
         return false;
     };
@@ -143,6 +143,33 @@ fn valid_link(url: &str) -> bool {
         && !parts[1].is_empty()
         && parts[2] == "pull"
         && parts[3].parse::<u64>().is_ok()
+}
+
+/// Send the captured commit to the branch on the remote, after checking that the checkout and
+/// the push address are still the ones captured.
+fn push(
+    repo: &Utf8Path,
+    target: &Target,
+    repository: &Repository,
+    run: &mut impl FnMut(&str, &[String]) -> Result<String, String>,
+) -> Result<(), String> {
+    target::publishable(repo, target)?;
+    let origin = run(
+        "git",
+        &["remote", "get-url", "--push", "--all", "origin"].map(str::to_string),
+    )?;
+    if origin != repository.origin {
+        return Err("The push repository changed. Refresh the pull request target.".into());
+    }
+    run(
+        "git",
+        &[
+            "push".into(),
+            "origin".into(),
+            format!("{}:refs/heads/{}", target.sha, target.branch),
+        ],
+    )?;
+    target::unchanged(repo, target)
 }
 
 pub(super) fn publish(
@@ -155,26 +182,33 @@ pub(super) fn publish(
 ) -> Result<Opened, String> {
     say("Checking for an existing pull request…");
     if let Some(existing) = lookup(target, repository, run)? {
-        return Ok(existing);
-    }
-    target::publishable(repo, target)?;
-    let origin = run(
-        "git",
-        &["remote", "get-url", "--push", "--all", "origin"].map(str::to_string),
-    )?;
-    if origin != repository.origin {
-        return Err("The push repository changed. Refresh the pull request target.".into());
+        // Only a pull request this branch is strictly ahead of is added to. One at this commit
+        // has it all; one at a commit this checkout has never seen is somebody else's push, and
+        // is reported as it stands rather than claimed or pushed over.
+        let behind = existing.head != target.sha
+            && crate::git::run(
+                repo,
+                &["merge-base", "--is-ancestor", &existing.head, &target.sha],
+            )
+            .is_ok();
+        if !behind {
+            return Ok(existing);
+        }
+        // Open, but without the commits made since: send them. It used to be returned as it
+        // stood, so work done after a pull request was opened never reached it and the page said
+        // "already open". A push that cannot happen (the checkout moved) still leaves the link,
+        // which is what a retry after a lost response is asking for.
+        say("Adding your new commits to the pull request…");
+        return Ok(match push(repo, target, repository, run) {
+            Ok(()) => lookup(target, repository, run)?.unwrap_or(existing),
+            Err(why) => {
+                say(&format!("The pull request was not updated: {why}"));
+                existing
+            }
+        });
     }
     say("Pushing the captured commit…");
-    run(
-        "git",
-        &[
-            "push".into(),
-            "origin".into(),
-            format!("{}:refs/heads/{}", target.sha, target.branch),
-        ],
-    )?;
-    target::unchanged(repo, target)?;
+    push(repo, target, repository, run)?;
     // Tracking config names the intended branch even if an external checkout moves later.
     let _ = run(
         "git",

@@ -8,7 +8,7 @@ vi.mock("./Approvals", () => ({ ApprovalStrip: () => null }));
 vi.mock("../streams", () => ({ open: vi.fn() }));
 vi.mock("../ide", () => ({ useIde: { getState: () => ({ navigate: () => undefined }) } }));
 import { Ended, Finished, PullRequestLine, Running } from "./PreReview";
-import { prLabel, prLink, type Review } from "../prereview";
+import { prLabel, prLink, prSaved, type Review } from "../prereview";
 
 const ep = { port: 1, token: "t" };
 const base = { lane: "l", ep, place: "dock" as const };
@@ -21,6 +21,14 @@ const opened = (result: "done" | "failed") => ({ running: false, state: { lines:
 const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
 describe("the review dock", () => {
+  it("says what a pull request carried: one commit named, several counted, else the branch", () => {
+    expect(prSaved({ title: "Dark mode toggle", commits: 1, files: 3 }, "keel/dark")).toBe("Saved as “Dark mode toggle” · 3 files · on branch keel/dark");
+    expect(prSaved({ title: "x", commits: 1, files: 1 }, "b")).toBe("Saved as “x” · 1 file · on branch b");
+    expect(prSaved({ title: "last", commits: 4, files: 12 }, "b")).toBe("4 commits · 12 files · on branch b");
+    expect(prSaved(undefined, "b")).toBe("On branch b");
+    const html = renderToStaticMarkup(<PullRequestLine {...base} run={{ running: false, state: { lines: [url], result: "done", link: url, saved: { title: "Fix it", commits: 1, files: 2 }, target: { branch: "keel/fix" } } }} r={null} />);
+    expect(html).toContain("Saved as “Fix it” · 2 files · on branch keel/fix");
+  });
   it("once a pull request is open, offers no other — only its link", () => {
     const html = renderToStaticMarkup(<PullRequestLine {...base} run={opened("done")} r={review({ kind: "none", cause: "cancelled", line: "", took: 10 })} />);
     expect(html).toContain("Pull request opened");

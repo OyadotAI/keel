@@ -539,6 +539,10 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 .ship-card .ship-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
 .ship-card .ship-text { flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ship-card .ship-row > button { flex: none; }
+.ship-card .ship-row > .review-close { position: static; }
+.review-saved { overflow-wrap: anywhere; }
+.ship-card .ship-shared { padding-block: 6px; }
+.ship-card .ship-shared + .ship-row { padding-top: 0; }
 /* The composer and its status never scroll out of view: when the dock is capped (a short window,
    several cards), only the cards and the queue above them shrink and scroll. */
 .chat-dock { display: flex; flex-direction: column; overflow: hidden; }

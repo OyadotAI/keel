@@ -12,6 +12,7 @@ fn main() {
         "sign_packet",
         "save_text",
         "is_dir",
+        "read_dropped",
         "preview_show",
         "preview_bounds",
         "preview_hide",

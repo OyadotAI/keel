@@ -20,6 +20,14 @@ export interface GitStatus {
   branch: string | null;
   changes: Change[];
   collapsed?: boolean;
+  /** `HEAD`'s commit. */
+  head?: string | null;
+  /** Commits the base lacks; absent where git cannot say. */
+  ahead?: number | null;
+  /** Changes a commit would take: `changes` without what Keel keeps out of commits. */
+  unsaved?: number | null;
+  /** The pull request opened from this branch, and the commit GitHub has for it. */
+  pr?: { url: string; head: string } | null;
 }
 
 export interface DiffLine {

@@ -58,7 +58,14 @@ async fn open(
         let opened = github::publish(&repo, &target, &hosting, &query, &mut |program, args| github::command(&repo, program, args), &mut |line| {
             let _ = tx.blocking_send(Ok(Event::default().event("line").data(line)));
         })?;
-        let data = json!({"url":opened.url,"existing":opened.existing,"branch":target.branch,"head":opened.head,"requested_head":target.sha,"base":target.base});
+        super::remember(&repo, &target.branch, &opened.url);
+        // What went into it, in the page's words: one commit is named, several are counted.
+        let commits = super::ahead(&target.base, |args| crate::git::run(&repo, args));
+        let files = [format!("origin/{}", target.base), target.base.clone()].iter().find_map(|base| {
+            crate::git::run(&repo, &["diff", "--name-only", &format!("{base}...HEAD")]).ok()
+        }).map(|names| names.lines().count());
+        let title = crate::git::trimmed(&repo, &["log", "-1", "--format=%s"]).ok();
+        let data = json!({"url":opened.url,"existing":opened.existing,"branch":target.branch,"head":opened.head,"requested_head":target.sha,"base":target.base,"commits":commits,"files":files,"title":title});
         let _ = tx.blocking_send(Ok(Event::default().event("pr").data(data.to_string())));
         let _ = tx.blocking_send(Ok(Event::default().event("line").data(opened.url)));
         Ok(())

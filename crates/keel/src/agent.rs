@@ -2146,7 +2146,12 @@ pub(crate) fn translate(
     });
     // The words the agent was given, attachments named, so the live turn's prompt is the one its
     // transcript replays — and the chat can show the images it carried.
-    let prompt = with_attachments(query.prompt.clone(), &query.attachments);
+    // In the words the agent's own transcript will hold, so live and replay open the same turn.
+    let prompt = if query.provider.as_deref() == Some("antigravity") {
+        with_attachments(query.prompt.clone(), &query.attachments)
+    } else {
+        with_shown_attachments(query.prompt.clone(), &query.attachments)
+    };
     let mut stopped = false;
     let mut opened = false;
     let frame = |frames: Vec<Frame>| {
@@ -2341,6 +2346,38 @@ mod attach_tests {
 /// the person attached a screenshot and the agent never heard of it. Only Keel's own upload
 /// folder is named: anything else in the list did not come from `attach`.
 fn with_attachments(prompt: String, attachments: &[Attachment]) -> String {
+    naming(
+        prompt,
+        attachments,
+        "Attached files in this checkout (read them):",
+    )
+}
+
+/// The same names for an agent that is handed the images themselves (Claude and Codex through
+/// the helper). Its transcript then says which uploads the message carried, so a conversation
+/// redrawn from it still shows them — it named none, and the image vanished on every replay.
+/// Worded so the agent does not read again what it was already shown.
+pub(crate) fn with_shown_attachments(prompt: String, attachments: &[Attachment]) -> String {
+    // Images only: the helper hands those over as images. Any other file it names by path for
+    // the agent to read, and calling that "already shown" would tell it not to.
+    let shown: Vec<Attachment> = attachments
+        .iter()
+        .filter(|a| {
+            let path = a.path.to_ascii_lowercase();
+            [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+                .iter()
+                .any(|ext| path.ends_with(ext))
+        })
+        .cloned()
+        .collect();
+    naming(
+        prompt,
+        &shown,
+        "Attached files in this checkout (already shown to you above):",
+    )
+}
+
+fn naming(prompt: String, attachments: &[Attachment], note: &str) -> String {
     let paths: Vec<&str> = attachments
         .iter()
         .map(|a| a.path.as_str())
@@ -2349,10 +2386,7 @@ fn with_attachments(prompt: String, attachments: &[Attachment]) -> String {
     if paths.is_empty() {
         return prompt;
     }
-    format!(
-        "{prompt}\n\nAttached files in this checkout (read them):\n{}",
-        paths.join("\n")
-    )
+    format!("{prompt}\n\n{note}\n{}", paths.join("\n"))
 }
 
 /// How long `agy models` may take; it fetches the list, and a hung fetch must not linger.
@@ -2815,6 +2849,14 @@ mod stream_tests {
         assert!(said.starts_with("look\n\n") && said.contains(".keel/attachments/shot.png"));
         assert!(!said.contains("passwd") && !said.contains(".."));
         assert_eq!(super::with_attachments("look".into(), &[]), "look");
+        // Claude and Codex are handed the image itself; the name is for the transcript.
+        let shown =
+            super::with_shown_attachments("look".into(), &[a(".keel/attachments/shot.png")]);
+        assert!(shown.contains("already shown") && shown.ends_with(".keel/attachments/shot.png"));
+        assert!(!shown.contains("read them"));
+        let notes =
+            super::with_shown_attachments("look".into(), &[a(".keel/attachments/notes.txt")]);
+        assert_eq!(notes, "look");
     }
 
     /// Refused before it started: the prompt still appears, as a failed turn, before the reason.

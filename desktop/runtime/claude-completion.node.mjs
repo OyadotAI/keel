@@ -1,7 +1,7 @@
 // Completion evidence is independent from callback delivery and from ambient process lifetimes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ClaudeCompletion } from './claude-completion.mjs';
+import { ClaudeCompletion, NOTIFICATION_QUIET_MS, STEER_QUIET_MS } from './claude-completion.mjs';
 const result = { type: 'result', is_error: false };
 const system = (subtype, fields = {}) => ({ type: 'system', subtype, ...fields });
 function fixture() {
@@ -103,4 +103,43 @@ test('a steer landing on a held result keeps the turn open for its reply', () =>
   f.completion.message({ type: 'stream_event' }); f.fire(); assert.deepEqual(f.ends, []);
   f.completion.message(result); f.fire(); f.completion.message({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
   assert.deepEqual(f.ends, [0]);
+});
+const notice = { type: 'result', is_error: false, num_turns: 0, origin: { kind: 'task-notification' } };
+/** A clock that keeps each timer's window and honours `clear`, so a re-armed hold is one timer. */
+function held() {
+  const ends = [], timers = new Map(); let next = 0;
+  const clock = { set: (fn, ms) => { timers.set(++next, { fn, ms }); return next; }, clear: (id) => timers.delete(id) };
+  const completion = new ClaudeCompletion((code) => ends.push(code), () => {}, clock);
+  const fire = () => { const all = [...timers.values()]; timers.clear(); all.forEach((t) => t.fn()); };
+  return { completion, ends, fire, windows: () => [...timers.values()].map((t) => t.ms), armed: () => [...timers.keys()] };
+}
+test("a notification result before the prompt's reply does not end the turn", () => {
+  const f = held(); f.completion.message(notice); assert.deepEqual(f.ends, []);
+  f.completion.message({ type: 'stream_event' }); f.fire(); assert.deepEqual(f.ends, [], 'the notice ended a turn still replying');
+  f.completion.message(result); assert.deepEqual(f.ends, [0]);
+});
+test('a notification result followed by silence still ends the turn', () => {
+  const f = held(); f.completion.message(notice); assert.deepEqual(f.windows(), [NOTIFICATION_QUIET_MS]);
+  f.fire(); assert.deepEqual(f.ends, [0]);
+});
+test('stop during a notification hold ends at once', () => {
+  const f = held(); f.completion.message(notice); f.completion.interrupt(); assert.deepEqual(f.ends, [-1]);
+});
+test("a notification result after the prompt's own result ends as before", () => {
+  const f = held(); f.completion.message(system('task_started', { task_id: 'bg', subagent_type: 'general', is_backgrounded: true }));
+  f.completion.message(result); f.completion.message(notice); assert.deepEqual(f.windows(), []); assert.deepEqual(f.ends, []);
+  f.completion.message(system('task_notification', { task_id: 'bg', status: 'completed' })); assert.deepEqual(f.ends, [0]);
+});
+test('task bookkeeping does not extend a notification hold', () => {
+  const f = held(); f.completion.message(notice); const [first] = f.armed();
+  f.completion.message(system('task_progress', { task_id: 'shell' })); f.completion.message(system('background_tasks_changed', { tasks: [] }));
+  assert.deepEqual(f.armed(), [first]);
+  f.completion.message(system('status')); assert.notDeepEqual(f.armed(), [first], 'session activity did not restart the quiet');
+  f.fire(); assert.deepEqual(f.ends, [0]);
+});
+test('a steered turn holds a notification result for the longer window', () => {
+  const f = held(); f.completion.steer(); f.completion.message(notice); assert.deepEqual(f.windows(), [NOTIFICATION_QUIET_MS]);
+  f.completion.steer(); assert.deepEqual(f.windows(), [NOTIFICATION_QUIET_MS], 'a steer during the hold shortened it');
+  f.completion.message({ type: 'stream_event' }); f.completion.message(result); assert.deepEqual(f.windows(), [STEER_QUIET_MS]);
+  f.fire(); assert.deepEqual(f.ends, [0]);
 });

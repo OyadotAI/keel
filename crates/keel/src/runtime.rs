@@ -518,6 +518,7 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     })
     .await
     .map_err(|e| e.to_string())??;
+    let provider_prompt = crate::agent::with_shown_attachments(provider_prompt, &q.attachments);
     let repo = state.repo();
     let provider = q.provider.as_deref().unwrap_or("claude");
     if !["claude", "codex"].contains(&provider) {

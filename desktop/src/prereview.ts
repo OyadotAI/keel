@@ -4,5 +4,5 @@ export { bindReview, reviewOf, useReview, refreshReview, updateReviewForm, revie
 export { startReview, stopReview, dismissReview, sendFindings, openPullRequest } from "./prereview/actions";
 export { prKey, usePrRun, prForTarget } from "./prereview/opening";
 export type { PrRun } from "./prereview/opening";
-export { baseOf, prLink, prLabel, sorted, navigable, fixPrompt, clock } from "./prereview/format";
+export { baseOf, prLink, prLabel, prSaved, sorted, navigable, fixPrompt, clock } from "./prereview/format";
 export { verdictPresentation, formPresentation } from "./prereview/presentation";

@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Endpoint } from "../api";
 import { useIde } from "../ide";
 import { useStore } from "../store";
-import { baseOf, clock, dismissReview, openPullRequest, prLabel, prLink, sorted, navigable, refreshReview, startReview, stopReview, sendFindings, useReview, usePrRun, prForTarget, type Review, type Finding, type PrRun } from "../prereview";
+import { baseOf, clock, dismissReview, openPullRequest, prLabel, prLink, prSaved, sorted, navigable, refreshReview, startReview, stopReview, sendFindings, useReview, usePrRun, prForTarget, type Review, type Finding, type PrRun } from "../prereview";
 import { ApprovalStrip } from "./Approvals";
 import { Banner, focusTerminal } from "./kit";
 import { Icon } from "./icons";
@@ -91,7 +91,7 @@ export function PrLink({ link }: { link: string }) {
 function Close(p: Props & { running?: boolean }) {
   const snapshot = useReview(p.lane, p.ep, p.wt);
   const publication = usePrRun(p.ep, p.wt);
-  const close = async () => { if (await dismissReview(p.lane, p.ep, p.wt)) after(); };
+  const close = async () => { if (await dismissReview(p.lane, p.ep, p.wt)) { after(); void useStore.getState().refreshGit(p.lane); } };
   const label = p.running ? "Cancel review and close" : "Dismiss review";
   return <button className="ghost review-close" aria-label={label} title={label} disabled={!!snapshot?.operation || !!publication?.running} onClick={() => void close()}><Icon name="x" size={14} /></button>;
 }
@@ -174,7 +174,7 @@ function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boole
 export function PullRequestLine({ run, r, ...p }: Props & { run: { state: PrRun; running: boolean }; r?: Review | null }) {
   const { busy, snapshot, again } = useControls(p, r), link = prLink(run), o = r?.outcome;
   const retry = () => void openPullRequest(p.ep, p.wt, { title: snapshot?.form.title ?? "", draft: !!snapshot?.form.draft, ...run.state.target }, p.lane);
-  if (link) return <><Head icon="check-circle" color="var(--add)" title={run.state.existing || run.state.result === "failed" ? "Pull request already open" : "Pull request opened"} meta={run.state.target?.branch} /><div className="review-pr"><PrLink link={link} /></div>{run.state.actualHead && run.state.target?.head && run.state.actualHead !== run.state.target.head && <p className="small muted">Pull request head {short(run.state.actualHead)} · Requested commit {short(run.state.target.head)}</p>}<Close {...p} /></>;
+  if (link) return <><Head icon="check-circle" color="var(--add)" title={run.state.existing || run.state.result === "failed" ? "Pull request already open" : "Pull request opened"} meta={run.state.target?.branch} /><div className="review-pr"><PrLink link={link} /></div><p className="small muted review-saved">{prSaved(run.state.saved, run.state.target?.branch)}</p>{run.state.actualHead && run.state.target?.head && run.state.actualHead !== run.state.target.head && <p className="small muted">Pull request head {short(run.state.actualHead)} · Requested commit {short(run.state.target.head)}</p>}<Close {...p} /></>;
   if (run.running) return <><Head eyebrow="Pull request" title="Opening pull request…" /><p className="small muted" role="status">{run.state.lines.at(-1) ?? "Checking target and existing pull requests…"}</p><Close {...p} /></>;
   return <><Banner tone="error">Couldn’t open the pull request. {run.state.error ?? run.state.lines.at(-1) ?? "The server did not confirm completion."}</Banner>
     <div className="actions"><button className="primary" disabled={busy} onClick={retry}>Retry opening</button>{(!o || o.kind === "none") && <button disabled={busy} onClick={again}>Review again</button>}</div><Close {...p} /></>;

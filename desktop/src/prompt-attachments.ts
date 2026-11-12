@@ -2,7 +2,7 @@
 // the live turn and its replay both say where the image is, whichever agent ran it.
 
 /** The trailer Keel appends after the person's words; never shown, it is Keel's own note. */
-const TRAILER = /\n*Attached files in this checkout \(read them\):\n[\s\S]*$/;
+const TRAILER = /\n*Attached files in this checkout \((?:read them|already shown to you above)\):\n[\s\S]*$/;
 const UPLOAD = /@?(\.keel\/attachments\/[^\s"'<>]+)/g;
 const IMAGE = /\.(png|jpe?g|gif|webp|avif)$/i;
 
