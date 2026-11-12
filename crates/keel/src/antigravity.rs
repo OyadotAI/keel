@@ -101,6 +101,25 @@ pub const SED: &str = "Keel does not run sed scripts for Antigravity lanes, beca
     on older versions).";
 pub const LINK: &str = "This path goes through a symbolic link, so Keel does not let Antigravity \
     write it. Write the file at its real location instead.";
+const TWO_PATHS: &str = "This file tool call names more than one file, so Keel could not tell \
+    which one it writes and refused it. Call it again naming one file.";
+
+/// Every different file a file tool's arguments name, under any of the keys agy has used.
+fn named_paths(args: &Value) -> std::collections::BTreeSet<&str> {
+    [
+        "TargetFile",
+        "AbsolutePath",
+        "Path",
+        "File",
+        "file_path",
+        "notebook_path",
+    ]
+    .iter()
+    .filter_map(|k| args[*k].as_str())
+    .filter(|p| !p.is_empty())
+    .collect()
+}
+
 const NO_PATH: &str = "This file tool call names no file, so Keel could not ask about it and \
     refused it. Call it again with the file's path.";
 const REFUSED: &str = "The person refused this call. Do not substitute another command for it.";
@@ -150,6 +169,12 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
         | "replace_file_content"
         | "multi_replace_file_content"
         | "notebook_edit" => {
+            // The checks below read one path; the tool must not be able to write another. A call
+            // naming two different files (a harmless `TargetFile` beside a `Path` of
+            // `.git/config`) is refused rather than judged by whichever key is read first.
+            if named_paths(args).len() > 1 {
+                return Route::Deny(TWO_PATHS);
+            }
             let path = input["file_path"]
                 .as_str()
                 .or(input["notebook_path"].as_str());
@@ -801,6 +826,25 @@ mod tests {
                 Route::Deny(CONFIG),
                 "{tool}"
             );
+            // Two files named: judged by neither, refused.
+            assert_eq!(
+                route(
+                    tool,
+                    &json!({"TargetFile": "/r/ok.txt", "Path": "/r/.git/config"}),
+                    false
+                ),
+                Route::Deny(TWO_PATHS),
+                "{tool}"
+            );
+            // The same file under two keys is still one file.
+            assert!(matches!(
+                route(
+                    tool,
+                    &json!({"TargetFile": "/r/a.txt", "Path": "/r/a.txt"}),
+                    false
+                ),
+                Route::Ask(..)
+            ));
         }
     }
 
