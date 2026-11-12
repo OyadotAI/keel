@@ -24,8 +24,13 @@ export interface Asked {
 
 const UNKNOWN: Summary = { title: "Run a command on your computer?", open: true };
 
-/** Shell syntax that runs more than one program or sends output somewhere. */
-const COMPOUND = /[;&|$`<>()\n\\]/;
+/** Shell syntax that runs more than one program, sends output somewhere, or quotes: a quoted word
+ *  is read by the shell differently from how these words are split, so it is never summarised. */
+const COMPOUND = /[;&|$`<>()\n\\'"]/;
+
+/** Files whose content runs later, unasked: git's hooks and config, every agent's settings, an
+ *  editor's tasks, CI workflows, direnv. An edit there is not "Change a file". */
+const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/;
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 const INSTALL_WORDS = new Set(["install", "i", "add", "ci"]);
 const DEV_SCRIPTS = new Set(["dev", "start", "serve", "preview"]);
@@ -154,6 +159,10 @@ function gitWords(w: string[]): Summary {
   const sub = w[1];
   if (GIT_LOOKS.has(sub) || (sub === "branch" && w.length === 2)) return say("Look at your project's history?");
   if (GIT_SAVES.has(sub)) return say("Save a version of your project?");
+  // A remote named by address reaches whatever that address is, not "GitHub".
+  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => !a.startsWith("-") && (a.includes("://") || /^[^/\s]+@[^:\s]+:/.test(a)))) {
+    return UNKNOWN;
+  }
   if (sub === "push") {
     return w.some((a) => a === "-f" || a.startsWith("--force")) ? say("Replace the versions saved on GitHub? This can lose changes.", true) : say("Send your saved versions to GitHub?");
   }
@@ -184,6 +193,7 @@ export function approvalWords(asked: Asked, root?: string): Summary {
     const path = String(input.file_path ?? input.notebook_path ?? "");
     if (!path) return say("Change a file in your project?", true);
     if (!inside(path, root)) return say("Change a file outside this project?", true);
+    if (RUNS_LATER.test(path)) return say("Change how your project runs commands?", true);
     return say(`Change ${path.split("/").pop()}?`);
   }
   if (tool === "File changes") return say("Change files in your project?");
