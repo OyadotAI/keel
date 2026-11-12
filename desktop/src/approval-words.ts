@@ -30,7 +30,13 @@ const COMPOUND = /[;&|$`<>()\n\\'"]/;
 
 /** Files whose content runs later, unasked: git's hooks and config, every agent's settings, an
  *  editor's tasks, CI workflows, direnv. An edit there is not "Change a file". */
-const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/;
+// Case-insensitive: macOS and Windows file systems are, so `.Git/hooks` is `.git/hooks`.
+const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/i;
+
+/** A path with `/` separators, as both platforms' paths are compared. */
+const slashed = (p: string) => p.replace(/\\/g, "/");
+/** Absolute on either platform: `/…`, or a Windows drive `C:/…`. */
+const absolute = (p: string) => p.startsWith("/") || /^[A-Za-z]:\//.test(p);
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 const INSTALL_WORDS = new Set(["install", "i", "add", "ci"]);
 const DEV_SCRIPTS = new Set(["dev", "start", "serve", "preview"]);
@@ -69,10 +75,14 @@ function words(command: string): string[] {
 
 /** Whether a path a command names stays in the project: relative and never climbing out, or
  *  absolute under the project's own folder. */
-export function inside(path: string, root?: string): boolean {
-  if (path.startsWith("~") || path === "..") return false;
-  if (path.startsWith("/")) return !!root && (path === root || path.startsWith(root.replace(/\/$/, "") + "/")) && !path.split("/").includes("..");
-  return !path.split("/").includes("..");
+export function inside(raw: string, root?: string): boolean {
+  const path = slashed(raw);
+  if (path.startsWith("~") || path.split("/").includes("..")) return false;
+  if (!absolute(path)) return true;
+  // Compared without case: a differently cased path is the same folder on macOS and Windows.
+  const base = root ? slashed(root).replace(/\/$/, "").toLowerCase() : undefined;
+  const p = path.toLowerCase();
+  return !!base && (p === base || p.startsWith(base + "/"));
 }
 
 /** A package manager's script name: `npm run dev`, `pnpm dev`, `yarn test`. */
@@ -159,8 +169,9 @@ function gitWords(w: string[]): Summary {
   const sub = w[1];
   if (GIT_LOOKS.has(sub) || (sub === "branch" && w.length === 2)) return say("Look at your project's history?");
   if (GIT_SAVES.has(sub)) return say("Save a version of your project?");
-  // A remote named by address reaches whatever that address is, not "GitHub".
-  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => !a.startsWith("-") && (a.includes("://") || /^[^/\s]+@[^:\s]+:/.test(a)))) {
+  // A remote or ref given as anything but a plain name (an address, `host:path`, `a:b`, a path)
+  // reaches whatever that is, not "GitHub".
+  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => !a.startsWith("-") && !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(a))) {
     return UNKNOWN;
   }
   if (sub === "push") {
@@ -193,8 +204,8 @@ export function approvalWords(asked: Asked, root?: string): Summary {
     const path = String(input.file_path ?? input.notebook_path ?? "");
     if (!path) return say("Change a file in your project?", true);
     if (!inside(path, root)) return say("Change a file outside this project?", true);
-    if (RUNS_LATER.test(path)) return say("Change how your project runs commands?", true);
-    return say(`Change ${path.split("/").pop()}?`);
+    if (RUNS_LATER.test(slashed(path))) return say("Change how your project runs commands?", true);
+    return say(`Change ${slashed(path).split("/").pop()}?`);
   }
   if (tool === "File changes") return say("Change files in your project?");
   if (tool === "WebFetch") return say(`Open ${host(input.url)}?`);
