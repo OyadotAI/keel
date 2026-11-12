@@ -1606,6 +1606,8 @@ pub async fn chat(
         });
         if let (Some(session), Some(turn)) = (session, key) {
             let window = tx.clone();
+            let stop_seen = stopper.clone();
+            let stop_lane = lane.clone();
             crate::turns::finish(
                 &stopper,
                 crate::turns::Finish {
@@ -1626,8 +1628,8 @@ pub async fn chat(
                         .filter(|e| *e == crate::antigravity::BYPASSED)
                         .map(Into::into),
                 },
-                // The claim is held for the whole of this, so nothing else can take the tree.
-                || true,
+                // Stop during the checks ends them, and nothing is committed (`stop_settling`).
+                move || !stop_seen.checks_stopped(&stop_lane, token),
                 // A window that has gone is not worth a test run.
                 move || !window.is_closed(),
             )

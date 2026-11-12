@@ -79,6 +79,10 @@ struct Turn {
     /// The child is reaped before checks/commit release the checkout claim. Never signal its
     /// old PID during that finishing phase; the OS can already have reused it.
     finished: bool,
+    /// Stop pressed while the turn was settling: the checks end and nothing is committed. Kept
+    /// apart from `interrupted`, which a stop before the child exits also sets and which must not
+    /// stop a turn's gate from running.
+    checks_stopped: bool,
     checkout: Utf8PathBuf,
     /// An advisory lock on the checkout directory's inode. Separate windows can use separate
     /// daemons, so the in-memory map alone cannot enforce one writer. Closing the descriptor
@@ -341,6 +345,7 @@ impl AppState {
                 pid: None,
                 interrupted: false,
                 finished: false,
+                checks_stopped: false,
                 checkout,
                 _writer_lock: writer_lock,
                 _activity: activity,
@@ -659,6 +664,26 @@ impl AppState {
         let turn = map.get_mut(lane).filter(|turn| !turn.finished)?;
         turn.interrupted = true;
         Some((turn.token, turn.pid.is_some()))
+    }
+
+    /// Stop pressed after the child was reaped, while the checks run. Nothing is signalled (the
+    /// pid may already be reused); the checks are asked to end, and the commit never happens.
+    pub(crate) fn stop_settling(&self, lane: &str) -> bool {
+        match self.running.locked().get_mut(lane) {
+            Some(turn) if turn.finished => {
+                turn.checks_stopped = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether Stop reached this turn's checks. The gate asks it once a second.
+    pub(crate) fn checks_stopped(&self, lane: &str, token: u64) -> bool {
+        self.running
+            .locked()
+            .get(lane)
+            .is_some_and(|turn| turn.token == token && turn.checks_stopped)
     }
 
     /// SIGINT the turn's process group if that same turn is still running.
@@ -2652,6 +2677,32 @@ mod tests {
         assert!(state.claim("replacement", checkout, true).is_err());
         state.release("preparing", token);
         assert!(state.claim("replacement", checkout, true).is_ok());
+    }
+
+    /// Stop during a chat turn's checks must end them: the gate used to ignore Stop once the child
+    /// was reaped, so a Stop pressed while the tests ran did nothing until the tests finished.
+    #[tokio::test]
+    async fn a_chat_lanes_checks_end_when_stopped() {
+        let state = Arc::new(AppState::empty());
+        let (_dir, checkout) = temporary_checkout();
+        std::fs::write(checkout.join("Makefile"), "check:\n\tsleep 30\n").unwrap();
+        let token = state.claim("lane-a", &checkout, true).unwrap();
+        state.finished("lane-a", token);
+
+        let stopper = state.clone();
+        let stop = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            stopper.stop_settling("lane-a")
+        });
+        let started = std::time::Instant::now();
+        let verdict =
+            crate::verify::run_all(&checkout, |_| {}, || state.checks_stopped("lane-a", token))
+                .await;
+
+        assert!(stop.await.unwrap(), "Stop found no settling turn");
+        assert_eq!(verdict.status, "aborted");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        state.release("lane-a", token);
     }
 
     #[test]

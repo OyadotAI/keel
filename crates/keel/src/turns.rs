@@ -888,7 +888,8 @@ const DESIGN_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// the tree is still this turn's to commit; what it cost and whether it failed; and `ended`.
 ///
 /// `still_ours` is asked before anything that changes the tree and once a second while the gate
-/// runs: for a lane it is always true, because the claim is held for the whole of this; for a
+/// runs: for a lane it is true until Stop is pressed on the settling turn (`serve::stop_settling`),
+/// because the claim is held for the whole of this; for a
 /// followed terminal session it is "the pid file still says idle". A gate that loses the tree is
 /// aborted — its process group, never `claude`'s — and nothing is committed. `window_open` is
 /// whether anyone is still looking: a closed window is not worth a test run, and then nothing is

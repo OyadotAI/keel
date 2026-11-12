@@ -481,10 +481,10 @@ pub async fn stop(state: &Arc<AppState>, lane: &str) -> bool {
         .filter(|r| r.alive.load(Ordering::Acquire))
         .cloned();
     let Some(runtime) = runtime else {
-        return state.interrupt(lane);
+        return state.interrupt(lane) || state.stop_settling(lane);
     };
     let Some((token, attached)) = state.mark_interrupted(lane) else {
-        return false;
+        return state.stop_settling(lane);
     };
     // Still preparing: `run` checks `was_interrupted` before it hands the runtime a turn.
     if !attached {
@@ -804,6 +804,8 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
     }
     emit(tx, "done", json!(code)).await;
     if let Some(session) = session {
+        let stop_seen = state.clone();
+        let stop_lane = lane.to_owned();
         crate::turns::finish(
             &state,
             crate::turns::Finish {
@@ -828,7 +830,8 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
                 auto_commit: q.auto_commit.unwrap_or(false),
                 refused: None,
             },
-            || true,
+            // Stop during the checks ends them, and nothing is committed (`stop_settling`).
+            move || !stop_seen.checks_stopped(&stop_lane, token),
             || true,
         )
         .await;

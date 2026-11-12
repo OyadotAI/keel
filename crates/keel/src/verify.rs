@@ -311,9 +311,27 @@ pub struct Verdict {
 /// group is ended — the gate's, never the agent's — and the verdict is `aborted`.
 pub async fn run_all(
     root: &Utf8Path,
-    mut sink: impl FnMut(GateEvent),
+    sink: impl FnMut(GateEvent),
     cancelled: impl Fn() -> bool,
 ) -> Verdict {
+    // no-blocking: only delegates; `run_within` walks on its own thread and awaits the children.
+    run_within(root, sink, cancelled, GATE_CEILING).await
+}
+
+/// How long the checks may run in all before they are ended, however many there are. A suite that
+/// is still running after this has hung, and a gate with no end holds the lane's tree claim and
+/// its spinner for as long as it hangs. Ten minutes is past a full suite and short enough that a
+/// hang is seen while the person is still at the turn.
+pub const GATE_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// `run_all` with the ceiling named, so a test can reach it without waiting ten minutes.
+async fn run_within(
+    root: &Utf8Path,
+    mut sink: impl FnMut(GateEvent),
+    cancelled: impl Fn() -> bool,
+    ceiling: std::time::Duration,
+) -> Verdict {
+    let deadline = std::time::Instant::now() + ceiling;
     // no-blocking: the walk is on its own thread, and the rest is a child process awaited.
     let checks = {
         let root = root.to_owned();
@@ -379,6 +397,7 @@ pub async fn run_all(
         let (out, err) = (child.stdout.take(), child.stderr.take());
         let scans = async { tokio::join!(scan_pipe(out, &check.dir), scan_pipe(err, &check.dir)) };
         let mut aborted = false;
+        let mut timed_out = false;
         let waited = async {
             loop {
                 tokio::select! {
@@ -386,9 +405,12 @@ pub async fn run_all(
                         break status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
                     }
                     _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                        if !aborted && cancelled() {
-                            aborted = true;
-                            crate::signals::end_tree(pid);
+                        if !aborted {
+                            timed_out = std::time::Instant::now() >= deadline;
+                            aborted = timed_out || cancelled();
+                            if aborted {
+                                crate::signals::end_tree(pid);
+                            }
                         }
                     }
                 }
@@ -400,9 +422,16 @@ pub async fn run_all(
             problems.push(p);
         }
         if aborted {
+            let mut command = ran.join(", ");
+            if timed_out {
+                command.push_str(&format!(
+                    " (stopped: ran past the {}-second ceiling)",
+                    ceiling.as_secs()
+                ));
+            }
             return Verdict {
                 status: "aborted",
-                command: ran.join(", "),
+                command,
                 problems,
             };
         }
@@ -801,5 +830,23 @@ mod tests {
     fn a_repository_with_no_gate_says_so_rather_than_guessing() {
         let (_d, root) = repo(&[("README.md", "hi")]);
         assert!(detect(&root).is_none());
+    }
+
+    /// A hung check used to hold the gate, and the lane's tree, for as long as it hung. Past the
+    /// ceiling it is ended and the verdict says why, in the shape Stop already uses.
+    #[tokio::test]
+    async fn a_gate_past_its_ceiling_ends_its_checks() {
+        let (_d, root) = repo(&[("Makefile", "check:\n\tsleep 30\n")]);
+        let started = std::time::Instant::now();
+        let verdict = run_within(
+            &root,
+            |_| {},
+            || false,
+            std::time::Duration::from_millis(300),
+        )
+        .await;
+        assert_eq!(verdict.status, "aborted");
+        assert!(verdict.command.contains("ceiling"), "{}", verdict.command);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
     }
 }
