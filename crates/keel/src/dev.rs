@@ -33,6 +33,18 @@ struct DevState {
     checkout: Option<Utf8PathBuf>,
     /// Recent output, capped — a dev server left running all day should not grow without bound.
     log: Vec<String>,
+    /// A start is between its check and its spawn. Two starts at once both passed the check and
+    /// the second replaced the first's child, leaving that server's workers running with nothing
+    /// that could stop them — a race a preview that starts on its own makes ordinary.
+    starting: bool,
+}
+
+/// Gives back the start reservation however `start` leaves: spawned, refused or failed.
+struct Starting;
+impl Drop for Starting {
+    fn drop(&mut self) {
+        state().locked().starting = false;
+    }
 }
 
 /// Whether a dev server is running in `root` or a checkout under it.
@@ -336,8 +348,11 @@ pub async fn start(
 ) -> Result<Json<Status>, (axum::http::StatusCode, String)> {
     let bad = |m: String| (axum::http::StatusCode::BAD_REQUEST, m);
 
-    {
-        let s = state().locked();
+    let _reserved = {
+        let mut s = state().locked();
+        if s.starting && s.child.is_none() {
+            return Err(bad("The dev server is already starting.".into()));
+        }
         if s.child.is_some() {
             let whose = match s.checkout.as_deref() {
                 Some(c) if c != repo => {
@@ -354,7 +369,9 @@ pub async fn start(
                 "A dev server is already running{whose}. Keel runs one at a time — stop it first."
             )));
         }
-    }
+        s.starting = true;
+        Starting
+    };
 
     // A typed command runs where the person is; a detected one runs where it was found, which
     // for a monorepo is not the repository root.
@@ -409,7 +426,14 @@ pub async fn start(
     tokio::spawn(watch(out));
     tokio::spawn(watch(err));
 
-    let found = detect(&repo);
+    // The same walk as above: off the executor.
+    let found = {
+        let repo = repo.clone();
+        tokio::task::spawn_blocking(move || detect(&repo))
+            .await
+            .ok()
+            .flatten()
+    };
     Ok(Json(Status {
         running: true,
         url: None,
@@ -508,10 +532,44 @@ mod tests {
     use camino::Utf8PathBuf;
     use tempfile::TempDir;
 
+    /// The dev server is one per daemon, so the tests that start it take turns.
+    async fn one_at_a_time() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
+
+    /// Two starts at once run one server. Both used to pass the check, and the second replaced
+    /// the first's child — whose workers then ran on with nothing left that could stop them.
+    #[tokio::test]
+    async fn two_concurrent_starts_run_one_server() {
+        let _turn = one_at_a_time().await;
+        let (_d, root) = repo(&[]);
+        stop_now();
+        let go = || {
+            start(
+                crate::serve::Checkout(root.clone()),
+                Json(StartBody {
+                    command: Some("sleep 30".into()),
+                }),
+            )
+        };
+        let (a, b) = tokio::join!(go(), go());
+        let started = [a.is_ok(), b.is_ok()];
+        stop_now();
+        assert_eq!(started.iter().filter(|s| **s).count(), 1, "{started:?}");
+        assert!(
+            !state().locked().starting,
+            "the reservation was left behind"
+        );
+    }
+
     /// A server that dies on start — `next: command not found` — is not running, and says why.
     /// It stayed "running" as a zombie, and Start refused because one was.
     #[tokio::test]
     async fn a_server_that_dies_on_start_is_not_running() {
+        let _turn = one_at_a_time().await;
         let (_d, root) = repo(&[]);
         stop_now();
         let _started = start(

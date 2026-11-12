@@ -11,6 +11,8 @@ import { Markdown } from "./Markdown";
 import { Questions, QuestionRecoveries } from "./Questions";
 import { shownTool } from "../browser";
 import { BROWSER_CHOICE } from "../browser-preference";
+import { ANSWER_WORDS, approvalWords } from "../approval-words";
+import { checkoutOf, usePlain } from "../plain";
 
 /// The answered row unmounts under the focused button; focus would land on nothing.
 const after = () => requestAnimationFrame(() => document.activeElement === document.body && focusTerminal());
@@ -47,6 +49,13 @@ function Arguments({ input }: { input: Record<string, unknown> }) {
 /** Characters of a one-line command shown before "Show all": a long line wraps into a wall. */
 const COMMAND_GLANCE_CHARS = 240;
 
+/** What a session rule covers, in a chat lane's words: the programs (`npm`), the server
+ *  (`github`), or the folder (`changes in src`). */
+function ruleNames(rules: string[]): string {
+  const named = rules.map((r) => /^Bash\((\S+) \*\)$/.exec(r)?.[1] ?? /^mcp__([^_]+(?:_[^_]+)*)(?:__.*)?$/.exec(r)?.[1] ?? /^(?:Edit|Write)\((.+?)\/?\*?\)$/.exec(r)?.[1]?.replace(/^/, "changes in ") ?? r);
+  return named.length < 2 ? named.join("") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+}
+
 /** The programs a session rule covers, as words: `grep, head and echo`, not `Bash(grep *), …`.
  *  The exact rules stay in the button's title. */
 function sessionNames(rules: string[]): string {
@@ -56,10 +65,14 @@ function sessionNames(rules: string[]): string {
 
 function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
   const answer = useStore((s) => s.answer);
+  const plain = usePlain(lane);
   const [all, setAll] = useState(false);
   if (p.tool === "AskUserQuestion") return <Questions lane={lane} p={p} />;
   if (p.tool === "ExitPlanMode") return <PlanApproval lane={lane} p={p} />;
   if (p.tool === BROWSER_CHOICE) return <BrowserChoice lane={lane} p={p} />;
+  // A form to fill or a page to visit (Codex's elicitations) keeps its own card: its fields and its
+  // "Open verification page" button are the request.
+  if (plain && !(p.provider && (p.input.requestedSchema || typeof p.input.url === "string"))) return <PlainRequest lane={lane} p={p} count={count} />;
   if (p.provider) return <RuntimeRequest lane={lane} p={p} />;
   const lines = p.command.split("\n");
   const long = lines.length > 6 || p.command.length > COMMAND_GLANCE_CHARS;
@@ -96,6 +109,47 @@ function Row({ lane, p, count }: { lane: string; p: Pending; count: number }) {
       </div>
     </div>
   );
+}
+
+/** A chat lane's card: what will happen, in a sentence a first-time builder can answer, with the
+ *  exact command behind Details — open from the start when the sentence alone is not enough. The
+ *  answers are the same ones the terminal card sends; only the words differ. */
+function PlainRequest({ lane, p, count }: { lane: string; p: Pending; count: number }) {
+  const answer = useStore((s) => s.answer);
+  const root = useStore((s) => (s.lanes[lane] ? checkoutOf(s.lanes[lane]) : undefined));
+  const [sending, setSending] = useState(false);
+  const said = approvalWords(p, root);
+  const shown = p.command || (typeof p.input.command === "string" ? p.input.command : Array.isArray(p.input.command) ? p.input.command.join(" ") : "");
+  // Codex's App Server offers its own decisions; Keel's cards answer allow, session or deny.
+  const options: { value: unknown; label: string }[] = p.provider && p.choices?.length
+    ? p.choices.map((c) => ({ value: c.value, label: typeof c.value === "string" ? ANSWER_WORDS[c.value] ?? c.label : c.label }))
+    // The session answer covers the rules the daemon offers (`npm *`, a whole MCP server), which
+    // can be wider than the sentence, so the button names them.
+    : [{ value: "allow", label: ANSWER_WORDS.allow }, ...(p.rules.length > 0 && !p.reason ? [{ value: "session", label: `Allow ${ruleNames(p.rules)} for this chat` }] : []), { value: "deny", label: ANSWER_WORDS.deny }];
+  async function choose(value: unknown) {
+    setSending(true);
+    if (p.provider) await runtimeAnswer(lane, p, { decision: value, content: null });
+    else await answer(lane, p, value === "deny" ? "deny" : "allow", undefined, value === "session" ? "session" : "once");
+    setSending(false);
+    after();
+  }
+  const keys: Record<string, string> = { allow: "a", accept: "a", session: "s", acceptForSession: "s", deny: "d", decline: "d" };
+  return <div className="strip-row command-approval">
+    <div className="strip-title"><Icon name="hand" className="hand" /><span style={{ flex: 1 }}>{said.title}</span>{count > 1 && <span className="small faint">{count} waiting</span>}</div>
+    {p.reason && <p className="small muted">{p.reason}</p>}
+    {!p.reason && typeof p.input.reason === "string" && <p className="small muted">{p.input.reason}</p>}
+    <details className="approval-details" open={said.open}>
+      <summary>Details</summary>
+      {shown ? <pre className="code approval-command is-open">$ {shown}</pre> : <Arguments input={p.input} />}
+    </details>
+    <div className="actions">{options.map((o, i) => {
+      // ⇧⌘S answers a Keel card's session rule; a runtime card has none, so it shows no shortcut.
+      const key = typeof o.value === "string" && !(p.provider && keys[o.value] === "s") ? keys[o.value] : undefined;
+      return <button key={i} disabled={sending} className={i === 0 ? "primary" : o.value === "deny" || o.value === "decline" ? "approval-deny" : undefined} onClick={() => void choose(o.value)}>
+        {o.label}{key && <> <kbd>{label({ key, shift: true })}</kbd></>}
+      </button>;
+    })}</div>
+  </div>;
 }
 
 /** Where this lane browses, asked on the agent's first browser step and saved for the lane. When Oya

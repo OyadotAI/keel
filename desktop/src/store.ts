@@ -187,6 +187,8 @@ export interface Lane {
   dev?: Dev;
   /** The last dev-server check failed: the Preview says so and offers to ask again. */
   devUnknown?: boolean;
+  /** The person stopped this lane's app, so it is not started again on its own. */
+  devStopped?: boolean;
   /// Prompts waiting for the turn in flight to end — a finished job's report, mainly. Drained by
   /// every way a turn ends, not just the happy one.
   queued: QueuedMessage[];
@@ -222,6 +224,8 @@ export interface Lane {
   cursor?: number;
   submitting?: boolean;
   disconnected?: boolean;
+  /// Another session is writing this lane's files, so its next message waits: `terminal` or `lane`.
+  waiting?: string;
   receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; effort?: Effort; wt?: string; system?: string; attachments?: Attachment[]; references?: FileReference[] };
   /// A receipt the person discarded as unconfirmed. The daemon may still have accepted it, and its
   /// `accepted` record then arrives: the prompt is running, so it must not stay in the composer.
@@ -658,6 +662,74 @@ export const useStore = create<State>()((set, getState, api) => {
     );
   }
 
+  /// Whether a send waits rather than starting a turn now: words typed into a running turn join it,
+  /// a busy lane queues them, and a project another session is writing holds them back.
+  async function heldBack(lid: string, l: Lane, m: { prompt: string; attachments: Attachment[]; references: FileReference[]; system?: string; ownsDraft: boolean }): Promise<boolean> {
+    if (await steered(lid, l, m.prompt, m)) return true;
+    // While a message waits for the project, a new one goes behind it — even in the moment after
+    // the project frees and before the waiting one is sent — so they arrive in the order typed.
+    if (l.running || l.submitting || (l.waiting && draining !== lid)) {
+      lane(lid, { queued: [...l.queued, { id: id(), text: m.prompt, attachments: m.attachments, references: m.references, system: m.system }], ...(m.ownsDraft ? { draft: "", attachments: [], references: [] } : {}) });
+      save(getState());
+      return true;
+    }
+    return sharedTreeBusy(lid, l, m);
+  }
+
+  /// A chat lane's app runs without anyone typing `pnpm dev`, as it does in Lovable — but only in a
+  /// trusted project: starting it runs the project's own code, which an untrusted project's chat
+  /// asks for with a button instead. Once per lane per launch, never in another lane's place, and
+  /// never again in a lane whose person stopped it.
+  const startedOnItsOwn = new Set<string>();
+  function startAppOnItsOwn(lid: string) {
+    const s = getState(), l = s.lanes[lid];
+    if (!l || l.interface === "terminal" || !s.trusted[l.project] || startedOnItsOwn.has(lid)) return;
+    // Stopped in any chat of the project counts: there is one dev server, and the person said no.
+    if ((s.projects[l.project]?.lanes ?? []).some((other) => s.lanes[other]?.devStopped)) return;
+    if (!l.dev || l.dev.running || l.dev.elsewhere || !l.dev.detected) return;
+    startedOnItsOwn.add(lid);
+    void getState().dev(lid, true);
+  }
+  /// The first time a chat lane's app is up, the panel opens on it: the app is what a builder came
+  /// to see. Once per lane, so closing it is not undone by the next status.
+  const broughtForward = new Set<string>();
+  function bringAppForward(lid: string) {
+    const s = getState(), l = s.lanes[lid];
+    if (!l || l.interface === "terminal" || s.active !== lid || broughtForward.has(lid)) return;
+    if (!l.dev?.running || l.dev.elsewhere || !l.dev.url) return;
+    broughtForward.add(lid);
+    set({ panelTab: "preview" });
+  }
+
+  /// Another session writing this lane's files is not something a first-time builder can act on,
+  /// and the daemon refuses a second writer. A new chat takes its own copy of the project and
+  /// goes straight on; one with a conversation keeps its message and sends it, by itself, once the
+  /// other session is done — checking again every few seconds through the queue.
+  const TREE_RECHECK_MS = 3000;
+  async function sharedTreeBusy(lid: string, l: Lane, m: { prompt: string; attachments: Attachment[]; references: FileReference[]; system?: string; ownsDraft: boolean }): Promise<boolean> {
+    if (l.isolated) return false;
+    const ep = await endpoint(l.project).catch(() => undefined);
+    const busy = ep && await get<{ busy: boolean; who?: string }>(ep, "/api/chat/busy", { lane: lid, wt: l.wt }).catch(() => undefined);
+    if (!busy?.busy) {
+      if (getState().lanes[lid]?.waiting) lane(lid, { waiting: undefined });
+      return false;
+    }
+    // Nothing said yet, so nothing tied to this folder: its own copy costs nothing.
+    if (!l.known) { lane(lid, { isolated: true, waiting: undefined }); return false; }
+    // The message `drain` just took goes back where it was; one typed now goes behind the others.
+    const message = { id: id(), text: m.prompt, attachments: m.attachments, references: m.references, system: m.system };
+    const front = draining === lid;
+    const already = !!l.waiting;
+    lane(lid, (now) => ({ waiting: busy.who ?? "terminal", queued: front ? [message, ...now.queued] : [...now.queued, message], ...(m.ownsDraft ? { draft: "", attachments: [], references: [] } : {}) }));
+    save(getState());
+    // One recheck at a time: each held send scheduling its own would multiply them.
+    if (front || !already) setTimeout(() => { if (getState().lanes[lid]?.waiting) drain(lid); }, TREE_RECHECK_MS);
+    return true;
+  }
+
+  /// The lane whose queued message `drain` is sending right now, so a hold puts it back in front.
+  let draining: string | undefined;
+
   /// A turn ended — any way at all — or the lane's terminal came up. What was queued goes next.
   function drain(lid: string) {
     const l = getState().lanes[lid];
@@ -666,7 +738,9 @@ export const useStore = create<State>()((set, getState, api) => {
     if (l.running || l.submitting || l.disconnected || l.receipt || l.queued[0].failed) return;
     const [next, ...rest] = l.queued;
     lane(lid, { queued: rest });
-    void getState().send(lid, next.text, next.attachments, next.system, next.references);
+    draining = lid;
+    const sent = getState().send(lid, next.text, next.attachments, next.system, next.references);
+    void sent.finally(() => { if (draining === lid) draining = undefined; });
   }
 
   const gitTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1348,12 +1422,15 @@ export const useStore = create<State>()((set, getState, api) => {
       if (!ep) return;
       const dev = await get<Dev>(ep, "/api/dev", { wt: l.wt }).catch(() => undefined);
       lane(lid, dev ? { dev, devUnknown: false } : { devUnknown: true });
+      startAppOnItsOwn(lid);
+      bringAppForward(lid);
     },
 
     async dev(lid, start) {
       const l = getState().lanes[lid];
       const ep = l && getState().projects[l.project]?.endpoint;
       if (!ep) return;
+      lane(lid, { devStopped: !start });
       try {
         const dev = start
           ? await post<Dev>(ep, "/api/dev/start", { command: l.dev?.detected ?? null }, { wt: l.wt })
@@ -1509,7 +1586,8 @@ export const useStore = create<State>()((set, getState, api) => {
       save(getState());
     },
     removeQueued(lid, messageId) {
-      lane(lid, (l) => ({ queued: l.queued.filter((q) => q.id !== messageId) }));
+      // Nothing left to send is nothing left to wait for.
+      lane(lid, (l) => { const queued = l.queued.filter((q) => q.id !== messageId); return { queued, ...(queued.length ? {} : { waiting: undefined }) }; });
       save(getState());
     },
 
@@ -1543,12 +1621,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const blocked = submissionBlock(l, prompt);
       if (blocked) { lane(lid, { error: blocked }); return false; }
       const ownsDraft = isComposerSubmission(l, prompt, attachments, references);
-      if (await steered(lid, l, prompt, { attachments, references, system, ownsDraft })) return true;
-      if (l.running || l.submitting) {
-        lane(lid, { queued: [...l.queued, { id: id(), text: prompt, attachments, references, system }], ...(ownsDraft ? { draft: "", attachments: [], references: [] } : {}) });
-        save(getState());
-        return true;
-      }
+      if (await heldBack(lid, l, { prompt, attachments, references, system, ownsDraft })) return true;
       lane(lid, { submitting: true, running: true, error: undefined });
       let submission: string | undefined;
       let submittedContext: Pick<Lane, "attachments" | "references"> = { attachments, references };
@@ -1561,7 +1634,10 @@ export const useStore = create<State>()((set, getState, api) => {
         submission = receipt.id;
         lane(lid, { receipt });
         save(getState());
-        const delivery = await post<{ accepted: boolean; running: boolean }>(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: false });
+        // Saved after every turn, as a terminal lane's turns already are: "Saved" is what a person
+        // coming from Lovable expects, and undo needs a version to go back to. Every guard on the
+        // automatic commit still applies — passing checks, only this turn's files, no hooks.
+        const delivery = await post<{ accepted: boolean; running: boolean }>(ready.ep, "/api/chat/send", { ...receipt, lane: lid, provider: l.agent, auto_commit: true });
         lane(lid, (now) => ({ managed: true, receipt: undefined, running: (now.cursor ?? 0) > (l.cursor ?? 0) ? now.running : delivery.running, ...composerAfterSend(now, l, ownsDraft, submittedContext) }));
         follows.get(lid)?.close();
         follows.delete(lid);

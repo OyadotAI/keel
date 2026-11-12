@@ -10,6 +10,8 @@ import { useCovered } from "../cover";
 import { toWindow } from "../zoom";
 import { flat } from "../pins";
 import { Icon } from "./icons";
+import { usePlain } from "../plain";
+import { AGENT_NAME } from "../store";
 
 /// The project's dev server, and the page it serves. One server for the project: a lane that is
 /// not the one running it is told whose it is, rather than shown another lane's tree as its own.
@@ -19,6 +21,7 @@ export function Preview({ lane }: { lane: string }) {
   const unknown = useStore((s) => !!s.lanes[lane]?.devUnknown);
   const wt = useStore((s) => s.lanes[lane]?.wt);
   const toggle = useStore((s) => s.dev);
+  const plain = usePlain(lane);
   const fromJob = useStore((s) => {
     for (const j of s.lanes[lane]?.jobs ?? []) {
       if (j.finished) continue;
@@ -27,26 +30,28 @@ export function Preview({ lane }: { lane: string }) {
     }
     return undefined;
   });
-  if (!dev && unknown) return <div className="panel-empty muted">Couldn’t check the dev server. <button className="link" onClick={() => void useStore.getState().refreshDev(lane)}>Try again</button></div>;
-  if (!dev) return <div className="panel-empty muted">Checking for a dev server…</div>;
+  if (!dev && unknown) return <div className="panel-empty muted">{plain ? "Couldn’t check whether your app is running." : "Couldn’t check the dev server."} <button className="link" onClick={() => void useStore.getState().refreshDev(lane)}>Try again</button></div>;
+  if (!dev) return <div className="panel-empty muted">{plain ? "Looking for your app…" : "Checking for a dev server…"}</div>;
   if (dev.running && dev.elsewhere)
     return (
       <div className="panel-empty muted">
-        The dev server is running for {dev.owner ? `the lane on keel/${dev.owner}` : "the project's own tree"}, not this one{wt ? "" : " — this lane shares the project tree"}. One runs at a time.
+        {plain
+          ? "Your app is showing another chat’s version. Only one can run at a time."
+          : <>The dev server is running for {dev.owner ? `the lane on keel/${dev.owner}` : "the project's own tree"}, not this one{wt ? "" : " — this lane shares the project tree"}. One runs at a time.</>}
       </div>
     );
   const [jobUrl, jobCommand] = fromJob?.split("\n") ?? [];
   if (!dev.running && jobUrl) return <Running lane={lane} url={jobUrl} label={`started by the agent: ${jobCommand}`} />;
-  if (!dev.running) return <NotRunning lane={lane} dev={dev} start={() => toggle(lane, true)} />;
-  return <Running lane={lane} url={dev.url ?? undefined} log={dev.log} stop={() => toggle(lane, false)} />;
+  if (!dev.running) return <NotRunning lane={lane} dev={dev} plain={plain} start={() => toggle(lane, true)} />;
+  return <Running lane={lane} url={dev.url ?? undefined} log={dev.log} plain={plain} stop={() => toggle(lane, false)} />;
 }
 
-function Running({ lane, url, label, log, stop }: { lane: string; url?: string; label?: string; log?: string[]; stop?: () => void }) {
+function Running({ lane, url, label, log, stop, plain = false }: { lane: string; url?: string; label?: string; log?: string[]; stop?: () => void; plain?: boolean }) {
   const shown = url ? frameable(url) : null;
   return (
     <div className="preview">
       <div className="panel-head small">
-        <span className="change-path" title={label}>{url ?? "Starting…"}</span>
+        <span className="change-path" title={label}>{url ?? (plain ? "Starting your app…" : "Starting…")}</span>
         {shown && <PickButton lane={lane} />}
         {url && (
           <button className="ghost" onClick={() => void openUrl(url)} title="Open in the browser" aria-label="Open in the browser">
@@ -62,9 +67,11 @@ function Running({ lane, url, label, log, stop }: { lane: string; url?: string; 
         </>
       ) : url ? (
         <div className="panel-empty">
-          <p className="muted">This server is not on this machine's own address, so it cannot be shown inside Keel.</p>
-          <button onClick={() => openUrl(url)}>Open {url} in the browser</button>
+          <p className="muted">{plain ? "This app runs somewhere else." : "This server is not on this machine's own address, so it cannot be shown inside Keel."}</p>
+          <button onClick={() => openUrl(url)}>{plain ? "Open in browser" : `Open ${url} in the browser`}</button>
         </div>
+      ) : plain ? (
+        <div className="panel-empty"><p className="muted">Starting your app…</p>{!!log?.length && <details><summary className="small">Show what it’s printing</summary><pre className="code small">{log.slice(-30).join("\n")}</pre></details>}</div>
       ) : (
         <pre className="code">{log?.slice(-30).join("\n") || "Waiting for it to say where it is listening…"}</pre>
       )}
@@ -74,9 +81,26 @@ function Running({ lane, url, label, log, stop }: { lane: string; url?: string; 
 
 /// Nothing running: why, if it was tried, and the two ways to start it — the agent, which can
 /// install what is missing and knows the project, or Keel's own guess at the command.
-function NotRunning({ lane, dev, start }: { lane: string; dev: NonNullable<ReturnType<typeof useStore.getState>["lanes"][string]["dev"]>; start: () => void }) {
+function NotRunning({ lane, dev, start, plain = false }: { lane: string; dev: NonNullable<ReturnType<typeof useStore.getState>["lanes"][string]["dev"]>; start: () => void; plain?: boolean }) {
   const [said, setSaid] = useState<string>();
   const why = whyStopped(dev.log);
+  const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
+  if (plain) {
+    const stopped = !!why || dev.log.length > 0;
+    return (
+      <div className="panel-empty">
+        <h3>{stopped ? "Your app stopped." : "Your app isn’t running yet."}</h3>
+        <div className="actions" style={{ justifyContent: "center" }}>
+          <button className="primary" onClick={() => void askToRun(lane).then((ok) => setSaid(ok ? `Asked ${agent} — follow along in the chat.` : "Couldn’t send that. Try again in a moment."))}>
+            {stopped ? `Ask ${agent} to fix it` : `Ask ${agent} to start it`}
+          </button>
+          {dev.detected && <button onClick={start}>{stopped ? "Start again" : "Start your app"}</button>}
+        </div>
+        {dev.log.length > 0 && <details><summary className="small">Details</summary><pre className="code small preview-log">{dev.log.slice(-8).join("\n")}</pre></details>}
+        {said && <p className="small faint">{said}</p>}
+      </div>
+    );
+  }
   return (
     <div className="panel-empty">
       <h3>{why ? `The dev server stopped. ${why}` : dev.detected ? "The dev server is not running" : "No dev server found in this project"}</h3>

@@ -122,7 +122,9 @@ export class Codex {
         if (decided === 'allow') result = { decision: 'accept' };
         else if (decided) result = { decision: 'decline' };
         else {
-          const answer = await this.ask(message.method.includes('fileChange') ? 'File changes' : 'Command', p.command ?? '', p, choices);
+          // One string, as every other agent's card carries it: Codex may send the command as words.
+          const shown = command ?? (Array.isArray(p.command) ? p.command.join(' ') : p.command ?? '');
+          const answer = await this.ask(message.method.includes('fileChange') ? 'File changes' : 'Command', shown, p, choices);
           result = { decision: answer.decision };
         }
       } else if (message.method === 'mcpServer/elicitation/request') {

@@ -7,10 +7,16 @@ import { Working } from "./Working";
 import { Icon } from "./icons";
 import { PrLink } from "./PreReview";
 import type { Endpoint } from "../api";
+import { usePlain } from "../plain";
 
 const COPY = {
   open: { text: "Happy with it? Share it as a pull request.", button: "Open pull request" },
   update: { text: "Share your new changes.", button: "Update pull request" },
+};
+/** A chat lane's words: a version saved to GitHub, never a pull request. */
+const PLAIN = {
+  open: { text: "Happy with it? Save this version to GitHub.", button: "Save to GitHub" },
+  update: { text: "New changes since your last save.", button: "Save new changes" },
 };
 const CLOSE = "Hide until there are new changes";
 
@@ -20,6 +26,8 @@ export function ShipCard({ lane, ep, wt }: { lane: string; ep: Endpoint; wt?: st
   const l = useStore((s) => s.lanes[lane]);
   const run = usePrRun(ep, wt), review = useReview(lane, ep, wt);
   const [step, setStep] = useState<ShipStep>();
+  const plain = usePlain(lane);
+  const words = plain ? PLAIN : COPY;
   const [error, setError] = useState<string>();
   if (!l?.git?.is_repo || l.running || l.submitting || run || review?.review) return null;
   const git = l.git, offer = shareOffer(git, l.shipDismissed);
@@ -37,15 +45,15 @@ export function ShipCard({ lane, ep, wt }: { lane: string; ep: Endpoint; wt?: st
   const close = () => { setError(undefined); useStore.getState().dismissShip(lane, shareKey(git)); };
   const card = (offer || step || error) && (
     <div className="ship-row">
-      {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span className="ship-text" title={error}>{error ? `Didn’t work: ${error.split(/\n|\s+hint:/)[0].trim()}` : COPY[offer ?? "open"].text}</span>}
-      {!step && <button className="primary" onClick={() => void go()}>{error ? "Try again" : COPY[offer ?? "open"].button}</button>}
+      {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span className="ship-text" title={error}>{error ? `${plain ? "Couldn’t save to GitHub" : "Didn’t work"}: ${error.split(/\n|\s+hint:/)[0].trim()}` : words[offer ?? "open"].text}</span>}
+      {!step && <button className="primary" onClick={() => void go()}>{error ? "Try again" : words[offer ?? "open"].button}</button>}
       {!step && <button className="ghost review-close" aria-label={CLOSE} title={CLOSE} onClick={close}><Icon name="x" size={14} /></button>}
     </div>
   );
   if (!card && !git.pr) return null;
   return (
     <div className="strip review-strip ship-card" role="region" aria-label="Share your changes">
-      {git.pr && <div className="ship-row ship-shared"><span className="small muted">Pull request</span><PrLink link={git.pr.url} /></div>}
+      {git.pr && <div className="ship-row ship-shared"><span className="small muted">{plain ? "On GitHub" : "Pull request"}</span><PrLink link={git.pr.url} /></div>}
       {card}
     </div>
   );

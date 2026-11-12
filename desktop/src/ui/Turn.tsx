@@ -165,18 +165,19 @@ function Tokens({ u }: { u: Usage }) {
   );
 }
 
+/** What the agent is told to fix when a turn's checks fail: the problems the gate read, by file
+ *  and line. One sentence for the Turns tab's "Copy for the agent" and the chat's "Fix it". */
+export function fixPrompt(problems: NonNullable<Turn["gate"]>["problems"] = []): string {
+  const listed = problems.slice(0, 30).map((p) => `${p.file ?? ""}${p.line ? `:${p.line}` : ""} ${p.message ?? ""}`.trim());
+  return "The project's checks failed. Fix these:\n\n" + (listed.length ? listed.join("\n") : "(run the checks to see what failed)");
+}
+
 function Problems({ turn }: { turn: Turn }) {
   const problems = turn.gate?.problems ?? [];
   const [copied, setCopied] = useState(false);
   if (!problems.length) return null;
   function copy() {
-    const text =
-      "The project's checks failed. Fix these:\n\n" +
-      problems
-        .slice(0, 30)
-        .map((p) => `${p.file ?? ""}${p.line ? `:${p.line}` : ""} ${p.message ?? ""}`.trim())
-        .join("\n");
-    void navigator.clipboard.writeText(text).then(() => {
+    void navigator.clipboard.writeText(fixPrompt(problems)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     });
@@ -379,7 +380,7 @@ function CommandDetail({ lane, index, call, depth }: { lane: string; index: numb
 
 /// Put the checkout back as it was before this turn ran. Undoable, and refused while the agent
 /// is mid-turn, which would be two writers on one tree.
-function Rewind({ lane, turn, number }: { lane: string; turn: Turn; number: number }) {
+export function Rewind({ lane, turn, number, plain = false }: { lane: string; turn: Turn; number: number; plain?: boolean }) {
   const [asking, setAsking] = useState(false);
   const agent = useStore((s) => s.lanes[lane]?.agent);
   // Anyone writing this tree, not just this lane: the daemon refuses too, this says why first.
@@ -401,19 +402,21 @@ function Rewind({ lane, turn, number }: { lane: string; turn: Turn; number: numb
   }
   return (
     <span style={{ position: "relative" }}>
-      <button className="ghost rewind" disabled={busy} onClick={() => setAsking(!asking)} aria-label={`Rewind files to before turn ${number}`} title={busy ? "An agent is writing this tree — rewind when it is idle" : `Rewind files to before turn ${number}`}>
+      <button className="ghost rewind" disabled={busy} onClick={() => setAsking(!asking)} aria-label={plain ? "Undo this change" : `Rewind files to before turn ${number}`} title={busy ? (plain ? `Wait for ${AGENT_NAME[agent ?? "claude"]} to finish` : "An agent is writing this tree — rewind when it is idle") : plain ? "Undo this change" : `Rewind files to before turn ${number}`}>
         <Icon name="rewind" size={13} />
       </button>
       {asking && (
-        <Dialog title={`Rewind files to before turn ${number}?`} onClose={() => setAsking(false)}>
+        <Dialog title={plain ? "Undo this change?" : `Rewind files to before turn ${number}?`} onClose={() => setAsking(false)}>
           <p>
-            Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. {AGENT_NAME[agent ?? "claude"]} still remembers these edits — tell it you rewound the files.
+            {plain
+              ? <>Puts the {turn.files.length} {turn.files.length === 1 ? "file" : "files"} back as they were before this message, plus anything changed since. You can redo it.</>
+              : <>Restores the whole checkout — {turn.files.length} file{turn.files.length === 1 ? "" : "s"} this turn changed, plus anything since. Undoable. {AGENT_NAME[agent ?? "claude"]} still remembers these edits — tell it you rewound the files.</>}
           </p>
           <div className="actions">
             <button className="primary" onClick={rewind}>
-              Rewind files
+              {plain ? "Undo" : "Rewind files"}
             </button>
-            <button onClick={() => setAsking(false)}>Cancel</button>
+            <button onClick={() => setAsking(false)}>{plain ? "Keep it" : "Cancel"}</button>
           </div>
         </Dialog>
       )}

@@ -17,6 +17,7 @@ export function patchLane(lane: string, patch: Partial<Lane>) {
 }
 
 export function Composer({ lane }: { lane: string }) {
+  const agentName = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const draft = useStore((s) => s.lanes[lane]?.draft ?? "");
   const busy = useStore((s) => !!s.lanes[lane]?.running);
   const submitting = useStore((s) => !!s.lanes[lane]?.submitting);
@@ -104,7 +105,7 @@ export function Composer({ lane }: { lane: string }) {
       })}</div>}
       <Attachments lane={lane} />
       <FileReferences lane={lane} />
-      <textarea ref={input} data-chat-input={lane} value={draft} aria-label="Message the agent" placeholder="Ask, build, or explain…" spellCheck={false}
+      <textarea ref={input} data-chat-input={lane} value={draft} aria-label={`Message ${agentName}`} placeholder="Describe what you want to build or change…" spellCheck={false}
         aria-controls={candidates.length ? "composer-options" : undefined} aria-activedescendant={candidates.length ? `suggestion-${choice}` : undefined}
         onChange={(e) => { write(e.target.value); if (e.target.value.endsWith("@")) void refreshSubagents(); }}
         onPaste={(e) => { const images = Array.from(e.clipboardData.files); if (images.length) { e.preventDefault(); void upload(images); } }}
@@ -176,12 +177,14 @@ function suggestions(token: string | undefined, files: string[], commands: strin
   if (!token || dismissed) return [];
   if (token[0] === "@") {
     const matches = (value: string) => value.toLowerCase().includes(token.toLowerCase());
-    const agents = subagents.map((a) => `@agent:${a.name}`).filter((c) => matches(`@${c.slice(7)}`));
+    // Files only: a chat lane is for people who describe what they want, not which subagent does it.
+    // Typing `@pm` by hand still tags one (`send` reads the mentions); it is just not offered.
+    void subagents;
     const paths = files
       .filter((f) => !/(^|\/)\.claude\/agents\/[^/]+\.md$/i.test(f))
       .map((f) => `@${f}`)
       .filter(matches);
-    return [...agents, ...paths].slice(0, 8);
+    return paths.slice(0, 8);
   }
   return [...new Set(["/settings", "/extensions", "/clear", ...(commands ?? []).map((c) => `/${c}`)])]
     .filter((c) => c.toLowerCase().includes(token.toLowerCase())).slice(0, 8);
@@ -215,10 +218,11 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   lane: string; disconnected: boolean; elsewhere: boolean; submitting: boolean; uploading: boolean; busy: boolean;
 }) {
   const waiting = useStore((s) => !!s.lanes[lane]?.pending.length);
+  const held = useStore((s) => s.lanes[lane]?.waiting);
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
   const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
-  const text = disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "This conversation is running in a terminal outside Keel — quit it there, then send from here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
+  const text = held && !busy ? "Another session is changing this project's files — your message will send when it finishes" : disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "This conversation is running in a terminal outside Keel — quit it there, then send from here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
   if (!text) return null;
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span></div>;
 }

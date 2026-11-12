@@ -566,6 +566,24 @@ pub async fn send(
 }
 
 #[derive(Deserialize)]
+pub struct BusyQuery {
+    lane: String,
+}
+
+/// Whether another session is writing this lane's working tree right now, and which kind. A chat
+/// lane asks before it sends: a new chat then takes its own copy of the project, and one with a
+/// conversation waits and sends when the tree is free, rather than starting a turn the one-writer
+/// rule (`AppState::claim`) would refuse in words a first-time builder cannot act on.
+pub async fn busy(
+    State(state): State<Arc<AppState>>,
+    crate::serve::Checkout(dir): crate::serve::Checkout,
+    Query(q): Query<BusyQuery>,
+) -> Json<Value> {
+    let who = crate::serve::blocking(move || state.writer_on(&dir, &q.lane), None).await;
+    Json(json!({"busy": who.is_some(), "who": who}))
+}
+
+#[derive(Deserialize)]
 pub struct Listen {
     lane: String,
     #[serde(default)]

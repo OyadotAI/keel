@@ -10,6 +10,7 @@ import { Dialog, restoreFocus } from "./kit";
 import { label } from "../keys";
 import { LaneViewSwitch } from "./LaneViewSwitch";
 import { TerminalThemeButton } from "./TerminalThemeButton";
+import { usePlain } from "../plain";
 
 export type Asking = "merge" | "discard" | "close" | null;
 
@@ -58,6 +59,7 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
   const agent = useStore((s) => s.lanes[lane]?.agent);
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [asking, setAsking] = useState<Asking>(null);
+  const plain = usePlain(lane);
   const renaming = useStore((s) => s.renaming === lane);
   const setRenaming = (on: boolean) => useStore.setState({ renaming: on ? lane : null });
   return (
@@ -72,7 +74,8 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
             <Icon name="pencil" size={12} />
           </button>
         )}
-        <span className="lane-context"><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span><AgentMark agent={agent} />{AGENT_NAME[agent ?? "claude"]}</span>
+        {/* A chat lane names its agent and nothing about branches: a person from Lovable has none to think about. */}
+        <span className="lane-context">{!plain && <><Icon name="branch" size={11} />{isolated ? (wt ? `keel/${wt}` : "Own branch") : "Project workspace"}<span className="lane-context-separator">/</span></>}<AgentMark agent={agent} />{AGENT_NAME[agent ?? "claude"]}</span>
       </div>
       <UpdateButton />
       <LaneViewSwitch lane={lane} />
@@ -94,8 +97,8 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
           <div className="sep" />
           {isolated && wt && (
             <>
-              <button onClick={() => (setMenu(null), setAsking("merge"))}>Merge lane… <kbd>{label({ key: "m", shift: true })}</kbd></button>
-              <button onClick={() => (setMenu(null), setAsking("discard"))}>Discard lane… <kbd>{label({ key: "Backspace", shift: true })}</kbd></button>
+              <button onClick={() => (setMenu(null), setAsking("merge"))}>{plain ? "Add these changes to your project…" : "Merge lane…"} <kbd>{label({ key: "m", shift: true })}</kbd></button>
+              <button onClick={() => (setMenu(null), setAsking("discard"))}>{plain ? "Throw away this chat's changes…" : "Discard lane…"} <kbd>{label({ key: "Backspace", shift: true })}</kbd></button>
             </>
           )}
           <button onClick={() => (setMenu(null), setAsking("close"))}>Close lane <kbd>{label({ key: "w" })}</kbd></button>
@@ -113,17 +116,20 @@ export function Confirm({ lane, what, done }: { lane: string; what: Asking; done
   const title = useStore((s) => s.lanes[lane]?.title);
   const busy = useStore((s) => !!s.lanes[lane]?.running);
   const loss = useStore((s) => s.lanes[lane]?.confirmDiscard);
+  const plain = usePlain(lane);
   const { merge, discard, closeLane } = useStore.getState();
   if (what === "merge")
     return (
-      <Dialog title={`Merge keel/${wt}?`} onClose={done}>
+      <Dialog title={plain ? "Add these changes to your project?" : `Merge keel/${wt}?`} onClose={done}>
         <p>
-          Into the branch it was cut from, with <code>--no-ff</code> so the lane stays one reviewable merge. The lane closes and its branch is deleted.
-          {busy && " The agent is mid-turn — merge when it is idle."}
+          {plain
+            ? "Everything this chat changed goes into your project, and the chat closes."
+            : <>Into the branch it was cut from, with <code>--no-ff</code> so the lane stays one reviewable merge. The lane closes and its branch is deleted.</>}
+          {busy && (plain ? " Wait for it to finish first." : " The agent is mid-turn — merge when it is idle.")}
         </p>
         <div className="actions">
           <button className="primary" disabled={busy} onClick={() => (done(), void merge(lane))}>
-            Merge
+            {plain ? "Add to project" : "Merge"}
           </button>
           <button onClick={done}>Cancel</button>
         </div>
@@ -131,8 +137,8 @@ export function Confirm({ lane, what, done }: { lane: string; what: Asking; done
     );
   if (what === "discard")
     return (
-      <Dialog title={`Discard keel/${wt}?`} onClose={done} tone="danger">
-        <p>{loss ?? "Its branch and its checkout under .keel/worktrees are deleted. This cannot be undone."}</p>
+      <Dialog title={plain ? "Throw away this chat's changes?" : `Discard keel/${wt}?`} onClose={done} tone="danger">
+        <p>{loss ?? (plain ? "This can't be undone." : "Its branch and its checkout under .keel/worktrees are deleted. This cannot be undone.")}</p>
         <div className="actions">
           <button
             className="danger"
@@ -144,7 +150,7 @@ export function Confirm({ lane, what, done }: { lane: string; what: Asking; done
               if (!useStore.getState().lanes[lane]?.confirmDiscard || loss) done();
             }}
           >
-            {loss ? "Discard anyway" : "Discard"}
+            {loss ? (plain ? "Throw away anyway" : "Discard anyway") : plain ? "Throw away" : "Discard"}
           </button>
           <button onClick={done}>Keep it</button>
         </div>
@@ -154,7 +160,7 @@ export function Confirm({ lane, what, done }: { lane: string; what: Asking; done
     <Dialog title={`Close “${title ?? "this lane"}”?`} onClose={done}>
       <p>
         {busy ? "The agent is mid-turn in this lane, and closing stops it. " : "Closing ends the agent in this lane. "}
-        {wt ? `The branch keel/${wt} and its checkout stay — reopen it from the project's menu.` : "The conversation stays in History, so you can resume it."}
+        {plain ? "Its changes stay. Reopen it from the project menu." : wt ? `The branch keel/${wt} and its checkout stay — reopen it from the project's menu.` : "The conversation stays in History, so you can resume it."}
       </p>
       <div className="actions">
         <button className="primary" onClick={() => (done(), closeLane(lane))}>

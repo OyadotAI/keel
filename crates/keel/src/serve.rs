@@ -509,6 +509,26 @@ impl AppState {
             .any(|(lane, t)| !lane.starts_with("term:") && t.session.as_deref() == Some(session))
     }
 
+    /// Who else is writing this working tree right now, if anyone: `terminal` for a session typed
+    /// in a terminal, `lane` for another of Keel's lanes. The lane asking is never its own answer.
+    /// What a chat lane checks before it sends, so it can wait or move instead of being refused.
+    pub fn writer_on(&self, checkout: &Utf8Path, lane: &str) -> Option<&'static str> {
+        let checkout = self
+            .claim_checkout(checkout)
+            .unwrap_or_else(|_| checkout.to_owned());
+        self.running
+            .locked()
+            .iter()
+            .find(|(holder, t)| t.writes && t.checkout == checkout && holder.as_str() != lane)
+            .map(|(holder, _)| {
+                if holder.starts_with("term:") {
+                    "terminal"
+                } else {
+                    "lane"
+                }
+            })
+    }
+
     /// Whether a turn *other than this session's* is allowed to write this checkout. Read by
     /// the automatic commit, which holds its own claim and must not refuse itself.
     pub fn writer_in_other(&self, checkout: &Utf8Path, session: &str) -> bool {
@@ -916,6 +936,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/context/source", get(crate::context::source))
         .route("/api/chat", get(crate::agent::chat))
         .route("/api/chat/send", axum::routing::post(crate::chat::send))
+        .route("/api/chat/busy", get(crate::chat::busy))
         .route("/api/chat/events", get(crate::chat::events))
         .route(
             "/api/chat/control",
@@ -2898,6 +2919,23 @@ mod tests {
             !state.writer_in_other(tree, "a"),
             "contention outlived the session's turn"
         );
+    }
+
+    /// A lane can ask who else writes its tree: a terminal session is named as one, and the
+    /// lane's own turn is never the answer.
+    #[test]
+    fn a_lane_can_see_who_else_writes_its_tree() {
+        let state = AppState::empty();
+        let (_dir, path) = temporary_checkout();
+        let repo = path.as_path();
+        assert_eq!(state.writer_on(repo, "chat"), None);
+        let held = state.claim("term:abc", repo, true).unwrap();
+        assert_eq!(state.writer_on(repo, "chat"), Some("terminal"));
+        state.release("term:abc", held);
+        let mine = state.claim("chat", repo, true).unwrap();
+        assert_eq!(state.writer_on(repo, "chat"), None);
+        assert_eq!(state.writer_on(repo, "other"), Some("lane"));
+        state.release("chat", mine);
     }
 
     #[test]

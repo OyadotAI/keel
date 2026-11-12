@@ -26,6 +26,9 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+/** Let a send's few awaits (the endpoint, the shared-tree check, the post) run, without timers. */
+const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
 describe("chat delivery", () => {
   it("never drains queued work on historical idle records before replay catches up", async () => {
     const store = await fixture();
@@ -41,9 +44,43 @@ describe("chat delivery", () => {
     expect(store.getState().lanes.test.queued).toEqual(queued);
     expect(mocks.post).not.toHaveBeenCalled();
     stream[2]([{ event: "record", data: { seq: 3, event: "idle", data: null } }]);
-    await Promise.resolve(); await Promise.resolve();
+    await settle();
     expect(mocks.post).toHaveBeenCalledOnce();
     expect(store.getState().lanes.test.draft).toBe("Hello");
+  });
+
+  it("a new chat takes its own copy when another session is writing the project", async () => {
+    const store = await fixture();
+    mocks.get.mockImplementation(async (_ep: unknown, path: string) => (path === "/api/chat/busy" ? { busy: true, who: "terminal" } : []));
+    mocks.post.mockResolvedValue({ accepted: true, running: true });
+    await store.getState().send("test", "Hello");
+    expect(store.getState().lanes.test.isolated).toBe(true);
+    expect(mocks.post).toHaveBeenCalledWith(ep, "/api/chat/send", expect.objectContaining({ prompt: "Hello" }));
+  });
+
+  it("a chat with history waits for the other session, then sends by itself", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, known: true, session: "s1" } } }));
+    let busy = true;
+    mocks.get.mockImplementation(async (_ep: unknown, path: string) => (path === "/api/chat/busy" ? { busy, who: "terminal" } : []));
+    mocks.post.mockResolvedValue({ accepted: true, running: true });
+    expect(await store.getState().send("test", "Hello")).toBe(true);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(store.getState().lanes.test).toMatchObject({ waiting: "terminal", draft: "", queued: [expect.objectContaining({ text: "Hello" })] });
+    busy = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.post).toHaveBeenCalledWith(ep, "/api/chat/send", expect.objectContaining({ prompt: "Hello" }));
+    expect(store.getState().lanes.test.waiting).toBeUndefined();
+  });
+
+  it("a message typed while another waits for the project goes behind it", async () => {
+    const store = await fixture();
+    store.setState((s) => ({ lanes: { test: { ...s.lanes.test, known: true, session: "s1" } } }));
+    mocks.get.mockImplementation(async (_ep: unknown, path: string) => (path === "/api/chat/busy" ? { busy: true, who: "terminal" } : []));
+    await store.getState().send("test", "Hello");
+    await store.getState().send("test", "Second");
+    expect(store.getState().lanes.test.queued.map((q) => q.text)).toEqual(["Hello", "Second"]);
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it("background and queued sends preserve an unrelated composer draft and attachments", async () => {
@@ -352,7 +389,7 @@ describe("plan approval handoff", () => {
     expect(mocks.post).toHaveBeenCalledOnce();
     expect(JSON.parse(localStorage.getItem("keel.layout.v1")!).lanes[0]).toMatchObject({ mode: "acceptEdits", queued: [{ text: expect.stringContaining("Add the export button") }] });
     idle();
-    await Promise.resolve(); await Promise.resolve();
+    await settle();
     expect(mocks.post).toHaveBeenLastCalledWith(ep, "/api/chat/send", expect.objectContaining({ mode: "acceptEdits", prompt: expect.stringContaining("Implement the plan I approved") }));
     expect(store.getState().lanes.test.draft).toBe("Hello");
   });
@@ -367,7 +404,7 @@ describe("plan approval handoff", () => {
     idle();
     expect(mocks.post).toHaveBeenCalledOnce();
     accept({ ok: true });
-    await answering; await Promise.resolve(); await Promise.resolve();
+    await answering; await settle();
     expect(mocks.post).toHaveBeenLastCalledWith(ep, "/api/chat/send", expect.objectContaining({ mode: "acceptEdits", prompt: expect.stringContaining("Implement the plan I approved") }));
     expect(store.getState().lanes.test.queued.map((q) => q.text)).toEqual(["Later task"]);
   });

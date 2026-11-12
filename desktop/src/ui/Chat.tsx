@@ -16,6 +16,7 @@ import { duration, turnFacts } from "../turn-facts";
 const ENDINGS: Record<string, string> = { done: "Done", stopped: "Stopped", interrupted: "Stopped", failed: "Didn't finish", superseded: "Done" };
 import { InlineDiff } from "./InlineDiff";
 import { describe, toolView, DIFF_ROWS, STATE_WORDS, type ToolView } from "../tool-view";
+import { fixPrompt, Rewind } from "./Turn";
 
 /** Lines of an edit shown before it is opened. */
 const GLANCE_ROWS = 12;
@@ -186,13 +187,33 @@ function ChildProgress({ lane, index, ids }: { lane: string; index: number; ids?
   return <span className="activity-children small faint">{ids.length} {ids.length === 1 ? "step" : "steps"}{last && last.state === "running" ? ` · ${describe(last.tool, last.subject, last.input).verb} ${describe(last.tool, last.subject, last.input).object}` : ""}</span>;
 }
 
+/** What the project's checks said, in a builder's words. */
+const CHECKED: Record<string, string> = { running: "Checking your app…", passed: "everything works", aborted: "didn't finish checking your app" };
+
+/** "Done · everything works · Saved": how it ended, what the checks said, and whether it was saved. */
+function endWords({ closed, gate, commit, shared }: Turn): string {
+  const checked = gate && gate.status !== "running" ? CHECKED[gate.status] : undefined;
+  const saved = commit ? "Saved" : shared ? `Not saved: ${shared}` : "";
+  return [closed ? ENDINGS[closed] ?? closed : "", checked ?? "", saved].filter(Boolean).join(" · ");
+}
+
+/** How a turn ended, said the way Lovable would: done, saved, and what to do if something broke.
+ *  A failed check offers one button that hands the problems back to the agent. */
 function End({ lane, index }: { lane: string; index: number }) {
-  const closed = useStore((s) => s.lanes[lane]?.conv.turns[index]?.closed);
-  const failures = useStore((s) => s.lanes[lane]?.conv.turns[index]?.failures);
-  const files = useStore((s) => s.lanes[lane]?.conv.turns[index]?.files);
-  const usage = useStore((s) => s.lanes[lane]?.conv.turns[index]?.usage);
-  const ms = useStore((s) => s.lanes[lane]?.conv.turns[index]?.ms);
+  const turn = useStore((s) => s.lanes[lane]?.conv.turns[index]);
+  const busy = useStore((s) => !!s.lanes[lane]?.running);
+  if (!turn) return null;
+  const { closed, failures, files, usage, gate } = turn;
+  const ms = turn.ms ?? usage?.ms;
+  const broken = gate?.status === "failed";
+  const said = endWords(turn);
   return <div className="chat-row chat-end">{failures?.filter((f) => !f.history).map((f, i) => <p role="alert" className="error" key={i}>{f.message}</p>)}
-    {closed && <div className="chat-turn-meta" title={turnFacts(usage, ms ?? usage?.ms).join(" · ")}><span>{ENDINGS[closed] ?? closed}{duration(ms ?? usage?.ms)}</span>{!!files?.length && <button className="link" onClick={() => useStore.setState({ panelTab: "git" })}>{files.length} {files.length === 1 ? "file" : "files"} changed — review →</button>}</div>}</div>;
+    {gate?.status === "running" && <div className="chat-turn-meta" role="status"><Working /><span>{CHECKED.running}</span></div>}
+    {broken && <div className="chat-broken" role="alert"><strong>Something's broken</strong>
+      <button className="primary" disabled={busy} onClick={() => void useStore.getState().send(lane, fixPrompt(gate?.problems))}>Fix it</button>
+      {!!gate?.problems?.length && <details><summary>What's broken ({gate.problems.length})</summary><ul>{gate.problems.slice(0, 20).map((p, i) => <li key={i}><code>{p.file}{p.line ? `:${p.line}` : ""}</code> {p.message}</li>)}</ul></details>}</div>}
+    {closed && <div className="chat-turn-meta" title={turnFacts(usage, ms).join(" · ")}><span>{said}{duration(ms)}</span>
+      {!!files?.length && <button className="link" onClick={() => useStore.setState({ panelTab: "git" })}>Changed {files.length} {files.length === 1 ? "file" : "files"} · See changes</button>}
+      {turn.snapshot && !!files?.length && <Rewind lane={lane} turn={turn} number={index + 1} plain />}</div>}</div>;
 }
 

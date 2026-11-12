@@ -11,6 +11,7 @@ import { activity } from "../activity";
 import { usageSummary } from "../session-usage";
 import { useFooterHeight } from "../use-footer-height";
 import { WindowZoom } from "./WindowZoom";
+import { isPlain } from "../plain";
 export { activity } from "../activity";
 
 const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
@@ -57,6 +58,20 @@ function CurrentActivity({ now, elsewhere }: { now: ReturnType<typeof useNow>; e
   </button>;
 }
 
+/** Whether this project's agent asks before acting, and the way to change it — in a chat lane's
+ *  words, "runs without asking" rather than "trusted". */
+function TrustButton({ project, trusted, plain }: { project: string; trusted: boolean; plain: boolean }) {
+  return trusted ? (
+    <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Keel Browser actions. Keel keeps its agent team and plugins current here. Click to change.">
+      <Icon name="shield" size={14} /> {plain ? "Runs without asking" : "Trusted"}
+    </button>
+  ) : (
+    <button onClick={() => projectTrust.open(project)} title="Review and confirm trust for this project. Every command outside the allowlist asks first until you confirm.">
+      <Icon name="shield" size={14} /> {plain ? "Stop asking every time…" : "Trust this project…"}
+    </button>
+  );
+}
+
 function branchLabel(lane: Lane): string {
   if (!lane.git) return lane.wt ? `keel/${lane.wt}` : "…";
   return lane.git.is_repo ? lane.git.branch ?? "detached" : "not a git repository";
@@ -79,11 +94,13 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
     return () => clearInterval(t);
   }, [now.tone]);
   const git = l?.git;
+  // A chat lane is for someone who has never used git: no branch, no token counts, no cost.
+  const plain = isPlain(l);
   return (
     <footer ref={footer} className="statusbar">
       <div className="statusbar-details">
       <button className="sb-icon" onClick={toggleSidebar} aria-label={sidebar ? "Hide projects" : "Show projects"} aria-pressed={sidebar} title={`Toggle projects (${label({ key: "e", shift: true })})`}><Icon name="folder" size={15} /></button>
-      {l && (
+      {l && !plain && (
         <button className="sb-branch" onClick={() => openTab("git")} title="Open Git">
           <Icon name="branch" size={14} />
           <span className="sb-mono">{branchLabel(l)}</span>
@@ -93,18 +110,9 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       {l && now.label && <span className="sb-sep" />}
       {l && now.label && <CurrentActivity now={now} elsewhere={elsewhere} />}
       <span className="spacer" />
-      {l && <SessionUsage lane={l} open={() => openTab("context")} />}
+      {l && !plain && <SessionUsage lane={l} open={() => openTab("context")} />}
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
-      {l &&
-        (trusted ? (
-          <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Keel Browser actions. Keel keeps its agent team and plugins current here. Click to change.">
-            <Icon name="shield" size={14} /> Trusted
-          </button>
-        ) : (
-          <button onClick={() => projectTrust.open(l.project)} title="Review and confirm trust for this project. Every command outside the allowlist asks first until you confirm.">
-            <Icon name="shield" size={14} /> Trust this project…
-          </button>
-        ))}
+      {l && <TrustButton project={l.project} trusted={trusted} plain={plain} />}
       <LicenseBadge />
       {project?.error ? (
         <button className="bad" onClick={() => l && useStore.getState().load(l.id)}>

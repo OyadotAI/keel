@@ -69,6 +69,8 @@ export interface Turn {
   files: string[];
   gate?: Gate;
   commit?: string;
+  /// Why the turn was not saved, when it was not: said by the daemon as `turn.shared`.
+  shared?: string;
   /// The tree before the turn ran, as a git tree id — what "rewind to before this turn" restores.
   snapshot?: string;
   /// When the turn started and how long it took, from the daemon's own facts.
@@ -296,6 +298,9 @@ export function applyFact(conv: Conversation, fact: Fact): Conversation {
     case "turn.commit":
       t.commit = fact.sha as string;
       break;
+    case "turn.shared":
+      t.shared = fact.reason as string;
+      break;
     case "turn.started":
       t.snapshot = (fact.snapshot as string | null) ?? undefined;
       t.startedAt = fact.started as string;
@@ -357,7 +362,7 @@ const keelOnly = (t: Turn) => t.closed === "failed" && t.steps.length === 0;
 /// failed turn ended on, and the cost.
 function merged(old: Turn, turn: Turn): Turn {
   const cost = turn.usage?.cost ?? old.usage?.cost;
-  return { ...turn, id: old.id, prompt: old.prompt, closed: ending(old, turn), files: old.files, gate: old.gate, commit: old.commit,
+  return { ...turn, id: old.id, prompt: old.prompt, closed: ending(old, turn), files: old.files, gate: old.gate, commit: old.commit, shared: old.shared,
     snapshot: old.snapshot, startedAt: old.startedAt, ms: old.ms, ended: old.ended,
     failures: turn.failures.length ? turn.failures : old.failures,
     ...(turn.usage || old.usage ? { usage: { ...(old.usage ?? turn.usage)!, ...turn.usage, cost } } : {}) };

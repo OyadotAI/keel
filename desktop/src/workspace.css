@@ -551,3 +551,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--control-ink); }
 /* An image queued behind the running turn shows beside its words. */
 .queue-attachments { display: flex; flex: none; gap: 4px; align-items: center; }
 .queue-attachments img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; box-shadow: 0 0 0 .5px var(--hairline); }
+/* A failed check in a chat lane: what broke, and the one button that fixes it. */
+.chat-broken { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; }
+.chat-broken details { flex-basis: 100%; font-size: var(--t-small); }
+.chat-broken ul { margin: 4px 0 0; padding-left: 18px; }
+.approval-details > summary { cursor: pointer; font-size: var(--t-small); color: var(--dim); }
