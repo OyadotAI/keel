@@ -61,12 +61,21 @@ const say = (title: string, open = false): Summary => ({ title, open });
  *  `find -exec`/`-delete`, `rg --pre`, git's `-c`, `--output`, `--upload-pack`. A family sentence
  *  ("Look through your project's files?") would hide exactly that. */
 const RISKY_FLAG = /^(-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-fls|-c|-C|--pre|--output|--upload-pack|--receive-pack|--exec|--config)(=.*)?$/;
+/** The same long flags, which git (and others) also accept abbreviated: `--upload-pa` is
+ *  `--upload-pack`. A long flag that is the start of one of these counts as it. */
+const RISKY_LONG = ["--pre", "--output", "--upload-pack", "--receive-pack", "--exec", "--config"];
+const abbreviatesRisky = (a: string) => {
+  const name = a.split("=")[0];
+  return name.startsWith("--") && name.length >= 4 && RISKY_LONG.some((r) => r.startsWith(name));
+};
+/** The only flags a git push, pull, fetch or clone may carry and still be summarised. */
+const PLAIN_GIT_NET_FLAGS = new Set(["-u", "--set-upstream", "--tags", "--all", "--prune", "-p", "--rebase", "--no-rebase", "--ff-only", "-f", "--force", "--force-with-lease", "-q", "--quiet", "-v", "--verbose"]);
 
 /** Whether any argument could do more than its program's plain sentence says: a risky flag, or a
  *  path given inside a flag (`--prefix=/elsewhere`) that leaves the project. */
 function beyondItsWords(args: string[], root?: string): boolean {
   return args.some((a) => {
-    if (RISKY_FLAG.test(a)) return true;
+    if (RISKY_FLAG.test(a) || abbreviatesRisky(a)) return true;
     const value = a.startsWith("-") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : undefined;
     return !!value && (value.includes("/") || value.startsWith("~")) && !inside(value, root);
   });
@@ -83,8 +92,13 @@ function words(command: string): string[] {
 /** Whether a path a command names stays in the project: relative and never climbing out, or
  *  absolute under the project's own folder. */
 export function inside(raw: string, root?: string): boolean {
-  const path = slashed(raw);
-  if (path.startsWith("~") || path.split("/").includes("..")) return false;
+  // Containment reads the path as written, only its separators unified: a part Windows would
+  // rewrite (a trailing dot or space, a `:stream`) is refused rather than tidied, because tidying
+  // it here could call a path inside that resolves outside.
+  const path = raw.replace(/\\/g, "/");
+  const parts = path.split("/");
+  if (parts.some((part, i) => /[. ]$/.test(part) && part !== "." && part !== ".." || (i > 0 || !/^[A-Za-z]:/.test(part)) && part.includes(":") || (i === 0 && /^[A-Za-z]:./.test(part) && part.slice(2).includes(":")))) return false;
+  if (path.startsWith("~") || parts.includes("..")) return false;
   if (!absolute(path)) return true;
   // Compared without case: a differently cased path is the same folder on macOS and Windows.
   const base = root ? slashed(root).replace(/\/$/, "").toLowerCase() : undefined;
@@ -161,7 +175,8 @@ export function commandWords(command: string, root?: string): Summary {
   const [first, second] = w;
   if (!first || first === "sudo" || first === "su") return UNKNOWN;
   const paths = w.slice(1).filter((a) => !a.startsWith("-"));
-  if (paths.some((p) => !inside(p, root))) return UNKNOWN;
+  // A web address is not a path: `curl` names its site, and git checks its remotes itself.
+  if (paths.some((p) => !p.includes("://") && !inside(p, root))) return UNKNOWN;
   if (beyondItsWords(w.slice(1), root)) return UNKNOWN;
   const c = { w, first, second, paths };
   for (const family of FAMILIES) {
@@ -178,7 +193,7 @@ function gitWords(w: string[]): Summary {
   if (GIT_SAVES.has(sub)) return say("Save a version of your project?");
   // A remote or ref given as anything but a plain name (an address, `host:path`, `a:b`, a path),
   // or any flag carrying a value (`--repo=…`), reaches whatever that is, not "GitHub".
-  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => (a.startsWith("-") ? a.includes("=") : !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(a)))) {
+  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => (a.startsWith("-") ? !PLAIN_GIT_NET_FLAGS.has(a) : !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(a)))) {
     return UNKNOWN;
   }
   if (sub === "push") {

