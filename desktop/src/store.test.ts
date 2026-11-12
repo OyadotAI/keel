@@ -67,6 +67,34 @@ describe("chat delivery", () => {
     expect(store.getState().lanes.test).toMatchObject({ draft: "Queued earlier", queued: [], error: undefined });
   });
 
+  it("a discarded message the daemon accepted is not sent twice", async () => {
+    const store = await fixture();
+    store.getState().load("test"); await Promise.resolve();
+    const stream = mocks.open.mock.calls.find(([url]) => url.includes("/api/chat/events"))!;
+    mocks.post.mockRejectedValueOnce(new Error("Response lost"));
+    await store.getState().send("test", "Hello");
+    const id = mocks.post.mock.calls[0][2].id;
+    store.getState().discardReceipt("test");
+    expect(store.getState().lanes.test).toMatchObject({ draft: "Hello", receipt: undefined, discarded: { id, prompt: "Hello" } });
+    stream[2]([{ event: "record", data: { seq: 1, event: "accepted", data: { id } } }, { event: "caught-up", data: { running: true } }]);
+    expect(store.getState().lanes.test).toMatchObject({ draft: "", running: true, discarded: undefined, error: undefined });
+    expect(mocks.post).toHaveBeenCalledOnce();
+  });
+
+  it("a discarded message the daemon accepted leaves an edited draft alone", async () => {
+    const store = await fixture();
+    store.getState().load("test"); await Promise.resolve();
+    const stream = mocks.open.mock.calls.find(([url]) => url.includes("/api/chat/events"))!;
+    mocks.post.mockRejectedValueOnce(new Error("Response lost"));
+    await store.getState().send("test", "Hello");
+    const id = mocks.post.mock.calls[0][2].id;
+    store.getState().discardReceipt("test");
+    store.getState().draft("test", "Hello, with a change");
+    stream[2]([{ event: "record", data: { seq: 1, event: "accepted", data: { id } } }]);
+    expect(store.getState().lanes.test).toMatchObject({ draft: "Hello, with a change", discarded: undefined });
+    expect(mocks.post).toHaveBeenCalledOnce();
+  });
+
   it("persists queued messages across reload and persists their removal", async () => {
     const store = await fixture();
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, running: true } } }));

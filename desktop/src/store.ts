@@ -17,7 +17,7 @@ import { endBanner, needsYou, notify } from "./notify";
 import type { Observation } from "./session-usage";
 import { sessionEnded } from "./activity";
 import { createLaneNames, restoredNaming, sessionForLane, type Naming } from "./lane-names";
-import { backToComposer, composerAfterSend, submissionBlock, type FileReference } from "./chat-files";
+import { acceptedReceipt, backToComposer, composerAfterSend, submissionBlock, type FileReference } from "./chat-files";
 import { requestChatFocus } from "./chat-focus";
 import { createReferenceActions } from "./reference-actions";
 import { createQuestionActions } from "./question-actions";
@@ -223,6 +223,9 @@ export interface Lane {
   submitting?: boolean;
   disconnected?: boolean;
   receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; effort?: Effort; wt?: string; system?: string; attachments?: Attachment[]; references?: FileReference[] };
+  /// A receipt the person discarded as unconfirmed. The daemon may still have accepted it, and its
+  /// `accepted` record then arrives: the prompt is running, so it must not stay in the composer.
+  discarded?: { id: string; prompt: string };
 }
 
 interface State {
@@ -328,7 +331,7 @@ const watchers = new Map<string, Stream>();
 interface Saved {
   order: string[];
   projects: { path: string; lanes: string[]; collapsed?: boolean }[];
-  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; shipDismissed?: string; interface?: ChatInterface; draft?: string; model?: string; effort?: Effort; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"] }[];
+  lanes: { id: string; project: string; title: string; naming?: Naming; session?: string; isolated?: boolean; wt?: string; agent?: Agent; known?: boolean; queued?: QueuedMessage[]; attachments?: Attachment[]; references?: FileReference[]; questionDrafts?: QuestionDrafts; shipDismissed?: string; interface?: ChatInterface; draft?: string; model?: string; effort?: Effort; mode?: "plan" | "acceptEdits"; managed?: boolean; receipt?: Lane["receipt"]; discarded?: Lane["discarded"] }[];
   active?: string;
 }
 
@@ -354,7 +357,7 @@ function save(s: State): boolean {
   const out: Saved = {
     order: s.order,
     projects: s.order.map((p) => ({ path: p, lanes: s.projects[p].lanes, collapsed: s.projects[p].collapsed })),
-    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, shipDismissed, queued, draft, model, effort, mode, managed, receipt }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, shipDismissed, draft, model, effort, mode, managed, receipt })),
+    lanes: Object.values(s.lanes).map(({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, attachments, references, questionDrafts, shipDismissed, queued, draft, model, effort, mode, managed, receipt, discarded }) => ({ id, project, title, naming, session, isolated, wt, agent, known, interface: surface, queued: queued.map((q) => ({ ...q, attachments: q.attachments.map(({ path, name, mime }) => ({ path, name, mime })) })), attachments: attachments?.map(({ path, name, mime }) => ({ path, name, mime })), references, questionDrafts, shipDismissed, draft, model, effort, mode, managed, receipt, discarded })),
     active: s.active,
   };
   try {
@@ -974,7 +977,7 @@ export const useStore = create<State>()((set, getState, api) => {
               patch.running = true;
               patch.error = undefined;
               const id = (e.data as { id: string }).id;
-              if (current.receipt?.id === id) patch.receipt = undefined;
+              Object.assign(patch, acceptedReceipt(current, id));
             } else if (e.event === "snapshot") {
               conv = restoreTranscript(conv, (e.data as { frames: Frame[] }).frames);
             } else if (e.event === "turn") {
@@ -1521,7 +1524,7 @@ export const useStore = create<State>()((set, getState, api) => {
     discardReceipt(lid) {
       const r = getState().lanes[lid]?.receipt;
       if (!r) return;
-      lane(lid, (now) => ({ receipt: undefined, running: false, error: undefined, ...backToComposer(now, now.draft === r.prompt ? [] : [{ text: r.prompt, attachments: r.attachments, references: r.references }]) }));
+      lane(lid, (now) => ({ receipt: undefined, discarded: { id: r.id, prompt: r.prompt }, running: false, error: undefined, ...backToComposer(now, now.draft === r.prompt ? [] : [{ text: r.prompt, attachments: r.attachments, references: r.references }]) }));
       save(getState());
       drain(lid);
     },

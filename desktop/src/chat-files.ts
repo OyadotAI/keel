@@ -52,6 +52,13 @@ export function backToComposer(lane: Lane, unsent: Unsent[]): Partial<Lane> {
   };
 }
 
+/** The daemon accepted receipt `id`. A live receipt is cleared; a discarded one is cleared too, and its prompt leaves the composer only if the person has not edited it since Discard put it back. */
+export function acceptedReceipt(current: Lane, id: string): Partial<Lane> {
+  if (current.receipt?.id === id) return { receipt: undefined };
+  if (current.discarded?.id !== id) return {};
+  return { discarded: undefined, ...(current.draft === current.discarded.prompt ? { draft: "" } : {}) };
+}
+
 /** A new submission must not overwrite an external owner's turn or an unconfirmed receipt. */
 export function submissionBlock(lane: Lane, prompt: string): string | undefined {
   if (lane.elsewhere) return "This session is running outside Keel. Stop it there before resuming here.";
