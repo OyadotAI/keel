@@ -51,6 +51,9 @@ struct History {
     /// Length and mtime of the transcript when `fingerprint` was last checked, so a reconnect
     /// with nothing new does not read and hash the whole transcript again.
     stamp: Option<Vec<(u64, SystemTime)>>,
+    /// A reply landed while a turn held the journal (its checks, usually). The turn's end must
+    /// read the transcript rather than vouch for it, or that reply is marked seen and never shown.
+    stale: bool,
 }
 
 #[derive(Deserialize)]
@@ -252,6 +255,7 @@ pub(crate) fn refresh_idle(
     let journal = history(state, lane).map_err(|(_, e)| e)?;
     let mut h = journal.locked();
     if h.running {
+        h.stale = true;
         return Ok(());
     }
     h.snapshot(&transcript)
@@ -348,6 +352,7 @@ fn history(state: &AppState, lane: &str) -> Result<Journal, Error> {
         running: false,
         fingerprint,
         stamp: None,
+        stale: false,
     };
     if h.records.last().is_some_and(|r| r.event != "idle") {
         h.end_broken("The daemon restarted during this turn. Review the partial result before sending again.")
@@ -485,7 +490,12 @@ pub async fn send(
                     }
                     // A new conversation learns its session id during the turn; its first reconnect
                     // takes one snapshot, which is right, since the journal had no transcript yet.
-                    let _ = h.seen(&owner, &query);
+                    if std::mem::take(&mut h.stale) {
+                        h.running = false;
+                        let _ = h.seed(&owner, &query, true);
+                    } else {
+                        let _ = h.seen(&owner, &query);
+                    }
                     let _ = h.push("idle", Value::Null);
                     h.running = false;
                 })
@@ -791,6 +801,34 @@ mod tests {
         assert_eq!(events, ["accepted", "turn", "fatal"]);
         assert!(h.locked().records[1].data.get().contains("\"close\""));
     }
+    /// A reply that lands while a turn holds the journal is read at the turn's end, not vouched
+    /// for as seen: marked seen, it was never shown.
+    #[test]
+    fn a_reply_during_a_turns_checks_is_shown_when_the_turn_ends() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let h = history(&state, "busy-lane").unwrap();
+        let path = transcript_file(root.path(), &["hello"]);
+        h.locked().snapshot(&claude(&path)).unwrap();
+        h.locked().accept("send-one", "prompt-a").unwrap();
+        let path = transcript_file(root.path(), &["hello", "a background task finished"]);
+        refresh_idle(&state, "busy-lane", Some(claude(&path))).unwrap();
+        assert!(h.locked().stale, "a reply during the turn is remembered");
+        let before = h.locked().records.len();
+        // What the turn's end does when `stale` is set: read, not vouch.
+        {
+            let mut h = h.locked();
+            h.stale = false;
+            h.running = false;
+            h.snapshot(&claude(&path)).unwrap();
+        }
+        assert!(
+            h.locked().records[before..]
+                .iter()
+                .any(|r| r.event == "snapshot")
+        );
+    }
+
     #[test]
     fn lane_ids_cannot_escape_storage() {
         for id in ["", "..", "a/b", "a\\b", "/tmp", "hello world"] {

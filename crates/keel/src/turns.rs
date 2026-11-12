@@ -1045,10 +1045,12 @@ pub async fn finish(
             || !still_ours() || !window_open(),
         )
         .await;
-        let command = if announced.is_empty() {
-            verdict.command.clone()
-        } else {
-            announced
+        // The ceiling's reason rides on the verdict's command; the announced one would drop it, and
+        // a check ended for running too long then read like one the person stopped.
+        let command = match verdict.command.find(" (stopped: ") {
+            Some(at) if !announced.is_empty() => format!("{announced}{}", &verdict.command[at..]),
+            _ if announced.is_empty() => verdict.command.clone(),
+            _ => announced,
         };
         let g = Gate {
             status: verdict.status.to_string(),
