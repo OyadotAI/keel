@@ -56,7 +56,10 @@ export function backToComposer(lane: Lane, unsent: Unsent[]): Partial<Lane> {
 export function acceptedReceipt(current: Lane, id: string): Partial<Lane> {
   if (current.receipt?.id === id) return { receipt: undefined };
   if (current.discarded?.id !== id) return {};
-  return { discarded: undefined, ...(current.draft === current.discarded.prompt ? { draft: "" } : {}) };
+  if (current.draft !== current.discarded.prompt) return { discarded: undefined };
+  // The attachments Discard put back went with the message too; any added since stay.
+  const sent = new Set(current.discarded.paths ?? []);
+  return { discarded: undefined, draft: "", attachments: (current.attachments ?? []).filter((a) => !sent.has(a.path)) };
 }
 
 /** A new submission must not overwrite an external owner's turn or an unconfirmed receipt. */

@@ -81,6 +81,13 @@ describe("chat delivery", () => {
     expect(mocks.post).toHaveBeenCalledOnce();
   });
 
+  it("a discarded message the daemon accepted takes its attachments out of the composer too", async () => {
+    const { acceptedReceipt } = await import("./chat-files");
+    const shot = { path: ".keel/attachments/1-shot.png", name: "shot.png" }, later = { path: ".keel/attachments/2-more.png", name: "more.png" };
+    const lane = { draft: "Hello", attachments: [shot, later], discarded: { id: "r1", prompt: "Hello", paths: [shot.path] } } as unknown as Parameters<typeof acceptedReceipt>[0];
+    expect(acceptedReceipt(lane, "r1")).toEqual({ discarded: undefined, draft: "", attachments: [later] });
+  });
+
   it("a discarded message the daemon accepted leaves an edited draft alone", async () => {
     const store = await fixture();
     store.getState().load("test"); await Promise.resolve();

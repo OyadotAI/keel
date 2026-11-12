@@ -225,7 +225,7 @@ export interface Lane {
   receipt?: { id: string; prompt: string; session?: string; mode: string; model?: string; effort?: Effort; wt?: string; system?: string; attachments?: Attachment[]; references?: FileReference[] };
   /// A receipt the person discarded as unconfirmed. The daemon may still have accepted it, and its
   /// `accepted` record then arrives: the prompt is running, so it must not stay in the composer.
-  discarded?: { id: string; prompt: string };
+  discarded?: { id: string; prompt: string; paths?: string[] };
 }
 
 interface State {
@@ -1524,7 +1524,7 @@ export const useStore = create<State>()((set, getState, api) => {
     discardReceipt(lid) {
       const r = getState().lanes[lid]?.receipt;
       if (!r) return;
-      lane(lid, (now) => ({ receipt: undefined, discarded: { id: r.id, prompt: r.prompt }, running: false, error: undefined, ...backToComposer(now, now.draft === r.prompt ? [] : [{ text: r.prompt, attachments: r.attachments, references: r.references }]) }));
+      lane(lid, (now) => ({ receipt: undefined, discarded: { id: r.id, prompt: r.prompt, paths: r.attachments?.map((a) => a.path) }, running: false, error: undefined, ...backToComposer(now, now.draft === r.prompt ? [] : [{ text: r.prompt, attachments: r.attachments, references: r.references }]) }));
       save(getState());
       drain(lid);
     },
