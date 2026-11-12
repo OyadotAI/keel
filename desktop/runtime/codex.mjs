@@ -75,7 +75,9 @@ export class Codex {
       this.ops({ op: 'session', id: this.thread, commands: [] });
       const models = await this.rpc('model/list', {});
       this.emit('capabilities', { models: models.data, commands: [] });
-      if (q.session && thread.thread.turns?.length) this.emit('snapshot', { frames: [...historyFrames(thread.thread.turns), { turn: null, op: 'open', prompt: q.prompt }] });
+      // No history snapshot on resume: the daemon's journal already reads this thread from
+      // Codex's own rollout before every send, and sending it again here added a whole copy of
+      // the conversation to the journal each time this helper restarted.
     }
   }
   /** The turn itself, on a connected thread. */
@@ -237,6 +239,8 @@ export function script(command) {
   return plain.test(body) ? body : undefined;
 }
 
+/** A thread's turns as Keel's frames. Only tests use it now — it drives the decoder's replay of
+ *  stored items, which live turns share. */
 export function historyFrames(turns) {
   const frames = [];
   for (const turn of turns) {
