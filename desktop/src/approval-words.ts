@@ -33,10 +33,17 @@ const COMPOUND = /[;&|$`<>()\n\\'"]/;
 // Case-insensitive: macOS and Windows file systems are, so `.Git/hooks` is `.git/hooks`.
 const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/i;
 
-/** A path with `/` separators, as both platforms' paths are compared. */
-const slashed = (p: string) => p.replace(/\\/g, "/");
-/** Absolute on either platform: `/…`, or a Windows drive `C:/…`. */
-const absolute = (p: string) => p.startsWith("/") || /^[A-Za-z]:\//.test(p);
+/** A path as Windows and macOS resolve it, with `/` separators: a part's trailing dots and spaces
+ *  and an NTFS stream (`config::$DATA`, `x:stream`) name the same file without them, so they are
+ *  dropped before anything is matched. The drive (`C:`) keeps its colon. */
+const bare = (part: string) => (part === "." || part === ".." ? part : part.replace(/:.*$/, "").replace(/[. ]+$/, ""));
+const slashed = (p: string) =>
+  p.replace(/\\/g, "/").split("/").map((part, i) => (i === 0 && /^[A-Za-z]:/.test(part) ? part.slice(0, 2) + bare(part.slice(2)) : bare(part))).join("/");
+/** Absolute, or tied to a drive: `/…`, `C:/…`, and drive-relative `C:foo`, which is never
+ *  "inside" whatever folder the project happens to be. */
+const absolute = (p: string) => p.startsWith("/") || /^[A-Za-z]:/.test(p);
+/** A Windows short name (`GIT~1`) can stand for any long name, `.git` included. */
+const shortName = (p: string) => /(^|\/)[^/]*~\d/.test(p);
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 const INSTALL_WORDS = new Set(["install", "i", "add", "ci"]);
 const DEV_SCRIPTS = new Set(["dev", "start", "serve", "preview"]);
@@ -169,9 +176,9 @@ function gitWords(w: string[]): Summary {
   const sub = w[1];
   if (GIT_LOOKS.has(sub) || (sub === "branch" && w.length === 2)) return say("Look at your project's history?");
   if (GIT_SAVES.has(sub)) return say("Save a version of your project?");
-  // A remote or ref given as anything but a plain name (an address, `host:path`, `a:b`, a path)
-  // reaches whatever that is, not "GitHub".
-  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => !a.startsWith("-") && !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(a))) {
+  // A remote or ref given as anything but a plain name (an address, `host:path`, `a:b`, a path),
+  // or any flag carrying a value (`--repo=…`), reaches whatever that is, not "GitHub".
+  if (["push", "pull", "fetch", "clone"].includes(sub) && w.slice(2).some((a) => (a.startsWith("-") ? a.includes("=") : !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(a)))) {
     return UNKNOWN;
   }
   if (sub === "push") {
@@ -204,7 +211,7 @@ export function approvalWords(asked: Asked, root?: string): Summary {
     const path = String(input.file_path ?? input.notebook_path ?? "");
     if (!path) return say("Change a file in your project?", true);
     if (!inside(path, root)) return say("Change a file outside this project?", true);
-    if (RUNS_LATER.test(slashed(path))) return say("Change how your project runs commands?", true);
+    if (RUNS_LATER.test(slashed(path)) || shortName(slashed(path))) return say("Change how your project runs commands?", true);
     return say(`Change ${slashed(path).split("/").pop()}?`);
   }
   if (tool === "File changes") return say("Change files in your project?");

