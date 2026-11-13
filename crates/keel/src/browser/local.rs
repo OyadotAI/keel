@@ -80,7 +80,7 @@ impl Page {
                 submit,
             } => {
                 require_analysis(self.analyzed)?;
-                self.analyzed = false;
+                self.analyzed = read_survives_typing(submit);
                 let typed = client
                     .tool("type", json!({"element_id":target,"text":text}))
                     .await?;
@@ -125,9 +125,22 @@ fn require_analysis(analyzed: bool) -> Result<(), String> {
     }
 }
 
+/// Whether the last read's element ids still hold after typing. Oya's ids hold until the next
+/// read (only a read numbers the page afresh), so a form fills from one read; forcing a read per
+/// field made every form a full page analysis per field. Enter can post the form, so a submit
+/// still needs a fresh read.
+fn read_survives_typing(submit: bool) -> bool {
+    !submit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typing_keeps_the_read_unless_it_submits() {
+        assert!(read_survives_typing(false));
+        assert!(!read_survives_typing(true));
+    }
     #[test]
     fn element_actions_require_a_fresh_page_analysis() {
         assert!(require_analysis(false).is_err());
@@ -143,5 +156,63 @@ mod tests {
                 .contains("not connected")
         );
         assert!(page.show().await.unwrap_err().contains("no owned"));
+    }
+    /// Live: fills a form from one read in the installed Oya, including a field typed by its old
+    /// id after a select revealed a new field above it. Needs Oya running and `KEEL_LIVE_FORM`
+    /// naming a page shaped like the one this asserts on.
+    #[tokio::test]
+    #[ignore = "needs a running Oya Browser"]
+    async fn live_form_fills_from_one_read() {
+        let url = std::env::var("KEEL_LIVE_FORM").expect("KEEL_LIVE_FORM");
+        let installation = super::super::detection::installed()
+            .unwrap()
+            .expect("Oya installed");
+        let project = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let connection = super::super::connection::discover(&project, &installation).unwrap();
+        let mut page = Page::default();
+        page.connect(Client::new(connection).unwrap())
+            .await
+            .unwrap();
+        page.run(Op::Open { url }).await.unwrap();
+        page.run(Op::Read).await.unwrap();
+        let fields = [
+            (1, "Ada"),
+            (2, "Lovelace"),
+            (3, "ada@example.com"),
+            (4, "5550100"),
+            (5, "Business"),
+            (6, "London"),
+        ];
+        for (target, text) in fields {
+            let typed = page
+                .run(Op::Type {
+                    target,
+                    text: text.into(),
+                    submit: false,
+                })
+                .await;
+            assert!(typed.is_ok(), "field {target}: {typed:?}");
+        }
+        let after = page.run(Op::Read).await.unwrap();
+        println!("{after}");
+        for want in [
+            r#""First name" = "Ada""#,
+            r#""Phone" = "5550100""#,
+            r#""Account type" = "Business""#,
+            r#""City" = "London""#,
+        ] {
+            assert!(after.contains(want), "missing {want}");
+        }
+        assert!(
+            after.contains(r#"input:text "Company"]"#),
+            "Company stays empty"
+        );
+        let tab = page.tab.unwrap();
+        let _ = page
+            .client
+            .as_mut()
+            .unwrap()
+            .tool("close_tab", json!({"tab_id": tab}))
+            .await;
     }
 }
