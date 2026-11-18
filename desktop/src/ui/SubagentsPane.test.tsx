@@ -56,5 +56,11 @@ it("every child pane can be minimized or maximized, and the main terminal keeps 
   const html = render();
   expect(html.match(/aria-label="Minimize pane"/g)).toHaveLength(2);
   expect(html.match(/aria-label="Maximize pane"/g)).toHaveLength(2);
-  expect(html).toMatch(/--terminal-rows:minmax\(var\(--pane-min-height\), 1fr\) minmax\(var\(--pane-min-height\), 1fr\)/);
+  expect(html).toContain("--terminal-rows:max(var(--pane-min-height), calc(50% - var(--pane-gap) / 2)) minmax(var(--pane-min-height), 1fr)");
+});
+it("the main row does not depend on the child row count", () => {
+  const main = () => /--terminal-rows:(max\(.*?\)\)) /.exec(render())![1];
+  const one = main();
+  for (const id of ["b", "c", "d", "e", "f"]) fake.state.lanes[source.id].subagents!.invocations.push({ id, status: "working", output: "waiting" });
+  expect(main()).toBe(one);
 });

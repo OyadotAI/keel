@@ -1,7 +1,8 @@
 /* Live terminal tiles form through a brief haze; terminal-owned tokens keep output readable. */
 .terminal-grid-shell { --pane-min-height: 160px; --pane-gap: 8px; position: relative; flex: 1; min-height: 0; min-width: 0; background: var(--child-bg); color: var(--child-fg); }
 .terminal-grid { display: grid; height: 100%; min-height: 0; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); overflow: auto; }
-.split .terminal-grid { grid-template-rows: var(--terminal-rows); grid-auto-rows: auto; gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); }
+/* Tiles never need to scroll sideways, and a bar that came and went with an animation changed the column count. */
+.split .terminal-grid { grid-template-rows: var(--terminal-rows); grid-auto-rows: auto; gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); overflow-x: hidden; }
 .terminal-grid-main, .child-terminal-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--child-bg); color: var(--child-fg); }
 .child-terminal-surface { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
 .terminal-grid-main { position: relative; overflow: visible; grid-column: 1 / -1; }
@@ -75,7 +76,7 @@
 .child-terminal-pane .hljs-comment { color: var(--child-muted); }
 /* A feathered diagonal front materializes the surface; independent lobes linger after it. */
 .child-terminal-surface[data-motion] { mask-image: linear-gradient(165deg, #000 0%, #000 calc(50% - 24px), transparent calc(50% + 24px), transparent 100%); mask-size: 100% 300%; mask-repeat: no-repeat; }
-.child-terminal-smoke { display: none; position: absolute; inset: -12px; overflow: hidden; border-radius: 20px; pointer-events: none; z-index: 2; }
+.child-terminal-smoke { display: none; position: absolute; inset: calc(-1 * var(--pane-gap)); overflow: hidden; border-radius: 20px; pointer-events: none; z-index: 2; }
 .child-terminal-surface[data-motion] + .child-terminal-smoke { display: block; }
 .child-terminal-smoke i, .child-terminal-smoke span { position: absolute; inset: 25% -5% -15%; opacity: 0; transform-origin: 50% 80%; background: radial-gradient(ellipse at 40% 65%, color-mix(in srgb, var(--child-tool) 18%, transparent), transparent 62%), radial-gradient(ellipse at 65% 75%, color-mix(in srgb, var(--child-fg) 14%, transparent), transparent 55%); }
 .child-terminal-smoke i:nth-child(2) { inset: 10% -10% -5%; transform-origin: 70% 70%; }

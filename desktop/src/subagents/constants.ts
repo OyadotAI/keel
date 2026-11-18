@@ -13,7 +13,11 @@ export const PANE_OPEN_MS = 680;
 export const PANE_CLOSE_MS = 560;
 /** How long a pane takes to glide from its old box to its new one when the grid retracks. */
 export const PANE_MOVE_MS = 420;
-export const PANE_OPEN_Y = 10;
+/** How long a split whose children have all ended is held for the next one, so back-to-back helpers do not
+ *  resize the terminal twice each. Long enough for one parent step between them; an idle lane ends it at once. */
+export const SPLIT_LINGER_MS = 10_000;
+/** A tile rises this far as it opens: no more than the grid's padding, or the rise itself overflows the grid. */
+export const PANE_OPEN_Y = 8;
 export const PANE_CLOSE_Y = -10;
 export const PANE_REVEAL_OFFSET = 500 / PANE_OPEN_MS;
 export const PANE_OPEN_EASE = "cubic-bezier(.25, .1, .25, 1)";

@@ -4,7 +4,7 @@ import type { ChildState, Invocation } from "./model";
 import { GRID_MIN_WIDTH, GRID_MAX_COLUMNS } from "./constants";
 import { createGridMotion } from "./grid-motion";
 export { flipFrom } from "./grid-motion";
-export { useDeparting, withDeparting, type Shown } from "./presence";
+export { useHeldSlots, holdSlots, type Shown } from "./presence";
 const ended = new Set(["done", "failed", "cancelled", "interrupted"]);
 /** Missing evidence cannot become fabricated completion. */
 export function liveInvocations(before: Invocation[], snapshot?: ChildState): Invocation[] {
