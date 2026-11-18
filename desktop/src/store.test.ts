@@ -29,6 +29,29 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 /** Let a send's few awaits (the endpoint, the shared-tree check, the post) run, without timers. */
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
+describe("finished lanes", () => {
+  async function finishWhile(active: string) {
+    const store = await fixture();
+    store.setState((s) => ({ active, lanes: { test: { ...s.lanes.test, managed: true, running: true } } }));
+    store.getState().load("test"); await Promise.resolve();
+    const stream = mocks.open.mock.calls.find(([url]) => url.includes("/api/chat/events"))!;
+    stream[2]([{ event: "caught-up", data: { running: false } }]);
+    return store;
+  }
+
+  it("a turn that ends while another lane is open is marked until the lane is opened", async () => {
+    const store = await finishWhile("other");
+    expect(store.getState().lanes.test.unseen).toBe(true);
+    store.getState().select("test");
+    expect(store.getState().lanes.test.unseen).toBe(false);
+  });
+
+  it("a turn that ends on screen is not marked", async () => {
+    const store = await finishWhile("test");
+    expect(store.getState().lanes.test.unseen).toBeFalsy();
+  });
+});
+
 describe("chat delivery", () => {
   it("never drains queued work on historical idle records before replay catches up", async () => {
     const store = await fixture();

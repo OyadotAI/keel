@@ -341,7 +341,7 @@ function LaneRow({ id }: { id: string }) {
     <div className="lane-row">
     <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => startRename(id)} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), startRename(id)) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
-        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
+        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : l.unseen ? <span className="done-dot" aria-label="Finished — not opened yet" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
       </span>
       <span className="lane-text" title={`${l.title} — ${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
         <span className="lane-title">{l.title}</span>

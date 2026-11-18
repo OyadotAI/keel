@@ -444,6 +444,12 @@ button.link {
   border-radius: 50%;
   background: var(--accent);
 }
+.done-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 .busy-dot::after {
   content: "";
   position: absolute;

@@ -147,6 +147,8 @@ export interface Lane {
   attention?: { id: string; kind: "permission" | "question" };
   attentionSeen?: string;
   attentionRevision?: number;
+  /// A turn ended while another lane was on screen; cleared when this lane is opened.
+  unseen?: boolean;
   /// Invalidate manual verification when this checkout receives a filesystem or git change.
   reviewRevision?: number;
   context?: import("./context").ContextSnapshot;
@@ -384,7 +386,11 @@ export const useStore = create<State>()((set, getState, api) => {
     set((s) => {
       const l = s.lanes[lid];
       if (!l) return s;
-      return { lanes: { ...s.lanes, [lid]: { ...l, ...(typeof patch === "function" ? patch(l) : patch) } } };
+      const next = { ...l, ...(typeof patch === "function" ? patch(l) : patch) };
+      // Every way a turn ends passes here, so this is the one place "finished while you were away" is noted.
+      // `loaded` keeps a replay that is still catching up from reading as a turn that just ended.
+      if (l.loaded && l.running && !next.running && lid !== s.active) next.unseen = true;
+      return { lanes: { ...s.lanes, [lid]: next } };
     });
   /// Patch a project only while it is still open: a daemon finishing its start after the project
   /// was closed must not bring a half-entry back.
@@ -1374,7 +1380,7 @@ export const useStore = create<State>()((set, getState, api) => {
       return lid;
     },
     select(lid) {
-      set((s) => ({ active: lid, settings: false, creating: false, extensions: false, opened: s.opened.includes(lid) ? s.opened : [...s.opened, lid] }));
+      set((s) => ({ active: lid, settings: false, creating: false, extensions: false, opened: s.opened.includes(lid) ? s.opened : [...s.opened, lid], ...(s.lanes[lid]?.unseen ? { lanes: { ...s.lanes, [lid]: { ...s.lanes[lid], unseen: false } } } : {}) }));
       save(getState());
       void follow(lid);
       void listen(lid);
