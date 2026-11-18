@@ -2704,13 +2704,14 @@ mod stream_tests {
     /// no error, no exit code and nothing to stop.
     ///
     /// The test spawns exactly that shape and proves the reader must be concurrent: draining
-    /// stdout alone never sees the last line.
+    /// stdout alone never sees the last line. 8MB, not 300KB: ubuntu-26.04 runners buffered 300KB
+    /// whole, and no default pipe (Linux caps them at 1MB) holds 8MB.
     #[tokio::test]
     async fn an_undrained_stderr_wedges_the_child() {
         let mut command = Command::new("sh");
         command
             .arg("-c")
-            .arg("echo first; yes padding | head -c 300000 >&2; echo last")
+            .arg("echo first; yes padding | head -c 8000000 >&2; echo last")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().expect("could not spawn `sh`");
@@ -2729,7 +2730,7 @@ mod stream_tests {
         let _ = child.start_kill();
         assert!(
             wedged.is_err(),
-            "a child writing 300KB to an undrained stderr reached EOF on stdout — if this now \
+            "a child writing 8MB to an undrained stderr reached EOF on stdout — if this now \
              passes the platform buffers it, and the concurrent drain is still what makes the \
              guarantee rather than the buffer size"
         );
