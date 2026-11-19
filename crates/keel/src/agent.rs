@@ -216,9 +216,7 @@ pub(crate) fn system_prompt(repo: &Utf8Path) -> String {
          preference selects Inside Keel or Local Oya Browser behind the same permission gate. \
          Read the tool instructions for the effective browser and profile. Do not enable other \
          browser providers, use personal tabs, or switch browsers after a failure.\n\
-         - In plan mode `ask_user` is refused — Claude Code blocks every MCP tool there, and it is \
-         not Keel doing it. So put anything you would have asked into the plan itself, as the \
-         decision you made and the one you would have preferred to check. Write the plan to the \
+         - In plan mode `ask_user` works; ask there what the plan depends on. Write the plan to the \
          path your plan-mode reminder names, exactly as you normally would: Keel intercepts that \
          write, shows the plan with an Approve button, and approving starts the build as its own \
          turn in edit mode on this conversation. That write is the only way out of plan mode \

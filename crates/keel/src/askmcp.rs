@@ -263,7 +263,11 @@ fn tool_schema() -> Value {
                 }
             },
             "required": ["questions"]
-        }
+        },
+        // Read-only to Claude Code: in plan mode it ignores allow rules for any MCP tool not
+        // marked so — an interactive terminal asks the person before every question, and `-p`
+        // refuses with "Cannot call mcp__keel__ask_user while in plan mode". Asking changes nothing.
+        "annotations": { "readOnlyHint": true }
     })
 }
 
@@ -578,6 +582,13 @@ mod browser_gate_tests {
             "nor Codex's own"
         );
         assert!(args.contains(&"features.computer_use=false".to_string()));
+    }
+
+    /// Plan mode ignores allow rules for MCP tools not marked read-only, so without the hint every
+    /// question in a planning turn was a permission prompt in the terminal (Claude Code 2.1.328).
+    #[test]
+    fn a_question_is_read_only_so_plan_mode_lets_it_through() {
+        assert_eq!(tool_schema()["annotations"]["readOnlyHint"], true);
     }
 
     /// The address names the lane and nothing that waives a question; a lane id cannot add a

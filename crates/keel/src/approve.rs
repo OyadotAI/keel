@@ -1443,9 +1443,8 @@ pub const APPROVED: &str = "keel:plan-approved";
 ///
 /// There is no `ExitPlanMode` in headless `claude -p` — its plan-mode tool list has no plan tool
 /// at all, verified against 2.1.251 — and an MCP tool cannot stand in for one, because plan mode
-/// refuses every MCP call outright: `Cannot call mcp__keel__ask_user while in plan mode`, arriving
-/// as `toolDenialKind: "user-rejected"`. That is Claude Code, not Keel, and nothing on our command
-/// line changes it. It is also why `ask_user` has never worked in a planning turn.
+/// refuses every MCP call not marked `readOnlyHint` (`Cannot call mcp__keel__ask_user while in
+/// plan mode` until `ask_user` carried the hint), and an exit is not read-only.
 ///
 /// What does work is the channel Claude Code itself drives. Every plan turn opens with a
 /// `plan_mode` attachment naming a `planFilePath` under the Claude home, the turn is told to write
