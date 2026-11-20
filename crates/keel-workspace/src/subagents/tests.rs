@@ -653,4 +653,10 @@ fn antigravity_child_opened_by_a_parent_message_is_a_run() {
     let s = observer.snapshot();
     assert_eq!(s.invocations.len(), 2);
     assert_eq!(s.invocations[1].status, Status::Working);
+    // A second message before the run has answered is the same run, and ends with it.
+    row(&child, 7, 101, 3, &[]);
+    row(&child, 8, 15, 3, &bytes(20, &bytes(1, b"Done")));
+    let s = observer.snapshot();
+    assert_eq!(s.invocations.len(), 2);
+    assert!(s.invocations.iter().all(|i| i.status == Status::Done));
 }

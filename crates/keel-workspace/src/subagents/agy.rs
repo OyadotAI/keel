@@ -222,7 +222,14 @@ fn observe(context: &Context, child: &str, member: Option<String>, entries: &mut
         if ![INPUT, MESSAGE, RESPONSE, TOOL].contains(&kind) {
             continue;
         }
-        if kind == INPUT || kind == MESSAGE {
+        // A message that lands while a run is still going joins it. Measured on agy 1.5.13: the
+        // parent sends two in a row (steps 156 and 157 of one child), and a run opened for each
+        // left the first one "Working" for ever, with nothing after it to end it.
+        let going = run
+            .as_ref()
+            .and_then(|key| entries.get(key))
+            .is_some_and(|e| e.invocation.status.active());
+        if (kind == INPUT || kind == MESSAGE) && !going {
             let key = format!("antigravity:{child}:{idx}");
             let Some(e) = insert(
                 entries,
