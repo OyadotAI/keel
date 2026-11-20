@@ -72,7 +72,9 @@ const env = process.env;
 // ponytail: an `ask` anywhere under a tool's rules asks about every call of that tool; match the
 // person's patterns here if one `git push*` rule makes every command a card.
 const asking = (p) => (typeof p === "string" ? p === "ask" : Object.values(p ?? {}).some(asking));
-const glob = (k) => new RegExp("^" + k.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+const glob = (k) => new RegExp("^" + k.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+// Permissions that name no tool: OpenCode keeps deciding these itself, so they are never lifted.
+const THEIRS = ["external_directory", "doom_loop"];
 const lift = (p) =>
   typeof p === "string"
     ? p === "deny" ? "deny" : "allow"
@@ -84,8 +86,9 @@ export const KeelGate = async () => {
     config: async (cfg) => {
       servers = Object.keys(cfg.mcp ?? {});
       const own = cfg.permission;
-      asks = typeof own === "string" ? (own === "ask" ? ["*"] : []) : Object.entries(own ?? {}).filter(([, v]) => asking(v)).map(([k]) => k);
+      asks = typeof own === "string" ? (own === "ask" ? ["*"] : []) : Object.entries(own ?? {}).filter(([k, v]) => !THEIRS.includes(k) && asking(v)).map(([k]) => k);
       cfg.permission = typeof own === "string" ? { "*": lift(own) } : { "*": "allow", ...lift(own) };
+      for (const k of THEIRS) if (own?.[k] !== undefined) cfg.permission[k] = own[k];
     },
     "tool.execute.before": async (input, output) => {
       let said = null;
@@ -198,7 +201,12 @@ fn decide(raw: &str, env: Env, ask: Ask) -> Decision {
         .unwrap_or_default();
     // No mode said is planning: the narrower of the two.
     let plan = env("KEEL_OC_MODE").as_deref() != Some("acceptEdits");
+    let asked = call["asked"] == true;
     let (tool_name, tool_input) = match route(tool, &call["args"], &servers, plan) {
+        // A tool Keel would wave through, which the person's own rules say to ask about.
+        Route::Allow if asked => {
+            keel_workspace::conversation::opencode_tool(tool, &call["args"], &servers)
+        }
         Route::Allow => return allow(),
         Route::Deny(reason) => return deny(reason),
         Route::Ask(t, i) => (t, i),
@@ -220,7 +228,7 @@ fn decide(raw: &str, env: Env, ask: Ask) -> Decision {
             crate::approve::OPENCODE
         }
         .into(),
-        asked: call["asked"] == true,
+        asked,
     };
     match ask(port, hook) {
         None => deny(UNREACHABLE),
@@ -305,10 +313,11 @@ pub fn patch_leaves(repo: &camino::Utf8Path, cwd: &str, tool: &str, input: &Valu
 /// later, so each is checked as a `write`'s path is; a patch naming none cannot be judged.
 fn patched(args: &Value) -> Vec<&str> {
     const MARKS: &[&str] = &[
-        "*** Add File: ",
-        "*** Update File: ",
-        "*** Delete File: ",
-        "*** Move to: ",
+        // No space after the colon: OpenCode 1.18.30 reads `*** Add File:x` as a header too.
+        "*** Add File:",
+        "*** Update File:",
+        "*** Delete File:",
+        "*** Move to:",
     ];
     args.as_object()
         .into_iter()
@@ -774,6 +783,11 @@ mod tests {
         assert!(!leaves("src/a.rs"));
         assert!(leaves("../elsewhere.rs"));
         assert!(leaves("/etc/hosts"));
+        let tight = json!({"patchText": "*** Update File: a.rs\n*** Add File:/etc/hosts\n+x"});
+        assert!(
+            patch_leaves(&root, root.as_str(), "apply_patch", &tight),
+            "no space after the colon"
+        );
         assert!(!patch_leaves(&root, "", "Bash", &patch("/etc/hosts")));
         assert!(
             patch_leaves(&root, "", "apply_patch", &patch("a.rs")),
@@ -791,6 +805,13 @@ mod tests {
             decide(&raw.to_string(), &vars("acceptEdits"), &seen).reason,
             "asked"
         );
+        // A read is waved through by Keel, unless the person said to ask about reads.
+        let read = json!({"tool": "read", "callID": "c", "args": {"filePath": "a"}, "asked": true});
+        assert_eq!(
+            decide(&read.to_string(), &vars("acceptEdits"), &seen).reason,
+            "asked"
+        );
+        assert!(PLUGIN.contains(r#"const THEIRS = ["external_directory", "doom_loop"]"#));
     }
 
     #[test]
