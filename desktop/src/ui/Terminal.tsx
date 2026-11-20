@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { type Endpoint } from "../api";
 import { AGENT_NAME, useStore } from "../store";
 import { register } from "../typers";
+import { nextFollow, PERSON_SCROLL_MS } from "../terminal-follow";
 import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
 import { onTerminalFont, terminalFont } from "../zoom";
@@ -40,6 +41,38 @@ function wheelScrollsHistory(term: import("@xterm/xterm").Terminal) {
   });
 }
 
+/// Hold the bottom of the output unless the person scrolled away (`terminal-follow.ts`). The
+/// returned function stops watching; its `settle` runs after each write.
+function followBottom(term: import("@xterm/xterm").Terminal, host: HTMLElement) {
+  let following = true;
+  let touched = -Infinity;
+  let held = false;
+  const touch = () => { touched = performance.now(); };
+  const press = () => { held = true; touch(); };
+  const release = () => { held = false; touch(); };
+  const settle = (byPerson = false) => {
+    const buffer = term.buffer.active;
+    const next = nextFollow(following, buffer.viewportY >= buffer.baseY, byPerson);
+    following = next.following;
+    if (next.toBottom) term.scrollToBottom();
+  };
+  const scrolled = () => settle(held || performance.now() - touched < PERSON_SCROLL_MS);
+  const viewport = host.querySelector(".xterm-viewport");
+  host.addEventListener("wheel", touch, { capture: true, passive: true });
+  host.addEventListener("keydown", touch, true);
+  host.addEventListener("pointerdown", press, true);
+  window.addEventListener("pointerup", release, true);
+  viewport?.addEventListener("scroll", scrolled);
+  const stop = () => {
+    host.removeEventListener("wheel", touch, true);
+    host.removeEventListener("keydown", touch, true);
+    host.removeEventListener("pointerdown", press, true);
+    window.removeEventListener("pointerup", release, true);
+    viewport?.removeEventListener("scroll", scrolled);
+  };
+  return Object.assign(stop, { settle: () => settle() });
+}
+
 function setElsewhere(lane: string, elsewhere: boolean) {
   useStore.setState((s) => (s.lanes[lane] ? { lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], elsewhere } } } : s));
 }
@@ -60,7 +93,6 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => {});
   const visibilityRef = useRef<() => void>(() => {});
-  const followRef = useRef<{ atBottom: () => boolean; toBottom: () => void }>({ atBottom: () => true, toBottom: () => {} });
   const [title, setTitle] = useState("");
   const [state, setState] = useState<"starting" | "open" | "closed">("starting");
   const [generation, setGeneration] = useState(0);
@@ -119,6 +151,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       term.attachCustomKeyEventHandler((e) => !isKeel(e));
       wheelScrollsHistory(term);
       term.open(host.current);
+      const unfollow = followBottom(term, host.current);
       // Every terminal follows the choice, live. A running agent keeps the colours it started
       // with until it next starts — Claude Code reads its theme once, at launch.
       const retheme = () => {
@@ -151,9 +184,6 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         if (ws.readyState === WebSocket.OPEN) ws.send(`\u0000${term.cols},${term.rows}`);
       };
       fitRef.current = resize;
-      // A hidden terminal loses its scroll position (the element's scrollTop goes to 0), and
-      // it came back at the top of a long agy history. A terminal left at the bottom returns there.
-      followRef.current = { atBottom: () => term.buffer.active.viewportY >= term.buffer.active.baseY, toBottom: () => { term.scrollLines(-1); term.scrollToBottom(); } };
       ws.onopen = () => {
         setState("open");
         resize();
@@ -164,7 +194,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         // A text frame is the tab title, never output: writing it to the screen printed `zsh`
         // into the shell.
         if (typeof e.data === "string") setTitle(e.data);
-        else term.write(new Uint8Array(e.data as ArrayBuffer));
+        else term.write(new Uint8Array(e.data as ArrayBuffer), unfollow.settle);
       };
       ws.onclose = (e) => {
         // The daemon found this conversation open in another process: follow it, don't fork it.
@@ -197,6 +227,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       });
       cleanup = () => {
         unfont();
+        unfollow();
         untheme();
         unregister();
         observer.disconnect();
@@ -216,18 +247,15 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const takeoverRef = useRef(false);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
-  const wasAtBottom = useRef(true);
   useEffect(() => {
     visibilityRef.current();
     if (hidden) {
-      wasAtBottom.current = followRef.current.atBottom();
       // A hidden xterm that keeps focus still takes keystrokes — into a lane nobody can see.
       if (host.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
       return;
     }
     requestAnimationFrame(() => {
       fitRef.current();
-      if (wasAtBottom.current) followRef.current.toBottom();
       // Typing follows the lane on screen — unless focus is in the rail, the palette or a dialog.
       if (!document.activeElement?.closest(".sidebar, .palette, [role=dialog], .strip, .side-panel, input, textarea:not(.xterm-helper-textarea)")) host.current?.querySelector("textarea")?.focus();
     });
