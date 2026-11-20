@@ -69,22 +69,30 @@ const MCP_ARGS_CAP: usize = 16 * 1024;
 /// provider's words on stderr.
 const PLUGIN: &str = r#"// Keel's approval gate for OpenCode. Written by Keel on every turn; edits are overwritten.
 const env = process.env;
+// ponytail: an `ask` anywhere under a tool's rules asks about every call of that tool; match the
+// person's patterns here if one `git push*` rule makes every command a card.
+const asking = (p) => (typeof p === "string" ? p === "ask" : Object.values(p ?? {}).some(asking));
+const glob = (k) => new RegExp("^" + k.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
 const lift = (p) =>
   typeof p === "string"
     ? p === "deny" ? "deny" : "allow"
     : Object.fromEntries(Object.entries(p ?? {}).map(([k, v]) => [k, lift(v)]));
 export const KeelGate = async () => {
   let servers = [];
+  let asks = [];
   return {
     config: async (cfg) => {
       servers = Object.keys(cfg.mcp ?? {});
       const own = cfg.permission;
+      asks = typeof own === "string" ? (own === "ask" ? ["*"] : []) : Object.entries(own ?? {}).filter(([, v]) => asking(v)).map(([k]) => k);
       cfg.permission = typeof own === "string" ? { "*": lift(own) } : { "*": "allow", ...lift(own) };
     },
     "tool.execute.before": async (input, output) => {
       let said = null;
       try {
-        const call = { tool: input.tool, callID: input.callID, sessionID: input.sessionID, args: output.args, servers };
+        const key = ["write", "edit", "multiedit", "apply_patch"].includes(input.tool) ? "edit" : input.tool;
+        const asked = asks.some((k) => glob(k).test(key));
+        const call = { tool: input.tool, callID: input.callID, sessionID: input.sessionID, args: output.args, servers, asked };
         const p = Bun.spawn([env.KEEL_OC_EXE, "opencode-hook"], {
           stdin: new TextEncoder().encode(JSON.stringify(call)),
           stdout: "pipe",
@@ -212,6 +220,7 @@ fn decide(raw: &str, env: Env, ask: Ask) -> Decision {
             crate::approve::OPENCODE
         }
         .into(),
+        asked: call["asked"] == true,
     };
     match ask(port, hook) {
         None => deny(UNREACHABLE),
@@ -280,6 +289,16 @@ pub fn project_config(cwd: &camino::Utf8Path) -> bool {
         }
     }
     false
+}
+
+/// Whether an `apply_patch` writes outside the project: what `edit_is_inside` answers for a
+/// `write`, asked of every file the patch names. Trust covers the repository and nothing else.
+pub fn patch_leaves(repo: &camino::Utf8Path, cwd: &str, tool: &str, input: &Value) -> bool {
+    tool == "apply_patch"
+        && patched(input).iter().any(|p| {
+            let path = std::path::Path::new(cwd).join(p);
+            !crate::approve::edit_is_inside(repo, &json!({ "file_path": path }))
+        })
 }
 
 /// The files an `apply_patch` names. One approval must not cover a patch to a file that runs
@@ -723,6 +742,7 @@ mod tests {
     #[tokio::test]
     async fn an_opencode_call_opens_its_row_in_its_own_turn_only() {
         let hook = |session: &str| HookInput {
+            asked: false,
             tool_name: "Bash".into(),
             tool_input: json!({"command": "cargo test"}),
             tool_use_id: call_id(session, "c7"),
@@ -742,6 +762,35 @@ mod tests {
         assert_eq!(line["part"]["state"]["input"]["command"], "cargo test");
         drop(listening);
         assert!(rx.recv().await.is_none(), "one row, and the ear closes");
+    }
+
+    /// Trust is about the repository: a patch naming a file outside it is a question.
+    #[test]
+    fn an_opencode_patch_outside_the_project_is_not_covered_by_trust() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        let patch = |p: &str| json!({"patchText": format!("*** Update File: {p}\n@@\n-a\n+b")});
+        let leaves = |p: &str| patch_leaves(&root, root.as_str(), "apply_patch", &patch(p));
+        assert!(!leaves("src/a.rs"));
+        assert!(leaves("../elsewhere.rs"));
+        assert!(leaves("/etc/hosts"));
+        assert!(!patch_leaves(&root, "", "Bash", &patch("/etc/hosts")));
+        assert!(
+            patch_leaves(&root, "", "apply_patch", &patch("a.rs")),
+            "no checkout said"
+        );
+    }
+
+    /// The person's own `ask` reaches the daemon, which never lets trust answer it.
+    #[test]
+    fn the_persons_opencode_ask_rules_are_still_asked() {
+        assert!(PLUGIN.contains("asks.some((k) => glob(k).test(key))"));
+        let raw = json!({"tool": "bash", "callID": "c", "args": {"command": "ls"}, "asked": true});
+        let seen = |_: u16, h: HookInput| Some(deny(if h.asked { "asked" } else { "lost" }));
+        assert_eq!(
+            decide(&raw.to_string(), &vars("acceptEdits"), &seen).reason,
+            "asked"
+        );
     }
 
     #[test]

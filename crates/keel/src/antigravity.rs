@@ -454,6 +454,7 @@ fn decide(raw: &str, env: Env, ask: Ask) -> Decision {
         return deny(UNREADABLE);
     };
     let hook = HookInput {
+        asked: false,
         cwd: tool_input["Cwd"].as_str().unwrap_or_default().to_string(),
         tool_name,
         tool_input,

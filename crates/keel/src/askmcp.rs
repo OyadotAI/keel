@@ -52,6 +52,7 @@ async fn gated(
         return Ok(());
     }
     let hook = crate::approve::HookInput {
+        asked: false,
         tool_name: tool,
         tool_input: args.clone(),
         tool_use_id: {
@@ -692,6 +693,7 @@ mod browser_gate_tests {
         // Claude's hook in front asked about this exact click on Keel's card, and the person said
         // yes: it passes, once; another click, or the same one again, is asked.
         let hook = crate::approve::HookInput {
+            asked: false,
             tool_name: "mcp__keel__browser_click".into(),
             tool_input: json!({"element": 2}),
             tool_use_id: "t1".into(),

@@ -62,6 +62,10 @@ pub struct HookInput {
     /// Claude's hook, and from any hook older than the field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider: String,
+    /// The person's own OpenCode permissions say to ask about this tool. Keel's gate replaces
+    /// OpenCode's question, so without this their `ask` would become trust's silent yes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asked: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -716,8 +720,9 @@ async fn decide(
         }));
     }
     let (leaves_the_project, trusted, effective, denies, asks) = {
-        let (repo, tool, input, session, lane) = (
+        let (repo, cwd, tool, input, session, lane) = (
             repo.clone(),
+            hook.cwd.clone(),
             hook.tool_name.clone(),
             hook.tool_input.clone(),
             session.map(str::to_string),
@@ -726,7 +731,8 @@ async fn decide(
         crate::serve::blocking(
             move || {
                 (
-                    is_edit(&tool) && !edit_is_inside(&repo, &input),
+                    is_edit(&tool) && !edit_is_inside(&repo, &input)
+                        || crate::opencode::patch_leaves(&repo, &cwd, &tool, &input),
                     crate::permissions::trusted(&repo),
                     crate::permissions::effective(&repo, session.as_deref()),
                     // For agy, Codex and Keel's own MCP gate: Claude Code reads its own deny
@@ -764,6 +770,7 @@ async fn decide(
         crate::denies::Verdict::Denied(rule) => Some(rule),
         crate::denies::Verdict::Unsure => Some(String::new()),
     };
+    let asked = asked.or(hook.asked.then(String::new));
     let unsure_of_denies = unsure;
     let unsure = unsure || asked.is_some();
 
@@ -783,8 +790,12 @@ async fn decide(
     let mcp = hook.tool_name.starts_with("mcp__");
     // A final caller asks about `Read` outside the workspace, a path its gate protects, or an `ask`
     // rule of the person's — none of which trust is about. Only what trust covers is answered.
-    let trust_covers =
-        !sdk || mcp || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str());
+    // OpenCode's gate sends tools nobody has seen under their own names: trust is about commands,
+    // fetches, edits and MCP calls, never about a tool whose effects are unknown.
+    let trust_covers = !(sdk || opencode)
+        || mcp
+        || ["Bash", "WebFetch", "WebSearch"].contains(&hook.tool_name.as_str())
+        || (opencode && (is_edit(&hook.tool_name) || hook.tool_name == "apply_patch"));
     if !is_question && !leaves_the_project && trusted && !unsure && trust_covers {
         if background {
             return Ok(Json(monitor_request(&state, &hook).await));
@@ -2030,6 +2041,7 @@ pub(crate) mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
         let state = Arc::new(AppState::new(root.clone()));
         let hook = |provider: &str, tool: &str, input: serde_json::Value| HookInput {
+            asked: false,
             tool_name: tool.into(),
             tool_input: input,
             tool_use_id: format!("final-{provider}-{tool}"),
@@ -2105,6 +2117,22 @@ pub(crate) mod tests {
         assert_eq!(decided(h).await.as_deref(), Some("allow"));
         let read = hook(SDK, "Read", serde_json::json!({"file_path": "/etc/hosts"}));
         assert_eq!(decided(read).await, None);
+
+        // OpenCode's hook is the only gate, so trust's answer is the last one. It covers a
+        // command and a patch inside the project — never a tool nobody has seen, a patch that
+        // leaves, or a call the person's own OpenCode rules say to ask about.
+        let patch = |p: &str| serde_json::json!({"patchText": format!("*** Add File: {p}\n+x")});
+        let bash = || hook(OPENCODE, "Bash", serde_json::json!({"command": "ls"}));
+        assert_eq!(decided(bash()).await.as_deref(), Some("defer"));
+        let inside = hook(OPENCODE, "apply_patch", patch("src/a.rs"));
+        assert_eq!(decided(inside).await.as_deref(), Some("defer"));
+        let outside = hook(OPENCODE, "apply_patch", patch("/etc/hosts"));
+        assert_eq!(decided(outside).await, None);
+        let unknown = hook(OPENCODE, "frobnicate", serde_json::json!({}));
+        assert_eq!(decided(unknown).await, None);
+        let mut asked = bash();
+        asked.asked = true;
+        assert_eq!(decided(asked).await, None);
     }
 
     /// The person's deny rules hold wherever no Claude Code reads them after Keel.
@@ -2139,6 +2167,7 @@ pub(crate) mod tests {
         let state = Arc::new(AppState::new(root.clone()));
         crate::permissions::set_trusted(&root, true).unwrap();
         let hook = |tool: &str| HookInput {
+            asked: false,
             tool_name: tool.into(),
             tool_input: serde_json::json!({"element": 1}),
             tool_use_id: format!("term-{tool}"),
@@ -2204,6 +2233,7 @@ pub(crate) mod tests {
         file("a.json", "interactive", "term");
         file("b.json", "print", "headless");
         let hook = |session: &str, provider: &str, input: serde_json::Value| HookInput {
+            asked: false,
             tool_name: "Bash".into(),
             tool_input: input,
             tool_use_id: "b1".into(),
@@ -2306,6 +2336,7 @@ pub(crate) mod tests {
         let token = state.claim("agy-lane", &root, true).unwrap();
         state.bound("agy-lane", token, "parent");
         let hook = |tool: &str, input: serde_json::Value, id: &str| HookInput {
+            asked: false,
             tool_name: tool.into(),
             tool_input: input,
             tool_use_id: id.into(),
@@ -2367,6 +2398,7 @@ pub(crate) mod tests {
         crate::permissions::set_trusted(&root, true).unwrap();
         let state = Arc::new(AppState::new(root.clone()));
         let hook = |tool: &str, input: serde_json::Value| HookInput {
+            asked: false,
             tool_name: tool.into(),
             tool_input: input,
             tool_use_id: format!("trusted-{tool}"),
@@ -2442,6 +2474,7 @@ pub(crate) mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
         let state = Arc::new(AppState::new(root.clone()));
         let hook = |id: &str| HookInput {
+            asked: false,
             provider: AGY_TERMINAL.into(),
             tool_name: "Edit".into(),
             tool_input: serde_json::json!({"file_path":root.join("fixture.rs")}),
@@ -2494,6 +2527,7 @@ pub(crate) mod tests {
         }
         let id = format!("background-{}", root.file_name().unwrap());
         let hook = HookInput {
+            asked: false,
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({"command":"echo permission-test", "run_in_background":true}),
             tool_use_id: id.clone(),
@@ -2710,6 +2744,7 @@ pub(crate) mod tests {
             .push(("asks".into(), "Bash(git push --keel-test *)".into()));
         let state = Arc::new(AppState::new(root.clone()));
         let hook = |provider: &str, command: &str, id: &str| HookInput {
+            asked: false,
             tool_name: "Bash".into(),
             tool_input: serde_json::json!({"command": command}),
             tool_use_id: id.into(),
@@ -3134,6 +3169,7 @@ pub(crate) mod tests {
             ("Fold the export instead", "has not approved"),
         ] {
             let hook = HookInput {
+                asked: false,
                 tool_name: "Write".into(),
                 tool_input: serde_json::json!({}),
                 tool_use_id: format!("plan-{answer}"),
