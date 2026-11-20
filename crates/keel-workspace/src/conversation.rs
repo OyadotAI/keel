@@ -30,7 +30,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 mod agy;
+mod opencode;
 mod rollout;
+pub use opencode::opencode_tool;
 
 /// How long text may wait to be batched with what follows it.
 pub const BATCH: Duration = Duration::from_millis(40);
@@ -54,6 +56,7 @@ pub enum Provider {
     Claude,
     Codex,
     Antigravity,
+    OpenCode,
 }
 
 /// Where the lines come from. A transcript splits itself into turns at each prompt and says
@@ -320,6 +323,8 @@ pub struct Decoder {
     /// mid-turn spun until the next prompt. Kept in `push`, the one path every background op
     /// takes, so no provider's launch can miss it.
     chat_agents: Vec<String>,
+    /// What the open OpenCode turn has cost so far: it reports each response's cost on its own.
+    opencode_cost: f64,
 }
 
 impl Decoder {
@@ -333,6 +338,7 @@ impl Decoder {
             codex_total: [0; 3],
             codex_closed: HashSet::new(),
             chat_agents: Vec::new(),
+            opencode_cost: 0.0,
         }
     }
 
@@ -399,6 +405,8 @@ impl Decoder {
             self.agy_transcript(&record, &mut out, now);
         } else if self.provider == Provider::Antigravity {
             self.antigravity(&record, &mut out, now);
+        } else if self.provider == Provider::OpenCode {
+            self.opencode(&record, &mut out, now);
         } else {
             if self.source == Source::Transcript
                 && let Some((uuid, _, at)) = crate::sessions::opener(&record)

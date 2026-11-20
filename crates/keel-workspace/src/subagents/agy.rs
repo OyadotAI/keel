@@ -11,6 +11,11 @@ use std::collections::BTreeMap;
 
 const STEP_BATCH: i64 = 512;
 const INPUT: i64 = 14;
+/// A message from the parent conversation, which is what opens a child's run. Measured on agy
+/// 1.5.x: none of 33 child conversations has an input step (14) — each opens on a 101, and a
+/// later message from the parent is another 101 after a finished response. Read as input alone,
+/// a child's pending entry was removed and no run ever took its place.
+const MESSAGE: i64 = 101;
 const RESPONSE: i64 = 15;
 const TOOL: i64 = 132;
 const DONE: i64 = 3;
@@ -169,9 +174,10 @@ pub(super) fn rows(path: &Utf8Path) -> Option<(Vec<Value>, bool)> {
     let truncated = values.len() < total as usize;
     if let Some(first) = values.first()
         && first["step"] != INPUT
+        && first["step"] != MESSAGE
     {
         let start = first["agy"].as_i64()?;
-        if let Ok(input)=connection.query_row("SELECT idx,step_type,status,substr(step_payload,1,?2) FROM steps WHERE step_type=14 AND idx<?1 ORDER BY idx DESC LIMIT 1",[start,json::READ_BYTES as i64],|r| Ok(antigravity::line(r.get(0)?,r.get(1)?,r.get(2)?,&r.get::<_,Option<Vec<u8>>>(3)?.unwrap_or_default()))) {values.insert(0,input);}
+        if let Ok(input)=connection.query_row("SELECT idx,step_type,status,substr(step_payload,1,?2) FROM steps WHERE step_type IN (14,101) AND idx<?1 ORDER BY idx DESC LIMIT 1",[start,json::READ_BYTES as i64],|r| Ok(antigravity::line(r.get(0)?,r.get(1)?,r.get(2)?,&r.get::<_,Option<Vec<u8>>>(3)?.unwrap_or_default()))) {values.insert(0,input);}
     }
     Some((values, truncated))
 }
@@ -213,10 +219,10 @@ fn observe(context: &Context, child: &str, member: Option<String>, entries: &mut
         let idx = r["agy"].as_i64().unwrap_or_default();
         let kind = r["step"].as_i64().unwrap_or_default();
         let status = r["status"].as_i64().unwrap_or_default();
-        if ![INPUT, RESPONSE, TOOL].contains(&kind) {
+        if ![INPUT, MESSAGE, RESPONSE, TOOL].contains(&kind) {
             continue;
         }
-        if kind == INPUT {
+        if kind == INPUT || kind == MESSAGE {
             let key = format!("antigravity:{child}:{idx}");
             let Some(e) = insert(
                 entries,

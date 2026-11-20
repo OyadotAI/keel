@@ -353,12 +353,15 @@ fn read_varint(b: &[u8]) -> Option<(u64, usize)> {
 /// The conversations an `invoke_subagent` created, from its output: agy answers the call as soon
 /// as they exist ("Created the following subagents: {"conversationId": …}") and each then runs in
 /// a database of its own, so the call finishing says nothing about the subagent finishing.
+///
+/// The space after the colon is not fixed: measured on agy 1.5.x, 27 of 32 outputs had two and 5
+/// had one, and a key matched with exactly one found no child at all in the rest.
 pub(crate) fn children(output: &str) -> Vec<String> {
-    const KEY: &str = "\"conversationId\": \"";
+    const KEY: &str = "\"conversationId\":";
     output
         .match_indices(KEY)
         .filter_map(|(i, _)| {
-            let rest = &output[i + KEY.len()..];
+            let rest = output[i + KEY.len()..].trim_start().strip_prefix('"')?;
             let id = &rest[..rest.find('"')?];
             id.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -679,6 +682,16 @@ mod tests {
         assert!(finished(&parent, "../x"));
         let out = "Created the following subagents:\n{\n  \"conversationId\": \"done-1\",\n}\n{\n  \"conversationId\": \"busy-1\"\n}";
         assert_eq!(children(out), ["done-1", "busy-1"]);
+    }
+
+    /// agy 1.5.x writes one space or two after the key, depending on the build; both are children.
+    #[test]
+    fn antigravity_finds_children_whatever_spacing_its_json_has() {
+        let out = "Created At: 2026-11-19T10:00:00Z\nCreated the following subagents:\n{\n  \"conversationId\":  \"0af78588-two\",\n  \"name\": \"x\"\n}\n{\n  \"conversationId\": \"1bc-one\"\n}\n{\"conversationId\":\"none\"}";
+        assert_eq!(children(out), ["0af78588-two", "1bc-one", "none"]);
+        // Still an id and nothing else: a value that could be a path, or is not a string, is not one.
+        assert!(children("\"conversationId\":  \"../x\"").is_empty());
+        assert!(children("\"conversationId\":  7").is_empty());
     }
 
     /// A conversation is found only by its own id, in its own workspace.

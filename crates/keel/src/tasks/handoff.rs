@@ -138,11 +138,7 @@ pub(super) fn reserve(
     provider: &str,
     receipt: &str,
 ) -> Result<Continuation, String> {
-    let executable = if provider == "antigravity" {
-        "agy"
-    } else {
-        provider
-    };
+    let executable = crate::agent::program_of(provider);
     if crate::permissions::find_on_path(executable).is_none() {
         return Err(format!(
             "{provider} is not installed. Install it before continuing."
@@ -170,7 +166,7 @@ pub(super) fn transfer<G>(
 ) -> Result<Continuation, String> {
     if !tracking::valid(receipt)
         || receipt.len() > 64
-        || !["claude", "codex", "antigravity"].contains(&provider)
+        || !crate::agent::PROVIDERS.contains(&provider)
     {
         return Err("Invalid continuation request".into());
     }

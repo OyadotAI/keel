@@ -31,7 +31,7 @@ const COMPOUND = /[;&|$`<>()\n\\'"]/;
 /** Files whose content runs later, unasked: git's hooks and config, every agent's settings, an
  *  editor's tasks, CI workflows, direnv. An edit there is not "Change a file". */
 // Case-insensitive: macOS and Windows file systems are, so `.Git/hooks` is `.git/hooks`.
-const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.github\/workflows)(\/|$)|(^|\/)\.envrc$/i;
+const RUNS_LATER = /(^|\/)(\.git|\.claude|\.codex|\.agents|\.gemini|\.cursor|\.vscode|\.idea|\.husky|\.opencode|\.github\/workflows)(\/|$)|(^|\/)(\.envrc|opencode\.jsonc?)$/i;
 
 /** An http(s) address that parses as one — not a string that merely contains `://`. */
 function webAddress(a: string): boolean {

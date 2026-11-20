@@ -57,7 +57,7 @@ pub(crate) fn acknowledge(
     session: &str,
     mechanism: &str,
 ) -> Result<(), String> {
-    if !["claude", "codex", "antigravity"].contains(&provider)
+    if !crate::agent::PROVIDERS.contains(&provider)
         || session.is_empty()
         || !session
             .bytes()
@@ -103,7 +103,7 @@ pub(crate) fn delivery(repo: &Utf8Path, provider: &str, session: &str) -> Delive
     }
     Delivery {
         status: "Available for the next Keel session".into(),
-        mechanism: if provider == "antigravity" {
+        mechanism: if matches!(provider, "antigravity" | "opencode") {
             "Keel MCP initialization instructions; native system-prompt append is unavailable and client consumption is not verified"
         } else {
             "Native append/developer instructions"

@@ -1,5 +1,7 @@
 //! One parent stream owns incremental discovery; selected output uses only verified child links.
-use super::{Availability, Detail, Invocation, Snapshot, Status, agy, claude, codex, json, output};
+use super::{
+    Availability, Detail, Invocation, Snapshot, Status, agy, claude, codex, json, opencode, output,
+};
 use crate::{Follows, Transcript};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::BTreeMap;
@@ -73,6 +75,7 @@ impl Observer {
             Follows::Codex => Box::<codex::Reader>::default(),
             Follows::Claude => Box::<claude::Reader>::default(),
             Follows::Antigravity => Box::<agy::Reader>::default(),
+            Follows::OpenCode => Box::<opencode::Reader>::default(),
         };
         Self {
             context: Context {

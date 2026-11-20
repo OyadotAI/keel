@@ -1,10 +1,11 @@
 // Projects, lanes, and team members share the same observed activity indicators.
+import { AgentMark } from "./AgentMark";
 import { matchSessions } from "../history-search";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useOutsideWorkspace } from "./MoveProject";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { resumeCommand, sessionForLane } from "../lane-names";
+import { RESUME, resumeCommand, sessionForLane } from "../lane-names";
 import { AGENT_NAME, useStore, type Agent, type Session } from "../store";
 import { get, type Endpoint } from "../api";
 import { Floating } from "./Menu";
@@ -176,6 +177,9 @@ function Members({ project }: { project: string }) {
   </section>;
 }
 
+/** The agents a new lane can run, in menu order; the first carries the shortcuts. */
+const LANE_AGENTS: [Agent, string][] = [["claude", "Claude Code"], ["codex", "Codex"], ["antigravity", "Antigravity"], ["opencode", "OpenCode"]];
+
 function ProjectRow({ path }: { path: string }) {
   const p = useStore((s) => s.projects[path]);
   const needs = useStore((s) => (s.projects[path]?.lanes ?? []).filter((l) => s.lanes[l] && waiting(s.lanes[l]) > 0).length);
@@ -197,7 +201,7 @@ function ProjectRow({ path }: { path: string }) {
           <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} />
           <span className="project-name">{p.name}</span>
         </button>
-        <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code, Codex or Antigravity">
+        <button className="ghost" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "new" })} aria-label={`New lane in ${p.name}`} title="New lane — Claude Code, Codex, Antigravity or OpenCode">
           <Icon name="plus" size={14} />
         </button>
         <button className="ghost hover-only" onClick={(e) => setMenu({ at: e.currentTarget.getBoundingClientRect(), kind: "more" })} aria-label={`${p.name} actions`}>
@@ -224,29 +228,18 @@ function ProjectRow({ path }: { path: string }) {
       )}
       {menu?.kind === "new" && (
         <Floating anchor={menu.at} onClose={() => setMenu(null)} width={260}>
-          <div className="eyebrow" style={{ padding: "4px 8px" }}>Claude Code</div>
-          <button onClick={() => make(false, "claude")}>
-            <Icon name="terminal" size={14} /> In the project's tree <kbd style={{ marginLeft: "auto" }}>{label({ key: "n" })}</kbd>
-          </button>
-          <button onClick={() => make(true, "claude")}>
-            <Icon name="branch" size={14} /> On its own branch <kbd style={{ marginLeft: "auto" }}>{label({ key: "n", shift: true })}</kbd>
-          </button>
-          <div className="sep" />
-          <div className="eyebrow" style={{ padding: "4px 8px" }}>Codex</div>
-          <button onClick={() => make(false, "codex")}>
-            <Icon name="terminal" size={14} /> In the project's tree
-          </button>
-          <button onClick={() => make(true, "codex")}>
-            <Icon name="branch" size={14} /> On its own branch
-          </button>
-          <div className="sep" />
-          <div className="eyebrow" style={{ padding: "4px 8px" }}>Antigravity</div>
-          <button onClick={() => make(false, "antigravity")}>
-            <Icon name="terminal" size={14} /> In the project's tree
-          </button>
-          <button onClick={() => make(true, "antigravity")}>
-            <Icon name="branch" size={14} /> On its own branch
-          </button>
+          {LANE_AGENTS.map(([agent, name], n) => (
+            <Fragment key={agent}>
+              {n > 0 && <div className="sep" />}
+              <div className="eyebrow" style={{ padding: "4px 8px" }}>{name}</div>
+              <button onClick={() => make(false, agent)}>
+                <Icon name="terminal" size={14} /> In the project's tree {n === 0 && <kbd style={{ marginLeft: "auto" }}>{label({ key: "n" })}</kbd>}
+              </button>
+              <button onClick={() => make(true, agent)}>
+                <Icon name="branch" size={14} /> On its own branch {n === 0 && <kbd style={{ marginLeft: "auto" }}>{label({ key: "n", shift: true })}</kbd>}
+              </button>
+            </Fragment>
+          ))}
         </Floating>
       )}
       {menu?.kind === "more" && (
@@ -268,6 +261,9 @@ function ProjectRow({ path }: { path: string }) {
           </button>
           <button onClick={() => (setCtx(null), make(false, "antigravity"))}>
             <Icon name="terminal" size={14} /> New Antigravity lane
+          </button>
+          <button onClick={() => (setCtx(null), make(false, "opencode"))}>
+            <Icon name="terminal" size={14} /> New OpenCode lane
           </button>
           <div className="sep" />
           <button onClick={() => (setCtx(null), void revealItemInDir(path))}>
@@ -341,7 +337,7 @@ function LaneRow({ id }: { id: string }) {
     <div className="lane-row">
     <button className={`lane ${active ? "active" : ""}`} onClick={() => select(id)} onDoubleClick={() => startRename(id)} onKeyDown={(e) => (e.key === "F2" ? (e.preventDefault(), startRename(id)) : arrows(e))} onContextMenu={(e) => (e.preventDefault(), setCtx(pointer(e)))} aria-current={active} title={`${l.wt ? `keel/${l.wt}` : "Shares the project's working tree"} — double-click or F2 to rename; ↑↓ or ${label({ key: "ArrowUp", alt: true })}/${label({ key: "ArrowDown", alt: true })} to move between lanes`}>
       <span className="marker">
-        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : l.unseen ? <span className="done-dot" aria-label="Finished — not opened yet" /> : <Icon name={l.isolated ? "branch" : "chat"} size={14} />}
+        {asking ? <Icon name="hand" size={11} style={{ color: "var(--warn)" }} /> : failed ? <Icon name="x-circle" size={11} style={{ color: "var(--del)" }} /> : tone === "live" ? <span className="busy-dot" /> : l.unseen ? <span className="done-dot" aria-label="Finished — not opened yet" /> : <AgentMark agent={l.agent} />}
       </span>
       <span className="lane-text" title={`${l.title} — ${AGENT_NAME[l.agent ?? "claude"]}${subText ? ` · ${subText}` : ""}`}>
         <span className="lane-title">{l.title}</span>
@@ -369,7 +365,7 @@ function LaneRow({ id }: { id: string }) {
             <Icon name="branch" size={14} /> Copy branch name
           </button>
         )}
-        {l.agent !== "antigravity" && <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(`${l.agent === "codex" ? "codex resume" : "claude --resume"} ${l.session}`))}>
+        {l.agent !== "antigravity" && <button onClick={() => (setCtx(null), void navigator.clipboard.writeText(`${RESUME[l.agent ?? "claude"]} ${l.session}`))}>
           <Icon name="copy" size={14} /> Copy resume command
         </button>}
         <div className="sep" />

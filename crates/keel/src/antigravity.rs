@@ -120,9 +120,10 @@ fn named_paths(args: &Value) -> std::collections::BTreeSet<&str> {
     .collect()
 }
 
-const NO_PATH: &str = "This file tool call names no file, so Keel could not ask about it and \
+pub(crate) const NO_PATH: &str = "This file tool call names no file, so Keel could not ask about it and \
     refused it. Call it again with the file's path.";
-const REFUSED: &str = "The person refused this call. Do not substitute another command for it.";
+pub(crate) const REFUSED: &str =
+    "The person refused this call. Do not substitute another command for it.";
 
 /// The largest call the hook reads. A `write_to_file` carries the whole file; past this it is
 /// refused rather than half-read and misjudged.
@@ -230,12 +231,29 @@ pub fn route(tool: &str, args: &Value, plan: bool) -> Route {
 /// agent's settings, an editor's tasks. An edit inside the repository is otherwise allowed without
 /// a card — for Claude because Claude Code checks it after Keel; for agy nothing does — so these
 /// are refused outright, trusted project or not.
-fn runs_something(path: &str) -> bool {
+pub(crate) fn runs_something(path: &str) -> bool {
     const DIRS: &[&str] = &[
-        ".git", ".claude", ".codex", ".agents", ".agent", "_agents", "_agent", ".vscode", ".idea",
-        ".husky", ".keel", ".gemini",
+        ".git",
+        ".claude",
+        ".codex",
+        ".agents",
+        ".agent",
+        "_agents",
+        "_agent",
+        ".vscode",
+        ".idea",
+        ".husky",
+        ".keel",
+        ".gemini",
+        ".opencode",
     ];
-    const FILES: &[&str] = &[".mcp.json", ".envrc", ".gitmodules"];
+    const FILES: &[&str] = &[
+        ".mcp.json",
+        ".envrc",
+        ".gitmodules",
+        "opencode.json",
+        "opencode.jsonc",
+    ];
     // macOS and Windows fold case, and Windows drops trailing dots and spaces: `.GIT/config` is
     // `.git/config` there. And a link inside the repository can lead into `.git`, so the path is
     // checked again once the part of it that exists is resolved.
@@ -254,7 +272,7 @@ fn runs_something(path: &str) -> bool {
 /// to `.git/hooks/pre-commit` resolves to nothing, so no canonical path can catch it — or a
 /// folder on the way is one that points into config. Writing through a link is never needed for
 /// an edit, so it is refused rather than reasoned about.
-fn through_a_link(path: &str) -> bool {
+pub(crate) fn through_a_link(path: &str) -> bool {
     let p = std::path::Path::new(path);
     if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
         return true;

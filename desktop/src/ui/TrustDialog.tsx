@@ -35,6 +35,7 @@ export function TrustDialogView({ request, name, confirm, retry, close }: {
       <ul className="trust-disclosure">
         <li>Agents can make permitted file edits, run commands and use MCP tools without asking—including installs, deletes, network calls and Keel Browser actions.</li>
         <li>Keel can install and update its agent team, skills and suggested plugins from Anthropic’s official marketplace here, as its own commits.</li>
+        <li>OpenCode lanes load this project’s opencode.json and .opencode/ plugins, which can run code on this machine.</li>
         <li>Explicit deny rules still apply. Questions and plan decisions still need your answer.</li>
       </ul>
       <p>Trust applies only to this project and lasts until you choose <strong>Stop trusting</strong> in Settings → Project trust.</p>

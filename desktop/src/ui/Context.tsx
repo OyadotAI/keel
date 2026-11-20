@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { get, type Endpoint } from "../api";
 import { contextMatches, evidenceLabel, type ContextSnapshot, type ContextSource, type ContextSkill } from "../context";
-import { AGENT_NAME, useStore } from "../store";
+import { AGENT_NAME, oneShot, useStore } from "../store";
 import { tilde } from "../hooks";
 import { count } from "./Turn";
 import { Icon } from "./icons";
@@ -88,7 +88,7 @@ function useSessionContext(lane: string) {
     return `${last?.key}:${last?.usage?.context}:${last?.ended}:${Object.keys(last?.calls ?? {}).length}`;
   });
   const refresh = useCallback(async (live = false) => {
-    if (!ep || !provider || provider === "antigravity") return;
+    if (!ep || !provider || oneShot(provider)) return;
     const request = ++sequence.current;
     setBusy(true); setError("");
     try {

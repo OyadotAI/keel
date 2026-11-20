@@ -72,6 +72,18 @@ const TABLE: &[(&str, &str, &str, &str)] = &[
         // %LOCALAPPDATA%\agy\bin
         "irm https://antigravity.google/cli/install.ps1 | iex",
     ),
+    // OpenCode 1. Its vendor ships a shell script and no PowerShell one, so the Windows column is
+    // that script's own steps in PowerShell: the newest 1.x version from the `opencode-ai` npm
+    // record, its release zip from GitHub, unpacked into the folder the script uses. Neither
+    // column checks a signature, because the vendor publishes none.
+    // ponytail: the Windows column is read from the vendor's script and not run on Windows yet.
+    (
+        "opencode",
+        "OpenCode",
+        "curl --proto =https --tlsv1.2 -fsSL https://opencode.ai/install | bash",
+        // %USERPROFILE%\.opencode\bin
+        r#"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $v=(Invoke-RestMethod 'https://registry.npmjs.org/opencode-ai/latest').version; if ($v -notmatch '^1\.\d+\.\d+$') { throw 'Could not read the OpenCode version.' }; $w=Join-Path $env:TEMP ([guid]::NewGuid()); New-Item -ItemType Directory $w | Out-Null; $z=Join-Path $w 'opencode.zip'; Write-Output "Downloading OpenCode $v"; Invoke-WebRequest "https://github.com/anomalyco/opencode/releases/download/v$v/opencode-windows-x64.zip" -OutFile $z -UseBasicParsing; Expand-Archive $z -DestinationPath $w; $b=Join-Path $env:USERPROFILE '.opencode\bin'; New-Item -ItemType Directory -Force $b | Out-Null; Copy-Item (Join-Path $w 'opencode.exe') $b -Force; Remove-Item -Recurse $w; Write-Output 'Installed OpenCode.'"#,
+    ),
     // Oya Browser, offered on the browser card when a lane would browse in it and it isn't here.
     // Not a program on PATH: `present` asks Keel's own detection. The current release is read from
     // the update feed it ships (electron-builder's latest*.yml), so no version is pinned here, and
@@ -270,7 +282,16 @@ mod tests {
     #[test]
     fn every_agent_installs_on_every_os() {
         let programs: Vec<_> = TABLE.iter().map(|(p, ..)| *p).collect();
-        assert_eq!(programs, ["git", "claude", "codex", "agy", "oya"]);
+        assert_eq!(
+            programs,
+            ["git", "claude", "codex", "agy", "opencode", "oya"]
+        );
+        // OpenCode has no PowerShell installer of its vendor's; Keel's follows the shell one.
+        let (_, _, unix, windows) = TABLE[4];
+        assert!(unix.starts_with("curl --proto =https") && unix.contains("opencode.ai/install"));
+        assert!(windows.contains(
+            "https://github.com/anomalyco/opencode/releases/download/v$v/opencode-windows-x64.zip"
+        ));
         for (program, _, unix, windows) in &TABLE[1..4] {
             assert!(unix.starts_with("curl --proto =https"), "{program}: {unix}");
             assert!(windows.starts_with("irm https://"), "{program}: {windows}");
@@ -282,7 +303,7 @@ mod tests {
         );
         assert!(TABLE[0].3.starts_with("winget install --id Git.Git"));
         // Oya: both OSes read the vendor's feed and refuse a download whose checksum differs.
-        for script in [TABLE[4].2, TABLE[4].3] {
+        for script in [TABLE[5].2, TABLE[5].3] {
             assert!(
                 script.contains("https://oyabrowser.com/downloads"),
                 "{script}"

@@ -31,7 +31,7 @@ pub(super) fn key(source: &Source) -> String {
 pub(crate) fn register(repo: &Utf8Path, mut source: Source) -> Result<String, String> {
     if !valid(&source.lane)
         || !valid(&source.session)
-        || !["claude", "codex", "antigravity"].contains(&source.provider.as_str())
+        || !crate::agent::PROVIDERS.contains(&source.provider.as_str())
     {
         return Err("Invalid task source".into());
     }

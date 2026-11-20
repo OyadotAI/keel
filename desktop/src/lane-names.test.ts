@@ -9,7 +9,7 @@ function fixture(agent: Agent = "claude") {
   const lane: Lane = { id: "lane", project: "/repo", title: "New lane", agent, session: "s1", known: true, naming: { revision: 0 }, isolated: false, jobs: [], queued: [], conv: { turns: [] }, running: false, loaded: true, pending: [] };
   const model: { lanes: Record<string, Lane>; projects: Record<string, Project> } = { lanes: { lane }, projects: { "/repo": { path: "/repo", name: "Repo", lanes: ["lane"], endpoint: ep } } };
   const persist = vi.fn();
-  const names = createLaneNames({ read: () => model, lane: (id, patch) => { if (model.lanes[id]) model.lanes[id] = { ...model.lanes[id], ...patch }; }, project: (path, patch) => { model.projects[path] = { ...model.projects[path], ...patch }; }, endpoint: async () => ep, persist, label: (provider) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity" })[provider] });
+  const names = createLaneNames({ read: () => model, lane: (id, patch) => { if (model.lanes[id]) model.lanes[id] = { ...model.lanes[id], ...patch }; }, project: (path, patch) => { model.projects[path] = { ...model.projects[path], ...patch }; }, endpoint: async () => ep, persist, label: (provider) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode" })[provider] });
   return { model, persist, names };
 }
 function session(provider: Agent = "claude", title = "Provider name", revision = 1): Session {
@@ -77,8 +77,8 @@ it("makes a migration decision only for legacy layouts", () => {
   expect(restoredNaming("New lane")).toEqual({ revision: 0 });
   expect(restoredNaming("Native", { revision: 2, source: "explicit" })).toEqual({ revision: 2, source: "explicit" });
 });
-it.each<Agent>(["claude", "codex", "antigravity"])("copies the correct %s resume command", (provider) => {
-  expect(resumeCommand(session(provider))).toBe({ claude: "claude --resume s1", codex: "codex resume s1", antigravity: "agy --conversation s1" }[provider]);
+it.each<Agent>(["claude", "codex", "antigravity", "opencode"])("copies the correct %s resume command", (provider) => {
+  expect(resumeCommand(session(provider))).toBe({ claude: "claude --resume s1", codex: "codex resume s1", antigravity: "agy --conversation s1", opencode: "opencode -s s1" }[provider]);
 });
 
 it("retains the last A edit when an A to B to A sequence ends in failure", async () => {

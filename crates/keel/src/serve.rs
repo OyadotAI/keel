@@ -69,6 +69,19 @@ pub struct AppState {
 /// The other half — one *writer* per working tree — was kept in one window's Swift array, and a
 /// window cannot see another window. Each daemon tracks its lanes here, and the checkout's
 /// advisory lock coordinates writers across daemons used by detached windows.
+/// How long a stopped agent that detaches its tools has to exit on its own before it is ended.
+#[cfg(unix)]
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// What Stop and a turn's task share about an agent that detaches its tools: what was running
+/// under it when Stop was pressed, and whether the agent has since been reaped — after which its
+/// pid is the system's to reuse and is never signalled again.
+#[derive(Default)]
+pub(crate) struct Detached {
+    pub(crate) left: std::sync::Mutex<Vec<u32>>,
+    pub(crate) reaped: std::sync::atomic::AtomicBool,
+}
+
 struct Turn {
     token: u64,
     /// `None` until the child is spawned. The slot is reserved first so two requests arriving
@@ -83,6 +96,8 @@ struct Turn {
     /// apart from `interrupted`, which a stop before the child exits also sets and which must not
     /// stop a turn's gate from running.
     checks_stopped: bool,
+    /// The agent's descendants when Stop was pressed (`signal_if_running`).
+    stragglers: Option<Arc<Detached>>,
     checkout: Utf8PathBuf,
     /// An advisory lock on the checkout directory's inode. Separate windows can use separate
     /// daemons, so the in-memory map alone cannot enforce one writer. Closing the descriptor
@@ -346,6 +361,7 @@ impl AppState {
                 interrupted: false,
                 finished: false,
                 checks_stopped: false,
+                stragglers: None,
                 checkout,
                 _writer_lock: writer_lock,
                 _activity: activity,
@@ -716,8 +732,42 @@ impl AppState {
             .filter(|t| t.token == token && !t.finished)
             .and_then(|t| t.pid)
         {
+            // An agent whose tool shells lead groups of their own (`detaches`): everything
+            // under it is taken while it is alive to be walked from, then it is interrupted.
+            // One `ps`, on a thread of its own — Stop is a handler, and this is not memory.
+            #[cfg(unix)]
+            if let Some(found) = map.get(lane).and_then(|t| t.stragglers.clone()) {
+                std::thread::spawn(move || {
+                    let left = crate::signals::descendants(pid);
+                    *found.left.locked() = left.clone();
+                    crate::signals::group(pid, crate::signals::INTERRUPT);
+                    // Asked first, then ended: measured on OpenCode 1.18.30, an interrupt while
+                    // a tool runs is ignored — twice, for six seconds, with the tool alive.
+                    let deadline = std::time::Instant::now() + STOP_GRACE;
+                    while std::time::Instant::now() < deadline {
+                        if found.reaped.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    crate::signals::end_all(pid, &left);
+                });
+                return;
+            }
             crate::signals::group(pid, crate::signals::INTERRUPT);
         }
+    }
+
+    /// This turn's agent starts its tools in process groups of their own, so Stop must walk its
+    /// tree before interrupting it. Returns where Stop will leave what it found.
+    pub(crate) fn detaches(&self, lane: &str, token: u64) -> Arc<Detached> {
+        let found = Arc::new(Detached::default());
+        if let Some(turn) = self.running.locked().get_mut(lane)
+            && turn.token == token
+        {
+            turn.stragglers = Some(found.clone());
+        }
+        found
     }
 
     pub fn set_repo(&self, path: Utf8PathBuf) {

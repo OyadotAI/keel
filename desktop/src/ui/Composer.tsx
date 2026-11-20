@@ -1,7 +1,7 @@
 // Native chat composition keeps file references, uploads, and queued messages as separate intent.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get, url } from "../api";
-import { AGENT_NAME, EFFORTS, rememberedCommands, useStore, type Attachment, type Effort, type Lane } from "../store";
+import { AGENT_NAME, EFFORTS, oneShot, rememberedCommands, useStore, type Attachment, type Effort, type Lane } from "../store";
 import { LaneDock } from "./PreReview";
 import { Working } from "./Working";
 import { activity } from "./StatusBar";
@@ -33,8 +33,8 @@ export function Composer({ lane }: { lane: string }) {
   const reported = useStore((s) => s.lanes[lane]?.commands);
   const commands = useMemo(() => reported ?? rememberedCommands(agentId), [reported, agentId]);
   const receipt = useStore((s) => s.lanes[lane]?.receipt);
-  // Claude and Codex take words mid-turn; Antigravity's one-shot turn can only queue them.
-  const joins = useStore((s) => s.lanes[lane]?.agent !== "antigravity" && !s.lanes[lane]?.queued.length);
+  // Claude and Codex take words mid-turn; a one-shot turn (Antigravity, OpenCode) can only queue them.
+  const joins = useStore((s) => !oneShot(s.lanes[lane]?.agent) && !s.lanes[lane]?.queued.length);
   const [uploading, setUploading] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [subagents, setSubagents] = useState<{ name: string; display_name: string }[]>([]);

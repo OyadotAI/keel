@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type S
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
-import { useStore, agentName, projectTrust } from "../store";
+import { useStore, agentName, oneShot, projectTrust } from "../store";
 import { BROWSER_CHOICE } from "../browser-preference";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
@@ -326,7 +326,7 @@ function LaneError({ lane }: { lane: string }) {
   return (
     <div className="banner error" role="alert">
       {plainError(error)}{" "}
-      {agent !== "antigravity" && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
+      {!oneShot(agent) && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
       <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined, nameError: undefined } } }))}>
         Dismiss
       </button>
@@ -447,7 +447,7 @@ function Welcome() {
       )}
       <p>
         {none
-          ? "Each lane runs your own Claude Code, Codex or Antigravity in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
+          ? "Each lane runs your own Claude Code, Codex, Antigravity or OpenCode in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
           : "Each lane is one conversation. Open one on the left, or start a new one under a project."}
       </p>
       {none && <InterfaceSetting />}

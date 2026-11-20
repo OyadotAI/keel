@@ -1,8 +1,9 @@
-//! Which conversation a Codex or Antigravity terminal started.
+//! Which conversation a Codex, Antigravity or OpenCode terminal started.
 //!
 //! Claude Code takes `--session-id`, so Keel picks the id before the first word is typed. Codex
 //! and `agy` take none: each names its conversation itself when the person first sends it
-//! something, and says so nowhere but on disk. Until Keel learns the id, the lane cannot resume
+//! something, and says so nowhere but on disk. OpenCode takes `--session` only for one that
+//! already exists, so its first is found the same way, as a row in its database. Until Keel learns the id, the lane cannot resume
 //! after a relaunch and cannot switch to the chat view — it refused, saying the terminal "does not
 //! expose its session ID". So the PTY thread looks for the conversation that appeared in its
 //! checkout after it started the CLI, and the lane takes that id.
@@ -48,6 +49,15 @@ pub fn started(
             taken,
             || holder.and_then(open_by),
         ),
+        "opencode" => {
+            let since = since
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()?
+                .as_millis();
+            let cwd = camino::Utf8Path::from_path(cwd)?;
+            let db = keel_workspace::opencode::db_path()?;
+            keel_workspace::opencode::started(&db, cwd, since as i64, taken)
+        }
         _ => None,
     }
 }

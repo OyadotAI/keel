@@ -136,10 +136,12 @@ export function createLaneNames(d: Dependencies) {
   return { rename, register, reconcile, flush };
 }
 
+/** How each agent's own CLI reopens a session by id: one map, so the sidebar and History agree. */
+export const RESUME: Record<Agent, string> = { claude: "claude --resume", codex: "codex resume", antigravity: "agy --conversation", opencode: "opencode -s" };
+
 /// Copy the native resume command for the History entry's provider, without changing its identity.
 export function resumeCommand(session: Session): string {
-  const command = { claude: "claude --resume", codex: "codex resume", antigravity: "agy --conversation" };
-  return `${command[session.provider ?? "claude"]} ${session.id}`;
+  return `${RESUME[session.provider ?? "claude"]} ${session.id}`;
 }
 
 function validName(name: string): boolean {

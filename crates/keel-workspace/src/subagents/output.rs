@@ -44,6 +44,8 @@ pub(super) fn read(entry: &Entry) -> Detail {
     };
     let data = if entry.provider == Follows::Antigravity {
         agy::rows(&path)
+    } else if entry.provider == Follows::OpenCode {
+        opencode_lines(&path, entry.invocation.child.as_deref().unwrap_or_default())
     } else {
         let size = std::fs::metadata(&path)
             .map(|m| m.len())
@@ -110,6 +112,13 @@ pub(super) fn read(entry: &Entry) -> Detail {
     }
     trim(&mut detail);
     detail
+}
+/// A child session's most recent parts, as the lines its decoder reads.
+fn opencode_lines(db: &camino::Utf8Path, child: &str) -> Option<(Vec<serde_json::Value>, bool)> {
+    let start = crate::opencode::replay_start(db, child)?;
+    let (lines, _) = crate::opencode::parts(db, child, start, crate::opencode::MAX_PARTS)?;
+    let values = lines.iter().filter_map(|l| serde_json::from_str(l).ok());
+    Some((values.collect(), start > 0))
 }
 fn fold(items: &mut Vec<OutputLine>, chunks: &mut BTreeMap<String, usize>, op: Op) {
     match op {
@@ -210,5 +219,10 @@ pub(super) fn authorized(entry: &Entry) -> bool {
                     })
         }
         Follows::Antigravity => path.file_stem() == entry.invocation.child.as_deref(),
+        Follows::OpenCode => entry
+            .owner
+            .as_ref()
+            .zip(entry.invocation.child.as_ref())
+            .is_some_and(|(parent, child)| crate::opencode::child_of(&path, parent, child)),
     }
 }

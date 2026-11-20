@@ -103,7 +103,7 @@ mod tests {
         let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         std::fs::write(root.join("日本語 file.rs"), "test").unwrap();
         let state = AppState::new(root.clone());
-        for provider in ["claude", "codex", "antigravity"] {
+        for provider in crate::agent::PROVIDERS.iter().copied() {
             let mut q = query(root.as_str(), "日本語 file.rs");
             q.provider = Some(provider.into());
             let sent = provider_prompt(&state, &q, &root).unwrap();

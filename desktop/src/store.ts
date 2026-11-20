@@ -111,8 +111,10 @@ export type ChatInterface = "chat" | "terminal";
 /** Effort levels both runtimes take; `max` is Claude's, and Codex runs it as `xhigh`. */
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
-export type Agent = "claude" | "codex" | "antigravity";
-export const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
+export type Agent = "claude" | "codex" | "antigravity" | "opencode";
+export const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode" };
+/** Agents whose chat turn is one process per send: words typed mid-turn can only queue, and Keel's Settings has no sign-in for them. */
+export const oneShot = (agent?: Agent) => agent === "antigravity" || agent === "opencode";
 export const agentName = (agent?: Agent) => AGENT_NAME[agent ?? "claude"];
 
 export interface Attachment { path: string; name: string; mime?: string; preview?: string }
@@ -841,10 +843,10 @@ export const useStore = create<State>()((set, getState, api) => {
     void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : p.tool === "BrowserChoice" ? "The agent wants to use a browser. Choose where this lane browses." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
   }
 
-  /// Whose transcripts Keel follows: Claude's anywhere, and a Codex or Antigravity terminal's —
+  /// Whose transcripts Keel follows: Claude's anywhere, and a Codex, Antigravity or OpenCode terminal's —
   /// their chat lanes are Keel's own stream, read from the agent directly.
   function followable(l: Lane): boolean {
-    return (l.agent ?? "claude") === "claude" || ((l.agent === "codex" || l.agent === "antigravity") && l.interface === "terminal");
+    return (l.agent ?? "claude") === "claude" || (l.interface === "terminal" && !!l.agent);
   }
 
   /// Follow a lane's transcript for as long as the lane is open: every turn, as the CLI writes
@@ -945,7 +947,7 @@ export const useStore = create<State>()((set, getState, api) => {
         // one Keel has already seen, is not a wait — the pane sat empty saying nothing while this
         // retried every two seconds forever. It keeps looking, and says why it has nothing.
         if (missing && now.known && tries === 5)
-          lane(lid, { error: `Keel cannot find this conversation's transcript under ${({ codex: "~/.codex/sessions", antigravity: "~/.gemini/antigravity-cli/conversations" } as Record<string, string>)[l.agent ?? ""] ?? "~/.claude/projects"}. It keeps looking; if the folder was moved or renamed, open the conversation from History.` });
+          lane(lid, { error: `Keel cannot find this conversation's transcript ${({ codex: "under ~/.codex/sessions", antigravity: "under ~/.gemini/antigravity-cli/conversations", opencode: "in OpenCode's database" } as Record<string, string>)[l.agent ?? ""] ?? "under ~/.claude/projects"}. It keeps looking; if the folder was moved or renamed, open the conversation from History.` });
         // Not written yet is a wait; anything else backs off, to a ceiling.
         const wait = missing ? 2000 : Math.min(30_000, 1000 * 2 ** Math.min(tries, 5));
         setTimeout(() => void follow(lid), wait);
@@ -956,11 +958,11 @@ export const useStore = create<State>()((set, getState, api) => {
 
   /// Words typed while a turn runs join it, as they do in the CLI. Claude and Codex take them
   /// mid-turn; the runtime says whether they landed, and what did not (the turn was already
-  /// finishing, an Antigravity turn, attachments, a message of Keel's own) is queued as before.
+  /// finishing, an Antigravity or OpenCode turn, attachments, a message of Keel's own) is queued as before.
   async function steered(lid: string, l: Lane, prompt: string, with_: { attachments: Attachment[]; references: FileReference[]; system?: string; ownsDraft: boolean }): Promise<boolean> {
     const ep = getState().projects[l.project]?.endpoint;
     const plain = !with_.attachments.length && !with_.references.length && !with_.system && !prompt.trim().startsWith("/");
-    if (!ep || !l.running || l.submitting || !l.managed || l.agent === "antigravity" || l.queued.length || !plain) return false;
+    if (!ep || !l.running || l.submitting || !l.managed || oneShot(l.agent) || l.queued.length || !plain) return false;
     try {
       if (!(await post<{ ok?: boolean }>(ep, "/api/chat/control", { lane: lid, method: "steer", prompt })).ok) return false;
     } catch { return false; }

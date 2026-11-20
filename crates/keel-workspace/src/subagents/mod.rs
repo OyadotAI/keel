@@ -7,6 +7,7 @@ mod discovery;
 mod json;
 mod model;
 mod observer;
+mod opencode;
 mod output;
 
 pub use model::{Availability, Detail, Invocation, OutputLine, Snapshot, Status};

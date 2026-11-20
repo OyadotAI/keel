@@ -38,6 +38,7 @@ mod lock;
 mod mcp;
 mod monitor;
 mod names;
+mod opencode;
 mod pair;
 mod path;
 mod permissions;
@@ -328,7 +329,7 @@ fn main() -> Result<()> {
     // to a second per tool call with a heavy `.zshrc`.
     if std::env::args_os()
         .nth(1)
-        .is_none_or(|a| a != "approve" && a != "antigravity-hook")
+        .is_none_or(|a| a != "approve" && a != "antigravity-hook" && a != "opencode-hook")
     {
         path::adopt_shell_path();
     }
@@ -364,6 +365,11 @@ fn main() -> Result<()> {
         } else {
             antigravity::run();
         }
+        return Ok(());
+    }
+    // OpenCode's, the same way: its plugin reads anything but a printed `allow` as a refusal.
+    if args.get(1).is_some_and(|a| a == "opencode-hook") {
+        opencode::run();
         return Ok(());
     }
     let cli = match Cli::try_parse_from(&args) {

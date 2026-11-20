@@ -14,7 +14,7 @@ export function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane:
     <div className="pr-target"><strong>{branch} → {base}</strong>{review?.sha && <span className="small muted">Reviewed commit {review.sha.slice(0, 7)}</span>}</div>
     <label className="small">Pull request title<input className="field" value={form.title} onChange={(e) => updateReviewForm(lane, ep, wt, { title: e.target.value })} placeholder="From commits when left empty" aria-label="Pull request title" /></label>
     <label className="small pr-draft"><input type="checkbox" checked={form.draft} onChange={(e) => updateReviewForm(lane, ep, wt, { draft: e.target.checked })} /> Open as a draft</label>
-    <p className="small muted">Reviews run locally using Claude Code. Claude Code must be installed and signed in, including for Codex and Antigravity lanes.</p>
+    <p className="small muted">Reviews run locally using Claude Code. Claude Code must be installed and signed in, including for Codex, Antigravity and OpenCode lanes.</p>
     <p className="small muted">Reviewing does not open a pull request. You choose when to open it using GitHub CLI (gh).</p>
     <PreReview lane={lane} ep={ep} wt={wt} place="tab" />
     {!hasResult && <div className="actions"><button className="primary" disabled={pending || !snapshot?.confirmed} onClick={() => void startReview(lane, ep, wt)}>{snapshot?.operation === "start" ? "Starting review…" : "Review branch"}</button><button disabled={pending || !snapshot?.confirmed} onClick={() => void openPullRequest(ep, wt, form, lane)}>Open without review</button></div>}

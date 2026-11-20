@@ -6,6 +6,7 @@ mod antigravity_proto;
 mod claude;
 mod codex;
 mod files;
+mod opencode;
 
 /// Provider roots are injected so naming tests never touch the person's conversations.
 #[derive(Clone)]
@@ -13,6 +14,8 @@ pub struct SessionNames {
     pub claude: Utf8PathBuf,
     pub codex: Utf8PathBuf,
     pub antigravity: Utf8PathBuf,
+    /// OpenCode's one database, not a directory: every session's name is a row in it.
+    pub opencode: Utf8PathBuf,
 }
 
 /// A native name plus its change fingerprint, without conversation content.
@@ -32,6 +35,7 @@ impl SessionNames {
             claude: crate::claude_home()?,
             codex: crate::codex_home()?,
             antigravity: crate::home()?.join(".gemini/antigravity-cli"),
+            opencode: crate::opencode::db_path()?,
         })
     }
 
@@ -42,6 +46,10 @@ impl SessionNames {
         cwd: &Utf8Path,
         id: &str,
     ) -> Result<Option<NativeName>, String> {
+        // OpenCode's ids carry an underscore the other three never do, so it checks its own.
+        if provider == "opencode" {
+            return opencode::read(&self.opencode, cwd, id);
+        }
         files::valid_id(id)?;
         match provider {
             "claude" => Ok(claude::read(&self.claude, cwd, id)),
@@ -51,7 +59,8 @@ impl SessionNames {
         }
     }
 
-    /// Rename existing native metadata; Codex writes must go through its App Server API.
+    /// Rename existing native metadata; Codex writes must go through its App Server API, and
+    /// OpenCode's database is never written by Keel.
     pub fn rename(
         &self,
         provider: &str,

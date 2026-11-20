@@ -817,3 +817,123 @@ fn words_typed_mid_turn_replay_in_their_turn() {
     assert!(t.steps.iter().any(|(k, _)| k == "you"));
     assert!(t.text.values().any(|v| v == "Also say BANANA."));
 }
+
+fn opencode_fold(lines: &[String], source: Source) -> Fold {
+    let mut d = Decoder::new(Provider::OpenCode, source);
+    let now = Instant::now();
+    let mut frames = match source {
+        Source::Chat => d.open(Some("x".into()), None, None, None),
+        Source::Transcript => Vec::new(),
+    };
+    for line in lines {
+        frames.extend(d.feed(line, None, now));
+    }
+    frames.extend(d.close(Ending::Done));
+    let mut f = Fold::default();
+    f.apply(&frames);
+    f
+}
+
+/// OpenCode 1.18.30, one recorded `run --format json` turn (a command, a file written, a
+/// reply): the stream a chat lane reads and the database a terminal lane or a replay reads fold
+/// to the same steps, calls and tokens. Two decoders for one agent is how they drift.
+#[test]
+fn opencode_fixture_decodes_to_the_same_turn_live_and_from_the_database() {
+    use crate::opencode::tests as oc;
+    let raw = include_str!("../../tests/fixtures/opencode-run.jsonl");
+    let stream: Vec<String> = raw.lines().map(str::to_string).collect();
+    let live = opencode_fold(&stream, Source::Chat);
+
+    let (_dir, db) = oc::db();
+    let ses = "ses_fixture";
+    oc::message(
+        &db,
+        ses,
+        "msg_0",
+        json!({"role": "user", "time": {"created": 1}}),
+    );
+    oc::part(
+        &db,
+        ses,
+        "msg_0",
+        "prt_000000000001user",
+        json!({"type": "text", "text": "x"}),
+    );
+    for v in stream
+        .iter()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+    {
+        let p = &v["part"];
+        let msg = p["messageID"].as_str().unwrap();
+        oc::message(&db, ses, msg, json!({"role": "assistant"}));
+        oc::part(&db, ses, msg, p["id"].as_str().unwrap(), p.clone());
+    }
+    let (lines, _) = crate::opencode::parts(&db, ses, 0, 100).unwrap();
+    let replay = opencode_fold(&lines, Source::Transcript);
+
+    let (a, b) = (&live.turns[0], &replay.turns[0]);
+    assert_eq!(a.steps, b.steps);
+    assert_eq!(a.text, b.text);
+    assert_eq!(a.calls, b.calls);
+    assert_eq!(a.usage, b.usage);
+    assert_eq!(b.key.as_deref(), Some("msg_0"));
+    assert_eq!(
+        b.closed,
+        Some(Ending::Done),
+        "a step that asks for no tool ends the turn"
+    );
+
+    let kinds: Vec<&str> = a.steps.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, ["call", "call", "say"]);
+    let bash = &a.calls["chatcmpl-tool-8c7193cb0112d3f3"];
+    assert_eq!(bash.tool, "Bash");
+    assert_eq!(bash.output.as_deref(), Some("keel-fixture .\n"));
+    let write = &a.calls["chatcmpl-tool-9fc35c5e77c01be4"];
+    assert_eq!(write.tool, "Write");
+    assert_eq!(
+        write.input.as_ref().unwrap()["file_path"],
+        "/work/oc/out.txt"
+    );
+    assert_eq!(a.usage, Some((19153 + 297 + 140, 18 + 54 + 76 + 8 + 3)));
+}
+
+/// OpenCode's tools under Claude's names, so one approval card and one activity verb serve four
+/// agents — and a name nobody has seen stays itself, to be asked about.
+#[test]
+fn opencode_tools_take_claudes_names() {
+    let args = json!({"filePath": "a.rs", "oldString": "x", "newString": "y"});
+    let (tool, input) = opencode_tool("edit", &args, &["keel"]);
+    assert_eq!(
+        (tool.as_str(), &input["file_path"], &input["old_string"]),
+        ("Edit", &json!("a.rs"), &json!("x"))
+    );
+    assert_eq!(
+        opencode_tool("keel_browser_read", &json!({}), &["keel"]).0,
+        "mcp__keel__browser_read"
+    );
+    assert_eq!(
+        opencode_tool("oya_get_weather", &json!({}), &["keel"]).0,
+        "oya_get_weather"
+    );
+    assert_eq!(
+        opencode_tool("apply_patch", &json!({}), &["keel"]).0,
+        "apply_patch"
+    );
+}
+
+/// A failed run prints one `error` line and exits (measured: an unreachable model). It is a
+/// failure the page can name, not a remark in the raw log.
+#[test]
+fn an_opencode_error_line_is_a_failure() {
+    let raw = include_str!("../../tests/fixtures/opencode-error.jsonl");
+    let mut d = Decoder::new(Provider::OpenCode, Source::Chat);
+    let mut frames = d.open(Some("x".into()), None, None, None);
+    frames.extend(d.feed(raw.trim(), None, Instant::now()));
+    let failure = frames.iter().find_map(|f| match &f.op {
+        Op::Failure { kind, message, .. } => Some((kind.clone(), message.clone())),
+        _ => None,
+    });
+    let (kind, message) = failure.expect("a failure op");
+    assert_eq!(kind, "api_error");
+    assert!(message.starts_with("Cannot connect to API"));
+}

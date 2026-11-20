@@ -511,6 +511,38 @@ fn pty_thread(
                         c.env("KEEL_AGY_MODE", "acceptEdits");
                         c.env("KEEL_AGY_TERMINAL", "1");
                     }
+                    if agent == "opencode"
+                        && !crate::permissions::trusted(&repo)
+                        && crate::opencode::project_config(camino::Utf8Path::new(cwd))
+                    {
+                        let _ = out.blocking_send(Out::Bytes(
+                            format!("{}\r\n", crate::opencode::UNTRUSTED_CONFIG).into_bytes(),
+                        ));
+                        return;
+                    }
+                    if agent == "opencode" {
+                        // Its gate. Without it this terminal would run commands unasked, so one
+                        // that cannot have it does not start.
+                        match crate::opencode::env(&crate::opencode::Run {
+                            port,
+                            lane: lane.as_deref(),
+                            cwd,
+                            mode: "acceptEdits",
+                            terminal: true,
+                            trusted: crate::permissions::trusted(&repo),
+                        }) {
+                            Ok(env) => env.into_iter().for_each(|(k, v)| c.env(k, v)),
+                            Err(why) => {
+                                let _ = out.blocking_send(Out::Bytes(
+                                    format!(
+                                        "Keel could not write OpenCode's approval gate: {why}\r\n"
+                                    )
+                                    .into_bytes(),
+                                ));
+                                return;
+                            }
+                        }
+                    }
                     c
                 }
                 Err(why) => {

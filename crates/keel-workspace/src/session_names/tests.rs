@@ -11,6 +11,7 @@ fn fixture() -> (tempfile::TempDir, SessionNames, Utf8PathBuf) {
         claude: root.join("claude"),
         codex: root.join("codex"),
         antigravity: root.join("agy"),
+        opencode: root.join("opencode.db"),
     };
     (tmp, homes, cwd)
 }
@@ -126,4 +127,37 @@ fn identifiers_are_validated_before_provider_paths_are_used() {
         assert!(homes.read(provider, &cwd, "../foreign").is_err());
         assert!(homes.rename(provider, &cwd, "../foreign", "No").is_err());
     }
+}
+
+/// OpenCode's name is the session row's title, read with counts and times and never a message
+/// body (non-negotiable 7), and only for the checkout the session ran in.
+#[test]
+fn an_opencode_session_is_named_by_its_row_and_only_in_its_checkout() {
+    let (_tmp, homes, cwd) = fixture();
+    let c = Connection::open(&homes.opencode).unwrap();
+    c.execute_batch(
+        "CREATE TABLE session(id TEXT PRIMARY KEY,directory TEXT,title TEXT,time_updated INTEGER);
+         CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,data TEXT);
+         INSERT INTO message VALUES('m1','ses_a1','{\"secret\":true}'),('m2','ses_a1','{}');",
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO session VALUES('ses_a1',?1,'Fix the login',86400000)",
+        [cwd.as_str()],
+    )
+    .unwrap();
+    let name = homes.read("opencode", &cwd, "ses_a1").unwrap().unwrap();
+    assert_eq!(name.title.as_deref(), Some("Fix the login"));
+    assert_eq!(name.messages, 2);
+    assert_eq!(
+        name.last_active.as_deref(),
+        Some("1970-01-02T00:00:00.000Z")
+    );
+    assert!(
+        homes
+            .read("opencode", Utf8Path::new("/elsewhere"), "ses_a1")
+            .is_err()
+    );
+    assert!(homes.read("opencode", &cwd, "ses_a1' --").is_err());
+    assert!(homes.rename("opencode", &cwd, "ses_a1", "x").is_err());
 }

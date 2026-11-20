@@ -32,7 +32,7 @@ pub(crate) struct View {
     guidance: crate::guidance::Delivery,
 }
 fn task_for(repository: &Repository, id: &Identity) -> Result<Option<Task>, String> {
-    if !["claude", "codex", "antigravity"].contains(&id.provider.as_str())
+    if !crate::agent::PROVIDERS.contains(&id.provider.as_str())
         || !tracking::valid(&id.lane)
         || !tracking::valid(&id.session)
     {

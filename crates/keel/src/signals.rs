@@ -131,6 +131,13 @@ pub fn descendants(pid: u32) -> Vec<u32> {
 #[cfg(unix)]
 pub fn end_all(pid: u32, stragglers: &[u32]) {
     end_tree(pid);
+    end_each(stragglers);
+}
+
+/// End processes that left their agent's group, and the group each may lead — without touching
+/// the agent's own, for a caller whose agent is already reaped and its pid free to be reused.
+#[cfg(unix)]
+pub fn end_each(stragglers: &[u32]) {
     for &p in stragglers {
         // Safety: kill(2) on a pid, then on the group it may lead. A pid that is already gone is
         // ESRCH and ignored.

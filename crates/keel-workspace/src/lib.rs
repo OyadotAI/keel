@@ -22,6 +22,7 @@ pub mod conversation;
 mod follow;
 pub mod locations;
 pub mod moved;
+pub mod opencode;
 mod plugins;
 mod session_names;
 mod sessions;

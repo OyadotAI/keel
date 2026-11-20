@@ -468,6 +468,24 @@ pub const CODEX: &str = "codex";
 /// Terminal Antigravity has no native permission gate underneath Keel; unlike accept-edits chat,
 /// an untrusted terminal edit must ask, including when trust was withdrawn after launch.
 pub const AGY_TERMINAL: &str = "antigravity-terminal";
+/// An OpenCode chat turn, and an OpenCode terminal: Keel's plugin is their only gate, as
+/// Antigravity's hook is its (`opencode.rs`).
+pub const OPENCODE: &str = "opencode";
+pub const OPENCODE_TERMINAL: &str = "opencode-terminal";
+
+/// A caller whose hook is the only gate: nothing sits underneath a `defer`, so nobody answering
+/// is a refusal and only a command read whole is waved through.
+fn only_gate(provider: &str) -> bool {
+    matches!(
+        provider,
+        "antigravity" | AGY_TERMINAL | OPENCODE | OPENCODE_TERMINAL
+    )
+}
+
+/// A terminal agent whose own questions Keel's gate replaced: an untrusted edit must ask.
+fn gated_terminal(provider: &str) -> bool {
+    matches!(provider, AGY_TERMINAL | OPENCODE_TERMINAL)
+}
 
 /// Whether this caller takes the answer as final: nothing checks the call after Keel does. Such a
 /// caller only reaches Keel because its own gate already declined, so `allow` is said only where
@@ -476,7 +494,7 @@ pub const AGY_TERMINAL: &str = "antigravity-terminal";
 /// with no Claude Code after it to read them. The MCP gate was left out when it got its own name,
 /// and a deny rule on a Browser tab tool stopped holding for Codex lanes.
 fn reads_the_persons_denies(provider: &str) -> bool {
-    matches!(provider, "antigravity" | AGY_TERMINAL | CODEX | MCP_GATE)
+    only_gate(provider) || matches!(provider, CODEX | MCP_GATE)
 }
 
 fn is_final(provider: &str) -> bool {
@@ -574,7 +592,8 @@ async fn decide(
     hook: HookInput,
 ) -> Result<Json<Decision>, (StatusCode, String)> {
     let repo = state.repo();
-    let strict = matches!(hook.provider.as_str(), "antigravity" | AGY_TERMINAL);
+    let strict = only_gate(&hook.provider);
+    let opencode = matches!(hook.provider.as_str(), OPENCODE | OPENCODE_TERMINAL);
     let sdk = is_final(&hook.provider);
     // Keel's own Browser tab tools are decided whole here, for every caller (`keel_decides`), so
     // the person's deny rules are read here for them too.
@@ -582,6 +601,9 @@ async fn decide(
     let reads_denies = reads_the_persons_denies(&hook.provider) || browser;
     if strict {
         crate::antigravity::note_asked(&hook.tool_use_id);
+    }
+    if hook.provider == OPENCODE {
+        crate::opencode::announce(&hook);
     }
 
     // A background lifetime is not authorization to execute. Only hand the command to the
@@ -592,7 +614,12 @@ async fn decide(
     if strict && background {
         return Ok(Json(Decision {
             decision: "deny".into(),
-            reason: crate::antigravity::BACKGROUND.into(),
+            reason: if opencode {
+                crate::opencode::BACKGROUND
+            } else {
+                crate::antigravity::BACKGROUND
+            }
+            .into(),
         }));
     }
 
@@ -778,7 +805,7 @@ async fn decide(
         && !leaves_the_project
         && !unsure
         && !sdk
-        && hook.provider != AGY_TERMINAL
+        && !gated_terminal(&hook.provider)
     {
         // Inside the repository is what `acceptEdits` already covers; nothing to ask.
         return Ok(Json(Decision {
@@ -2083,7 +2110,14 @@ pub(crate) mod tests {
     /// The person's deny rules hold wherever no Claude Code reads them after Keel.
     #[test]
     fn every_caller_with_nothing_after_keel_reads_the_persons_denies() {
-        for p in ["antigravity", AGY_TERMINAL, CODEX, MCP_GATE] {
+        for p in [
+            "antigravity",
+            AGY_TERMINAL,
+            OPENCODE,
+            OPENCODE_TERMINAL,
+            CODEX,
+            MCP_GATE,
+        ] {
             assert!(reads_the_persons_denies(p), "{p}");
         }
         for p in ["", SDK] {

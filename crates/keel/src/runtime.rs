@@ -483,7 +483,8 @@ pub async fn chat(state: Arc<AppState>, q: ChatQuery) -> axum::response::Respons
     // no-blocking: wire channels only; the runner offloads filesystem preparation.
     // A turn per `agy -p`: the one-shot path already owns the claim, quarantine, the process
     // group, Stop and `turns::finish`, and the Rust decoder reads agy's stream.
-    if q.provider.as_deref() == Some("antigravity") {
+    // OpenCode the same way: one `opencode run` a turn.
+    if matches!(q.provider.as_deref(), Some("antigravity" | "opencode")) {
         use axum::response::IntoResponse;
         return crate::agent::chat(axum::extract::State(state), axum::extract::Query(q))
             .await

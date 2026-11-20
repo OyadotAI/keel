@@ -29,6 +29,8 @@ fn well_known() -> Vec<String> {
     [
         // Where `claude`'s own installer puts it.
         format!("{home}/.local/bin"),
+        // Where OpenCode's installer puts it.
+        format!("{home}/.opencode/bin"),
         format!("{home}/.bun/bin"),
         format!("{home}/.cargo/bin"),
         format!("{home}/.deno/bin"),
@@ -105,10 +107,11 @@ pub fn adopt_shell_path() {
     let mut dirs: Vec<_> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    // Where Claude Code, Codex and Antigravity install, each read from its own install.ps1.
+    // Where Claude Code, Codex, Antigravity and OpenCode install, each read from its installer.
     let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
     let app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
     let installs = [
+        home.as_ref().map(|h| h.join(".opencode").join("bin")),
         home.map(|h| h.join(".local").join("bin")),
         app_data
             .as_ref()

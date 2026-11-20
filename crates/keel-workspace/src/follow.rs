@@ -1,5 +1,6 @@
 //! Which agent's transcript a follower reads, and how — the one place the answer lives.
-//! Claude Code's and Codex's are JSONL; Antigravity's is a SQLite database read as lines.
+//! Claude Code's and Codex's are JSONL; Antigravity's is a SQLite database per conversation and
+//! OpenCode's is one database for every session, each read as lines.
 //!
 //! Following a terminal session was Claude's alone: the tail handler always read Claude's home and
 //! always built Claude's decoder, so a Codex terminal lane was idle in the sidebar and empty under
@@ -20,6 +21,7 @@ pub enum Agent {
     Claude,
     Codex,
     Antigravity,
+    OpenCode,
 }
 
 impl Agent {
@@ -29,6 +31,7 @@ impl Agent {
             None | Some("claude") => Ok(Agent::Claude),
             Some("codex") => Ok(Agent::Codex),
             Some("antigravity") => Ok(Agent::Antigravity),
+            Some("opencode") => Ok(Agent::OpenCode),
             Some(_) => Err("unknown agent"),
         }
     }
@@ -43,6 +46,15 @@ impl Agent {
                 dir,
                 id,
             )?,
+            Agent::OpenCode => {
+                let db = crate::opencode::db_path()?;
+                if !crate::opencode::session_in(&db, dir, id) {
+                    return None;
+                }
+                let mut found = Transcript::at(self, db);
+                found.session = id.to_string();
+                return Some(found);
+            }
         };
         Some(Transcript::at(self, path))
     }
@@ -53,6 +65,7 @@ impl Agent {
             Agent::Claude => Provider::Claude,
             Agent::Codex => Provider::Codex,
             Agent::Antigravity => Provider::Antigravity,
+            Agent::OpenCode => Provider::OpenCode,
         };
         Decoder::new(provider, Source::Transcript)
     }
@@ -67,6 +80,11 @@ pub struct Transcript {
     /// so a stream says each one finished exactly once.
     children: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, bool>>>,
     observation: std::sync::Arc<std::sync::Mutex<crate::antigravity::ObservationReader>>,
+    /// OpenCode's session id: its `path` is one database holding every session.
+    session: String,
+    /// OpenCode messages already said to have ended in an error. Such an ending is on the
+    /// message, past no cursor, so every read finds it again; a stream says it once.
+    ended: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl Transcript {
@@ -77,6 +95,8 @@ impl Transcript {
             path,
             children: Default::default(),
             observation: Default::default(),
+            session: String::new(),
+            ended: Default::default(),
         }
     }
 
@@ -104,7 +124,7 @@ impl Transcript {
         match self.agent {
             Agent::Claude => crate::sessions::followable,
             Agent::Codex => crate::codex::followable,
-            Agent::Antigravity => crate::antigravity::followable,
+            Agent::Antigravity | Agent::OpenCode => crate::antigravity::followable,
         }
     }
 
@@ -115,6 +135,9 @@ impl Transcript {
         if self.agent == Agent::Antigravity {
             lines.extend(self.children_done(&lines));
         }
+        if self.agent == Agent::OpenCode {
+            lines = self.once(lines);
+        }
         Some((lines, next))
     }
 
@@ -124,8 +147,24 @@ impl Transcript {
             Agent::Antigravity => {
                 crate::antigravity::steps(&self.path, from, crate::antigravity::MAX_REPLAY_STEPS)
             }
+            Agent::OpenCode => {
+                let max = crate::opencode::MAX_PARTS;
+                crate::opencode::parts(&self.path, &self.session, from, max)
+            }
             _ => crate::sessions::tail_file(&self.path, from, self.keep()),
         }
+    }
+
+    /// OpenCode's lines without an error ending this transcript has already said.
+    fn once(&self, lines: Vec<String>) -> Vec<String> {
+        let mut said = self.ended.lock().unwrap_or_else(|e| e.into_inner());
+        lines
+            .into_iter()
+            .filter(|l| {
+                let v: Value = serde_json::from_str(l).unwrap_or_default();
+                v["type"] != "turn_end" || said.insert(v["id"].as_str().unwrap_or_default().into())
+            })
+            .collect()
     }
 
     /// One line for each Antigravity subagent that has finished since the last read: those this
@@ -162,14 +201,20 @@ impl Transcript {
                 let (lines, next) = self.tail(start)?;
                 Some((lines, next, start))
             }
+            Agent::OpenCode => {
+                let start = crate::opencode::replay_start(&self.path, &self.session)?;
+                let (lines, next) = self.tail(start)?;
+                Some((lines, next, start))
+            }
             _ => crate::sessions::tail_last_file(&self.path, max, self.keep()),
         }
     }
 
-    /// Files whose change means the transcript moved: agy writes its write-ahead log first.
+    /// Files whose change means the transcript moved: agy and OpenCode write their write-ahead
+    /// log first.
     pub fn watched(&self) -> Vec<Utf8PathBuf> {
         match self.agent {
-            Agent::Antigravity => vec![
+            Agent::Antigravity | Agent::OpenCode => vec![
                 self.path.clone(),
                 Utf8PathBuf::from(format!("{}-wal", self.path)),
             ],
@@ -182,6 +227,7 @@ impl Transcript {
             Agent::Claude => crate::kind_of(line),
             Agent::Codex => crate::codex::kind_of(line),
             Agent::Antigravity => crate::antigravity::kind_of(line),
+            Agent::OpenCode => crate::opencode::kind_of(line),
         }
     }
 
@@ -190,6 +236,7 @@ impl Transcript {
             Agent::Claude => crate::opener_of(line),
             Agent::Codex => crate::codex::opener_of(line),
             Agent::Antigravity => crate::antigravity::opener_of(line),
+            Agent::OpenCode => crate::opencode::opener_of(line),
         }
     }
 
@@ -267,8 +314,31 @@ mod tests {
         assert!(t.opens_after(next, "turn-0"));
     }
 
+    /// An OpenCode message that ended in an error is found again by every read, because the
+    /// ending is on the message and past no cursor; a follower acting on it twice would close a
+    /// turn that had since reopened.
+    #[test]
+    fn an_opencode_error_ending_is_said_once() {
+        use crate::opencode::tests as oc;
+        let (_d, db) = oc::db();
+        let aborted = serde_json::json!({"role": "assistant",
+            "error": {"name": "MessageAbortedError", "data": {"message": "Aborted"}}});
+        oc::message(&db, "ses_a", "msg_1", serde_json::json!({"role": "user"}));
+        let text = serde_json::json!({"type": "text", "text": "go"});
+        oc::part(&db, "ses_a", "msg_1", "prt_000000000001aaaa", text);
+        oc::message(&db, "ses_a", "msg_2", aborted);
+        let mut t = Transcript::at(Agent::OpenCode, db);
+        t.session = "ses_a".into();
+        let (lines, next, _) = t.tail_last(0).unwrap();
+        assert_eq!(t.opener_of(&lines[0]).as_deref(), Some("msg_1"));
+        assert_eq!(t.kind_of(&lines[1]), Kind::TurnEnd);
+        assert_eq!(t.tail(next).unwrap().0.len(), 0);
+        assert!(!t.opens_after(next, "msg_1"));
+    }
+
     #[test]
     fn the_tail_names_the_agents_it_follows() {
+        assert_eq!(Agent::from_query(Some("opencode")), Ok(Agent::OpenCode));
         assert_eq!(Agent::from_query(None), Ok(Agent::Claude));
         assert_eq!(Agent::from_query(Some("codex")), Ok(Agent::Codex));
         assert_eq!(

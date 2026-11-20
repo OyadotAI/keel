@@ -560,3 +560,97 @@ fn claude_async_notifications_reconcile_before_call_discovery_in_every_native_fo
         assert_eq!(snapshot.invocations[0].status, Status::Done, "{form}");
     }
 }
+
+/// OpenCode 1.18.30: `task` makes a session whose `parent_id` is the asking session (measured;
+/// the child's tools never reach the parent's stream). The child is working until its newest
+/// reply asks for no tool, and its output is its own session's and nobody else's.
+#[test]
+fn an_opencode_child_session_is_a_subagent_until_its_last_reply() {
+    use crate::opencode::tests as oc;
+    let (_dir, db) = oc::db();
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute_batch(
+        "INSERT INTO session (id, parent_id, agent, time_created, time_updated) VALUES
+           ('ses_parent', NULL, 'build', 1000, 1000),
+           ('ses_child', 'ses_parent', 'general', 2000, 3000),
+           ('ses_other', 'ses_someone', 'general', 2000, 3000);",
+    )
+    .unwrap();
+    oc::message(&db, "ses_child", "msg_1", json!({"role": "user"}));
+    oc::part(
+        &db,
+        "ses_child",
+        "msg_1",
+        "prt_000000000001aaaa",
+        json!({"type": "text", "text": "do it"}),
+    );
+    oc::message(&db, "ses_child", "msg_2", json!({"role": "assistant"}));
+    let parent = Transcript::at(Follows::OpenCode, db.clone());
+    let mut o = Observer::new(parent, "/work".into(), "ses_parent".into());
+    let s = o.snapshot();
+    assert_eq!(
+        s.invocations.len(),
+        1,
+        "another session's child is not this one's"
+    );
+    assert_eq!(s.invocations[0].member.as_deref(), Some("general"));
+    assert_eq!(s.invocations[0].status, Status::Working);
+
+    let done = json!({"role": "assistant", "time": {"completed": 5}, "finish": "stop"});
+    oc::message(&db, "ses_child", "msg_2", done);
+    oc::part(
+        &db,
+        "ses_child",
+        "msg_2",
+        "prt_000000000002aaaa",
+        json!({"type": "text", "text": "child-ok"}),
+    );
+    c.execute(
+        "UPDATE session SET time_updated = 9000 WHERE id = 'ses_child'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(o.snapshot().invocations[0].status, Status::Done);
+    let detail = o.detail("ses_child").unwrap();
+    assert_eq!(detail.items.last().unwrap().text, "child-ok");
+}
+
+/// agy 1.5.x: a child conversation has no input step (14). It opens on the parent's message
+/// (101), and a later message after a finished response opens the next run.
+#[test]
+fn antigravity_child_opened_by_a_parent_message_is_a_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8Path::from_path(temp.path()).unwrap();
+    let parent = root.join("parent.db");
+    let c = database(&parent);
+    let call = bytes(2, b"invoke_subagent");
+    let out = b"Created At: now\n{\n  \"conversationId\":  \"child\"\n}";
+    let payload = [
+        bytes(5, &bytes(4, &call)),
+        bytes(140, &bytes(2, &bytes(1, out))),
+    ]
+    .concat();
+    row(&c, 0, 132, 3, &payload);
+    let child = database(&root.join("child.db"));
+    let tool = bytes(20, &bytes(7, &bytes(2, b"read_file")));
+    row(&child, 0, 90, 3, &[]);
+    row(&child, 1, 101, 3, &[]);
+    row(&child, 2, 15, 3, &tool);
+    row(&child, 3, 132, 3, &[]);
+    let mut observer = Observer::new(
+        Transcript::at(Follows::Antigravity, parent),
+        root.to_owned(),
+        "parent".into(),
+    );
+    let s = observer.snapshot();
+    assert_eq!(s.invocations.len(), 1);
+    assert_eq!(s.invocations[0].id, "antigravity:child:1");
+    assert_eq!(s.invocations[0].status, Status::Working);
+    row(&child, 4, 15, 3, &bytes(20, &bytes(1, b"Done")));
+    assert_eq!(observer.snapshot().invocations[0].status, Status::Done);
+    row(&child, 5, 101, 3, &[]);
+    row(&child, 6, 15, 8, &[]);
+    let s = observer.snapshot();
+    assert_eq!(s.invocations.len(), 2);
+    assert_eq!(s.invocations[1].status, Status::Working);
+}

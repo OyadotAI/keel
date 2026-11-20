@@ -14,6 +14,7 @@ fn fixture() -> (tempfile::TempDir, Repository, Identity) {
             claude: base.join("claude"),
             codex: base.join("codex"),
             antigravity: base.join("agy"),
+            opencode: base.join("opencode.db"),
         },
     };
     let identity = Identity {

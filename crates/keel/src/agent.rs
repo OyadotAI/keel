@@ -123,21 +123,42 @@ pub struct Stopped {
 /// Claude Code's tools. Each of those is refused in an agy lane with the opposite advice, and a
 /// refusal that contradicts the prompt is one the agent routes around.
 pub(crate) fn antigravity_prompt(repo: &Utf8Path) -> String {
+    hooked_prompt(
+        repo,
+        "Antigravity",
+        "ask in your reply as plain text and end the turn; their next message is the answer. \
+         `ask_question` is not available here.",
+    )
+}
+
+/// The same for an OpenCode lane, whose refusals say the same things in its own tools' names.
+pub(crate) fn opencode_prompt(repo: &Utf8Path) -> String {
+    hooked_prompt(
+        repo,
+        "OpenCode",
+        "call the `keel_ask_user` tool; it waits for their answer and returns it. `question` is \
+         not available here.",
+    )
+}
+
+/// Keel's prompt for a lane whose only gate is Keel's hook: `who` it is, and how it asks.
+fn hooked_prompt(repo: &Utf8Path, who: &str, ask: &str) -> String {
     const LAST: &str = "Keel also quarantines `.claude/settings.json` hooks.\n";
     let full = system_prompt(repo);
     let start = full.find("- Background commands belong to Keel");
     let end = full.find(LAST);
-    let rules = "- Run commands in the foreground. Keel does not run background commands for \
-        Antigravity lanes: a command that never exits (a dev server, a watcher) is for the person \
+    let rules = &format!(
+        "- Run commands in the foreground. Keel does not run background commands for \
+        {who} lanes: a command that never exits (a dev server, a watcher) is for the person \
         to start.\n\
         - Permissions: a command or edit may come back refused with a reason. Read the reason, do \
         not work around it with another tool, and say what you needed.\n\
-        - To ask the person something, ask in your reply as plain text and end the turn; their \
-        next message is the answer. `ask_question` is not available here.\n\
+        - To ask the person something, {ask}\n\
         - In plan mode nothing can be changed: no edits, no commands. Write the whole plan in your \
         reply.\n\
         - Git configuration, hooks and agent settings (`.git/`, `.claude/`, `.agents/`, \
-        `.vscode/`) are not yours to write.\n";
+        `.opencode/`, `.vscode/`) are not yours to write.\n"
+    );
     match (start, end) {
         (Some(a), Some(b)) if b > a => format!("{}{rules}{}", &full[..a], &full[b + LAST.len()..]),
         _ => full,
@@ -897,18 +918,12 @@ pub async fn chat(
         // could delay the Stop request for the entire preparation on a large repository.
         let base_system = if provider == "claude" || query.session.is_none() {
             let checkout = cwd.clone();
-            let agy = provider == "antigravity";
-            crate::serve::blocking(
-                move || {
-                    if agy {
-                        antigravity_prompt(&checkout)
-                    } else {
-                        system_prompt(&checkout)
-                    }
-                },
-                String::new(),
-            )
-            .await
+            let prompt = match provider {
+                "antigravity" => antigravity_prompt,
+                "opencode" => opencode_prompt,
+                _ => system_prompt,
+            };
+            crate::serve::blocking(move || prompt(&checkout), String::new()).await
         } else {
             String::new()
         };
@@ -951,6 +966,66 @@ pub async fn chat(
                 }
             });
         }
+        // OpenCode's gate and Keel's MCP server, in its environment for this run alone. A run
+        // without the plugin has no gate at all, so one that cannot have it does not start.
+        let opencode_env = if provider == "opencode" {
+            let (root, dir, lane, mode) = (
+                repo.clone(),
+                cwd.clone(),
+                query.lane.clone(),
+                query.mode.clone(),
+            );
+            let made = crate::serve::blocking(
+                move || {
+                    let trusted = crate::permissions::trusted(&root);
+                    if !trusted && crate::opencode::project_config(&dir) {
+                        return Err(crate::opencode::UNTRUSTED_CONFIG.to_string());
+                    }
+                    crate::opencode::env(&crate::opencode::Run {
+                        port,
+                        lane: lane.as_deref(),
+                        cwd: dir.as_str(),
+                        mode: match mode.as_deref() {
+                            Some("acceptEdits") => "acceptEdits",
+                            _ => "plan",
+                        },
+                        terminal: false,
+                        trusted,
+                    })
+                },
+                Err("the gate could not be prepared".into()),
+            )
+            .await;
+            match made {
+                Ok(env) => env,
+                Err(e) if e == crate::opencode::UNTRUSTED_CONFIG => {
+                    let _ = tx.send(Ok(said("fatal", e))).await;
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(said(
+                            "fatal",
+                            format!(
+                                "Keel could not write the approval gate OpenCode needs ({e}), so \
+                                 the turn did not start. Without it nothing would ask before a \
+                                 command ran."
+                            ),
+                        )))
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        // What an OpenCode turn is told, on its stdin: as an argument the prompt is stored
+        // wrapped in quotes (measured on 1.18.30).
+        let opencode_prompt = if query.session.is_some() {
+            provider_prompt.clone()
+        } else {
+            first_turn.clone()
+        };
         // The gate, written before anything can run: an `agy` without it has no gate at all.
         let agy_hooks = if provider == "antigravity" {
             let made = crate::serve::blocking(
@@ -1095,6 +1170,8 @@ pub async fn chat(
                 command.arg("--conversation").arg(session);
             }
             command
+        } else if provider == "opencode" {
+            opencode_command(&cwd, &query, opencode_env)
         } else if provider == "claude" {
             let mut command = Command::new(crate::permissions::program("claude"));
             command
@@ -1183,8 +1260,14 @@ pub async fn chat(
             command.env_remove(name);
         }
 
-        if let Some(model) = model_arg(query.model.as_deref()) {
+        // OpenCode names its model `provider/model` and took it in `opencode_command`.
+        if provider != "opencode"
+            && let Some(model) = model_arg(query.model.as_deref())
+        {
             command.arg("--model").arg(model);
+        }
+        if provider == "opencode" {
+            command.stdin(Stdio::piped());
         }
 
         // Its own process group, so Stop can interrupt the agent *and* whatever it started. A
@@ -1237,8 +1320,11 @@ pub async fn chat(
                     |scope| scope.set_tag("provider", provider),
                     || sentry::capture_message("could not start the agent", sentry::Level::Error),
                 );
-                let why = if provider == "antigravity" && e.kind() == std::io::ErrorKind::NotFound {
+                let missing = e.kind() == std::io::ErrorKind::NotFound;
+                let why = if provider == "antigravity" && missing {
                     AGY_MISSING.to_string()
+                } else if provider == "opencode" && missing {
+                    OPENCODE_MISSING.to_string()
                 } else {
                     format!("could not start `{provider}`: {e}. Is the CLI installed and on PATH?")
                 };
@@ -1247,6 +1333,15 @@ pub async fn chat(
             }
         };
 
+        // Written from the side and closed: a prompt past the pipe's buffer must not hold up the
+        // reads below, and OpenCode starts once its stdin ends.
+        if let Some(mut stdin) = child.child.stdin.take() {
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let _ = stdin.write_all(opencode_prompt.as_bytes()).await;
+                let _ = stdin.shutdown().await;
+            });
+        }
         // Recorded before the first line is read, so a Stop arriving immediately still finds it.
         let pid = child.child.id().unwrap_or(0);
         if pid != 0 {
@@ -1255,6 +1350,9 @@ pub async fn chat(
         // On the parent-death path for as long as it runs: `exit` alone would reparent the agent
         // and everything under it to init.
         let _tracked = crate::runtime::Tracked::new(pid);
+        // OpenCode's tool shells lead process groups of their own and survive its interrupt
+        // (measured), so Stop walks its tree first and leaves what it found here.
+        let stragglers = (provider == "opencode").then(|| stopper.detaches(&lane, token));
         let run_usage = crate::license::run(repo.clone()).await;
 
         // Drained, always, and not only to report it.
@@ -1308,6 +1406,22 @@ pub async fn chat(
         // agy says a spent quota only here, and exits 0 after it.
         let mut result_error: Option<String> = None;
         let mut agy_result = false;
+        // Whether OpenCode's last step finished without asking for another tool.
+        let mut opencode_finished = false;
+        // The calls an OpenCode turn asks about, heard as they ask: its stream says a tool only
+        // once it has settled.
+        let _opencode_rows = (provider == "opencode").then(|| {
+            let (listening, mut rows) =
+                crate::opencode::listen(&lane, query.session.as_deref().unwrap_or(""));
+            let tx = tx.downgrade();
+            tokio::spawn(async move {
+                while let Some(line) = rows.recv().await {
+                    let Some(tx) = tx.upgrade() else { return };
+                    let _ = tx.send(Ok(said("msg", line))).await;
+                }
+            });
+            listening
+        });
         // Codex's subagents, read from its own transcript for as long as the turn runs.
         let mut subagents: Option<Aborts> = None;
         if let Some(session) = &session {
@@ -1343,6 +1457,25 @@ pub async fn chat(
                     }
                     crate::lines::Next::Done => break,
                 };
+                // OpenCode's models for the composer's list, asked for once the run is talking:
+                // side by side on a fresh install, the two raced to create OpenCode's database
+                // and the turn died of "database is locked" (measured).
+                if provider == "opencode" && !streamed {
+                    let tx = tx.downgrade();
+                    tokio::spawn(async move {
+                        if let Some(models) = opencode_models().await
+                            && let Some(tx) = tx.upgrade()
+                        {
+                            let _ = tx
+                                .send(Ok(said(
+                                    "capabilities",
+                                    serde_json::json!({"models": models, "commands": []})
+                                        .to_string(),
+                                )))
+                                .await;
+                        }
+                    });
+                }
                 streamed = true;
                 if provider == "codex"
                     && subagents.is_none()
@@ -1433,6 +1566,75 @@ pub async fn chat(
                         _ => {}
                     }
                 }
+                if provider == "opencode"
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&line)
+                {
+                    // No transcript to key a turn off, so the key is Keel's own, as agy's is.
+                    if key.is_none()
+                        && let Some(id) = v["sessionID"].as_str()
+                    {
+                        if session.is_none() {
+                            session = Some(id.to_string());
+                            stopper.bound(&lane, token, id);
+                            crate::opencode::heard_as(&lane, id);
+                            let (task_repo, task_lane, task_session) =
+                                (repo.clone(), lane.clone(), id.to_string());
+                            let _ = crate::serve::in_blocking(move || {
+                                crate::tasks::session(&task_repo, &task_lane, &task_session)
+                            })
+                            .await;
+                        }
+                        let turn = format!(
+                            "keel-{}-{token}",
+                            crate::turns::now().replace([':', '.'], "-")
+                        );
+                        forwarder =
+                            Some(keyed(&stopper, &lane, token, &repo, id, &turn, &tx).await);
+                        key = Some(turn);
+                    }
+                    let part = &v["part"];
+                    match v["type"].as_str() {
+                        Some("tool_use")
+                            if part["state"]["status"] == "completed"
+                                && !crate::opencode::gated(
+                                    session.as_deref().unwrap_or_default(),
+                                    part["callID"].as_str().unwrap_or_default(),
+                                    part["tool"].as_str().unwrap_or_default(),
+                                    &part["state"]["input"],
+                                    query.mode.as_deref() != Some("acceptEdits"),
+                                ) =>
+                        {
+                            result_error = Some(crate::opencode::BYPASSED.into());
+                            let _ = tx.send(Ok(said("msg", line))).await;
+                            let _ = child.terminate().await;
+                            break;
+                        }
+                        Some("step_finish") => {
+                            opencode_finished = keel_workspace::opencode::ends(&v);
+                            let t = &part["tokens"];
+                            let n = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+                            let u = usage.get_or_insert_with(Default::default);
+                            u.input += n(&t["input"]);
+                            u.output += n(&t["output"]) + n(&t["reasoning"]);
+                            u.cache_read += n(&t["cache"]["read"]);
+                            u.cache_write += n(&t["cache"]["write"]);
+                            if let Some(cost) = part["cost"].as_f64().filter(|c| *c > 0.0) {
+                                u.cost_usd = Some(u.cost_usd.unwrap_or(0.0) + cost);
+                            }
+                        }
+                        Some("error") => {
+                            let e = &v["error"];
+                            result_error = Some(
+                                e["data"]["message"]
+                                    .as_str()
+                                    .or(e["name"].as_str())
+                                    .unwrap_or("OpenCode reported an error.")
+                                    .to_string(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 // Cheap substring checks first; the parse only runs on the three records that
                 // matter, of the thousands a turn streams.
                 if session.is_none()
@@ -1497,6 +1699,16 @@ pub async fn chat(
         // Before the turn closes: a subagent's end read after that would open a turn of its own.
         drop(subagents);
         let status = wait_for_agent(&mut child, &tx).await;
+        // What a stopped agent left running: the shells of its tools lead process groups of
+        // their own (OpenCode's survive its interrupt, measured), so its group does not reach
+        // them. Taken by Stop while the agent was alive to be walked from; ended now it is gone.
+        if let Some(detached) = &stragglers {
+            detached
+                .reaped
+                .store(true, std::sync::atomic::Ordering::Release);
+            #[cfg(unix)]
+            crate::signals::end_each(&detached.left.locked());
+        }
         drop(run_usage);
         // Reaped: off the parent-death list before the pid can be reused by something else.
         drop(_tracked);
@@ -1513,6 +1725,17 @@ pub async fn chat(
                 result_error = Some(AGY_UNFINISHED.into());
             }
             if result_error.is_some() && code == 0 {
+                code = 1;
+            }
+        }
+        // An OpenCode that exited without a last step did not finish: a spent quota retries in
+        // silence until the gate's plugin ends the run, and says why on stderr.
+        if provider == "opencode" && !stopped {
+            let said_why = !errors.locked().trim().is_empty();
+            if !opencode_finished && result_error.is_none() && !said_why {
+                result_error = Some(OPENCODE_UNFINISHED.into());
+            }
+            if (result_error.is_some() || !opencode_finished) && code == 0 {
                 code = 1;
             }
         }
@@ -1546,7 +1769,19 @@ pub async fn chat(
                     )
                 },
             );
-            if let Some(error) = result_error
+            if provider == "opencode" {
+                // Keel's own sentences go out as written; a provider's error is its own words.
+                let error = result_error.as_deref().unwrap_or(&why);
+                let sentence = match cause {
+                    _ if error == crate::opencode::BYPASSED || error == OPENCODE_UNFINISHED => {
+                        error
+                    }
+                    "limits" => OPENCODE_QUOTA,
+                    "auth" => OPENCODE_SIGNED_OUT,
+                    _ => error.lines().last().unwrap_or(error),
+                };
+                let _ = tx.send(Ok(said("fatal", sentence.to_string()))).await;
+            } else if let Some(error) = result_error
                 .as_deref()
                 .filter(|_| provider == "antigravity")
             {
@@ -1634,7 +1869,9 @@ pub async fn chat(
                     // Whatever an ungated tool wrote is not Keel's to vouch for with a commit.
                     refused: result_error
                         .as_deref()
-                        .filter(|e| *e == crate::antigravity::BYPASSED)
+                        .filter(|e| {
+                            *e == crate::antigravity::BYPASSED || *e == crate::opencode::BYPASSED
+                        })
                         .map(Into::into),
                 },
                 // Stop during the checks ends them, and nothing is committed (`stop_settling`).
@@ -1669,11 +1906,58 @@ const AGY_UNFINISHED: &str = "Antigravity ended without finishing the turn. Run 
 const AGY_MISSING: &str = "Antigravity isn't installed, and Keel has no installer for it on this \
     system. Install the agy CLI, run agy once to sign in, and send again.";
 
-/// The program a chat provider runs.
-fn program_of(provider: &str) -> &'static str {
+const OPENCODE_UNFINISHED: &str = "OpenCode ended without finishing the turn. Run opencode in a \
+    terminal to see why — a signed-out provider or a spent quota fails like this and says so there.";
+const OPENCODE_MISSING: &str = "OpenCode isn't installed, and Keel has no installer for it on this \
+    system. Install the opencode CLI, run opencode auth login once, and send again.";
+const OPENCODE_SIGNED_OUT: &str = "OpenCode has no provider signed in. Run opencode auth login in \
+    a terminal and pick a provider, then send again.";
+const OPENCODE_QUOTA: &str = "OpenCode's provider is out of quota for now. The limit belongs to \
+    the provider OpenCode is signed in to. Wait for the reset or choose another model, then send \
+    again.";
+
+/// One OpenCode turn: `opencode run`, its events as JSON lines, reasoning included, the prompt on
+/// stdin. The gate is in `env` (`opencode.rs`), which is why the two flags that would remove it —
+/// one drops plugins, one approves everything — are never passed; a test reads this function for
+/// them.
+fn opencode_command(
+    cwd: &Utf8Path,
+    query: &ChatQuery,
+    env: Vec<(&'static str, String)>,
+) -> Command {
+    let mut command = Command::new(crate::permissions::program("opencode"));
+    command
+        .current_dir(cwd)
+        .args(["run", "--format", "json", "--thinking", "--dir"])
+        .arg(cwd)
+        .envs(env);
+    // OpenCode's own planning agent, which has no edit tools; Keel's hook refuses them as well.
+    if query.mode.as_deref() != Some("acceptEdits") {
+        command.args(["--agent", "plan"]);
+    }
+    if let Some(session) = &query.session {
+        command.arg("--session").arg(session);
+    }
+    if let Some(model) = crate::opencode::model_arg(query.model.as_deref()) {
+        command.arg("--model").arg(model);
+    }
+    // A variant is the provider's own name for an effort; one a model lacks is ignored.
+    if let Some(effort) = effort_arg(query.effort.as_deref()) {
+        command.arg("--variant").arg(effort);
+    }
+    command
+}
+
+/// Every agent Keel drives, by the name a request and a stored task carry. One list, because
+/// four copies of it each had to learn about a new agent separately.
+pub(crate) const PROVIDERS: &[&str] = &["claude", "codex", "antigravity", "opencode"];
+
+/// The program a provider runs.
+pub(crate) fn program_of(provider: &str) -> &'static str {
     match provider {
         "codex" => "codex",
         "antigravity" => "agy",
+        "opencode" => "opencode",
         _ => "claude",
     }
 }
@@ -1943,6 +2227,15 @@ pub(crate) fn interactive(
             }
             Ok((crate::permissions::program("agy"), args))
         }
+        // The same gate as a chat turn, in its environment (`term.rs` sets it): OpenCode's own
+        // question is replaced by Keel's card, so a terminal lane asks where a chat lane does.
+        "opencode" => {
+            let mut args = vec![cwd.to_string()];
+            if resume {
+                args.extend(["--session".into(), session.to_string()]);
+            }
+            Ok((crate::permissions::program("opencode"), args))
+        }
         other => Err(format!("unknown agent `{other}`")),
     }
 }
@@ -2011,6 +2304,16 @@ struct AgentChild {
 impl AgentChild {
     async fn terminate(&mut self) -> std::io::Result<std::process::ExitStatus> {
         if let Some(pid) = self.child.id() {
+            // With what left its group: a closed lane or a stopped turn must not leave a tool's
+            // shell writing a tree whose claim is about to be released.
+            #[cfg(unix)]
+            {
+                let left = tokio::task::spawn_blocking(move || crate::signals::descendants(pid))
+                    .await
+                    .unwrap_or_default();
+                crate::signals::end_all(pid, &left);
+            }
+            #[cfg(not(unix))]
             crate::signals::end_tree(pid);
         }
         self.child.wait().await
@@ -2108,11 +2411,23 @@ async fn next_agent_line<R: tokio::io::AsyncBufRead + Unpin>(
         biased;
         _ = tx.closed() => {
             let _ = child.terminate().await;
-            None
+            return None;
         }
-        next = crate::lines::next(lines) => Some(next),
+        next = crate::lines::next(lines) => return Some(next),
+        _ = child.child.wait() => {}
     }
+    // The agent has exited and its pipe is still open: something it started holds the other
+    // end. Measured with OpenCode, whose tool shells lead their own process groups and survive
+    // its interrupt — a stopped turn sat "working" for as long as a `sleep` it had started
+    // lived. What is already written is read; the survivor is not waited for.
+    tokio::time::timeout(AFTER_EXIT, crate::lines::next(lines))
+        .await
+        .ok()
+        .or(Some(crate::lines::Next::Done))
 }
+
+/// How long a pipe is read after its agent has exited before the turn stops waiting on it.
+const AFTER_EXIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 async fn wait_for_agent(
     child: &mut AgentChild,
@@ -2167,6 +2482,7 @@ pub(crate) fn translate(
         let provider = match query.provider.as_deref() {
             Some("codex") => Provider::Codex,
             Some("antigravity") => Provider::Antigravity,
+            Some("opencode") => Provider::OpenCode,
             _ => Provider::Claude,
         };
         Decoder::new(provider, Source::Chat)
@@ -2174,7 +2490,7 @@ pub(crate) fn translate(
     // The words the agent was given, attachments named, so the live turn's prompt is the one its
     // transcript replays — and the chat can show the images it carried.
     // In the words the agent's own transcript will hold, so live and replay open the same turn.
-    let prompt = if query.provider.as_deref() == Some("antigravity") {
+    let prompt = if matches!(query.provider.as_deref(), Some("antigravity" | "opencode")) {
         with_attachments(query.prompt.clone(), &query.attachments)
     } else {
         with_shown_attachments(query.prompt.clone(), &query.attachments)
@@ -2436,6 +2752,52 @@ async fn agy_models() -> Option<Vec<serde_json::Value>> {
                 .map_err(|_| ())?
                 .map_err(|_| ())?;
             let models = parse_agy_models(&String::from_utf8_lossy(&out.stdout));
+            if models.is_empty() {
+                Err(())
+            } else {
+                Ok(models)
+            }
+        })
+        .await
+        .ok()
+        .cloned()
+}
+
+/// `opencode models`, read once per daemon and kept, as agy's list is.
+/// ponytail: a provider signed in after the first turn shows after a restart; drop the cache if
+/// that is reported.
+async fn opencode_models() -> Option<Vec<serde_json::Value>> {
+    static MODELS: tokio::sync::OnceCell<Vec<serde_json::Value>> =
+        tokio::sync::OnceCell::const_new();
+    MODELS
+        .get_or_try_init(|| async {
+            // Never in a project: measured, `opencode models` imports the plugins of the folder
+            // it runs in, and this runs for a project nobody has trusted. Never the shared temp
+            // folder either, where another account on the machine could leave an
+            // `opencode.json`: Keel's own folder under the person's home, which only they write.
+            let home = tokio::task::spawn_blocking(|| {
+                let dir = crate::permissions::permissions_dir()
+                    .ok()?
+                    .with_file_name("opencode");
+                std::fs::create_dir_all(&dir).ok()?;
+                Some(dir)
+            })
+            .await
+            .ok()
+            .flatten()
+            .ok_or(())?;
+            let run = tokio::process::Command::new(crate::permissions::program("opencode"))
+                .arg("models")
+                .current_dir(home)
+                .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output();
+            let out = tokio::time::timeout(AGY_MODELS_WAIT, run)
+                .await
+                .map_err(|_| ())?
+                .map_err(|_| ())?;
+            let models = crate::opencode::parse_models(&String::from_utf8_lossy(&out.stdout));
             if models.is_empty() {
                 Err(())
             } else {
