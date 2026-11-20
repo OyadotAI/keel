@@ -87,6 +87,9 @@ function reconciled(lane: string, wt: string | undefined, before: Snapshot, now:
   return { ...now, form, loading: false, confirmed: true, delivery: now.review?.id === before.review?.id ? before.delivery : undefined, restarted: !now.review && (wasRunning || !!before.restarted), error: before.error?.action === "read" ? undefined : before.error };
 }
 
+/** Running out of time says nothing about the daemon; only a real failure may revoke confirmation. */
+const timedOut = (error: unknown) => error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
+
 async function read(lane: string, ep: Endpoint, wt: string | undefined, captured: Snapshot, timeout: number): Promise<boolean> {
   const ticket = (requests.get(lane) ?? 0) + 1; requests.set(lane, ticket);
   patchReview(lane, captured, { loading: true });
@@ -100,6 +103,7 @@ async function read(lane: string, ep: Endpoint, wt: string | undefined, captured
     return true;
   } catch (error) {
     if (requests.get(lane) !== ticket) return false;
+    if (timedOut(error)) { patchReview(lane, captured, { loading: false }); return false; }
     patchReview(lane, captured, { loading: false, confirmed: false, error: { action: "read", message: "Couldn’t refresh review status. Last confirmed results are shown below.", details: error instanceof Error ? error.message : String(error) } });
     return false;
   }

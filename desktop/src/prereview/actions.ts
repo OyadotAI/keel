@@ -3,7 +3,7 @@ import { HttpError, post, type Endpoint } from "../api";
 import type { Operation, Review, Scope, Snapshot } from "./model";
 import { bindReview, currentReview, invalidateReviewReads, patchReview, refreshReview, reviewOf, updateReviewForm } from "./state";
 import { beginOpening, clearOpening, prRun, type OpeningInput } from "./opening";
-import { STOP_WAIT, STOP_POLL, MIN_REQUEST_WAIT } from "./constants";
+import { STOP_WAIT, STOP_POLL, STOP_READ_FLOOR } from "./constants";
 
 const MESSAGES: Record<Operation, string> = { start: "Review start wasn’t confirmed.", cancel: "Couldn’t cancel the review.", dismiss: "Couldn’t dismiss the review.", fix: "Couldn’t send findings.", open: "Couldn’t open the pull request." };
 const entry = (s: Scope) => currentReview(s.lane, s.ep, s.wt);
@@ -49,8 +49,10 @@ async function settled(scope: Scope, review: Review | null): Promise<boolean> {
   const stopped = await post<{ id?: string; finished: boolean; missing?: boolean; cancel_requested: boolean }>(scope.ep, "/api/prereview/stop", { lane: scope.lane, id: review.id }, { wt: scope.wt }, STOP_WAIT);
   if (stopped.id !== review.id) throw new Error("The review changed. Refresh its status before continuing.");
   for (;;) {
-    if (Date.now() >= until) throw new Error("The review is still stopping. Wait for it to finish, then retry.");
-    if (!await refresh(scope, Math.max(MIN_REQUEST_WAIT, until - Date.now()))) return false;
+    // A read with less than the floor left would only abort, so the wait reports what is true instead.
+    if (until - Date.now() < STOP_READ_FLOOR) throw new Error("The review is still stopping. Wait for it to finish, then retry.");
+    // A read that merely ran out of time leaves no error and is polled again; a real failure ends the wait.
+    if (!await refresh(scope, until - Date.now()) && entry(scope)?.error?.action === "read") return false;
     const now = entry(scope);
     if (!now) return false;
     if (!now.review) return true;

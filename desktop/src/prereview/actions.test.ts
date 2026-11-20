@@ -119,6 +119,33 @@ it("cancellation has a bounded wait and leaves an unfinished review visible", as
   expect(module.reviewOf("lane")?.error?.details).toContain("still stopping");
 });
 
+it("a stop that outlasts its wait reports that it is still stopping, never a lost connection", async () => {
+  await seed(review(null));
+  api.get.mockImplementation(async (_ep, _path, _params, timeout: number) => {
+    if (timeout < 1_500) throw new DOMException("Fetch is aborted", "AbortError");
+    await new Promise((resolve) => setTimeout(resolve, 1_500)); return structuredClone(reading);
+  });
+  const stopping = module.stopReview("lane", ep, wt); await vi.advanceTimersByTimeAsync(10_000);
+  expect(await stopping).toBe(false);
+  expect(module.reviewOf("lane")).toMatchObject({ confirmed: true, error: { action: "cancel" } });
+  expect(module.reviewOf("lane")?.error?.details).toContain("still stopping");
+});
+
+it("a read that only ran out of time keeps confirmation and shows no connection failure", async () => {
+  await seed(); api.get.mockRejectedValueOnce(new DOMException("The operation timed out.", "TimeoutError"));
+  expect(await module.refreshReview("lane", ep, wt, true)).toBe(false);
+  expect(module.reviewOf("lane")).toMatchObject({ confirmed: true, loading: false, review: { id: "run-one" } });
+  expect(module.reviewOf("lane")?.error).toBeUndefined();
+});
+
+it("a stop whose every status read times out still ends by saying it is stopping", async () => {
+  await seed(review(null));
+  api.get.mockImplementation((_ep, _path, _params, timeout: number) => new Promise((_resolve, reject) => { setTimeout(() => reject(new DOMException("The operation timed out.", "TimeoutError")), timeout); }));
+  const stopping = module.stopReview("lane", ep, wt); await vi.advanceTimersByTimeAsync(10_100);
+  expect(await stopping).toBe(false);
+  expect(module.reviewOf("lane")?.error).toMatchObject({ action: "cancel" });
+});
+
 it("opening waits for actual cancellation and keeps form/body and immutable target guards", async () => {
   await seed(review(null)); module.updateReviewForm("lane", ep, wt, { title: "Edited title", draft: false });
   const opening = module.openPullRequest(ep, wt, { title: "ignored old title", draft: true }, "lane");
