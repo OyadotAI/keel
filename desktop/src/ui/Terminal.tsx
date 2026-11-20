@@ -60,6 +60,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => {});
   const visibilityRef = useRef<() => void>(() => {});
+  const followRef = useRef<{ atBottom: () => boolean; toBottom: () => void }>({ atBottom: () => true, toBottom: () => {} });
   const [title, setTitle] = useState("");
   const [state, setState] = useState<"starting" | "open" | "closed">("starting");
   const [generation, setGeneration] = useState(0);
@@ -150,6 +151,9 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         if (ws.readyState === WebSocket.OPEN) ws.send(`\u0000${term.cols},${term.rows}`);
       };
       fitRef.current = resize;
+      // A hidden terminal loses its scroll position (the element's scrollTop goes to 0), and
+      // it came back at the top of a long agy history. A terminal left at the bottom returns there.
+      followRef.current = { atBottom: () => term.buffer.active.viewportY >= term.buffer.active.baseY, toBottom: () => { term.scrollLines(-1); term.scrollToBottom(); } };
       ws.onopen = () => {
         setState("open");
         resize();
@@ -212,15 +216,18 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const takeoverRef = useRef(false);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
+  const wasAtBottom = useRef(true);
   useEffect(() => {
     visibilityRef.current();
     if (hidden) {
+      wasAtBottom.current = followRef.current.atBottom();
       // A hidden xterm that keeps focus still takes keystrokes — into a lane nobody can see.
       if (host.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
       return;
     }
     requestAnimationFrame(() => {
       fitRef.current();
+      if (wasAtBottom.current) followRef.current.toBottom();
       // Typing follows the lane on screen — unless focus is in the rail, the palette or a dialog.
       if (!document.activeElement?.closest(".sidebar, .palette, [role=dialog], .strip, .side-panel, input, textarea:not(.xterm-helper-textarea)")) host.current?.querySelector("textarea")?.focus();
     });
