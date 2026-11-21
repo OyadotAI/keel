@@ -1,5 +1,9 @@
 # Product design
 
+For a new surface, a redesign, or anything that looks dated or machine-made, also read
+`design-modern.md`: how to choose a direction, what reads as current, what dates a design, and
+the templates in `../assets/templates/` a new surface starts from.
+
 ## Hard limits
 
 These hold for every surface: an app, a landing page, a dashboard, an email, CLI output with

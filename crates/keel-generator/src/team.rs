@@ -85,6 +85,22 @@ pub fn files() -> Vec<(&'static str, &'static str)> {
             include_str!("team/skills/team-work/references/designer.md"),
         ),
         (
+            ".claude/skills/team-work/references/design-modern.md",
+            include_str!("team/skills/team-work/references/design-modern.md"),
+        ),
+        (
+            ".claude/skills/team-work/assets/templates/tokens.css",
+            include_str!("team/skills/team-work/assets/templates/tokens.css"),
+        ),
+        (
+            ".claude/skills/team-work/assets/templates/landing.html",
+            include_str!("team/skills/team-work/assets/templates/landing.html"),
+        ),
+        (
+            ".claude/skills/team-work/assets/templates/app.html",
+            include_str!("team/skills/team-work/assets/templates/app.html"),
+        ),
+        (
             ".claude/skills/team-work/references/pm.md",
             include_str!("team/skills/team-work/references/pm.md"),
         ),
@@ -521,6 +537,9 @@ the point. Never the generic AI look:
 - the hard limits in `team-work`'s `references/designer.md` bind what you build: five colours
   at most, two font families, body text at 16px or more, one primary action per screen, and the
   speed budget. Read them before choosing a palette or a font
+- a new page or screen starts from `team-work`'s `assets/templates/` (tokens, a landing page,
+  an app screen), and `references/design-modern.md` says what makes it current and what dates
+  it. Read it before a new surface or a redesign
 
 ## 3. Every state, not the happy one
 

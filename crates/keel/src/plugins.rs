@@ -43,6 +43,21 @@ struct Suggestion {
     when: &'static [&'static str],
 }
 
+/// What says a repository has a frontend, for the design plugins. Framework and styling configs
+/// rather than `package.json`, which a backend has too.
+const FRONTEND: &[&str] = &[
+    "next.config.ts",
+    "next.config.mjs",
+    "next.config.js",
+    "vite.config.ts",
+    "vite.config.js",
+    "svelte.config.js",
+    "astro.config.mjs",
+    "nuxt.config.ts",
+    "tailwind.config.ts",
+    "tailwind.config.js",
+];
+
 /// The curated set.
 ///
 /// Deliberately short. A recommendations list that suggests thirty things is a directory, and a
@@ -87,6 +102,22 @@ const SUGGESTED: &[Suggestion] = &[
         reason: "Pattern warnings on edits. 45% of AI-generated code samples carry an OWASP Top-10 \
                  flaw, so this is not optional hygiene.",
         when: &[],
+    },
+    Suggestion {
+        name: "frontend-design",
+        marketplace: "claude-plugins-official",
+        add_source: Some("anthropics/claude-plugins-official"),
+        reason: "Anthropic's own design skill: a written direction and palette before any code, \
+                 so a new page is designed for this product rather than assembled from defaults.",
+        when: FRONTEND,
+    },
+    Suggestion {
+        name: "impeccable",
+        marketplace: "impeccable",
+        add_source: Some("pbakaus/impeccable"),
+        reason: "Design critique, audit and polish commands, and a detector for the patterns \
+                 that mark a page as machine-made. Third-party, so it waits for a click.",
+        when: FRONTEND,
     },
     Suggestion {
         name: "github",
