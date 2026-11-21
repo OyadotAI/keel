@@ -518,6 +518,9 @@ the point. Never the generic AI look:
   space or deliberate density
 - colours, spacing, radii and type sizes are tokens (CSS variables), never literals scattered
   through components
+- the hard limits in `team-work`'s `references/designer.md` bind what you build: five colours
+  at most, two font families, body text at 16px or more, one primary action per screen, and the
+  speed budget. Read them before choosing a palette or a font
 
 ## 3. Every state, not the happy one
 
