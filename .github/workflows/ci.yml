@@ -114,6 +114,7 @@ jobs:
 
       # Compile the shipping NSIS hooks and exercise shortcut ownership without real installs.
       - name: Windows installer shortcut contracts
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
