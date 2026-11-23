@@ -1129,7 +1129,9 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route(
             "/api/browser/result",
-            axum::routing::post(crate::browser::api_result),
+            axum::routing::post(crate::browser::api_result).layer(
+                axum::extract::DefaultBodyLimit::max(crate::browser::SCREENSHOT_WIRE_BYTES),
+            ),
         )
         .route(
             "/api/prereview/dismiss",

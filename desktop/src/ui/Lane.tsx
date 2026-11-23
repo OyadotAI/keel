@@ -1,3 +1,4 @@
+// Lane surfaces preserve running terminals while exposing the selected conversation and evidence.
 import { SubagentsPane } from "./SubagentsPane";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -110,7 +111,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
           title: `${names[id]} (${label({ key: String(i + 1), alt: true })})`,
         }))} value={tab} onChange={setTab}>
       </Tabs>
-      <div className="tab-body" onKeyDown={walkFiles}>
+      <div className="tab-body" data-attention-turns={tab === "turns" ? lane : undefined} tabIndex={tab === "turns" ? -1 : undefined} onKeyDown={walkFiles}>
         {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : tab === "context" ? <Context key={lane} lane={lane} /> : tab === "browser" ? <Browser lane={lane} /> : <Readiness lane={lane} />}
       </div>
     </aside>

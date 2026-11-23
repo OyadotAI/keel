@@ -1063,6 +1063,7 @@ version = "0.4.85"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "camino",
  "clap",
  "futures-util",

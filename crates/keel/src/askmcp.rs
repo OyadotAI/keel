@@ -392,31 +392,31 @@ pub async fn post(
                 .unwrap_or(json!({}));
             let answered = if crate::browser::is_tool(name) {
                 Some(match gated(&state, &q, name, &args).await {
-                    Ok(()) => {
-                        crate::browser::call(
-                            Some(&state.repo()),
-                            q.lane.as_deref(),
-                            q.binding.as_deref(),
-                            name,
-                            &args,
-                        )
-                        .await
-                    }
+                    Ok(()) => crate::browser::call(
+                        Some(&state.repo()),
+                        q.lane.as_deref(),
+                        q.binding.as_deref(),
+                        name,
+                        &args,
+                    )
+                    .await
+                    .map(|output| output.content()),
                     Err(why) => Err(why),
                 })
             } else if name == crate::tasks::TOOL {
-                Some(crate::tasks::call(state.clone(), q.lane.clone(), args).await)
+                Some(
+                    crate::tasks::call(state.clone(), q.lane.clone(), args)
+                        .await
+                        .map(text_content),
+                )
             } else if name == TOOL {
-                Some(ask(q.lane.as_deref(), &args).await)
+                Some(ask(q.lane.as_deref(), &args).await.map(text_content))
             } else {
                 None
             };
             if let Some(answered) = answered {
                 match answered {
-                    Ok(answer) => rpc_ok(
-                        id,
-                        json!({ "content": [{ "type": "text", "text": answer }], "isError": false }),
-                    ),
+                    Ok(answer) => rpc_ok(id, json!({ "content": answer, "isError": false })),
                     Err(e) => rpc_ok(
                         id,
                         json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
@@ -585,6 +585,54 @@ mod browser_gate_tests {
         assert!(args.contains(&"features.computer_use=false".to_string()));
     }
 
+    /// A desktop capture crosses the real tools/call path as image content, not a truncated string.
+    #[tokio::test]
+    async fn screenshot_mcp_keeps_the_native_image_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        crate::permissions::set_trusted(&root, true).unwrap();
+        let state = Arc::new(AppState::new(root));
+        let _window = crate::events::tests_window();
+        let mut events = crate::events::subscribe();
+        let call = tokio::spawn(post(
+            State(state),
+            Query(McpQuery {
+                lane: Some("image-mcp-fixture".into()),
+                binding: None,
+            }),
+            Json(
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{"description":"fixture capture"}}}),
+            ),
+        ));
+        let id = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.kind == "browser" && event.data["lane"] == "image-mcp-fixture" {
+                    break event.data["id"].as_str().unwrap().to_string();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+        let Json(accepted) = crate::browser::api_result(Json(crate::browser::Result_ {
+            id,
+            ok: true,
+            text: "Native capture".into(),
+            image: Some(crate::browser::Image {
+                data: png.into(),
+                mime_type: "image/png".into(),
+            }),
+        }))
+        .await;
+        assert!(accepted);
+        let (_, _, Json(reply)) = call.await.unwrap();
+        assert_eq!(reply["result"]["isError"], false);
+        assert_eq!(reply["result"]["content"][1]["type"], "image");
+        assert_eq!(reply["result"]["content"][1]["data"], png);
+    }
+
     /// Plan mode ignores allow rules for MCP tools not marked read-only, so without the hint every
     /// question in a planning turn was a permission prompt in the terminal (Claude Code 2.1.328).
     #[test]
@@ -742,4 +790,9 @@ mod browser_gate_tests {
             "another click is not that one"
         );
     }
+}
+
+/// Keep ordinary tool answers textual while browser captures carry an actual image block.
+fn text_content(text: String) -> Vec<Value> {
+    vec![json!({"type":"text", "text":text})]
 }

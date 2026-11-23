@@ -57,4 +57,15 @@ describe("the lane's Browser tab", () => {
     expect(address("127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
     expect(address("localhost.example.com")).toBe("https://localhost.example.com");
   });
+  it("describes viewport operations and forwards images outside text", async () => {
+    expect(activity({op:"viewport",settings:{width:375,height:812}})).toBe("setting viewport to 375 × 812");
+    expect(activity({op:"viewport",settings:{reset:true}})).toBe("resetting viewport");
+    expect(activity({op:"screenshot"})).toBe("taking a screenshot");
+    posted.length=0;
+    const image={data:"native-png",mime_type:"image/png"};
+    invoke.mockResolvedValueOnce({text:"Screenshot",image});
+    await onBrowser("/p",ep,()=>true,{id:"b-image",lane:"image-lane",op:{op:"screenshot"}});
+    expect(posted).toEqual([{id:"b-image",ok:true,text:"Screenshot",image}]);
+  });
+
 });

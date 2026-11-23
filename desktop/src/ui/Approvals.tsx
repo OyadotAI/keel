@@ -27,7 +27,7 @@ export function ApprovalStrip({ lane }: { lane: string }) {
   return (
     <div className="strip" role="region" aria-label={pending?.length ? "Waiting for your answer" : "Saved question answers"}>
       {pending?.map((p, i) => (
-        <Row key={p.id} lane={lane} p={p} count={i === 0 ? pending.length : 0} />
+        <div key={p.id} data-attention-request={p.id} tabIndex={-1}><Row lane={lane} p={p} count={i === 0 ? pending.length : 0} /></div>
       ))}
       <QuestionRecoveries lane={lane} />
     </div>

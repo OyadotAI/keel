@@ -1,5 +1,6 @@
 // Native agent and shell terminals retain their process and input ownership across lane switches.
 import { useEffect, useRef, useState } from "react";
+import { canAutofocusTerminal, terminalConnectionFocus } from "../terminal-focus";
 import { type Endpoint } from "../api";
 import { AGENT_NAME, useStore } from "../store";
 import { register } from "../typers";
@@ -89,6 +90,14 @@ function providerInput(lane: string, ws: WebSocket, term: import("@xterm/xterm")
   return { refresh, close: () => { unwatch(); connection(); } };
 }
 
+/** Connection readiness applies focus policy after layout has chosen the visible destination. */
+function terminalReady(options: { opening: ReturnType<typeof terminalConnectionFocus>; term: { focus(): void }; hidden: { current: boolean }; ready(): void; resize(): void; agent: boolean; lane: string }) {
+  const focus = options.opening.allowed(document.activeElement);
+  options.opening.dispose(); options.ready(); options.resize();
+  if (!options.hidden.current && focus) options.term.focus();
+  if (options.agent && !options.hidden.current) consumeChatFocus(options.lane, options.term);
+}
+
 export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane: string; agent?: boolean; hidden?: boolean; onExit?: () => void }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => {});
@@ -107,7 +116,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   useEffect(() => {
     if (!host.current || elsewhere) return;
     let disposed = false;
-    let cleanup = () => {};
+    const openingFocus = terminalConnectionFocus(document.activeElement, !agent);
+    let cleanup = () => openingFocus.dispose();
     setState("starting");
     setError(undefined);
     void (async () => {
@@ -124,6 +134,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         setError(String(e));
       }
       if (!ep || disposed || !host.current) {
+        openingFocus.dispose();
         if (!ep && !disposed) setState("closed");
         return;
       }
@@ -184,12 +195,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         if (ws.readyState === WebSocket.OPEN) ws.send(`\u0000${term.cols},${term.rows}`);
       };
       fitRef.current = resize;
-      ws.onopen = () => {
-        setState("open");
-        resize();
-        if (!hiddenRef.current) term.focus();
-        if (agent && !hiddenRef.current) consumeChatFocus(lane, term);
-      };
+      ws.onopen = () => terminalReady({ opening: openingFocus, term, hidden: hiddenRef, ready: () => setState("open"), resize, agent, lane });
       ws.onmessage = (e) => {
         // A text frame is the tab title, never output: writing it to the screen printed `zsh`
         // into the shell.
@@ -197,6 +203,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         else term.write(new Uint8Array(e.data as ArrayBuffer), unfollow.settle);
       };
       ws.onclose = (e) => {
+        openingFocus.dispose();
         // The daemon found this conversation open in another process: follow it, don't fork it.
         if (e.code === ELSEWHERE) {
           if (!disposed) setElsewhere(lane, true);
@@ -226,6 +233,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         resize();
       });
       cleanup = () => {
+        openingFocus.dispose();
         unfont();
         unfollow();
         untheme();
@@ -257,7 +265,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
     requestAnimationFrame(() => {
       fitRef.current();
       // Typing follows the lane on screen — unless focus is in the rail, the palette or a dialog.
-      if (!document.activeElement?.closest(".sidebar, .palette, [role=dialog], .strip, .side-panel, input, textarea:not(.xterm-helper-textarea)")) host.current?.querySelector("textarea")?.focus();
+      if (canAutofocusTerminal(document.activeElement)) host.current?.querySelector("textarea")?.focus();
     });
   }, [hidden]);
 

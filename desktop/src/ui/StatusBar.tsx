@@ -77,7 +77,7 @@ function branchLabel(lane: Lane): string {
   return lane.git.is_repo ? lane.git.branch ?? "detached" : "not a git repository";
 }
 
-export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar, layout }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void; layout?: ReactNode }) {
+export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar, layout, attention }: { openTab: (tab: Tab) => void; panel: boolean; togglePanel: () => void; sidebar: boolean; toggleSidebar: () => void; layout?: ReactNode; attention?: ReactNode }) {
   const footer = useRef<HTMLElement>(null);
   useFooterHeight(footer);
   const lane = useStore((s) => s.active);
@@ -98,6 +98,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
   const plain = isPlain(l);
   return (
     <footer ref={footer} className="statusbar">
+      {attention}
       <div className="statusbar-details">
       <button className="sb-icon" onClick={toggleSidebar} aria-label={sidebar ? "Hide projects" : "Show projects"} aria-pressed={sidebar} title={`Toggle projects (${label({ key: "e", shift: true })})`}><Icon name="folder" size={15} /></button>
       {l && !plain && (

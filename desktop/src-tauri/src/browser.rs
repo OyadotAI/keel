@@ -12,18 +12,22 @@
 //! string synchronously and every wait is here, each with its own ceiling shorter than the
 //! daemon's, so the agent hears which thing did not happen rather than a generic timeout.
 
+mod capture;
+mod viewport;
 use crate::preview::{Bounds, web_only};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewBuilder, WebviewUrl};
+use tauri::{Emitter, LogicalPosition, Manager, Url, WebviewBuilder, WebviewUrl};
 
 const SCRIPT: &str = include_str!("browser.js");
 /// Each webview is a WebContent process of a few hundred MB. Past this, the least recently used
 /// one no lane is showing is closed; its lane's next call opens it again.
 const MAX_LIVE: usize = 6;
+const DEFAULT_SIZE: (f64, f64) = (1280.0, 800.0);
 const LOAD_WAIT: Duration = Duration::from_secs(30);
 const SCRIPT_WAIT: Duration = Duration::from_secs(10);
+const METADATA_WAIT: Duration = Duration::from_secs(2);
 /// The most a page's answer may be before it is refused rather than carried. The daemon cuts what
 /// reaches the agent to 64 KB; this is the ceiling on what the app holds to get there.
 const MAX_ANSWER: usize = 1024 * 1024;
@@ -43,7 +47,8 @@ static LOADS: Mutex<Option<HashMap<String, Vec<tokio::sync::oneshot::Sender<()>>
     Mutex::new(None);
 /// Per label: one op at a time. Claude Code issues tool calls in parallel, and a click landing
 /// between another call's read and its type is two agents in one page.
-static TURNS: Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = Mutex::new(None);
+static TURNS: Mutex<Option<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>> =
+    Mutex::new(None);
 
 fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -119,21 +124,27 @@ fn touch(label: &str, shown: Option<bool>) {
 
 /// Make room for one more, closing the least recently used webview nobody is looking at.
 fn make_room(app: &tauri::AppHandle) {
-    let gone = {
+    let (gone, _turn) = {
         let mut live = locked(&LIVE);
         if live.len() < MAX_LIVE {
             return;
         }
-        let Some(at) = live
+        let Some((at, lease)) = live
             .iter()
             .enumerate()
             .filter(|(_, l)| !l.shown)
-            .min_by_key(|(_, l)| l.used)
-            .map(|(i, _)| i)
+            .filter_map(|(at, l)| {
+                turn(&l.label)
+                    .try_lock_owned()
+                    .ok()
+                    .map(|lease| (at, l.used, lease))
+            })
+            .min_by_key(|(_, used, _)| *used)
+            .map(|(at, _, lease)| (at, lease))
         else {
             return;
         };
-        live.remove(at).label
+        (live.remove(at).label, lease)
     };
     if let Some(view) = app.get_webview(&gone) {
         let _ = view.close();
@@ -205,7 +216,7 @@ fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Resul
         .add_child(
             builder,
             LogicalPosition::new(OFF.0, OFF.1),
-            LogicalSize::new(1280.0, 800.0),
+            viewport::initial_size(label),
         )
         .map_err(|e| e.to_string())?;
     touch(label, Some(false));
@@ -222,11 +233,15 @@ async fn script(view: &tauri::Webview, op: &serde_json::Value) -> Result<String,
         }
     })
     .map_err(|e| e.to_string())?;
-    let raw = tokio::time::timeout(SCRIPT_WAIT, rx)
+    let wait = if matches!(op["op"].as_str(), Some("viewport_info" | "clear_marks")) {
+        METADATA_WAIT
+    } else {
+        SCRIPT_WAIT
+    };
+    let raw = tokio::time::timeout(wait, rx)
         .await
         .map_err(|_| {
-            "The page did not answer within 10 s; it may be busy or still loading. Read it again."
-                .to_string()
+            format!("The page did not answer within {} s; it may be busy or still loading. Read it again.", wait.as_secs())
         })?
         .map_err(|_| "The page closed before it answered.".to_string())?;
     // The script runs in the page's own realm, so a page can hand back anything at all — hundreds
@@ -253,15 +268,23 @@ pub async fn browser_act(
     lane: String,
     project: String,
     op: serde_json::Value,
-) -> Result<String, String> {
+) -> Result<capture::Output, String> {
     let label = label(&lane)?;
-    let turn = locked(&TURNS)
-        .get_or_insert_with(HashMap::new)
-        .entry(label.clone())
-        .or_default()
-        .clone();
+    let turn = turn(&label);
     let _turn = turn.lock().await;
     let kind = op["op"].as_str().unwrap_or_default();
+    if matches!(kind, "viewport" | "screenshot") && app.get_webview(&label).is_some() {
+        touch(&label, None);
+    }
+    if kind == "viewport" {
+        return viewport::apply(&app, &label, &op["settings"]).await;
+    }
+    if kind == "screenshot" {
+        let view = app
+            .get_webview(&label)
+            .ok_or("No page is open in this lane. Open one with browser_open, then retry.")?;
+        return viewport::screenshot(&view).await;
+    }
     if kind == "open" {
         let url: Url = op["url"]
             .as_str()
@@ -285,14 +308,14 @@ pub async fn browser_act(
         };
         let host = url.host_str().unwrap_or("The page").to_string();
         // No reason is given for a load that never finishes: the platform reports none.
-        return match tokio::time::timeout(LOAD_WAIT, loaded).await {
+        let result = match tokio::time::timeout(LOAD_WAIT, loaded).await {
             Ok(_) => Ok(format!("Opened {url}. Read the page to see it.")),
             Err(_) => {
                 // A first page that never commits leaves WebKit queueing every script, unanswered,
                 // for whatever page commits next. That tab is closed, so the next call says plainly
                 // that there is no page, and the tab says what happened.
                 if made {
-                    let _ = browser_close(app.clone(), lane.clone());
+                    let _ = close(&app, &label);
                 }
                 let said = format!("{host} did not finish loading within 30 s.");
                 let _ = app.emit_to(
@@ -303,6 +326,10 @@ pub async fn browser_act(
                 Err(said)
             }
         };
+        if result.is_ok() {
+            viewport::refresh(&app, &label).await;
+        }
+        return result.map(capture::Output::text);
     }
     let view = app
         .get_webview(&label)
@@ -319,7 +346,8 @@ pub async fn browser_act(
         // showing, whose timers may run slowly.
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    Ok(text)
+    viewport::refresh(&app, &label).await;
+    Ok(capture::Output::text(text))
 }
 
 /// Show the lane's tab over `bounds`, or put it away with `None`.
@@ -330,17 +358,18 @@ pub async fn browser_place(
     bounds: Option<Bounds>,
 ) -> Result<(), String> {
     let label = label(&lane)?;
+    let turn = turn(&label);
+    let _turn = turn.lock().await;
     let Some(view) = app.get_webview(&label) else {
         return Ok(());
     };
     match bounds {
         Some(b) => {
-            crate::preview::place(&view, &b).await?;
+            viewport::place(&view, Some(b)).await?;
             touch(&label, Some(true));
         }
         None => {
-            view.set_position(LogicalPosition::new(OFF.0, OFF.1))
-                .map_err(|e| e.to_string())?;
+            viewport::place(&view, None).await?;
             touch(&label, Some(false));
         }
     }
@@ -349,14 +378,32 @@ pub async fn browser_place(
 
 /// Close the lane's tab: the lane closed, or its project did. Its logins stay with the project.
 #[tauri::command]
-pub fn browser_close(app: tauri::AppHandle, lane: String) -> Result<(), String> {
+pub async fn browser_close(app: tauri::AppHandle, lane: String) -> Result<(), String> {
     let label = label(&lane)?;
+    // Close visible native content immediately; then retire any state an in-flight op could finish.
+    close(&app, &label)?;
+    let turn = turn(&label);
+    let _turn = turn.lock().await;
+    close(&app, &label)
+}
+
+fn turn(label: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut registry = locked(&TURNS);
+    let turns = registry.get_or_insert_with(HashMap::new);
+    turns.retain(|_, turn| turn.strong_count() > 0);
+    if let Some(turn) = turns.get(label).and_then(std::sync::Weak::upgrade) {
+        return turn;
+    }
+    let turn = Arc::new(tokio::sync::Mutex::new(()));
+    turns.insert(label.into(), Arc::downgrade(&turn));
+    turn
+}
+
+fn close(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    viewport::forget(label);
     locked(&LIVE).retain(|l| l.label != label);
-    locked(&TURNS)
-        .get_or_insert_with(HashMap::new)
-        .remove(&label);
-    page_loaded(&label);
-    if let Some(view) = app.get_webview(&label) {
+    page_loaded(label);
+    if let Some(view) = app.get_webview(label) {
         view.close().map_err(|e| e.to_string())?;
     }
     Ok(())

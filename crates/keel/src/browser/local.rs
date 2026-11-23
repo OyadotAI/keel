@@ -1,35 +1,80 @@
 //! Local Oya operations use only this binding's owned tab and never replay uncertain effects.
-use super::{Op, connection::Client};
+use super::{Op, Output, connection::Client};
 use serde_json::json;
+const TAB_CLOSED: &str = "This lane's tab was closed. Open a page with browser_open to continue.";
+
+enum Selection {
+    Active(String),
+    Closed,
+}
+impl Selection {
+    fn text(self) -> Result<String, String> {
+        match self {
+            Self::Active(text) => Ok(text),
+            Self::Closed => Err(TAB_CLOSED.into()),
+        }
+    }
+}
 #[derive(Default)]
 pub(super) struct Page {
     client: Option<Client>,
     tab: Option<u64>,
     pub url: Option<String>,
     analyzed: bool,
+    cleanup_runtime: Option<tokio::runtime::Handle>,
 }
 impl Page {
+    /// Retire the connection and its page references together after replacement or restart.
     pub fn reset(&mut self) {
-        if let Some(client) = self.client.take() {
-            tokio::spawn(client.close());
+        if let Some(client) = self.client.take()
+            && let Some(runtime) = self.cleanup_runtime.take()
+        {
+            runtime.spawn(client.close());
         }
+        self.clear_tab();
+    }
+    /// Forget only the closed page; the authenticated session still owns any replacement tab.
+    fn clear_tab(&mut self) {
         self.tab = None;
         self.url = None;
         self.analyzed = false;
+    }
+    /// Every page path selects its owned tab before acting, so closure never targets another tab.
+    async fn switch_tab(&mut self, tab: u64) -> Result<Selection, String> {
+        let result = self
+            .client
+            .as_mut()
+            .ok_or("Local Oya is disconnected.")?
+            .tool("switch_tab", json!({"tab_id":tab}))
+            .await;
+        match result {
+            Err(why) if tab_gone(&why, tab) => {
+                self.clear_tab();
+                Ok(Selection::Closed)
+            }
+            result => result.map(Selection::Active),
+        }
     }
     pub fn connected(&self) -> bool {
         self.client.is_some()
     }
     pub async fn connect(&mut self, client: Client) -> Result<(), String> {
+        self.reset();
         let mut client = client;
-        self.tab = None;
-        self.analyzed = false;
-        client.initialize().await?;
+        let runtime = tokio::runtime::Handle::current();
+        if let Err(why) = client.initialize().await {
+            client.close().await;
+            return Err(why);
+        }
+        self.cleanup_runtime = Some(runtime);
         self.client = Some(client);
         Ok(())
     }
-    pub async fn run(&mut self, op: Op) -> Result<String, String> {
-        let result = self.perform(op).await;
+    pub async fn run(&mut self, op: Op) -> Result<Output, String> {
+        let result = match op {
+            Op::Screenshot => self.capture().await,
+            op => self.perform(op).await.map(Output::text),
+        };
         match &result {
             // Its tab ids belong to an Oya that is gone: start clean, and the next step reconnects.
             Err(why) if why == super::connection::RESTARTED => self.reset(),
@@ -39,29 +84,30 @@ impl Page {
         result
     }
     async fn perform(&mut self, op: Op) -> Result<String, String> {
-        let client=self.client.as_mut().ok_or("Local Oya is not connected. Use Retry connection in Browser settings; Keel did not switch browsers.")?;
+        if self.client.is_none() {
+            return Err("Local Oya is not connected. Use Retry connection in Browser settings; Keel did not switch browsers.".into());
+        }
         if let Op::Open { url } = op {
-            self.analyzed = false;
-            if let Some(tab) = self.tab {
-                client.tool("switch_tab", json!({"tab_id":tab})).await?;
-                let result = client.tool("navigate", json!({"url":url})).await?;
-                self.url = Some(url);
-                return Ok(result);
-            }
-            let result = client.tool("open_tab", json!({"url":url})).await?;
-            let value: serde_json::Value = serde_json::from_str(&result)
-                .map_err(|_| "Oya did not return an owned tab identity.")?;
-            self.tab = Some(
-                value["tab_id"]
-                    .as_u64()
-                    .ok_or("Oya did not return an owned tab identity.")?,
-            );
-            self.url = Some(url);
-            return Ok(result);
+            return self.open(url).await;
         }
         let tab=self.tab.ok_or("Open a page with browser_open before using local Oya. Personal tabs are not available to this lane.")?;
-        client.tool("switch_tab", json!({"tab_id":tab})).await?;
+        self.switch_tab(tab).await?.text()?;
+        let client = self.client.as_mut().unwrap();
         match op {
+            Op::Viewport { settings } => {
+                if !client.supports("viewport") {
+                    return Err("This Oya version cannot set the viewport. Update Oya and retry; Keel did not switch browsers.".into());
+                }
+                let result = client
+                    .tool(
+                        "viewport",
+                        serde_json::to_value(settings).map_err(|e| e.to_string())?,
+                    )
+                    .await?;
+                self.analyzed = false;
+                Ok(result)
+            }
+            Op::Screenshot => unreachable!(),
             Op::Read => {
                 let text = client
                     .tool("analyze_page", json!({"format":"markdown"}))
@@ -105,15 +151,72 @@ impl Page {
             Op::Open { .. } => unreachable!(),
         }
     }
+    /// Opening may replace a known-closed tab, but never retries an uncertain navigation.
+    async fn open(&mut self, url: String) -> Result<String, String> {
+        self.analyzed = false;
+        if let Some(tab) = self.tab
+            && matches!(self.switch_tab(tab).await?, Selection::Active(_))
+        {
+            let result = self
+                .client
+                .as_mut()
+                .unwrap()
+                .tool("navigate", json!({"url":url}))
+                .await?;
+            self.url = Some(url);
+            return Ok(result);
+        }
+        let result = self
+            .client
+            .as_mut()
+            .unwrap()
+            .tool("open_tab", json!({"url":url}))
+            .await?;
+        let value: serde_json::Value = serde_json::from_str(&result)
+            .map_err(|_| "Oya did not return an owned tab identity.")?;
+        self.tab = Some(
+            value["tab_id"]
+                .as_u64()
+                .ok_or("Oya did not return an owned tab identity.")?,
+        );
+        self.url = Some(url);
+        Ok(result)
+    }
+    /// Captures only this session's owned tab, retaining element references on success.
+    async fn capture(&mut self) -> Result<Output, String> {
+        let tab = self
+            .tab
+            .ok_or("No page is open in this lane. Open one with browser_open, then retry.")?;
+        let client = self
+            .client
+            .as_ref()
+            .ok_or("Local Oya is not connected. Retry connection in Browser settings.")?;
+        if !client.supports("screenshot") {
+            return Err(
+                "This Oya version cannot capture screenshots. Update Oya and retry.".into(),
+            );
+        }
+        self.switch_tab(tab).await?.text()?;
+        self.client.as_mut().unwrap().capture().await
+    }
     pub async fn show(&mut self) -> Result<String, String> {
         let tab = self.tab.ok_or("This lane has no owned Oya tab yet.")?;
-        self.client
-            .as_mut()
-            .ok_or("Local Oya is disconnected.")?
-            .tool("switch_tab", json!({"tab_id":tab}))
-            .await
+        self.switch_tab(tab).await?.text()
     }
 }
+
+/// Oya's switch_tab exposes no tab-specific error code, only this exact text. Match the owned
+/// id and the whole reply so timeouts, ownership refusals and other tab ids retain their state.
+fn tab_gone(why: &str, tab: u64) -> bool {
+    why == format!("Tab {tab} not found")
+}
+/// Retirement/replacement can drop a binding on a worker thread; its connected runtime owns cleanup.
+impl Drop for Page {
+    fn drop(&mut self) {
+        self.reset();
+    }
+}
+
 fn require_analysis(analyzed: bool) -> Result<(), String> {
     if analyzed {
         Ok(())
@@ -134,85 +237,5 @@ fn read_survives_typing(submit: bool) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn typing_keeps_the_read_unless_it_submits() {
-        assert!(read_survives_typing(false));
-        assert!(!read_survives_typing(true));
-    }
-    #[test]
-    fn element_actions_require_a_fresh_page_analysis() {
-        assert!(require_analysis(false).is_err());
-        assert!(require_analysis(true).is_ok());
-    }
-    #[tokio::test]
-    async fn disconnected_local_browser_never_uses_an_embedded_or_personal_tab() {
-        let mut page = Page::default();
-        assert!(
-            page.run(Op::Read)
-                .await
-                .unwrap_err()
-                .contains("not connected")
-        );
-        assert!(page.show().await.unwrap_err().contains("no owned"));
-    }
-    /// Live: fills a form from one read in the installed Oya, including a field typed by its old
-    /// id after a select revealed a new field above it. Needs Oya running and `KEEL_LIVE_FORM`
-    /// naming a page shaped like the one this asserts on.
-    #[tokio::test]
-    #[ignore = "needs a running Oya Browser"]
-    async fn live_form_fills_from_one_read() {
-        let url = std::env::var("KEEL_LIVE_FORM").expect("KEEL_LIVE_FORM");
-        let installation = super::super::detection::installed()
-            .unwrap()
-            .expect("Oya installed");
-        let project = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let connection = super::super::connection::discover(&project, &installation).unwrap();
-        let mut page = Page::default();
-        page.connect(Client::new(connection).unwrap())
-            .await
-            .unwrap();
-        page.run(Op::Open { url }).await.unwrap();
-        page.run(Op::Read).await.unwrap();
-        let fields = [
-            (1, "Ada"),
-            (2, "Lovelace"),
-            (3, "ada@example.com"),
-            (4, "5550100"),
-            (5, "Business"),
-            (6, "London"),
-        ];
-        for (target, text) in fields {
-            let typed = page
-                .run(Op::Type {
-                    target,
-                    text: text.into(),
-                    submit: false,
-                })
-                .await;
-            assert!(typed.is_ok(), "field {target}: {typed:?}");
-        }
-        let after = page.run(Op::Read).await.unwrap();
-        println!("{after}");
-        for want in [
-            r#""First name" = "Ada""#,
-            r#""Phone" = "5550100""#,
-            r#""Account type" = "Business""#,
-            r#""City" = "London""#,
-        ] {
-            assert!(after.contains(want), "missing {want}");
-        }
-        assert!(
-            after.contains(r#"input:text "Company"]"#),
-            "Company stays empty"
-        );
-        let tab = page.tab.unwrap();
-        let _ = page
-            .client
-            .as_mut()
-            .unwrap()
-            .tool("close_tab", json!({"tab_id": tab}))
-            .await;
-    }
-}
+#[path = "local_tests.rs"]
+mod tests;

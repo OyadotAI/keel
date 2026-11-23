@@ -124,7 +124,7 @@ pub(crate) fn instructions(_lane: Option<&str>) -> String {
 }
 
 /// The adapter is serialized per binding; extra concurrent operations fail before producing effects.
-pub(super) async fn local(binding: Arc<Binding>, op: Op) -> Result<String, String> {
+pub(super) async fn local(binding: Arc<Binding>, op: Op) -> Result<super::Output, String> {
     let mut page = binding
         .page
         .try_lock()

@@ -54,7 +54,7 @@ export async function pickProject() {
   if (typeof path === "string") await useStore.getState().openProject(path, true);
 }
 
-export function Sidebar({ explorer, showCode }: { explorer?: ReactNode; showCode?: () => void }) {
+export function Sidebar({ explorer, showCode, attention }: { explorer?: ReactNode; showCode?: () => void; attention?: ReactNode }) {
   const order = useStore((s) => s.order);
   const project = useStore((s) => (s.active ? s.lanes[s.active]?.project : undefined) ?? s.order[0]);
   const [conversationsOpen, setConversationsOpen] = useState(true);
@@ -75,6 +75,7 @@ export function Sidebar({ explorer, showCode }: { explorer?: ReactNode; showCode
           <Icon name="plus" size={17} />
         </button>
       </div>
+      {attention}
       {explorer && <div className="ide-sidebar-tabs" role="group" aria-label="Sidebar view">
         <button aria-pressed={section === "explorer"} onClick={() => setSection("explorer")}><Icon name="folder" size={13} />Explorer</button>
         <button title="Source Control" aria-label={`Source Control${changed ? ` (${changed} changed)` : ""}`} aria-pressed={section === "git"} onClick={() => setSection("git")}><Icon name="branch" size={13} />Git{changed > 0 && <small>{changed}</small>}</button>

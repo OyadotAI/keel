@@ -26,6 +26,8 @@ clap.workspace = true
 camino.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Validate bounded browser PNG payloads; already in the HTTP dependency graph.
+base64 = "0.22"
 # Reuse the workspace HTTP client for authenticated local Oya MCP, with redirects/proxies disabled.
 reqwest.workspace = true
 tracing.workspace = true

@@ -30,6 +30,9 @@ import { MoveProject } from "./MoveProject";
 import { TrustDialog } from "./TrustDialog";
 import { ideCommand } from "../ide-keys";
 import { MAC } from "../keys";
+import { AttentionButton, AttentionDialog } from "./Attention";
+import { useAttentionNavigation } from "../use-attention-navigation";
+import { revealAttention, ATTENTION_DRAWER_QUERY } from "../attention-navigation";
 
 const remembered = (key: string, fallback: string) => {
   try {
@@ -129,6 +132,8 @@ export function App() {
   const [shell, setShell] = useState(false);
   const [palette, setPalette] = useState(false);
   const [conversation, setConversation] = useState(false);
+  const attention = useAttentionNavigation((_lane, destination) => revealAttention(destination,
+    { panel: setPanel, conversation: setConversation, expanded: setExpanded, tab: setTab, sidebar: setSidebar }, window.matchMedia(ATTENTION_DRAWER_QUERY).matches));
   const asking = useStore((s) => s.asking);
   const setAsking = (a: Asking) => useStore.setState({ asking: a });
 
@@ -197,6 +202,7 @@ export function App() {
       [{ key: "." }, (l) => void useStore.getState().stop(l)],
     ];
     const handler = (e: KeyboardEvent) => {
+      if (document.querySelector(".attention-content")) return;
       if (handleIdeShortcut(e, { setPalette, setShell, toggleSidebar, setSidebar })) return;
       for (const [c, run] of chords)
         if (matches(e, c)) {
@@ -224,14 +230,15 @@ export function App() {
   const workspace = showPanel && lane ? <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} /> : null;
   return (
     <div className={`app ${sidebar ? "" : "no-sidebar"} ${ideActive ? "ide-layout" : ""} ${conversation ? "ide-conversation-open" : ""}`}>
-      <Sidebar showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
+      <Sidebar attention={<AttentionButton open={attention.show} />} showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
       <button className="sidebar-backdrop" style={{ background: "transparent" }} aria-label="Close projects" onClick={toggleSidebar} />
       <Handle name={ideActive ? "--coding-sidebar-w" : "--sidebar-w"} min={240} max={ideActive ? 480 : 360} fallback={ideActive ? 320 : 240} from="left" />
       <WorkspaceMain lane={lane} overlay={overlay} showPanel={showPanel} expanded={expanded} ideActive={ideActive} shell={shell} setShell={setShell} closePanel={closePanel} workspace={workspace} conversation={conversation} setConversation={setConversation} showGit={showGit} />
-      <StatusBar layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
+      <StatusBar attention={!sidebar && <AttentionButton open={attention.show} />} layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
       <Drop />
       <FileReferenceDrag />
-      {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
+      {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showAttention: attention.show, showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
+      {attention.open && <AttentionDialog close={attention.close} activate={attention.activate} openProject={async () => { await pickProject(); if (useStore.getState().order.length) attention.close(); }} />}
       {ideActive && navigation && lane && <FileNavigation key={`${lane}:${navigation}`} lane={lane} showCode={showCode} />}
       <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
@@ -306,7 +313,7 @@ function WorkspaceMain({ lane, overlay, showPanel, expanded, ideActive, shell, s
 }
 
 function AgentPane({ lane, hidden, shell, setShell, closeConversation }: { lane?: string; hidden: boolean; shell: boolean; setShell: (value: boolean | ((current: boolean) => boolean)) => void; closeConversation: () => void }) {
-  return <section className="agent-pane" style={hidden ? { display: "none" } : undefined}>
+  return <section className="agent-pane" data-attention-lane={lane} style={hidden ? { display: "none" } : undefined}>
     {lane && <LaneHeader key={`header:${lane}`} lane={lane} shell={shell} toggleShell={() => setShell((s) => !s)} />}
     {lane && <LaneError lane={lane} />}
     <div className="agents"><Agents /></div>
@@ -324,7 +331,7 @@ function LaneError({ lane }: { lane: string }) {
   const agent = useStore((s) => s.lanes[lane]?.agent);
   if (!error) return null;
   return (
-    <div className="banner error" role="alert">
+    <div className="banner error" role="alert" data-attention-error tabIndex={-1}>
       {plainError(error)}{" "}
       {!oneShot(agent) && /auth|oauth|expired|unauthorized|\/login/i.test(error) && <button className="link small" onClick={() => useStore.setState({ settings: true })}>Log in →</button>}{" "}
       <button className="link small" onClick={() => useStore.setState((s) => ({ lanes: { ...s.lanes, [lane]: { ...s.lanes[lane], error: undefined, nameError: undefined } } }))}>
@@ -379,9 +386,10 @@ function PaletteHost({ lane, close, actions }: { lane?: string; close: () => voi
   return <Palette commands={commands} close={close} />;
 }
 
-function useCommands({ lane, showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }: { lane?: string; showTab: (t: Tab) => void; togglePanel: () => void; toggleSidebar: () => void; focusTerminal: () => void; setShell: (f: (s: boolean) => boolean) => void; setAsking: (a: Asking) => void }): Command[] {
+function useCommands({ lane, showAttention, showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }: { lane?: string; showAttention: () => void; showTab: (t: Tab) => void; togglePanel: () => void; toggleSidebar: () => void; focusTerminal: () => void; setShell: (f: (s: boolean) => boolean) => void; setAsking: (a: Asking) => void }): Command[] {
   const s = useStore();
   const out: Command[] = [];
+  out.push({ id: "attention", title: "Attention — questions, errors, checks and updates", run: showAttention });
   const l = lane ? s.lanes[lane] : undefined;
   for (const p of l?.pending ?? []) {
     if (p.tool === "AskUserQuestion" || p.tool === BROWSER_CHOICE) continue;

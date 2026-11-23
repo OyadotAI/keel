@@ -20,7 +20,7 @@ import { Icon } from "./icons";
 /// The ring's width, in CSS pixels: the page is placed this far inside its frame.
 const RING = 2;
 
-function Place({ lane, working }: { lane: string; working: boolean }) {
+function Place({ lane, working, tab }: { lane: string; working: boolean; tab?: Tab }) {
   const host = useRef<HTMLDivElement>(null);
   const covered = useCovered();
   useEffect(() => {
@@ -55,6 +55,10 @@ function Place({ lane, working }: { lane: string; working: boolean }) {
   }, [lane, covered]);
   return (
     <div ref={host} className={`browser-page${working ? " working" : ""}`}>
+      {tab?.fixed && !covered && <div className="browser-viewport-preview">
+        {tab.preview ? <img alt="Viewport preview from the last browser step" src={`data:${tab.preview.mime_type};base64,${tab.preview.data}`} /> : <p>{tab.previewError || "Preparing viewport preview…"}</p>}
+        <span>Viewport preview · last browser step{tab.previewError ? ` · ${tab.previewError}` : ""}</span>
+      </div>}
       {covered && <div className="panel-empty muted">The browser is hidden while a menu or dialog is open.</div>}
     </div>
   );
@@ -161,7 +165,7 @@ export function Browser({ lane }: { lane: string }) {
       <Bar url={tab?.url} loading={tab?.loading} run={run} openInOya={oya} />
       <Status tab={tab} working={working} install={install}><BrowseIn state={browserPreference} /></Status>
       {tab?.url ? (
-        <Place lane={lane} working={working} />
+        <Place lane={lane} working={working} tab={tab} />
       ) : tab?.room ? (
         <Empty title="This page was closed to make room for another lane">The agent reopens it on its next browser step, or type an address above.</Empty>
       ) : (

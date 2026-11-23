@@ -32,7 +32,11 @@ tauri-plugin-process = "2"
 # in the build through wry, at these versions and features.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSView", "NSWindow", "NSResponder"] }
+# Native page snapshots reuse the binding crates already brought in by wry.
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSString", "NSError"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "WKSnapshotConfiguration", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSView", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep"] }
 
 # tao 0.37.1 declares its AppKit overrides `extern "C"`, so an Objective-C exception raised under
 # `-[NSApplication sendEvent:]` cannot unwind to NSApplication's own handler and aborts the app

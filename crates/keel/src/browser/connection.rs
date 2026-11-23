@@ -91,6 +91,7 @@ pub(super) struct Client {
     http: reqwest::Client,
     session: Option<String>,
     next: u64,
+    tools: std::collections::HashSet<String>,
 }
 impl Client {
     pub fn new(connection: Connection) -> Result<Self, String> {
@@ -106,6 +107,7 @@ impl Client {
             http,
             session: None,
             next: 0,
+            tools: Default::default(),
         })
     }
     async fn ownership(&self) -> Result<(), String> {
@@ -122,6 +124,9 @@ impl Client {
     /// End this client's Oya session (MCP's DELETE with its id), so a status check or a reset page
     /// does not leave one open in Oya for each time it ran. Best effort: Oya may already be gone.
     pub async fn close(self) {
+        if self.ownership().await.is_err() {
+            return;
+        }
         if let Some(session) = &self.session {
             let _ = self
                 .http
@@ -132,6 +137,23 @@ impl Client {
                 .await;
         }
     }
+    /// A loopback fixture still proves the listener is this executable; no production verification is bypassed.
+    #[cfg(all(test, any(target_os = "macos", windows)))]
+    pub(super) fn fixture(url: reqwest::Url) -> Self {
+        Self::new(Connection {
+            url,
+            authorization: "Bearer fixture".into(),
+            process: std::process::id(),
+            installation: Installation {
+                application: "fixture".into(),
+                executable: std::env::current_exe()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+        })
+        .unwrap()
+    }
     pub async fn initialize(&mut self) -> Result<(), String> {
         self.rpc("initialize",serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Keel","version":env!("CARGO_PKG_VERSION")}})).await?;
         if self.session.is_none() {
@@ -139,6 +161,12 @@ impl Client {
         }
         self.rpc("ping", serde_json::json!({})).await?;
         let tools = self.rpc("tools/list", serde_json::json!({})).await?;
+        self.tools = tools["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect();
         for required in [
             "open_tab",
             "navigate",
@@ -160,6 +188,19 @@ impl Client {
             }
         }
         Ok(())
+    }
+    pub fn supports(&self, name: &str) -> bool {
+        self.tools.contains(name)
+    }
+    /// Screenshot calls have their own bounded wire budget and retain native MCP image blocks.
+    pub async fn capture(&mut self) -> Result<super::Output, String> {
+        let response = self
+            .rpc(
+                "tools/call",
+                serde_json::json!({"name":"screenshot", "arguments":{}}),
+            )
+            .await?;
+        capture_output(response)
     }
     pub async fn tool(&mut self, name: &str, args: Value) -> Result<String, String> {
         let response = self
@@ -221,13 +262,18 @@ impl Client {
             }
             self.session = Some(session.into());
         }
+        let limit = if method == "tools/call" && params["name"] == "screenshot" {
+            super::SCREENSHOT_WIRE_BYTES
+        } else {
+            RESPONSE_BYTES
+        };
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|_| "Local Oya disconnected during the operation; its effect is uncertain.")?
         {
-            if bytes.len() + chunk.len() > RESPONSE_BYTES {
+            if bytes.len() + chunk.len() > limit {
                 return Err("Oya response exceeded its display limit.".into());
             }
             bytes.extend_from_slice(&chunk);
@@ -238,6 +284,46 @@ impl Client {
         message(&bytes, id).ok_or("Oya returned no matching protocol response.".to_string())?
     }
 }
+/// Untrusted Oya replies may contain text and exactly one PNG; paths and resources are refused.
+fn capture_output(response: Value) -> Result<super::Output, String> {
+    let mut output = super::Output::default();
+    let blocks = response["content"]
+        .as_array()
+        .ok_or("Oya returned no screenshot content.")?;
+    for block in blocks {
+        match block["type"].as_str() {
+            Some("text") => {
+                output
+                    .text
+                    .push_str(block["text"].as_str().unwrap_or_default());
+                output.text.push('\n');
+            }
+            Some("image") if output.image.is_none() => {
+                output.image = Some(super::Image {
+                    data: block["data"]
+                        .as_str()
+                        .ok_or("Oya returned no screenshot pixels.")?
+                        .into(),
+                    mime_type: block["mimeType"].as_str().unwrap_or_default().into(),
+                })
+            }
+            _ => return Err("Oya returned unsupported screenshot content.".into()),
+        }
+    }
+    if response["isError"] == true {
+        return Err(super::capped(output.text));
+    }
+    let image = output
+        .image
+        .as_ref()
+        .ok_or("Oya returned no screenshot image.")?;
+    let (width, height) = image.dimensions()?;
+    output
+        .text
+        .push_str(&format!("Screenshot image: {width} × {height} px."));
+    output.bounded(true)
+}
+
 fn message(bytes: &[u8], id: u64) -> Option<Result<Value, String>> {
     let parsed = serde_json::from_slice::<Value>(bytes).ok().or_else(|| {
         std::str::from_utf8(bytes)
@@ -293,6 +379,22 @@ mod tests {
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn screenshot_content_preserves_pixels_and_rejects_missing_or_failed_capture() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+        let response = json!({"content":[{"type":"text","text":"375 CSS px"},{"type":"image","mimeType":"image/png","data":png}]});
+        let result = capture_output(response.clone()).unwrap();
+        assert!(result.text.contains("375 CSS px"));
+        assert_eq!(result.image.unwrap().data, png);
+        assert!(capture_output(json!({"content":[]})).is_err());
+        let mut failed = response;
+        failed["isError"] = true.into();
+        assert!(capture_output(failed).is_err());
+        assert!(
+            capture_output(json!({"content":[{"type":"resource_link","uri":"file:///tmp/x"}]}))
+                .is_err()
+        );
     }
     #[test]
     fn protocol_parser_ignores_other_request_ids_and_accepts_json_or_event_streams() {

@@ -12,6 +12,21 @@ state costs more than it saves, and nobody files a bug about that — they just 
 the bar in [CLAUDE.md](../CLAUDE.md#the-bar) applies to every surface described here. Never slow,
 never stuck, never weird.
 
+## Finding what needs you
+
+**Attention** collects received updates from every open project in one list, including collapsed
+projects and both workspace layouts. Open it below **Open project**, from the footer when the
+sidebar is hidden, or through the command palette. Each lane appears once, with unanswered
+requests first, then errors, failed checks, and unseen updates. Its action opens the existing
+question, agent terminal, recovery surface, or Turns panel. Unseen endings open Turns so a
+conversation’s saved scroll position cannot hide the update being acknowledged.
+
+Opening a lane acknowledges an unseen update. Unanswered requests, delivery errors, and failed
+checks stay visible until their source clears or a newer turn supersedes them. Execution and
+checks have separate labels: **Finished** does not imply **Checks passed**. The list describes
+updates Keel has received, marks disconnected details as possibly stale, and says when some
+conversations have not loaded. It does not load dormant lanes or store a historical inbox.
+
 ## Seeing what it did
 
 **Coding Mode.** Choose **Coding Mode** in the status bar for a file explorer on the left, code

@@ -1,3 +1,4 @@
+// The desktop entry loads shared styling before mounting the workspace and native integration.
 import "./appearance";
 import { createRoot } from "react-dom/client";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -5,6 +6,7 @@ import { App } from "./ui/App";
 import "./styles.css";
 import "./workspace.css";
 import "./ide.css";
+import "./attention.css";
 
 // A link in the agent's reply opens in the browser. Followed in place, it replaced the whole app
 // with that page and left no way back but quitting.

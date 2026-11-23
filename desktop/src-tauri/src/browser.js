@@ -47,6 +47,11 @@
 
   function run() {
   switch (op.op) {
+    case "viewport_info": return say(true, JSON.stringify({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,url:location.href}));
+    case "clear_marks": {
+      document.querySelectorAll('[data-keel="browser-mark"],[data-keel="browser-ref"]').forEach((node) => node.remove());
+      return say(true, "Inspection marks cleared.");
+    }
     case "read": {
       document.querySelectorAll("[data-keel-ref]").forEach((el) => el.removeAttribute("data-keel-ref"));
       const els = [...document.querySelectorAll("a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[contenteditable=true],[onclick]")].filter(visible).slice(0, MAX_ELEMENTS);

@@ -12,24 +12,28 @@
 //! to `/api/browser/result`. Every wait has an end: no window at all fails at once, an op nobody
 //! answers fails at its timeout, and a call Claude Code abandons takes its waiter with it.
 //!
-//! What it cannot do, said to the agent in the tool descriptions rather than discovered: no
-//! screenshots (neither WKWebView through Tauri nor WebView2 offers a snapshot on desktop), the top
-//! frame only, synthetic input only, and none of the person's logins.
+//! Native capabilities vary by adapter; unsupported capture/emulation settings fail explicitly.
+//! Embedded reading covers the top frame and uses synthetic input.
 
 mod bindings;
 mod choice;
 mod connection;
 mod detection;
 mod local;
+mod output;
 mod preference;
 mod settings;
+mod viewport;
 pub(crate) use bindings::{
     alias as session_alias, id as binding_id, instructions, prepare, release,
 };
 pub(crate) use choice::{oya_app, oya_installed};
+pub(crate) use output::SCREENSHOT_WIRE_BYTES;
+pub use output::{Image, Output};
 pub(crate) use settings::{
     reconnect, save as preference_save, set_lane, show as show_local, status as preference_status,
 };
+pub use viewport::Viewport;
 
 use crate::lock::Locked;
 use axum::Json;
@@ -56,6 +60,10 @@ pub enum Op {
         url: String,
     },
     Read,
+    Viewport {
+        settings: Viewport,
+    },
+    Screenshot,
     Click {
         target: u32,
     },
@@ -119,6 +127,10 @@ pub fn op(name: &str, args: &Value) -> Result<Op, String> {
             url: web_only(args["url"].as_str().unwrap_or(""))?,
         },
         "browser_read" => Op::Read,
+        "browser_viewport" => Op::Viewport {
+            settings: Viewport::parse(args)?,
+        },
+        "browser_screenshot" => Op::Screenshot,
         "browser_click" => Op::Click { target: target()? },
         "browser_type" => {
             let text = args["text"].as_str().unwrap_or("");
@@ -164,11 +176,14 @@ pub fn op(name: &str, args: &Value) -> Result<Op, String> {
     })
 }
 
+/// Route every browser capability through the same lane ownership and approval checks.
 pub fn is_tool(name: &str) -> bool {
     matches!(
         name,
         "browser_open"
             | "browser_read"
+            | "browser_viewport"
+            | "browser_screenshot"
             | "browser_click"
             | "browser_type"
             | "browser_key"
@@ -177,7 +192,7 @@ pub fn is_tool(name: &str) -> bool {
     )
 }
 
-type Answer = Result<String, String>;
+type Answer = Result<Output, String>;
 
 fn waiters() -> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<Answer>>> {
     static W: OnceLock<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Answer>>>> =
@@ -225,7 +240,9 @@ pub async fn call(
         && let Some(bound) = bindings::authorize(project, lane, binding)?
         && choice::choose(&bound.project, lane, &bound).await? == preference::Backend::LocalOya
     {
-        return bindings::local(bound, op).await.map(capped);
+        return bindings::local(bound, op)
+            .await?
+            .bounded(name == "browser_screenshot");
     }
     some_window(crate::events::windows())?;
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -244,7 +261,7 @@ pub async fn call(
     };
     crate::events::emit("browser", None, json!({ "id": id, "lane": lane, "op": op }));
     match tokio::time::timeout(wait, rx).await {
-        Ok(Ok(answer)) => answer,
+        Ok(Ok(answer)) => answer?.bounded(name == "browser_screenshot"),
         _ => Err(format!(
             "The Browser tab did not answer within {} s. The page may still be loading; read it again, or say what you could not do.",
             wait.as_secs()
@@ -259,6 +276,8 @@ pub struct Result_ {
     pub ok: bool,
     #[serde(default)]
     pub text: String,
+    #[serde(default)]
+    pub image: Option<Image>,
 }
 
 /// Answer a waiting call. `false` for an id nobody is waiting on — a result that arrived after its
@@ -268,8 +287,15 @@ pub async fn api_result(Json(r): Json<Result_>) -> Json<bool> {
     let Some(tx) = waiters().locked().remove(&r.id) else {
         return Json(false);
     };
-    let text = capped(r.text);
-    Json(tx.send(if r.ok { Ok(text) } else { Err(text) }).is_ok())
+    let answer = if r.ok {
+        Ok(Output {
+            text: capped(r.text),
+            image: r.image,
+        })
+    } else {
+        Err(capped(r.text))
+    };
+    Json(tx.send(answer).is_ok())
 }
 
 /// At most `RESULT_CAP` bytes, the head and tail kept, on character boundaries.
@@ -330,7 +356,21 @@ pub fn schemas() -> Vec<Value> {
         ),
         tool(
             "browser_read",
-            "Read the page in this lane's Browser tab: its title, address, visible text, and its interactive elements numbered as [n]. Text only: the tab cannot take screenshots, and only the top frame is read (not cross-origin iframes such as embedded payment or sign-in widgets).",
+            "Read the page in this lane's Browser tab: its title, address, visible text, and its interactive elements numbered as [n]. Use browser_screenshot for an image. Frame coverage depends on the selected browser: embedded mode reads the top frame only; local Oya uses its frame support. If content is missing, report that limit.",
+            serde_json::Map::new(),
+            &[],
+            true,
+        ),
+        tool(
+            "browser_viewport",
+            "Set this lane’s viewport in CSS pixels until reset, including across navigation. Open a page first. Use {reset:true} to restore automatic sizing. Optional settings retain their previous value. Unsupported settings fail before changes; mobile/touch emulation is currently unsupported. Read again after resizing.",
+            viewport::properties(),
+            &[],
+            false,
+        ),
+        tool(
+            "browser_screenshot",
+            "Capture this lane’s current viewport and scroll position as a PNG image, without inspection marks. Native capture availability depends on the selected browser; failures never switch browsers. This preserves the last read’s element references.",
             serde_json::Map::new(),
             &[],
             true,
@@ -482,14 +522,16 @@ mod tests {
             id: id.clone(),
             ok: true,
             text: "Example Domain".into(),
+            image: None,
         }))
         .await;
         assert!(taken);
-        assert_eq!(asking.await.unwrap().unwrap(), "Example Domain");
+        assert_eq!(asking.await.unwrap().unwrap().text, "Example Domain");
         let Json(late) = api_result(Json(Result_ {
             id,
             ok: true,
             text: String::new(),
+            image: None,
         }))
         .await;
         assert!(!late, "an answer to nobody is said to be late");

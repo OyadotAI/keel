@@ -9,13 +9,14 @@ import { listen } from "@tauri-apps/api/event";
 import { post, type Endpoint } from "./api";
 
 export interface Op {
-  op: "open" | "read" | "click" | "type" | "key" | "scroll" | "back" | "forward" | "reload";
+  op: "open" | "read" | "viewport" | "screenshot" | "click" | "type" | "key" | "scroll" | "back" | "forward" | "reload";
   url?: string;
   target?: number;
   text?: string;
   submit?: boolean;
   key?: string;
   direction?: "up" | "down";
+  settings?: { width?: number; height?: number; deviceScaleFactor?: number; mobile?: boolean; reset?: boolean };
 }
 
 export interface Tab {
@@ -33,6 +34,9 @@ export interface Tab {
   /// Closed by Keel to make room for another lane's page.
   room?: boolean;
   error?: string;
+  preview?: { data: string; mime_type: string };
+  fixed?: boolean;
+  previewError?: string;
 }
 
 const tabs = new Map<string, Tab>();
@@ -57,6 +61,8 @@ export function useTab(lane: string): Tab | undefined {
 export function activity(op: Op): string {
   switch (op.op) {
     case "open": return `opening ${op.url?.replace(/^https?:\/\//, "")}`;
+    case "viewport": return op.settings?.reset ? "resetting viewport" : `setting viewport to ${op.settings?.width} × ${op.settings?.height}`;
+    case "screenshot": return "taking a screenshot";
     case "read": return "analyzing the page";
     case "click": return `clicking element ${op.target}`;
     case "type": return `typing ${op.text?.length ?? 0} characters into element ${op.target}${op.submit ? ", then submitting" : ""}`;
@@ -68,8 +74,8 @@ export function activity(op: Op): string {
 
 /// Run one op in the lane's tab. The person's own back, forward, reload and address go through here
 /// too, so they wait their turn behind the agent's.
-export function act(lane: string, project: string, op: Op): Promise<string> {
-  return invoke<string>("browser_act", { lane, project, op });
+export function act(lane: string, project: string, op: Op): Promise<string | {text: string; image?: {data: string; mime_type: string}}> {
+  return invoke("browser_act", { lane, project, op });
 }
 
 /// The daemon's `browser` event: run it, answer it. A lane this window does not have is answered
@@ -87,7 +93,9 @@ export async function onBrowser(project: string, ep: Endpoint, has: (lane: strin
   lastOp.set(data.lane, now);
   put(data.lane, { activity: activity(data.op), op: data.id, acting: true, browsing: true, room: false, error: undefined });
   try {
-    await answer(true, await act(data.lane, project, data.op));
+    const result = await act(data.lane, project, data.op);
+    if (typeof result === "string") await answer(true, result);
+    else await post(ep, "/api/browser/result", {id: data.id, ok: true, ...result}).catch(() => undefined);
   } catch (e) {
     await answer(false, e instanceof Error ? e.message : String(e));
   } finally {
@@ -109,9 +117,12 @@ let listening = false;
 export function listenPages() {
   if (listening) return;
   listening = true;
+  void listen<{lane: string; image?: Tab["preview"]; fixed: boolean; error?: string}>("browser-preview", ({payload}) => {
+    if (tabs.has(payload.lane)) put(payload.lane, {preview:payload.image, fixed:payload.fixed, previewError:payload.error});
+  });
   void listen<{ lane: string; url?: string; loading?: boolean; closed?: string; error?: string }>("browser-page", ({ payload }) => {
     if (payload.error) put(payload.lane, { url: undefined, loading: false, error: payload.error });
-    else if (payload.closed) put(payload.lane, { url: undefined, loading: false, room: true });
+    else if (payload.closed) put(payload.lane, { url: undefined, loading: false, room: true, fixed: false, preview: undefined, previewError: undefined });
     else put(payload.lane, { url: payload.url, loading: !!payload.loading });
   });
 }

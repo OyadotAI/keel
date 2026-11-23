@@ -2395,7 +2395,7 @@ h3 {
   margin: 0 8px 6px;
   padding: 0 10px;
   border-radius: var(--r-sm);
-  font: 500 var(--t-micro) var(--font);
+  font: 500 0.75rem var(--font);
   color: var(--faint);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -2824,3 +2824,8 @@ button.primary kbd, button.danger kbd { color: inherit; background: #ffffff18; }
 /* `button.ghost` is a 24px icon square; this one carries a word. */
 .composer-tools .composer-more { width: auto; padding: 0 8px; }
 .composer-stop { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 8px; }
+
+/* Fixed viewport snapshots fit the panel without changing the inspected CSS viewport. */
+.browser-viewport-preview { position:absolute; inset:2px; display:flex; flex-direction:column; align-items:center; overflow:hidden; background:var(--bg); }
+.browser-viewport-preview img { min-height:0; width:100%; flex:1; object-fit:contain; object-position:center top; }
+.browser-viewport-preview span { flex:none; max-width:100%; padding:4px 8px; font-size:0.75rem; color:var(--faint); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }

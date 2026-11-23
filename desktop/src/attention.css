@@ -1,0 +1,36 @@
+/* Attention stays a flat, bounded list over existing state, with no animation or new assets. */
+.attention-entry { display: flex; align-items: center; gap: .5rem; color: var(--dim); background: transparent; border: 0; min-height: 32px; font: 500 .875rem/1.5 var(--font); }
+.sidebar > .attention-entry { margin: 0 16px 12px; padding: 4px 8px; }
+.attention-entry .attention-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.statusbar > .attention-entry { flex: none; font-size: .875rem; min-height: 32px; }
+.attention-entry:hover { background: var(--hover); color: var(--text); }
+.dialog-backdrop:has(.attention-content), .dialog:has(.attention-content) { animation: none; }
+.dialog:has(.attention-content) { width: min(40rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); padding: 1.5rem; display: flex; flex-direction: column; }
+.dialog:has(.attention-content) h2 { flex: none; font: 600 1.375rem/1.2 var(--font); }
+.attention-content { min-height: 0; display: flex; flex-direction: column; font: 400 .875rem/1.5 var(--font); overflow-wrap: anywhere; }
+.dialog .attention-content p { font: inherit; margin: 0; }
+.dialog .attention-content .attention-subtitle, .dialog .attention-content .attention-coverage { flex: none; color: var(--dim); font-size: .75rem; padding: .5rem 0; }
+.attention-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.attention-list, .attention-reasons { list-style: none; margin: 0; padding: 0; }
+.attention-row { display: flex; align-items: center; gap: 1rem; padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.attention-identity { flex: 1; min-width: 0; }
+.attention-project { display: block; color: var(--faint); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text); font-weight: 600; }
+.attention-reason { display: flex; align-items: baseline; gap: .375rem; margin-top: .375rem; color: var(--dim); }
+.attention-reason svg { flex: none; align-self: start; margin-top: .2rem; }
+.attention-reason.input svg { color: var(--warn); }
+.attention-reason.error svg, .attention-reason.checks svg { color: var(--del); }
+.attention-reason.error span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dialog .attention-content .attention-disconnected { margin-top: .375rem; font-size: .75rem; color: var(--dim); }
+.dialog .attention-content .actions { flex: none; margin: 0; }
+.dialog .attention-content .actions button { min-height: 32px; height: auto; padding: .375rem .75rem; font: 500 .875rem/1.5 var(--font); white-space: normal; }
+.dialog .attention-content .attention-footer { flex-direction: row; justify-content: flex-end; padding-top: 1rem; }
+.attention-empty { padding: 1.5rem 0; color: var(--dim); }
+.attention-entry:focus-visible, .attention-content button:focus-visible, [data-attention-turns]:focus-visible, [data-attention-request]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 640px) {
+  .attention-row { align-items: stretch; flex-direction: column; gap: .75rem; }
+  .attention-row .actions, .attention-row .actions button { width: 100%; }
+}
+@media (pointer: coarse) {
+  .attention-entry, .dialog .attention-content .actions button { min-height: 44px; }
+}

@@ -2076,11 +2076,14 @@ dependencies = [
 name = "keel-desktop"
 version = "0.4.85"
 dependencies = [
+ "block2",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "keyring",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",

@@ -5,6 +5,11 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Added a workspace Attention list across open projects, with direct routes to unanswered
+  requests, agent terminals, errors, failed checks and unseen endings; kept unresolved conditions
+  visible after navigation and separated execution endings from project-check evidence.
+  Closed covering narrow drawers and kept late terminal connections from stealing deliberate
+  review or request focus.
 - Kept the SDK's formatting-only structured-output helper available to focused reviews while
   applying the complete trusted reviewer policy, so a completed assessment returns a validated verdict.
 - Replaced sequential CI review orchestration with one read-only focused reviewer, explicit
@@ -57,6 +62,10 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   without a word, and a busy one says what to stop first.
 
 ### Fixed
+
+- Recovered local Oya browsing after a lane's tab was closed: opening a page creates a new owned
+  tab, while other calls clear stale page state and explain how to continue without a restart.
+- Added lane-scoped browser viewport sizing and PNG screenshots, with native capability errors and a fixed-size preview on macOS; corrected wrapped-link targeting in the companion Oya adapter.
 - Replaced subagent tile scaling with a brief smoke-like reveal and dissolution, preserved pane
   contents through closing, and smoothly retargeted interrupted grid movement. Child transcripts
   now share the main terminal palette, including independently selected light and dark themes.
