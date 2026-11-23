@@ -232,6 +232,14 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm runtime:stage x86_64-pc-windows-msvc
           pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Verify Windows installer shortcut contracts before publication
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (!(Test-Path $nsis) -and !(Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis --version=3.11 --yes --no-progress
+          }
+          python -B -m unittest discover -s packaging/tests -p 'test_windows_installer.py'
       - name: Upload to the draft
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}

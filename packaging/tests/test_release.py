@@ -85,6 +85,13 @@ class ReleaseBrandingTests(unittest.TestCase):
                 self.assertEqual(1, macro.count(f"Push {register}"))
                 self.assertEqual(1, macro.count(f"Pop {register}"))
 
+    def test_windows_contract_checks_run_before_installer_publication(self):
+        """A passing native shortcut fixture is required before release artifacts can publish."""
+        windows = WORKFLOW.read_text().split("  windows:\n", 1)[1].split("  linux-cli:\n", 1)[0]
+        check = "Verify Windows installer shortcut contracts before publication"
+        self.assertIn("-p 'test_windows_installer.py'", windows)
+        self.assertLess(windows.index(check), windows.index("Upload to the draft"))
+
     def test_every_referenced_native_icon_ships_in_the_desktop_bundle(self):
         """A regenerated mark must reach each configured native icon format."""
         config = json.loads(CONFIG.read_text())
