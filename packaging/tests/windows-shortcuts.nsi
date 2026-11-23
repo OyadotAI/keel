@@ -17,6 +17,9 @@ InstallDir "${FIXTURE_ROOT}\state"
     FileClose $0
   ${EndIf}
   StrCpy $2 "${TARGET}"
+  FileOpen $3 "$EXEDIR\FactoryHarnessTrace.log" a
+  FileWrite $3 "link=${LINK}|expected=$2|actual=$1$\r$\n"
+  FileClose $3
   StrCpy $3 "matcher clobbered this register"
   ${If} $1 == $2
     Push 1

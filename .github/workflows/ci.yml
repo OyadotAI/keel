@@ -112,9 +112,14 @@ jobs:
           packaging/sidecar.sh
           cd desktop/src-tauri && cargo test
 
-      # Compile the shipping NSIS hooks and exercise shortcut ownership without real installs.
+
+  # Native installer checks are independent of the daemon's long-running Windows suites.
+  windows-installer-contracts:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Windows installer shortcut contracts
-        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import unittest
+from test_windows_installer import write_cases
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -91,6 +92,16 @@ class ReleaseBrandingTests(unittest.TestCase):
         check = "Verify Windows installer shortcut contracts before publication"
         self.assertIn("-p 'test_windows_installer.py'", windows)
         self.assertLess(windows.index(check), windows.index("Upload to the draft"))
+
+    def test_native_shortcut_fixture_uses_windows_path_separators(self):
+        """The NSIS fixture must address the same Windows paths as the shipping hooks."""
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script = root / "cases.nsh"
+            write_cases(root, script)
+            source = script.read_text()
+            self.assertNotIn("$INSTDIR/", source)
+            self.assertIn("$INSTDIR\\missing\\failed_rename.factory", source)
 
     def test_every_referenced_native_icon_ships_in_the_desktop_bundle(self):
         """A regenerated mark must reach each configured native icon format."""

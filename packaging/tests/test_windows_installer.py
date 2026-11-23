@@ -30,11 +30,12 @@ def write_cases(state, script):
         target = f"missing/{name}.factory" if missing_parent else f"{name}.factory"
         if destination is not None:
             (state / target).write_text(destination)
-        operation = f'!insertmacro FactoryRenameOwnedShortcut "$INSTDIR/{name}.legacy" "$INSTDIR/{target}"'
+        native_target = target.replace("/", "\\")
+        operation = f'!insertmacro FactoryRenameOwnedShortcut "$INSTDIR\\{name}.legacy" "$INSTDIR\\{native_target}"'
         commands.extend([operation, operation])  # Same installer run again must be idempotent.
     for owner in ("owned", "other"):
         (state / f"remove-{owner}").write_text(owner)
-        commands.append(f'!insertmacro FactoryRemoveOwnedShortcut "$INSTDIR/remove-{owner}"')
+        commands.append(f'!insertmacro FactoryRemoveOwnedShortcut "$INSTDIR\\remove-{owner}"')
     commands.extend(['Pop $4', 'StrCmp $4 "stack sentinel" +3 0', 'SetErrorLevel 1', 'Abort'])
     for index in range(4):
         commands.extend([f'StrCmp ${index} "saved{index}" +3 0', 'SetErrorLevel 1', 'Abort'])
@@ -60,10 +61,12 @@ class WindowsShortcutTests(unittest.TestCase):
             write_cases(state, script)
             subprocess.run([compiler, "/V2", f"/DFIXTURE_ROOT={fixture}", f"/DFACTORY_HOOK={HOOK}", f"/DTEST_CASES={script}", str(HARNESS)], check=True, timeout=COMPILER_TIMEOUT)
             subprocess.run([str(fixture / "shortcut-fixture.exe"), "/S"], check=True, timeout=FIXTURE_TIMEOUT)
+            trace = fixture / "FactoryHarnessTrace.log"
+            diagnostic = trace.read_text(encoding="utf-8", errors="replace") if trace.exists() else "Matcher trace was not written."
             for name, _, _, missing_parent, source, destination in RENAME_CASES:
                 target = state / (f"missing/{name}.factory" if missing_parent else f"{name}.factory")
                 for path, expected in [(state / f"{name}.legacy", source), (target, destination)]:
                     with self.subTest(case=name, path=path.name):
-                        self.assertEqual(expected, path.read_text() if path.exists() else None)
-            self.assertFalse((state / "remove-owned").exists())
+                        self.assertEqual(expected, path.read_text() if path.exists() else None, diagnostic)
+            self.assertFalse((state / "remove-owned").exists(), diagnostic)
             self.assertEqual("other", (state / "remove-other").read_text())

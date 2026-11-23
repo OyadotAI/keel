@@ -11,6 +11,7 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   Retained Windows' legacy NSIS identity for upgrades while branding its installed-program
   entry and app-owned shortcuts as Oya Factory.
   Added native Windows shortcut checks to CI and the release upload gate.
+  Used Windows-native fixture paths and separated shortcut checks from daemon CI suites.
 - Added a workspace Attention list across open projects, with direct routes to unanswered
   requests, agent terminals, errors, failed checks and unseen endings; kept unresolved conditions
   visible after navigation and separated execution endings from project-check evidence.
