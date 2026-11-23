@@ -61,12 +61,10 @@ class WindowsShortcutTests(unittest.TestCase):
             write_cases(state, script)
             subprocess.run([compiler, "/V2", f"/DFIXTURE_ROOT={fixture}", f"/DFACTORY_HOOK={HOOK}", f"/DTEST_CASES={script}", str(HARNESS)], check=True, timeout=COMPILER_TIMEOUT)
             subprocess.run([str(fixture / "shortcut-fixture.exe"), "/S"], check=True, timeout=FIXTURE_TIMEOUT)
-            trace = fixture / "FactoryHarnessTrace.log"
-            diagnostic = trace.read_text(encoding="utf-8", errors="replace") if trace.exists() else "Matcher trace was not written."
             for name, _, _, missing_parent, source, destination in RENAME_CASES:
                 target = state / (f"missing/{name}.factory" if missing_parent else f"{name}.factory")
                 for path, expected in [(state / f"{name}.legacy", source), (target, destination)]:
                     with self.subTest(case=name, path=path.name):
-                        self.assertEqual(expected, path.read_text() if path.exists() else None, diagnostic)
-            self.assertFalse((state / "remove-owned").exists(), diagnostic)
+                        self.assertEqual(expected, path.read_text() if path.exists() else None)
+            self.assertFalse((state / "remove-owned").exists())
             self.assertEqual("other", (state / "remove-other").read_text())
