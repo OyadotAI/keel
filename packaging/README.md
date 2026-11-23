@@ -1,9 +1,18 @@
+<!-- Building and updating Oya Factory while retaining its installed-copy contracts. -->
 # Packaging
 
-Keel is a Tauri app (`desktop/`) with the Rust daemon (`keel`) bundled inside it, one daemon per
+Oya Factory is a Tauri app (`desktop/`) with the Rust daemon (`keel`) bundled inside it, one daemon per
 open project. A release is a universal macOS app (DMG plus an updater archive) and a Windows NSIS
 installer, published to the public `OyadotAI/keel-releases` repository. Installed copies update
 themselves from there.
+
+The shared display name is **Oya Factory**. Windows keeps `productName: "Keel"` in
+`desktop/src-tauri/tauri.windows.conf.json`: NSIS derives upgrade keys and its installation
+directory from this value, rather than the bundle identifier. The supported installer hooks
+brand the installed-program entry and existing app-owned shortcuts as Oya Factory, including
+shortcuts created on the interactive finish page. The hooks preserve unrelated links and skip
+shortcut removal during updates. Wizard text and executable version metadata can still contain
+the compatibility name Keel. Do not remove this override as a cosmetic cleanup.
 
 ## Building locally
 
@@ -20,7 +29,7 @@ unsigned build is for your own machine and nothing else.
 
 The macOS signing entitlements include `com.apple.security.cs.allow-jit` for the bundled
 Node runtime. Without it, hardened-runtime builds can crash in V8 initialization before the
-agent helper starts. After signing, run `node desktop/scripts/runtime-smoke.mjs /path/to/Keel.app`.
+agent helper starts. After signing, run `node desktop/scripts/runtime-smoke.mjs "/path/to/Oya Factory.app"`.
 This starts the shipped runtime and checks that the helper processes a command; `--version`
 alone does not exercise V8. The release workflow runs this check before publishing.
 
@@ -28,7 +37,7 @@ alone does not exercise V8. The release workflow runs this check before publishi
 
 The app checks `releases/latest/download/latest.json` at launch and every six hours, downloads in
 the background, and installs only when the person clicks **Update now** in the header. A restart stops
-every agent the app is running, so Keel never makes that choice for them, and it says how many
+every agent the app is running, so Oya Factory never makes that choice for them, and it says how many
 lanes are mid-turn before it restarts. Development builds never check.
 
 Updates are signed with an updater key that has nothing to do with Apple. The public half is in

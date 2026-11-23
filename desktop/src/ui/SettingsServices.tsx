@@ -58,7 +58,7 @@ export function ClaudeSection({ ep }: { ep: Endpoint }) {
         <p className="muted">Checking…</p>
       ) : !claude.installed ? (
         <>
-          <p>Claude Code is not installed. Keel runs your own <code>claude</code>, so it needs it first.</p>
+          <p>Claude Code is not installed. Oya Factory runs your own <code>claude</code>, so it needs it first.</p>
           <button className="primary" disabled={!!busy} onClick={() => run("install")}>
             {busy === "install" ? "Installing…" : "Install Claude Code"}
           </button>
@@ -178,9 +178,9 @@ export function UpdatesSection() {
         : u.state === "downloading"
           ? `Downloading ${u.version}…`
           : u.state === "ready"
-            ? `Keel ${u.version} is downloaded — choose Update now in the header to install it.`
+            ? `Oya Factory ${u.version} is downloaded — choose Update now in the header to install it.`
             : u.state === "installing"
-              ? `Installing Keel ${u.version}…`
+              ? `Installing Oya Factory ${u.version}…`
             : u.state === "failed"
               ? `Could not check: ${u.why}`
               : import.meta.env.DEV
@@ -190,7 +190,7 @@ export function UpdatesSection() {
     <section className="settings-section">
       <h2>Updates</h2>
       <p className="small muted">
-        Keel {version ?? "…"} · checks for a new version at launch and every six hours, downloads it in the background, and installs it when you restart.
+        Oya Factory {version ?? "…"} · checks for a new version at launch and every six hours, downloads it in the background, and installs it when you restart.
       </p>
       <div className="form-row">
         <button onClick={() => void check()} disabled={u.state === "checking" || u.state === "downloading" || u.state === "ready" || u.state === "installing"}>

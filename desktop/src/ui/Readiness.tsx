@@ -28,7 +28,7 @@ function FindingCard({ finding, busy, onAdopt, auto, onFix, onIgnore }: {
   finding: Finding;
   busy: boolean;
   onAdopt: () => void;
-  /// A trusted project: Keel adds the team itself, and only a failed attempt gets a button.
+  /// A trusted project: Oya Factory adds the team itself, and only a failed attempt gets a button.
   auto?: { failed?: string | null; retry: () => void };
   onFix: (finding: Finding) => void;
   onIgnore: (finding: Finding) => void;
@@ -43,7 +43,7 @@ function FindingCard({ finding, busy, onAdopt, auto, onFix, onIgnore }: {
       <div className="small">{finding.fix.description}</div>
       <div className="card-actions">
         {finding.id === "agent/no-reviewers" && auto ? (
-          auto.failed ? <button onClick={auto.retry} title={auto.failed}>Try again</button> : <span className="small muted">Keel adds the team on project open.</span>
+          auto.failed ? <button onClick={auto.retry} title={auto.failed}>Try again</button> : <span className="small muted">Oya Factory adds the team on project open.</span>
         ) : finding.id === "agent/no-reviewers" ? (
           <button className="primary" onClick={onAdopt} title="Write the agent team and the lifecycle into this project, never over a file">
             Add the team

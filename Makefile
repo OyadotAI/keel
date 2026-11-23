@@ -1,5 +1,5 @@
 # Build and verify Keel, its desktop shell, and the standalone Oya product page.
-.PHONY: help build check fmt lint test scan clean dev website-test
+.PHONY: help build check fmt lint test scan clean dev website-test packaging-test
 
 help:
 	@echo "build   compile the workspace"
@@ -11,11 +11,15 @@ help:
 build:
 	cargo build
 
-check: website-test fmt lint test desktop-test
+check: website-test packaging-test fmt lint test desktop-test
 
 # The landing page is buildless; validate its public contracts without installing dependencies.
 website-test:
 	python3 -B -m unittest discover -s website/tests -p 'test_*.py'
+
+# Pin displayed app names and space-containing bundle paths without building an installer.
+packaging-test:
+	python3 -B -m unittest discover -s packaging/tests -p 'test_*.py'
 
 fmt:
 	cargo fmt --all -- --check

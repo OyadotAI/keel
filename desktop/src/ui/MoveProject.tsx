@@ -1,4 +1,4 @@
-// The one question about where a project lives: move it into the Keel workspace, or keep it.
+// The one question about where a project lives: move it into the Oya Factory workspace, or keep it.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -24,7 +24,7 @@ export function MoveProject() {
   const name = nameOf(m.from);
   const close = () => { if (m.phase === "offer") void answerMove(false); else if (m.phase !== "moving") closeMove(); };
   if (m.phase === "moved") return (
-    <Dialog title="Moved into the Keel workspace" onClose={close}>
+    <Dialog title="Moved into the Oya Factory workspace" onClose={close}>
       <div ref={box}>
         <p>{name} is now at <code className="project-location">{m.to}</code>.</p>
         <p>Terminals and editors that had the old folder open need to reopen it from here. Sign-ins in the Browser tab stay with the old place.</p>
@@ -38,7 +38,7 @@ export function MoveProject() {
   );
   const refused = m.phase === "refused" && m.refusal;
   return (
-    <Dialog title={`Move “${name}” into the Keel workspace?`} onClose={close}>
+    <Dialog title={`Move “${name}” into the Oya Factory workspace?`} onClose={close}>
       <div ref={box}>
         <p>From <code className="project-location">{m.from}</code> to <code className="project-location">{m.to}</code>.</p>
         <p>Its lanes’ branches and checkouts, its trust and rules, and its conversation history come with it.</p>

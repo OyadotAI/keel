@@ -17,11 +17,11 @@ export function UpdateButton() {
   if (u.state !== "ready") return null;
   return (
     <>
-      <button className="update" onClick={() => (running ? setAsking(true) : void restart())} title={`Keel ${u.version} is downloaded`}>
+      <button className="update" onClick={() => (running ? setAsking(true) : void restart())} title={`Oya Factory ${u.version} is downloaded`}>
         Update now
       </button>
       {asking && (
-        <Dialog title={`Restart to install Keel ${u.version}?`} onClose={() => setAsking(false)}>
+        <Dialog title={`Restart to install Oya Factory ${u.version}?`} onClose={() => setAsking(false)}>
           <p>
             {running} lane{running === 1 ? " is" : "s are"} running a turn, and restarting stops {running === 1 ? "it" : "them"}. The conversations stay in History and resume after the restart.
           </p>

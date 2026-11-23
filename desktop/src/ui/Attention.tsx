@@ -66,10 +66,10 @@ export function AttentionDialog({ close, activate, openProject }: { close: () =>
     finally { setPicking(false); }
   }
   return <Dialog title="Attention" onClose={close}><div className="attention-content" ref={root} onFocusCapture={(event) => onFocus(event.target)}>
-    <p className="attention-subtitle">Across open projects · Updates Keel has received</p>
+    <p className="attention-subtitle">Across open projects · Updates Oya Factory has received</p>
     <span className="sr-only" role="status" aria-live="polite">{items.length} lanes in Attention</span>
     <div className="attention-scroll">{items.length ? <ol className="attention-list">{items.map((item, index) => <AttentionRow key={item.lane} item={item} first={index === 0} activate={activate} />)}</ol> : <p className="attention-empty">{empty}</p>}</div>
-    {!!coverage.unloaded && <p className="attention-coverage">Some conversations haven’t loaded yet. This list includes updates Keel has received.</p>}
+    {!!coverage.unloaded && <p className="attention-coverage">Some conversations haven’t loaded yet. This list includes updates Oya Factory has received.</p>}
     {error && <p role="alert">{error}</p>}
     <div className="actions attention-footer">{!coverage.projects && <button className="primary" disabled={picking} onClick={() => void pick()}>{picking ? "Opening project…" : "Open project…"}</button>}<button className={`attention-close${!items.length && coverage.projects ? " primary" : ""}`} onClick={close}>Close</button></div>
   </div></Dialog>;

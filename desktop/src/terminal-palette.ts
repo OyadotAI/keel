@@ -1,27 +1,23 @@
 // One palette owns main-terminal ANSI colors and read-only child transcript colors.
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"] as const;
 
-/// Keel's two terminal palettes: background, text and all sixteen ANSI colours, from the same
-/// tokens as the window. Fixed values rather than read from the page, because the terminal's
-/// colours are a choice of their own (`terminal-theme`), which may differ from the window's.
+// Fixed values are flattened mixes of the same five Oya colors as styles.css. A terminal
+// can have a different appearance from its window, so reading window CSS would be incorrect.
+const INK = "#1a1a1a", PAPER = "#f7f5f0", LIME = "#cdf01e";
+const LIGHT = { text: INK, muted: "#5c5c5a", add: "#57631b", del: "#973c36", warn: "#76592f" };
+const DARK = { text: PAPER, muted: "#acaba7", add: LIME, del: "#f48d84", warn: "#f5b14c" };
 const PALETTES = {
   light: {
-    background: "#fafaf8",
-    foreground: "#1c1c1a",
-    cursor: "#157a13",
-    selection: "rgba(21, 122, 19, 0.25)",
-    surface: "#f0efeb",
-    border: "#dedcd4",
-    ansi: ["#1c1c1a", "#c0322a", "#16774a", "#9a5200", "#2f5fb3", "#8a3fa0", "#1b7a86", "#62625a", "#45453e", "#d5473e", "#157a13", "#b06a12", "#3d6fc7", "#9d52b3", "#238e9b", "#1c1c1a"],
+    background: "#eae8e3", foreground: LIGHT.text, cursor: INK,
+    selection: "rgba(205, 240, 30, 0.30)", surface: "#e3e1dd", border: "#cdcbc7",
+    ansi: [LIGHT.text, LIGHT.del, LIGHT.add, LIGHT.warn, LIGHT.text, INK, LIGHT.muted, LIGHT.muted,
+      LIGHT.muted, LIGHT.del, LIGHT.add, LIGHT.warn, LIGHT.text, INK, LIGHT.muted, LIGHT.text],
   },
   dark: {
-    background: "#141410",
-    foreground: "#f4f3ef",
-    cursor: "#39ed35",
-    selection: "rgba(57, 237, 53, 0.25)",
-    surface: "#1c1c18",
-    border: "#2c2c26",
-    ansi: ["#2c2c26", "#ff7b72", "#5cd39a", "#f2b544", "#79a8ff", "#d199ff", "#6fd3dd", "#babab0", "#62625a", "#ff9a92", "#7fe0b0", "#f7c96b", "#9cbfff", "#ddb3ff", "#93e2ea", "#f4f3ef"],
+    background: INK, foreground: DARK.text, cursor: LIME,
+    selection: "rgba(205, 240, 30, 0.30)", surface: "#272727", border: "#3d3d3c",
+    ansi: [DARK.text, DARK.del, DARK.add, DARK.warn, DARK.text, LIME, DARK.muted, DARK.muted,
+      DARK.muted, DARK.del, DARK.add, DARK.warn, DARK.text, LIME, DARK.muted, DARK.text],
   },
 };
 

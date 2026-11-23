@@ -18,7 +18,7 @@ interface Repo {
 }
 
 const TEMPLATES = [
-  { id: "empty", label: "Empty", detail: "A Git repository with Keel’s agent team and checklist." },
+  { id: "empty", label: "Empty", detail: "A Git repository with Oya Factory’s agent team and checklist." },
   { id: "app", label: "Cloudflare app", detail: "Next.js frontend and Hono API, each a Worker, joined by a service binding." },
   { id: "stack", label: "Container stack", detail: "Next.js and Hono on Node, Postgres and Redis, kustomize for dev and prod." },
 ] as const;
@@ -75,7 +75,7 @@ export function NewProject() {
         />
         <section className="settings-section">
           <p>
-            Location <code className="project-location">{parent ?? "Finding your Keel projects folder…"}</code> <button disabled={!!busy || !!created} onClick={pick}>Change…</button>
+            Location <code className="project-location">{parent ?? "Finding your Oya Factory projects folder…"}</code> <button disabled={!!busy || !!created} onClick={pick}>Change…</button>
           </p>
           {error && <div className="error" role="alert">{error}</div>}
           {created ? <><p>Project created at <code className="project-location">{created}</code>.</p><button className="primary" disabled={!!busy} onClick={() => void reopen()}>Open project</button></> : mode === "template" ? (
@@ -84,7 +84,7 @@ export function NewProject() {
                 Name (optional)
                 <input value={name} disabled={!!busy} onChange={(e) => { setName(e.target.value.toLowerCase()); resetOperation(); }} placeholder="Automatic name" aria-describedby="project-name-help" aria-invalid={!!name.trim() && !valid} />
               </label>
-              <p id="project-name-help" className="small muted">Leave blank and Keel will create a uniquely named project folder.</p>
+              <p id="project-name-help" className="small muted">Leave blank and Oya Factory will create a uniquely named project folder.</p>
               {name.trim() && !valid && <div className="small error">Use lowercase letters, digits and hyphens, up to 41 characters.</div>}
               <p className="small muted project-location">{name.trim() && valid ? projectDestination(parent ?? "", name) : "A unique project folder will be created in this location."}</p>
               <div className="templates">

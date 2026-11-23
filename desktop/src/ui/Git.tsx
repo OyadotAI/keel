@@ -92,12 +92,12 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
     return ok;
   }
 
-  if (!ep) return <div className="panel-empty">Starting Keel for this project…</div>;
+  if (!ep) return <div className="panel-empty">Starting Oya Factory for this project…</div>;
   if (git && !git.is_repo)
     return (
       <div className="panel-empty">
         <h3>Not a git repository</h3>
-        <p>Keel commits each turn and gives lanes their own branches, and both need git.</p>
+        <p>Oya Factory commits each turn and gives lanes their own branches, and both need git.</p>
         <button className="primary" onClick={() => act("Initialised a git repository.", () => post(ep, "/api/git/init", {}, { wt }))}>
           Initialise git here
         </button>

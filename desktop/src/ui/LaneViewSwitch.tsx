@@ -27,7 +27,7 @@ export function LaneViewSwitch({ lane, menu = false, onSwitch }: {
     void useStore.getState().switchInterface(lane, value);
   }
   const confirmation = confirm && <Dialog title="Switch to Chat?" onClose={() => setConfirm(false)}>
-    <p>Keel will ask {name} to exit the terminal normally, then reopen this same conversation in Chat. Copy any unsent text in the terminal before continuing.</p>
+    <p>Oya Factory will ask {name} to exit the terminal normally, then reopen this same conversation in Chat. Copy any unsent text in the terminal before continuing.</p>
     <div className="actions">
       <button onClick={() => setConfirm(false)}>Keep terminal open</button>
       <button className="primary" disabled={busy} onClick={() => { setConfirm(false); onSwitch?.(); void useStore.getState().switchInterface(lane, "chat"); }}>Exit terminal and switch</button>

@@ -12,11 +12,11 @@
 .context-segment { height: 100%; flex-shrink: 1; background: var(--accent); transition: width .25s ease; }
 .context-meter.near-limit { outline: 1px solid var(--del); outline-offset: 2px; }
 .context-tone-0 { background: var(--accent); }
-.context-tone-1 { background: #bd8645; }
-.context-tone-2 { background: #6b91ac; }
-.context-tone-3 { background: #a1849c; }
-.context-tone-4 { background: #8c9272; }
-.context-tone-5 { background: #8d979d; }
+.context-tone-1 { background: var(--warn); }
+.context-tone-2 { background: var(--dim); }
+.context-tone-3 { background: var(--del); }
+.context-tone-4 { background: var(--add); }
+.context-tone-5 { background: var(--faint); }
 .context-segment.free, .context-swatch.free { background: var(--line); }
 .context-segment.buffer, .context-swatch.buffer { background: repeating-linear-gradient(135deg, var(--line-strong) 0 2px, var(--surface) 2px 4px); }
 .context-swatch.deferred { background: transparent; border: 1px solid var(--line-strong); }

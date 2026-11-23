@@ -13,10 +13,10 @@ const render = (oya: string) => {
   return renderToStaticMarkup(<ApprovalStrip lane="l" />);
 };
 
-it("asks where the lane browses, with Inside Keel first and the Oya button matching what is installed", () => {
+it("asks where the lane browses, with Inside Oya Factory first and the Oya button matching what is installed", () => {
   const installed = render("installed");
   expect(installed).toContain("wants to use a browser. Where should this lane browse?");
-  expect(installed.indexOf("Inside Keel")).toBeLessThan(installed.indexOf("Your Oya Browser"));
+  expect(installed.indexOf("Inside Oya Factory")).toBeLessThan(installed.indexOf("Your Oya Browser"));
   expect(installed).not.toContain("Install Oya Browser");
   expect(installed).not.toContain("Allow once");
 

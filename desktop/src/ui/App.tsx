@@ -373,7 +373,7 @@ function answerOldest(lane: string, decision: "allow" | "deny", scope: "once" | 
     return;
   }
   if (p.tool === "AskUserQuestion") return void document.querySelector<HTMLElement>(".strip-row .actions button")?.focus();
-  // Where to browse is a choice, not a permission: ⌘⇧A picks Inside Keel, the card's first answer.
+  // Where to browse is a choice, not a permission: ⌘⇧A picks Inside Oya Factory, the card's first answer.
   if (p.tool === BROWSER_CHOICE) return void (decision === "allow" && scope === "once" && s.answer(lane, p, "allow", "embedded"));
   if (scope === "session" && !p.rules.length) return;
   void s.answer(lane, p, decision, undefined, scope);
@@ -442,7 +442,7 @@ function Welcome() {
   const none = useStore((s) => s.order.length === 0);
   return (
     <div className="settings">
-      <header className="lane-header"><span className="lane-heading">Keel</span><UpdateButton /></header>
+      <header className="lane-header"><span className="lane-heading">Oya Factory</span><UpdateButton /></header>
       <div className="empty">
       <h1>{none ? "Open a project to start" : "Pick a lane"}</h1>
       {none && (
@@ -455,7 +455,7 @@ function Welcome() {
       )}
       <p>
         {none
-          ? "Each lane runs your own Claude Code, Codex, Antigravity or OpenCode in the project, and Keel shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
+          ? "Each lane runs your own Claude Code, Codex, Antigravity or OpenCode in the project, and Oya Factory shows every turn beside it: the files it changed, the commands it ran, whether the checks passed."
           : "Each lane is one conversation. Open one on the left, or start a new one under a project."}
       </p>
       {none && <InterfaceSetting />}

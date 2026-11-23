@@ -1,7 +1,7 @@
 <!-- Development and hosting boundaries for Oya's standalone product-family landing page. -->
 # oya.dev
 
-Oya's product directory for Keel, Oya Browser, and Keel Reviewer. The entire deployable artifact is
+Oya's product directory for Oya Factory, Oya Browser, and Keel Reviewer. The entire deployable artifact is
 `website/public/`: static HTML, CSS, and local assets. It needs no installation, JavaScript, build
 step, environment variables, or backend.
 
@@ -21,22 +21,21 @@ real keyboard, or responsive browser testing.
 
 ## Content and assets
 
-- The theme follows Oya Browser's **public landing page**, using its white canvas, DM Sans,
-  green `#16733b`, pale-lime `#c7f7a4` actions, and forest `#1b2d22` panels. These come from
-  `agentchrome/ui/src/app/page.module.css`, including its final layout overrides. The app's
-  dark globals and Archivo display font do not apply to that public page.
-- `public/assets/oya-logo.svg` preserves the original two-ring vector from
-  `agentchrome/ui/src/components/oya-logo.tsx`; its strokes resolve the public page's primary
-  and foreground colors. Header and footer share this asset. The favicon preserves the
-  supplied `agentchrome/ui/src/app/icon.svg` geometry and colors. Brand source was checked
-  against the local Oya Browser checkout and the live site through Oya on 2026-11-03.
+- The light theme uses AgentChrome/Oya's current five base colors: ink `#1a1a1a`, paper
+  `#f7f5f0`, lime `#cdf01e`, red `#f2554a`, and amber `#f5b14c`. Neutral surfaces and readable
+  secondary text are mixes of ink and paper; lime fills use ink text and an ink edge.
+  Source: `agentchrome/ui/src/app/globals.css` and `browser/src/renderer/core/tokens.css`.
+- `public/assets/oya-logo.svg` preserves the two-ring geometry from
+  `agentchrome/ui/src/components/oya-logo.tsx`, with a lime back ring and ink front ring.
+  The favicon uses the same mark on ink with a paper front ring. Current brand source
+  was checked against the local AgentChrome checkout on 2026-11-23.
 - Keel's screenshot is the unaltered image supplied by the user on 2026-11-04, stored at
   `public/assets/keel-workspace-6a5ef2e2c367.png`. It shows a live agent terminal and embedded browser.
 - DM Sans is copied from `desktop/src/fonts/dm-sans-latin.woff2`; its original SIL Open Font
   License is retained in `public/assets/OFL.txt`.
 - Browser and Reviewer diagrams are HTML/CSS illustrations, explicitly labeled as such.
 - Browser copy follows [Oya Browser](https://oyabrowser.com), checked through Oya on 2026-11-03.
-- Keel and Reviewer copy follows this repository, its current license, and
+- Oya Factory and Reviewer copy follows this repository, its current license, and
   `packaging/action/review/README.md`. Source, release assets, and public Reviewer documentation
   were checked through Oya on 2026-11-03. External links can change after that check.
 

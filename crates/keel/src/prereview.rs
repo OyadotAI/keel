@@ -215,7 +215,7 @@ fn start_with(
         }));
         let done = opening.unwrap_or_else(|_| Done::None {
             cause: "other",
-            line: "The review stopped unexpectedly, inside Keel.".into(),
+            line: "The review stopped unexpectedly, inside Oya Factory.".into(),
             took: 0,
             cost: None,
         });
@@ -229,7 +229,7 @@ fn start_with(
             r.phase = "done";
             r.outcome = Some(none(
                 "start",
-                format!("Keel could not start the review: {e}."),
+                format!("Oya Factory could not start the review: {e}."),
                 Instant::now(),
             ));
         });

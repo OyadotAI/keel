@@ -11,7 +11,7 @@ describe("ship", () => {
   it("names the work after the lane, else its first prompt, else a default", () => {
     expect(shipTitle({ title: "Dark mode toggle", conv: conv("x") })).toBe("Dark mode toggle");
     expect(shipTitle({ title: "Untitled session", conv: conv("make the header blue\nplease") })).toBe("make the header blue");
-    expect(shipTitle({ title: "Untitled session", conv: { turns: [] } as unknown as Lane["conv"] })).toBe("Changes from Keel");
+    expect(shipTitle({ title: "Untitled session", conv: { turns: [] } as unknown as Lane["conv"] })).toBe("Changes from Oya Factory");
   });
   it("makes a safe branch name with a suffix", () => {
     expect(branchName("Fix: the Header's colour!", "ab12")).toBe("keel/fix-the-header-s-colour-ab12");
@@ -27,7 +27,7 @@ describe("ship", () => {
   it("offers nothing on a clean lane with nothing its base lacks", () => {
     expect(shareOffer(work())).toBeUndefined();
     expect(shareOffer(undefined)).toBeUndefined();
-    // What Keel keeps out of commits is not work to share.
+    // What Oya Factory keeps out of commits is not work to share.
     expect(shareOffer(work({ changes: [{ path: ".mcp.json" }] as never, unsaved: 0 }))).toBeUndefined();
   });
   it("offers a pull request for unsaved changes or commits the base lacks", () => {

@@ -1,4 +1,4 @@
-// "Open pull request" in one click, for people who have never branched or committed: Keel takes
+// "Open pull request" in one click, for people who have never branched or committed: Oya Factory takes
 // the git steps itself — a branch when the lane is on the project's main line, a commit of
 // everything, then the pull request, which pushes. Each step is an existing daemon route.
 import { post, type Endpoint } from "./api";
@@ -34,7 +34,7 @@ export function shareOffer(git: Lane["git"], dismissed?: string): "open" | "upda
 /** What the work is called: the lane's name, else its first prompt. Becomes the commit and the title. */
 export function shipTitle(l: Pick<Lane, "title" | "conv">): string {
   const named = l.title && !/^untitled/i.test(l.title) ? l.title : promptAttachments(l.conv?.turns[0]?.prompt ?? "").text;
-  return named.split("\n")[0].trim().slice(0, MESSAGE_LIMIT) || "Changes from Keel";
+  return named.split("\n")[0].trim().slice(0, MESSAGE_LIMIT) || "Changes from Oya Factory";
 }
 
 /** A new branch name from the title, with a short suffix so a second ship never collides. */

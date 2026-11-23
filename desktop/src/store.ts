@@ -42,7 +42,7 @@ export interface Pending {
   rules: string[];
   input: Record<string, unknown>;
   session_id: string;
-  /// Why Keel is asking, when it is not the usual reason.
+  /// Why Oya Factory is asking, when it is not the usual reason.
   reason?: string;
   /// Asked by a subagent the lane's turn started; its own steps are not in the turn.
   subagent?: boolean;
@@ -113,7 +113,7 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 export type Agent = "claude" | "codex" | "antigravity" | "opencode";
 export const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode" };
-/** Agents whose chat turn is one process per send: words typed mid-turn can only queue, and Keel's Settings has no sign-in for them. */
+/** Agents whose chat turn is one process per send: words typed mid-turn can only queue, and Oya Factory's Settings has no sign-in for them. */
 export const oneShot = (agent?: Agent) => agent === "antigravity" || agent === "opencode";
 export const agentName = (agent?: Agent) => AGENT_NAME[agent ?? "claude"];
 
@@ -162,14 +162,14 @@ export interface Lane {
   nameSaving?: boolean;
   nameLocked?: boolean;
   nameError?: string;
-  /// The conversation, chosen by Keel when the lane is made so the transcript to follow is known
+  /// The conversation, chosen by Oya Factory when the lane is made so the transcript to follow is known
   /// before anything is typed.
   session?: string;
   /// Which CLI the lane's terminal runs.
   agent: Agent;
   /// The transcript exists: the next launch resumes the conversation instead of starting it.
   known: boolean;
-  /// The conversation is running in a `claude` Keel did not start — a terminal, another app. The
+  /// The conversation is running in a `claude` Oya Factory did not start — a terminal, another app. The
   /// lane follows it and starts nothing until the person takes it over: two processes driving one
   /// conversation is two agents writing one transcript.
   elsewhere?: boolean;
@@ -277,7 +277,7 @@ interface State {
   /// The project's daemon, started if it is not running. For views that talk to it directly.
   ensure(project: string): Promise<Endpoint>;
   /// Open a folder as a project. `offer`: from the folder picker or a drop, so a folder outside
-  /// the Keel workspace is offered a move first, once.
+  /// the Oya Factory workspace is offered a move first, once.
   openProject(path: string, offer?: boolean): Promise<void>;
   /// The move dialog, when one is showing.
   moving: Moving | null;
@@ -500,7 +500,7 @@ export const useStore = create<State>()((set, getState, api) => {
       }
     }
   }
-  /// A chat lane Keel is not driving is following a conversation someone else runs for exactly as
+  /// A chat lane Oya Factory is not driving is following a conversation someone else runs for exactly as
   /// long as that session is live. Only the terminal pane ever cleared this, so a chat lane opened
   /// from History said "stop it there first" and refused every send until a relaunch.
   function outsideKeel(lid: string, l?: Lane, s?: Session) {
@@ -545,7 +545,7 @@ export const useStore = create<State>()((set, getState, api) => {
       void poll(path, d?.lane);
     },
     // A Codex or Antigravity terminal named its conversation: the lane resumes it from now on,
-    // and can switch to the chat view. Never a running Claude lane's — Keel chose that id.
+    // and can switch to the chat view. Never a running Claude lane's — Oya Factory chose that id.
     "terminal.session": (path, _ep, data) => {
       const d = (data as { data?: { lane?: string; session?: string } })?.data;
       const l = d?.lane ? getState().lanes[d.lane] : undefined;
@@ -843,14 +843,14 @@ export const useStore = create<State>()((set, getState, api) => {
     void needsYou(title, p.tool === "AskUserQuestion" ? "The agent asked a question." : p.tool === "BrowserChoice" ? "The agent wants to use a browser. Choose where this lane browses." : `Allow ${p.tool}${p.command ? `: ${p.command.slice(0, 80)}` : ""}?`);
   }
 
-  /// Whose transcripts Keel follows: Claude's anywhere, and a Codex, Antigravity or OpenCode terminal's —
-  /// their chat lanes are Keel's own stream, read from the agent directly.
+  /// Whose transcripts Oya Factory follows: Claude's anywhere, and a Codex, Antigravity or OpenCode terminal's —
+  /// their chat lanes are Oya Factory's own stream, read from the agent directly.
   function followable(l: Lane): boolean {
     return (l.agent ?? "claude") === "claude" || (l.interface === "terminal" && !!l.agent);
   }
 
   /// Follow a lane's transcript for as long as the lane is open: every turn, as the CLI writes
-  /// it, with Keel's facts about it — the files, the checks, the commit. A session nobody has
+  /// it, with Oya Factory's facts about it — the files, the checks, the commit. A session nobody has
   /// typed into has no transcript yet; that is a wait, retried, never an error on screen.
   async function follow(lid: string) {
     const l = getState().lanes[lid];
@@ -937,17 +937,17 @@ export const useStore = create<State>()((set, getState, api) => {
         if (!now) return;
         if (now.known) save(getState());
         // A network failure is the daemon gone: forget its address so the next use restarts it.
-        // An answer that refused (a checkout removed outside Keel) is said, not retried blind.
+        // An answer that refused (a checkout removed outside Oya Factory) is said, not retried blind.
         const network = !!error && /fetch|network|load failed/i.test(error);
         if (network) lost(l.project, ep);
         else if (error && !missing) lane(lid, { error: `Could not follow this conversation: ${error}` });
         const tries = (retries.get(lid) ?? 0) + 1;
         retries.set(lid, tries);
         // Not there yet is normal for a session that has not said anything. Still not there, for
-        // one Keel has already seen, is not a wait — the pane sat empty saying nothing while this
+        // one Oya Factory has already seen, is not a wait — the pane sat empty saying nothing while this
         // retried every two seconds forever. It keeps looking, and says why it has nothing.
         if (missing && now.known && tries === 5)
-          lane(lid, { error: `Keel cannot find this conversation's transcript ${({ codex: "under ~/.codex/sessions", antigravity: "under ~/.gemini/antigravity-cli/conversations", opencode: "in OpenCode's database" } as Record<string, string>)[l.agent ?? ""] ?? "under ~/.claude/projects"}. It keeps looking; if the folder was moved or renamed, open the conversation from History.` });
+          lane(lid, { error: `Oya Factory cannot find this conversation's transcript ${({ codex: "under ~/.codex/sessions", antigravity: "under ~/.gemini/antigravity-cli/conversations", opencode: "in OpenCode's database" } as Record<string, string>)[l.agent ?? ""] ?? "under ~/.claude/projects"}. It keeps looking; if the folder was moved or renamed, open the conversation from History.` });
         // Not written yet is a wait; anything else backs off, to a ceiling.
         const wait = missing ? 2000 : Math.min(30_000, 1000 * 2 ** Math.min(tries, 5));
         setTimeout(() => void follow(lid), wait);
@@ -958,7 +958,7 @@ export const useStore = create<State>()((set, getState, api) => {
 
   /// Words typed while a turn runs join it, as they do in the CLI. Claude and Codex take them
   /// mid-turn; the runtime says whether they landed, and what did not (the turn was already
-  /// finishing, an Antigravity or OpenCode turn, attachments, a message of Keel's own) is queued as before.
+  /// finishing, an Antigravity or OpenCode turn, attachments, a message of Oya Factory's own) is queued as before.
   async function steered(lid: string, l: Lane, prompt: string, with_: { attachments: Attachment[]; references: FileReference[]; system?: string; ownsDraft: boolean }): Promise<boolean> {
     const ep = getState().projects[l.project]?.endpoint;
     const plain = !with_.attachments.length && !with_.references.length && !with_.system && !prompt.trim().startsWith("/");
@@ -972,7 +972,7 @@ export const useStore = create<State>()((set, getState, api) => {
   }
 
   /// One source feeds a chat lane's conversation: the transcript follower while the session runs
-  /// outside Keel, the chat stream otherwise. Both used to run on a lane opened from History, and
+  /// outside Oya Factory, the chat stream otherwise. Both used to run on a lane opened from History, and
   /// each reset the conversation on its first batch and set `running` by its own lights — so the
   /// lane could read busy forever while the chat stream said idle, and queue every message.
   function chatSource(lid: string) {
@@ -1052,7 +1052,7 @@ export const useStore = create<State>()((set, getState, api) => {
             if (e.seq <= cursor) continue;
             if (cursor === 0) conv = empty;
             cursor = e.seq;
-            // Only a turn Keel accepted makes the lane Keel's to drive. A transcript snapshot is
+            // Only a turn Oya Factory accepted makes the lane Oya Factory's to drive. A transcript snapshot is
             // a reading, and marking that "managed" hid a later outside `--resume` for good.
             if (e.event === "accepted") {
               patch.managed = true;
@@ -1265,14 +1265,14 @@ export const useStore = create<State>()((set, getState, api) => {
       let done: Moved | undefined;
       let refusal: Refusal | undefined;
       try {
-        if (!ep) throw new Error("Keel isn’t running for this project.");
+        if (!ep) throw new Error("Oya Factory isn’t running for this project.");
         done = await post<Moved>(ep, "/api/project/move", undefined, { opened: m.from });
       } catch (e) {
         if (e instanceof HttpError && /^\{"code"/.test(e.message)) {
           try { refusal = JSON.parse(e.message) as Refusal; } catch { refusal = { code: "rename", error: e.message }; }
         } else if (!(await invoke<boolean>("is_dir", { path: m.from }).catch(() => true)) && (await invoke<boolean>("is_dir", { path: m.to }).catch(() => false))) {
           // The reply was lost but the folder moved: carry on from where it is.
-          done = { from: m.from, to: m.to, warnings: [{ step: "history", error: "Keel couldn’t confirm the steps after the move" }] };
+          done = { from: m.from, to: m.to, warnings: [{ step: "history", error: "Oya Factory couldn’t confirm the steps after the move" }] };
         } else refusal = { code: "rename", error: e instanceof Error ? e.message : String(e) };
       }
       if (!done) return set({ moving: { ...m, phase: "refused", refusal } });
@@ -1687,7 +1687,7 @@ export const useStore = create<State>()((set, getState, api) => {
           lane(lid, (now) => ({
             mode: "acceptEdits", error: undefined,
             pending: now.pending.filter((x) => x.id !== p.id),
-            queued: [{ id: id(), text: `Implement the plan I approved in Keel. Proceed with the changes and verify them.${plan}`, attachments: [] }, ...now.queued],
+            queued: [{ id: id(), text: `Implement the plan I approved in Oya Factory. Proceed with the changes and verify them.${plan}`, attachments: [] }, ...now.queued],
           }));
         } catch (error) {
           lane(lid, { error: `Could not approve the plan: ${error}` });

@@ -22,7 +22,7 @@ describe("the lane's Browser tab", () => {
     posted.length = 0;
     await onBrowser("/p", ep, () => false, { id: "b-1", lane: "gone", op: { op: "read" } });
     expect(invoke).not.toHaveBeenCalled();
-    expect(posted).toEqual([{ id: "b-1", ok: false, text: "That lane isn't open in Keel, so it has no Browser tab." }]);
+    expect(posted).toEqual([{ id: "b-1", ok: false, text: "That lane isn't open in Oya Factory, so it has no Browser tab." }]);
   });
 
   it("runs the op in the lane's webview and posts what it said, or why not", async () => {

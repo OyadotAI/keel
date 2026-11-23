@@ -120,7 +120,7 @@ function PlainRequest({ lane, p, count }: { lane: string; p: Pending; count: num
   const [sending, setSending] = useState(false);
   const said = approvalWords(p, root);
   const shown = p.command || (typeof p.input.command === "string" ? p.input.command : Array.isArray(p.input.command) ? p.input.command.join(" ") : "");
-  // Codex's App Server offers its own decisions; Keel's cards answer allow, session or deny.
+  // Codex's App Server offers its own decisions; Oya Factory's cards answer allow, session or deny.
   const options: { value: unknown; label: string }[] = p.provider && p.choices?.length
     ? p.choices.map((c) => ({ value: c.value, label: typeof c.value === "string" ? ANSWER_WORDS[c.value] ?? c.label : c.label }))
     // The session answer covers the rules the daemon offers (`npm *`, a whole MCP server), which
@@ -143,7 +143,7 @@ function PlainRequest({ lane, p, count }: { lane: string; p: Pending; count: num
       {shown ? <pre className="code approval-command is-open">$ {shown}</pre> : <Arguments input={p.input} />}
     </details>
     <div className="actions">{options.map((o, i) => {
-      // ⇧⌘S answers a Keel card's session rule; a runtime card has none, so it shows no shortcut.
+      // ⇧⌘S answers a Oya Factory card's session rule; a runtime card has none, so it shows no shortcut.
       const key = typeof o.value === "string" && !(p.provider && keys[o.value] === "s") ? keys[o.value] : undefined;
       return <button key={i} disabled={sending} className={i === 0 ? "primary" : o.value === "deny" || o.value === "decline" ? "approval-deny" : undefined} onClick={() => void choose(o.value)}>
         {o.label}{key && <> <kbd>{label({ key, shift: true })}</kbd></>}
@@ -167,15 +167,15 @@ function BrowserChoice({ lane, p }: { lane: string; p: Pending }) {
   return <div className="strip-row browser-choice-card">
     <div className="strip-title"><Icon name="hand" className="hand" /><span style={{ flex: 1 }}>{who(p)} wants to use a browser. Where should this lane browse?</span></div>
     <div className="actions">
-      <button className="primary" disabled={sending} onClick={() => void choose("embedded")} title="A browser in Keel's Browser tab. Sign-ins stay with this project.">
-        Inside Keel <kbd>{label({ key: "a", shift: true })}</kbd>
+      <button className="primary" disabled={sending} onClick={() => void choose("embedded")} title="A browser in Oya Factory's Browser tab. Sign-ins stay with this project.">
+        Inside Oya Factory <kbd>{label({ key: "a", shift: true })}</kbd>
       </button>
       <button disabled={sending} onClick={() => void choose(installed ? "local_oya" : "install_oya")} title={installed ? "Uses the Oya app on your computer and the accounts you're already signed into." : "Downloads and installs Oya Browser, then uses it for this lane."}>
         {installed ? "Your Oya Browser" : "Install Oya Browser"}
       </button>
     </div>
     <p className="small muted">
-      <strong>Inside Keel</strong>: a browser in the Browser tab; sign-ins stay with this project.{" "}
+      <strong>Inside Oya Factory</strong>: a browser in the Browser tab; sign-ins stay with this project.{" "}
       <strong>{installed ? "Oya Browser" : "Install Oya Browser"}</strong>: {installed ? "the Oya app on your computer, with the accounts you're already signed into." : "installs the Oya app, then this lane browses there with your own sign-ins."}{" "}
       Saved for this lane — change it any time in the Browser tab.
     </p>

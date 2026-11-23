@@ -1,4 +1,4 @@
-// The setup chip and its popover: only what stops a lane from working, and what Keel's own setup
+// The setup chip and its popover: only what stops a lane from working, and what Oya Factory's own setup
 // needs from the person. Suggestions live in Extensions and Readiness, not here.
 import { useState } from "react";
 import { useStore } from "../store";
@@ -26,7 +26,7 @@ const GROUPS = [
 
 /// Whether the automatic setup's record needs the person: only when it failed. Running, done and
 /// waiting — on a turn, a merge, or files with their uncommitted edits — all resolve on their own
-/// (Keel retries once the tree frees), so a chip for them is a question with nothing to answer.
+/// (Oya Factory retries once the tree frees), so a chip for them is a question with nothing to answer.
 const needsYou = (r: SetupRecord) => r.phase === "failed";
 
 /// Ask the daemon to run its setup pass again, failures forgotten.
@@ -49,7 +49,7 @@ function SetupRow({ w, go }: { w: Warning; go: (w: Warning) => void }) {
   );
 }
 
-/// What stops a lane in this project, the one place each is fixed, and what Keel's own setup did
+/// What stops a lane in this project, the one place each is fixed, and what Oya Factory's own setup did
 /// when it needs the person. No install button and no hand-off to an agent: a first run is not
 /// the moment to spend steps on someone's files.
 export function SetupList({ project, close }: { project: string; close: () => void; showTab?: (t: "readiness") => void }) {
@@ -78,7 +78,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
     <div className="setup-list">
       <div className="setup-head">
         <span className="eyebrow">{auto?.phase === "failed" ? "Setup · failed" : `Setup · ${warnings.length} to look at`}</span>
-        {auto?.phase === "failed" && <button className="primary" onClick={() => void retrySetup(project)} title="Run Keel's setup again">Retry</button>}
+        {auto?.phase === "failed" && <button className="primary" onClick={() => void retrySetup(project)} title="Run Oya Factory's setup again">Retry</button>}
       </div>
       {lines.length > 0 && (
         <div className="small setup-doing setup-result" role="status">
@@ -100,7 +100,7 @@ export function SetupList({ project, close }: { project: string; close: () => vo
   );
 }
 
-/// The chip, where a project is named: absent unless something stops a lane or Keel's own setup
+/// The chip, where a project is named: absent unless something stops a lane or Oya Factory's own setup
 /// needs the person. A brand-new project shows nothing.
 export function SetupBadge({ project, showTab }: { project: string; showTab?: (t: "readiness") => void }) {
   const warnings = useStore((s) => s.setup[project]);
@@ -120,7 +120,7 @@ export function SetupBadge({ project, showTab }: { project: string; showTab?: (t
           e.stopPropagation();
           setAt(e.currentTarget.getBoundingClientRect());
         }}
-        title={auto ? "Keel's setup needs you — click for what happened" : `${warnings?.length ?? 0} thing${warnings?.length === 1 ? "" : "s"} stopping lanes in this project`}
+        title={auto ? "Oya Factory's setup needs you — click for what happened" : `${warnings?.length ?? 0} thing${warnings?.length === 1 ? "" : "s"} stopping lanes in this project`}
         aria-label={aria}
       >
         <Icon name={icon} size={13} /> {label}

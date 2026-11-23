@@ -96,7 +96,7 @@ export function Composer({ lane }: { lane: string }) {
     <LaneDock lane={lane} />
     <QueuedMessages lane={lane} onEdit={(id) => { useStore.getState().editQueued(lane, id); input.current?.focus(); }} />
     <ComposerStatus lane={lane} disconnected={disconnected} elsewhere={elsewhere} submitting={submitting} uploading={uploading} busy={busy} />
-    {receipt && !submitting && <div className="chat-retry">Keel couldn’t confirm this message was sent. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Send again</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
+    {receipt && !submitting && <div className="chat-retry">Oya Factory couldn’t confirm this message was sent. <button onClick={() => void useStore.getState().send(lane, receipt.prompt, receipt.attachments, receipt.system, receipt.references)}>Send again</button><button onClick={() => useStore.getState().discardReceipt(lane)}>Discard</button></div>}
     <div className={composerClass(dragOver, busy)}>
       {dragOver && <div className="reference-drop-hint">Drop to reference this file.</div>}
       {!!candidates.length && <div id="composer-options" className="composer-suggestions" role="listbox" aria-label="Suggestions">{candidates.map((c, i) => {
@@ -222,7 +222,7 @@ function ComposerStatus({ lane, disconnected, elsewhere, submitting, uploading, 
   const progress = useStore((s) => s.lanes[lane] ? activity(s.lanes[lane]).label : "Working…");
   const agent = useStore((s) => AGENT_NAME[s.lanes[lane]?.agent ?? "claude"]);
   const live = busy && !waiting && !disconnected && !elsewhere;
-  const text = held && !busy ? "Another session is changing this project's files — your message will send when it finishes" : disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "This conversation is running in a terminal outside Keel — quit it there, then send from here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
+  const text = held && !busy ? "Another session is changing this project's files — your message will send when it finishes" : disconnected ? "Reconnecting — your draft is saved" : elsewhere ? "This conversation is running in a terminal outside Oya Factory — quit it there, then send from here" : waiting ? "Waiting for your response" : submitting ? "Sending…" : uploading ? "Attaching…" : busy ? `${agent} · ${progress}` : "";
   if (!text) return null;
   return <div className={`chat-status${live ? " is-working" : ""}`} role="status"><span className="chat-status-text">{(live || submitting || uploading) && <Working />}<span>{text}</span></span></div>;
 }

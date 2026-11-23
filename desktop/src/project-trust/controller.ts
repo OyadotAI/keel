@@ -55,7 +55,7 @@ export function createTrustController(deps: TrustDependencies) {
     try {
       const endpoint = await deps.ensure(request.project);
       if (!deps.exists(request.project)) throw new Error(CLOSED_PROJECT);
-      if (await deps.grant(endpoint) !== true) throw new Error("Keel did not confirm project trust. Try again.");
+      if (await deps.grant(endpoint) !== true) throw new Error("Oya Factory did not confirm project trust. Try again.");
       if (deps.read() !== saving) return;
       deps.confirmed(request.project);
       deps.put(null);

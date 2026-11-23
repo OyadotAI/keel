@@ -1,4 +1,5 @@
-<h1 align="center">Keel</h1>
+<!-- Oya Factory overview and contributor entry point; technical paths retain compatibility. -->
+<h1 align="center">Oya Factory</h1>
 
 <p align="center">
   <b>A full software factory, with the team ready to go.</b>
@@ -14,8 +15,8 @@
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows-black?style=flat" alt="macOS and Windows"></a>
   <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-source--available-blue.svg?style=flat" alt="Source-available license"></a>
   <a href="https://oyabrowser.com"><img src="https://img.shields.io/badge/sponsored%20by-OyaBrowser.com-7928CA?style=flat" alt="Sponsored by OyaBrowser.com"></a>
-  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><img src="https://img.shields.io/badge/download-macOS-007AFF?style=flat" alt="Download Keel for macOS"></a>
-  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><img src="https://img.shields.io/badge/download-Windows-007AFF?style=flat" alt="Download Keel for Windows"></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><img src="https://img.shields.io/badge/download-macOS-007AFF?style=flat" alt="Download Oya Factory for macOS"></a>
+  <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><img src="https://img.shields.io/badge/download-Windows-007AFF?style=flat" alt="Download Oya Factory for Windows"></a>
 </p>
 
 <p align="center"><b>Free. Open source. Always.</b><br>
@@ -35,7 +36,7 @@ Used daily by engineers at Oya.ai and Jumpermedia.co.</p>
 
 <p align="center">
   <a href="#see-it-in-action">
-    <img src="docs/media/workspace.png" width="1200" alt="Keel's workspace: a project with three lanes in the sidebar, a lane on its own branch with its finished turn, and the Turns panel showing it passed with its changed files and cost.">
+    <img src="docs/media/workspace.png" width="1200" alt="Earlier Keel workspace: a project with three lanes in the sidebar, a lane on its own branch with its finished turn, and the Turns panel showing it passed with its changed files and cost.">
   </a>
 </p>
 
@@ -51,24 +52,24 @@ Claude Code writes excellent code. But one agent in a terminal is one engineer w
 - **Nobody tries to break it** before you do.
 - **And you can't see any of it**: the changes are buried in scrollback, two agents at once wreck one working tree, and approvals roll past.
 
-**Keel is the whole factory, staffed.** Every project comes with seven agents and the lifecycle that runs them: **pm** decides build, change, cut or not yet; **designer** owns what people see; **principal** designs the change; the main agent builds it; **reviewer**, **security** and **reliability** read the diff; **qa** runs the real thing. Nothing to hire, configure or prompt. Open a repository, add the team in one click, and ask for a feature.
+**Oya Factory is the whole factory, staffed.** Every project comes with seven agents and the lifecycle that runs them: **pm** decides build, change, cut or not yet; **designer** owns what people see; **principal** designs the change; the main agent builds it; **reviewer**, **security** and **reliability** read the diff; **qa** runs the real thing. Nothing to hire, configure or prompt. Open a repository, add the team in one click, and ask for a feature.
 
 **And the factory floor is built in.** Each request is a lane on its own branch and worktree. Every turn becomes one reviewable record: the files, the commands with their output, your project's real gate, the duration and the cost. Commands that need permission stop and ask in the conversation.
 
-Your existing Claude sessions come with you. Running one in your terminal right now? Follow it live in Keel.
+Your existing Claude sessions come with you. Running one in your terminal right now? Follow it live in Oya Factory.
 
 ---
 
 ## Why engineers switch from CLI & VS Code
 
-| Experience | Raw CLI / VS Code Extension | Keel |
+| Experience | Raw CLI / VS Code Extension | Oya Factory |
 | :--- | :--- | :--- |
 | **The team** | One agent that plans, builds and grades its own work | **Seven agents, ready to go**: pm, designer, principal, reviewer, security, reliability and qa on every request |
 | **Reviewing code** | `git diff` after the turn, scrolling through terminal logs | **Live stacked diffs** with syntax highlighting as files are written |
 | **Multi-agent concurrency** | One shared branch; simultaneous tasks collide and clobber files | **Isolated Git worktrees** (`.keel/worktrees/`) on dedicated task branches |
 | **Background jobs** | Dev servers (`pnpm dev`) killed on turn exit | **Monitors**: daemon supervises background jobs with streaming logs & Stop button |
 | **Command approvals** | Prompts lost in scrollback; all-or-nothing permission flags | **Inline approval cards**: Allow Once, Allow Session, or 1-click **Trust this project** |
-| **Verification** | Trusting the agent's prose or running checks by hand | **Automatic gates**: Keel runs your real `make check`, `cargo test`, or `pnpm test` |
+| **Verification** | Trusting the agent's prose or running checks by hand | **Automatic gates**: Oya Factory runs your real `make check`, `cargo test`, or `pnpm test` |
 | **Existing history** | Locked inside terminal history; no unified view | **Replay & Follow**: browse past sessions and watch external runs in real time |
 | **UI verification** | Guessing files, accidental component duplication | **Preview & change check**: pick elements, send them to the agent, and see whether they actually changed |
 | **Speed & ergonomics** | One terminal pane per agent, one project per window | **Light desktop shell**: Tauri + React over a local Rust daemon. No Electron, no bundled Chromium |
@@ -86,7 +87,7 @@ Watch three tasks progress concurrently across isolated Git branches, with live 
 ## Inside the factory
 
 ### 1. A team that's ready on day one
-An agent alone writes code. A team decides what's worth building, designs it, reviews it, and tries to break it. Keel ships seven subagents and the lifecycle that runs them, written into `.claude/agents/` and `CLAUDE.md`, so they work in Claude Code anywhere and not just in Keel:
+An agent alone writes code. A team decides what's worth building, designs it, reviews it, and tries to break it. Oya Factory ships seven subagents and the lifecycle that runs them, written into `.claude/agents/` and `CLAUDE.md`, so they work in Claude Code anywhere and not just in Oya Factory:
 
 | Stage | Agent | Returns |
 | :--- | :--- | :--- |
@@ -104,18 +105,18 @@ That screenshot is a real run on one request, "add discount codes". The **pm** c
 New projects start with the team. For an existing repository, **Add the team** in Readiness writes it in, and never over a file you already have.
 
 ### 2. The turn is the reviewable artifact
-An agent reporting "done" is an assertion. Keel collects every file written, every command with its raw output, the repository's real gate verdict, commit hash, duration, tokens, and cost into one inspectable packet.
+An agent reporting "done" is an assertion. Oya Factory collects every file written, every command with its raw output, the repository's real gate verdict, commit hash, duration, tokens, and cost into one inspectable packet.
 
 <p align="center"><img src="docs/media/turn.gif" width="900" alt="A real turn: the agent edits a test, asks to run make check, and the turn passes with its changed files, time and cost."></p>
 
 - **Parallel work, separate branches.** Every task lane can spin up its own Git worktree under `.keel/worktrees/<lane>` on branch `keel/<lane>`. Keep several projects open in one window, each with its own lanes.
-- **Checks you recognize.** Keel detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
+- **Checks you recognize.** Oya Factory detects your project's gate (`make check`, `cargo test`, `npm test`, `pytest`) and runs it after every turn. No invented green checkmarks.
 - **Rewind with safe undo.** Restore a pre-turn snapshot without blowing away your staged changes. Conflicting ignored files halt the operation safely.
 
 ### 3. Approve commands in the flow
 When the agent needs permission to run a command, it **stops** right above your composer with the exact command line and intent.
 
-<p align="center"><img src="docs/media/approve.gif" width="900" alt="The agent pauses to run make check. Keel shows Allow once, Allow for this session, and Deny, and the turn continues once allowed."></p>
+<p align="center"><img src="docs/media/approve.gif" width="900" alt="Earlier Keel interface: the agent pauses to run make check. Keel shows Allow once, Allow for this session, and Deny, and the turn continues once allowed."></p>
 
 - **Allow once** runs the single invocation and remembers nothing.
 - **Session & project rules** grant scoped patterns under More options.
@@ -124,14 +125,14 @@ When the agent needs permission to run a command, it **stops** right above your 
 - **Chat or terminal, per lane.** Read a lane as formatted chat, or switch it to the agent's own interactive CLI. Lanes run `claude` or `codex`.
 
 ### 4. Your old sessions. Your live agents. One workspace.
-**You don't have to start a session in Keel to see it in Keel.**
+**You don't have to start a session in Oya Factory to see it in Oya Factory.**
 
 - **Zero-migration history.** Browse and replay past Claude Code conversations directly from `~/.claude/projects/`—no import scripts or cloud accounts needed.
-- **Follow work in real time.** Launch `claude` in your terminal, VS Code, or Orca. Keel's watcher picks up the active transcript and streams messages, tool calls, and diffs live.
+- **Follow work in real time.** Launch `claude` in your terminal, VS Code, or Orca. Oya Factory's watcher picks up the active transcript and streams messages, tool calls, and diffs live.
 - **Deep write recovery.** Recovers files written not just by `Edit`/`Write`, but by subagents (`Task`) and shell commands (`cat >>`, python heredocs), flagging edits outside the repo.
 
 ### 5. Background jobs that don't die
-In the Claude Code CLI, background processes (`run_in_background`) get terminated the moment the turn completes. Keel's daemon takes them over:
+In the Claude Code CLI, background processes (`run_in_background`) get terminated the moment the turn completes. Oya Factory's daemon takes them over:
 
 - **Monitors panel:** Long-running processes like `pnpm dev` or `gh run watch` run supervised outside turn lifetimes.
 - **Live streaming output:** Inspect stdout/stderr in real time and stop jobs with a single click.
@@ -141,7 +142,7 @@ In the Claude Code CLI, background processes (`run_in_background`) get terminate
 Building frontends with agents often results in edited-the-wrong-file or duplicated-component bugs:
 
 - **Point-and-click inspection:** Pick elements in the Preview tab, pin a note to each, and send them to the agent as one prompt with unique selectors and ranked source candidates.
-- **Change verification:** Each pinned element's markup, computed style, and size are fingerprinted before and after the turn. If nothing changed, Keel says the edit probably went to the wrong file.
+- **Change verification:** Each pinned element's markup, computed style, and size are fingerprinted before and after the turn. If nothing changed, Oya Factory says the edit probably went to the wrong file.
 
 ### 7. Built for keyboard speed
 Never take your hands off the keyboard. Press `⌘K` to search actions, files, and conversations, and `⌘/` to see every shortcut. On Windows, `⌘` is `Ctrl`.
@@ -162,7 +163,7 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 
 ---
 
-## Why I built Keel
+## Why I built Oya Factory
 
 > I loved Claude Code's agent. Making it work well for a team was the frustrating part.
 >
@@ -170,9 +171,9 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 > - **I couldn't see the work clearly.** What were my agents doing? Which files did this session modify? I wanted that answer in the workspace, not buried in terminal output.
 > - **I wanted shared workflows, not a subscription migration.** I wanted teammates to keep their individual Claude subscriptions, including Max, while working from the same playbook.
 >
-> That's the reason for Keel: an opinionated environment around Claude for people who build products. Make setup visible. Keep decisions close to the conversation. Make the agent's work inspectable.
+> That's the reason for Oya Factory: an opinionated environment around Claude for people who build products. Make setup visible. Keep decisions close to the conversation. Make the agent's work inspectable.
 >
-> — **Mohamed Alkiswani**, Creator of Keel
+> — **Mohamed Alkiswani**, Creator of Oya Factory
 
 ---
 
@@ -180,14 +181,14 @@ Never take your hands off the keyboard. Press `⌘K` to search actions, files, a
 
 ## Get started in 60 seconds
 
-1. **Download Keel** for [macOS](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg) or [Windows](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe), or build from source below. It updates itself after that.
-2. **Connect Claude.** Already signed in? Keel detects your setup instantly. Otherwise, **Install Claude Code** and **Log in** from Settings (`⌘,`), via Anthropic's official installer and browser flow.
+1. **Download Oya Factory** for [macOS](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg) or [Windows](https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe), or build from source below. It updates itself after that.
+2. **Connect Claude.** Already signed in? Oya Factory detects your setup instantly. Otherwise, **Install Claude Code** and **Log in** from Settings (`⌘,`), via Anthropic's official installer and browser flow.
 3. **Open any repository.** Readiness offers **Add the team**, then start a lane, inspect past sessions, or follow an active terminal agent.
 
 <p align="center"><img src="docs/media/readiness.png" width="900" alt="Readiness on a new project: the agent team is incomplete, with an Add the team button, followed by findings the agent can fix."></p>
 
 Requires **macOS 13+** or **Windows**, and an [account with Claude Code access](https://code.claude.com/docs/en/setup#authenticate).  
-No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's official native installer and CLI browser-login flow. No separate Keel account or proxy.
+No Node.js or Homebrew required to install Claude Code. Oya Factory uses Anthropic's official native installer and CLI browser-login flow. No separate Oya Factory account or proxy.
 
 
 
@@ -196,7 +197,7 @@ No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's of
 ## Local & Private by Design
 
 - **Local by default.** The desktop app starts one daemon per open project and connects to its Rust daemon over `127.0.0.1`. Optional paired-device access can expose the daemon over LAN or Tailscale; keep loopback mode unless you need it.
-- **Your credentials stay yours.** Keel uses your existing Claude authentication. Prompts and code go directly to Anthropic per your account terms—never to third-party intermediate proxies.
+- **Your credentials stay yours.** Oya Factory uses your existing Claude authentication. Prompts and code go directly to Anthropic per your account terms—never to third-party intermediate proxies.
 - **Deterministic locks:** File system and checkout locks prevent multiple agents from clobbering your Git state.
 - **No reporting yet.** The desktop app sends no crash reports or usage events. See [Privacy](docs/privacy.md).
 - **Trust stays on your machine.** Project trust and approved commands are saved outside the repository. Cloned permission files are ignored; build and installer commands are suggestions until you approve them.
@@ -206,7 +207,7 @@ No Node.js or Homebrew required to install Claude Code. Keel uses Anthropic's of
 
 ## Build from Source
 
-Keel is a **Tauri 2** desktop app (React page, `desktop/`) over a **Rust** daemon (`crates/keel`), one daemon per open project. You need Rust, Node.js and `pnpm`.
+Oya Factory is a **Tauri 2** desktop app (React page, `desktop/`) over a **Rust** daemon (`crates/keel`), one daemon per open project. You need Rust, Node.js and `pnpm`.
 
 ```sh
 # Clone repository
@@ -251,7 +252,7 @@ cargo run -- serve .
 
 ## Contributing
 
-Keel is free and open source, and will always be free to use. Contributions of all kinds are welcome!
+Oya Factory is free and open source, and will always be free to use. Contributions of all kinds are welcome!
 
 - Check out the [Contribution Guide](CONTRIBUTING.md) for setup rules and testing.
 - See open issues on the [Issue Tracker](https://github.com/OyadotAI/keel/issues).
@@ -261,10 +262,10 @@ Keel is free and open source, and will always be free to use. Contributions of a
 
 ## Maintainer and Sponsor
 
-Keel is created and maintained by **Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)) and sponsored by **[OyaBrowser.com](https://oyabrowser.com)**.
+Oya Factory is created and maintained by **Mohamed Alkiswani** ([mk@getoya.ai](mailto:mk@getoya.ai)) and sponsored by **[OyaBrowser.com](https://oyabrowser.com)**.
 
 ## License
 
 Source available, free for solo developers: 200 agent steps a day, with an anonymous daily usage report.
 Teams, companies and commercial use need a license — email [sales@getoya.ai](mailto:sales@getoya.ai).
-What Keel generates in your project is yours. See [LICENSE.md](LICENSE.md).
+What Oya Factory generates in your project is yours. See [LICENSE.md](LICENSE.md).

@@ -4,7 +4,7 @@ import "./BrowserPreference.css";
 import { useBrowserPreference, type BrowserBackend } from "../browser-preference";
 
 type State = ReturnType<typeof useBrowserPreference>;
-const NAMES: Record<BrowserBackend, string> = { embedded: "Inside Keel", local_oya: "Oya Browser" };
+const NAMES: Record<BrowserBackend, string> = { embedded: "Inside Oya Factory", local_oya: "Oya Browser" };
 
 /** Settings: the device default. "Ask each lane" is what a new person gets; lanes that chose keep it. */
 export function BrowserPreference({ lane }: { lane?: string }) {
@@ -24,9 +24,9 @@ export function BrowserPreferenceView({ state }: { state: State }) {
     <h2>Browser for coding agents</h2>
     {!value && !state.error && <p className="muted">Checking for Oya Browser…</p>}
     {value && <div className="browser-choice" role="radiogroup" aria-label="Browser for coding agents">
-      {option(null, "Ask each lane (recommended)", "The first time an agent in a lane needs a browser, Keel asks where that lane should browse.")}
-      {option("embedded", "Always Inside Keel", "A browser in each lane's Browser tab. Sign-ins stay with each project.")}
-      {option("local_oya", "Always Oya Browser", value.installation ? "The Oya app on your computer, with the accounts you're already signed into." : "Oya Browser isn't installed. Choose “Ask each lane” and Keel offers to install it.", !value.installation)}
+      {option(null, "Ask each lane (recommended)", "The first time an agent in a lane needs a browser, Oya Factory asks where that lane should browse.")}
+      {option("embedded", "Always Inside Oya Factory", "A browser in each lane's Browser tab. Sign-ins stay with each project.")}
+      {option("local_oya", "Always Oya Browser", value.installation ? "The Oya app on your computer, with the accounts you're already signed into." : "Oya Browser isn't installed. Choose “Ask each lane” and Oya Factory offers to install it.", !value.installation)}
       <p className="muted small">Lanes that already chose keep their choice. Change one in its Browser tab.</p>
     </div>}
     {state.error && <p className="error" role="alert">{state.error}</p>}
@@ -48,7 +48,7 @@ export function BrowseIn({ state }: { state: State }) {
   </label>;
 }
 
-/** A lane browsing in the person's own Oya: Keel shows only the page this lane owns there. */
+/** A lane browsing in the person's own Oya: Oya Factory shows only the page this lane owns there. */
 export function LocalOyaView({ state }: { state: State }) {
   const value = state.value;
   if (!value || value.effective.backend !== "local_oya") return null;

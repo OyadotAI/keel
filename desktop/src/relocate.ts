@@ -1,4 +1,4 @@
-// Moving a project into the Keel workspace: what the daemon's answer means in words, which
+// Moving a project into the Oya Factory workspace: what the daemon's answer means in words, which
 // projects the person said to leave, and the one pure step that re-files the app's state.
 import type { Lane, Project } from "./store";
 
@@ -31,31 +31,31 @@ export const structural = (r?: Refusal | null) => !!r && ["inside", "contains", 
 /// One sentence per refusal. `title` names a lane by what the person called it.
 export function refusalText(r: Refusal, from: string, workspace: string, name: string, title: (lane: string) => string | undefined): string {
   switch (r.code) {
-    case "inside": return "This project is already in the Keel workspace.";
-    case "contains": return `${from} holds the Keel workspace itself, so it stays where it is.`;
+    case "inside": return "This project is already in the Oya Factory workspace.";
+    case "contains": return `${from} holds the Oya Factory workspace itself, so it stays where it is.`;
     case "link": return `${from} is a link to ${r.target} — open the real folder and move that.`;
     case "worktree": return `This folder is a worktree of ${r.main}, so it stays with that repository.`;
     case "linked": return `This project has a git worktree of its own at ${r.path}. Moving the project would break it, so the project stays where it is — remove that worktree first (git worktree remove) to move it.`;
     case "submodule": return `This folder is a submodule of ${r.parent}, so it stays with that repository.`;
     case "nested": return `This folder is inside the repository at ${r.root}, so it stays with that repository.`;
-    case "taken": return `There is already a “${name}” in the Keel workspace — rename one of them, then move from the project menu.`;
-    case "volume": return `${from} is on a different disk from the Keel workspace; Keel moves within one disk — move it yourself, then open it from there.`;
-    case "turn": { const t = r.lane ? title(r.lane) : undefined; return t ? `A turn is running in “${t}” — finish or stop it first.` : "Keel is writing to this project — try again in a moment."; }
+    case "taken": return `There is already a “${name}” in the Oya Factory workspace — rename one of them, then move from the project menu.`;
+    case "volume": return `${from} is on a different disk from the Oya Factory workspace; Oya Factory moves within one disk — move it yourself, then open it from there.`;
+    case "turn": { const t = r.lane ? title(r.lane) : undefined; return t ? `A turn is running in “${t}” — finish or stop it first.` : "Oya Factory is writing to this project — try again in a moment."; }
     case "terminal": return "A terminal is open in this project — close or stop it first.";
-    case "live": return "Claude Code is running in this folder outside Keel — quit it first.";
+    case "live": return "Claude Code is running in this folder outside Oya Factory — quit it first.";
     case "dev": return "The dev server is running — stop it first.";
     case "job": return `The background job “${r.command}” is running — stop it first.`;
-    case "workspace": return `Keel can’t write to ${workspace}: ${r.error}.`;
+    case "workspace": return `Oya Factory can’t write to ${workspace}: ${r.error}.`;
     case "rename": return `The move failed: ${r.error}. Nothing was moved.`;
-    case "repair": return `Keel couldn’t relink the lane checkouts: ${r.error}. Nothing was moved.`;
+    case "repair": return `Oya Factory couldn’t relink the lane checkouts: ${r.error}. Nothing was moved.`;
   }
 }
 
 const STEP: Record<string, string> = {
   trust: "its trust and rules couldn’t be carried over — trust it again from the status bar",
-  vouched: "Keel’s record of the plugins and servers it installed couldn’t be carried over",
+  vouched: "Oya Factory’s record of the plugins and servers it installed couldn’t be carried over",
   sessions: "Codex and Antigravity conversations couldn’t be re-filed in History",
-  record: "Keel couldn’t note the old path, so Codex and Antigravity History may miss older conversations",
+  record: "Oya Factory couldn’t note the old path, so Codex and Antigravity History may miss older conversations",
   history: "Claude Code’s history couldn’t be renamed; earlier conversations stay under the old path",
 };
 export const warningText = (w: { step: string; error: string }) => `Moved, but ${STEP[w.step] ?? w.step}: ${w.error}.`;

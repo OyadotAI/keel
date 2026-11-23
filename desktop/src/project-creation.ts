@@ -20,7 +20,7 @@ export function useProjectCreation() {
   const operation = useRef(crypto.randomUUID());
   useEffect(() => {
     alive.current = true;
-    void invoke<string>("projects_dir").then((path) => { if (alive.current) setParent((current) => current ?? path); }, () => { if (alive.current) setError("Couldn’t access the Keel projects folder. Choose another location."); });
+    void invoke<string>("projects_dir").then((path) => { if (alive.current) setParent((current) => current ?? path); }, () => { if (alive.current) setError("Couldn’t access the Oya Factory projects folder. Choose another location."); });
     return () => { alive.current = false; };
   }, []);
   async function open(path: string) {
@@ -39,7 +39,7 @@ export function useProjectCreation() {
       const path = await act(scratch.ep, operation.current);
       if (!alive.current) return;
       setCreated(path);
-      try { await open(path); } catch (e) { throw new Error(`Project created at ${path}, but Keel couldn’t open it. ${String(e)}`); }
+      try { await open(path); } catch (e) { throw new Error(`Project created at ${path}, but Oya Factory couldn’t open it. ${String(e)}`); }
     } catch (e) { if (alive.current) setError(String(e)); }
     finally { done(); if (alive.current) setBusy(undefined); }
   }

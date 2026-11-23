@@ -1,6 +1,6 @@
 // Updates: the Tauri updater against the public releases feed. Checked at launch and every six
 // hours, downloaded in the background, and installed only when the person says — a restart ends
-// every agent the app is running, so it is never Keel's decision to make.
+// every agent the app is running, so it is never Oya Factory's decision to make.
 
 import { useSyncExternalStore } from "react";
 
@@ -65,7 +65,7 @@ export async function restart(): Promise<void> {
     // Said, not swallowed: an app run from the disk image, or one macOS moved aside on first
     // launch, cannot replace itself, and a button that does nothing when clicked is worse.
     pending = undefined;
-    put({ state: "failed", why: `The update could not install: ${e instanceof Error ? e.message : String(e)}. Move Keel to Applications and try again.` });
+    put({ state: "failed", why: `The update could not install: ${e instanceof Error ? e.message : String(e)}. Move Oya Factory to Applications and try again.` });
   }
 }
 

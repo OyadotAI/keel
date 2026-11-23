@@ -31,7 +31,7 @@ pub fn supported() -> Result<(), String> {
     if cfg!(target_os = "macos") {
         Ok(())
     } else {
-        Err("Native screenshot and fixed viewport capture are unavailable in this Keel build. Keel did not switch browsers.".into())
+        Err("Native screenshot and fixed viewport capture are unavailable in this Oya Factory build. Oya Factory did not switch browsers.".into())
     }
 }
 

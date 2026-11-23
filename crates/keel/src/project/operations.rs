@@ -40,8 +40,8 @@ pub(super) fn run(
     // Under Keel's own folder, never the one the person chose: that may be inside a repository,
     // where `.keel/project-operations/*.json` was committed by its next checkpoint. The id is
     // unique per request, so the parent need not be part of the key.
-    let dir =
-        receipts(root).ok_or_else(|| bad("No home directory is available for Keel.".into()))?;
+    let dir = receipts(root)
+        .ok_or_else(|| bad("No home directory is available for Oya Factory.".into()))?;
     std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
     let path = dir.join(format!("{id}.json"));
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {

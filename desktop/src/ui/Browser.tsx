@@ -169,7 +169,7 @@ export function Browser({ lane }: { lane: string }) {
       ) : tab?.room ? (
         <Empty title="This page was closed to make room for another lane">The agent reopens it on its next browser step, or type an address above.</Empty>
       ) : (
-        <Empty title="No page open yet">When the agent needs a website, it opens it here. This browser is Keel's, not yours: sign in once and the login stays with this project.</Empty>
+        <Empty title="No page open yet">When the agent needs a website, it opens it here. This browser is Oya Factory's, not yours: sign in once and the login stays with this project.</Empty>
       )}
     </div>
   );

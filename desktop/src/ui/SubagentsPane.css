@@ -25,7 +25,7 @@
 .terminal-pane-footer > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-pane-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-pane-heading small, .terminal-pane-footer small { opacity: .65; white-space: nowrap; }
-.terminal-pane-order { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--child-bg); font-weight: 600; font-size: 10px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.terminal-pane-order { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent-fill); color: var(--on-accent); font-weight: 600; font-size: 10px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .terminal-pane-status { margin-left: auto; font-size: 10px; }
 .child-terminal-content { display: flex; flex: 1; flex-direction: column; position: relative; min-height: 0; }
 .child-terminal-output { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; user-select: text; font-family: var(--mono); font-size: var(--child-terminal-font); line-height: 1.45; }
@@ -140,13 +140,13 @@
 .chat-helpers .child-terminal-surface {
   border: 0; border-radius: 14px; overflow: hidden;
   background: color-mix(in srgb, var(--bg) 92%, var(--accent) 2%);
-  box-shadow: 0 1px 0 color-mix(in srgb, #fff 6%, transparent) inset, 0 10px 30px -12px #0000005c, 0 2px 6px -2px #00000033;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--paper) 6%, transparent) inset, 0 10px 30px -12px color-mix(in srgb, var(--ink) 36.08%, transparent), 0 2px 6px -2px color-mix(in srgb, var(--ink) 20.00%, transparent);
   transition: box-shadow 400ms var(--ease), transform 400ms var(--ease);
 }
-.chat-helpers .child-terminal-pane:hover .child-terminal-surface { transform: translateY(-2px); box-shadow: 0 1px 0 color-mix(in srgb, #fff 8%, transparent) inset, 0 18px 40px -14px #00000070, 0 3px 8px -2px #00000038; }
+.chat-helpers .child-terminal-pane:hover .child-terminal-surface { transform: translateY(-2px); box-shadow: 0 1px 0 color-mix(in srgb, var(--paper) 8%, transparent) inset, 0 18px 40px -14px color-mix(in srgb, var(--ink) 43.92%, transparent), 0 3px 8px -2px color-mix(in srgb, var(--ink) 21.96%, transparent); }
 .chat-helpers .child-terminal-surface::before {
   content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; border-radius: inherit; padding: 1px;
-  background: conic-gradient(from var(--helper-angle), var(--line) 0deg, var(--line) 250deg, color-mix(in srgb, var(--accent) 90%, #fff) 310deg, var(--line) 360deg);
+  background: conic-gradient(from var(--helper-angle), var(--line) 0deg, var(--line) 250deg, color-mix(in srgb, var(--accent) 90%, var(--paper)) 310deg, var(--line) 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
   opacity: .9; transition: opacity 500ms var(--ease);
 }

@@ -230,7 +230,7 @@ function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
         <List items={ws.skills} empty="No skills yet. Add one from the catalog below, or write your own." remove={(n) => call(() => post(ep, "/api/skills/remove", { dir: dirOf(n.path), commit: true }))} />
       </section>
       <section className="settings-section">
-        <h2>From Keel's catalog</h2>
+        <h2>From Oya Factory's catalog</h2>
         {!catalog ? (
           <p className="muted">Reading…</p>
         ) : (
@@ -286,7 +286,7 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
   const [installing, setInstalling] = useState(false);
   const trusted = useStore((s) => !!s.trusted[project]);
   const record = useStore((s) => s.setupRun[project]);
-  // In a trusted project Keel adds the team itself; a button stays only for a failed attempt.
+  // In a trusted project Oya Factory adds the team itself; a button stays only for a failed attempt.
   const auto = trusted && recordShown(record) ? record : undefined;
   const autoFailed = auto?.phase === "failed" && !!auto.error;
   const retry = () => void post(ep, "/api/setup/run").catch(() => undefined);
@@ -312,8 +312,8 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
         {/* Above the members: the update is the action, and eight rows pushed it out of view. */}
         <TeamUpdate key={project} ep={ep} project={project} plan={plan} reread={reread} />
         {!ws.agents.length ? <>
-          <p className="muted">{trusted ? "Keel adds its default team to this project on its own. Once it is in, members appear in the sidebar and you can tag them with @." : "Install Keel’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @."}</p>
-          {trusted ? (auto?.phase === "running" ? <p className="small muted" role="status">Keel is adding its default team to this project…</p> : autoFailed ? <><p className="small error">Couldn’t add the team: {auto!.error}</p><button onClick={retry}>Try adding the team again</button></> : null) : <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>}
+          <p className="muted">{trusted ? "Oya Factory adds its default team to this project on its own. Once it is in, members appear in the sidebar and you can tag them with @." : "Install Oya Factory’s default team, or create your own subagent below. Once installed, members appear in the sidebar and you can tag them with @."}</p>
+          {trusted ? (auto?.phase === "running" ? <p className="small muted" role="status">Oya Factory is adding its default team to this project…</p> : autoFailed ? <><p className="small error">Couldn’t add the team: {auto!.error}</p><button onClick={retry}>Try adding the team again</button></> : null) : <button disabled={installing} onClick={installTeam}>{installing ? "Installing team…" : "Install default team"}</button>}
           <p className="small muted">Adds eight members for {forAgents(plan)}, including Oya Browser, role playbooks, handoff templates and a production checklist. {absent(plan)}</p>
         </> : <ul className="rules">
           {ws.agents.map((agent) => {
@@ -323,7 +323,7 @@ function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: 
         </ul>}
         {!!ws.agents.length && missing && <div className="team-install">
           {trusted ? (autoFailed ? <button onClick={retry}>Try again</button> : null) : <button disabled={installing} onClick={installTeam}>{installing ? "Adding members…" : "Add missing team members"}</button>}
-          <p className="small muted">{trusted ? `Keel adds the missing members for ${forAgents(plan)} on its own. Keeps your existing definitions and images.` : `Adds what's missing for ${forAgents(plan)}. Keeps your existing definitions and images.`}{trusted && autoFailed ? ` Last attempt: ${auto!.error}` : ""}</p>
+          <p className="small muted">{trusted ? `Oya Factory adds the missing members for ${forAgents(plan)} on its own. Keeps your existing definitions and images.` : `Adds what's missing for ${forAgents(plan)}. Keeps your existing definitions and images.`}{trusted && autoFailed ? ` Last attempt: ${auto!.error}` : ""}</p>
         </div>}
       </section>
       <Create ep={ep} call={call} kind={AGENT} />
@@ -364,7 +364,7 @@ function Commands({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: (
   );
 }
 
-/// The two Markdown-with-frontmatter files Keel writes, and the words each form needs.
+/// The two Markdown-with-frontmatter files Oya Factory writes, and the words each form needs.
 interface Kind {
   title: string;
   path: string;
@@ -400,7 +400,7 @@ function Create({ ep, call, kind }: { ep: Endpoint; call: (run: () => Promise<un
   return (
     <section className="settings-section">
       <h2>{kind.title}</h2>
-      {kind === AGENT && <p className="small muted">Subagents you add here are for Claude Code only. Keel's team is installed for every coding agent on this machine.</p>}
+      {kind === AGENT && <p className="small muted">Subagents you add here are for Claude Code only. Oya Factory's team is installed for every coding agent on this machine.</p>}
       <div className="form">
         <label className="field">
           Name
@@ -599,7 +599,7 @@ function Hooks({ ws }: { ws: Workspace }) {
   return (
     <>
       <p className="small muted hooks-why">
-        A hook is a shell command Claude Code runs on your machine when something happens, so Keel lists them and does not write them. Add or edit one in your settings file, or with <code>/hooks</code> in Claude Code.
+        A hook is a shell command Claude Code runs on your machine when something happens, so Oya Factory lists them and does not write them. Add or edit one in your settings file, or with <code>/hooks</code> in Claude Code.
         {files.length > 0 && (
           <span className="hooks-files">
             {files.map((f) => (
@@ -610,10 +610,10 @@ function Hooks({ ws }: { ws: Workspace }) {
           </span>
         )}
       </p>
-      {!ws.hooks.length && <p className="muted">No hooks. Keel runs its own approval hook beside them; that one is not listed.</p>}
+      {!ws.hooks.length && <p className="muted">No hooks. Oya Factory runs its own approval hook beside them; that one is not listed.</p>}
       {fromRepo.length > 0 && (
         <p className="small" style={{ color: "var(--warn)", display: "flex", gap: 6, alignItems: "center" }}>
-          <Icon name="shield" size={14} /> Hooks from this repository's .claude/settings.json and .agents/hooks.json are quarantined before Keel starts an agent, because they are commands anyone who commits here can make your machine run.
+          <Icon name="shield" size={14} /> Hooks from this repository's .claude/settings.json and .agents/hooks.json are quarantined before Oya Factory starts an agent, because they are commands anyone who commits here can make your machine run.
         </p>
       )}
       <ul className="hook-list">

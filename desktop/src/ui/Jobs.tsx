@@ -8,7 +8,7 @@ export function Jobs({ lane }: { lane: string }) {
   if (!jobs?.length)
     return (
       <div className="panel-empty muted">
-        Nothing running in the background. When the agent starts a long command — a dev server, a watcher, `gh run watch` — Keel runs it here so it outlives the turn, and hands the result back when it ends.
+        Nothing running in the background. When the agent starts a long command — a dev server, a watcher, `gh run watch` — Oya Factory runs it here so it outlives the turn, and hands the result back when it ends.
       </div>
     );
   return (

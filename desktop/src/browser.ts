@@ -31,7 +31,7 @@ export interface Tab {
   /// for seconds between steps and a state cleared after each one read as six blinks, not as
   /// "working". Shown only while the lane's turn runs, so it cannot outlive the agent.
   browsing?: boolean;
-  /// Closed by Keel to make room for another lane's page.
+  /// Closed by Oya Factory to make room for another lane's page.
   room?: boolean;
   error?: string;
   preview?: { data: string; mime_type: string };
@@ -82,7 +82,7 @@ export function act(lane: string, project: string, op: Op): Promise<string | {te
 /// at once, so the agent hears why rather than waiting out the call.
 export async function onBrowser(project: string, ep: Endpoint, has: (lane: string) => boolean, data: { id: string; lane: string; op: Op }, reveal: (lane: string) => void = () => undefined) {
   const answer = (ok: boolean, text: string) => post(ep, "/api/browser/result", { id: data.id, ok, text }).catch(() => undefined);
-  if (!has(data.lane)) return answer(false, "That lane isn't open in Keel, so it has no Browser tab.");
+  if (!has(data.lane)) return answer(false, "That lane isn't open in Oya Factory, so it has no Browser tab.");
   // The tab comes into view when the agent opens a page, or starts working in the browser after a
   // pause — panel opened if it was closed, Browser tab chosen. "It didn't open the browser" was the
   // agent working in a tab the person had no reason to look at. Not on every action of a run, so

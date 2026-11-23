@@ -109,7 +109,7 @@ pub fn web_only(url: &str) -> Result<String, String> {
         host.as_str(),
         "tauri.localhost" | "ipc.localhost" | "asset.localhost"
     ) {
-        return Err("That address is Keel's own page, not a website.".into());
+        return Err("That address is Oya Factory's own page, not a website.".into());
     }
     Ok(url.to_string())
 }
@@ -214,7 +214,7 @@ impl Drop for Waiting {
 fn some_window(open: usize) -> Result<(), String> {
     if open == 0 {
         return Err(
-            "No Keel window is open, so there is no Browser tab to drive. Say so and continue without it."
+            "No Oya Factory window is open, so there is no Browser tab to drive. Say so and continue without it."
                 .into(),
         );
     }
@@ -499,7 +499,11 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(some_window(0).unwrap_err().contains("No Keel window"));
+        assert!(
+            some_window(0)
+                .unwrap_err()
+                .contains("No Oya Factory window")
+        );
         assert!(some_window(1).is_ok());
     }
 

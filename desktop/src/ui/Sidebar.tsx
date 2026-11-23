@@ -66,7 +66,7 @@ export function Sidebar({ explorer, showCode, attention }: { explorer?: ReactNod
   const changed = useStore((s) => lane ? s.lanes[lane]?.git?.changes.length ?? 0 : 0);
   return (
     <nav className="sidebar" aria-label="Workspace">
-      <div className="workspace-brand"><span className="brand-symbol"><BrandMark /></span><strong>Keel</strong></div>
+      <div className="workspace-brand"><span className="brand-symbol"><BrandMark size={32} /></span><strong>Oya Factory</strong></div>
       <div className="sidebar-actions">
         <button className="open" onClick={pickProject} title={`Open a project folder (${label({ key: "o" })})`}>
           <Icon name="folder" size={17} /> Open project…
@@ -155,9 +155,9 @@ function Members({ project }: { project: string }) {
 
   if (!loaded) return null;
   const shown = showAll ? members : members.slice(0, MEMBERS_VISIBLE);
-  return <section className="sidebar-section member-section" aria-label={`Keel Agents in ${projectName ?? project}`}>
-    <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Keel Agents in ${projectName ?? project}`}>
-      <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />Keel Agents
+  return <section className="sidebar-section member-section" aria-label={`Oya Factory Agents in ${projectName ?? project}`}>
+    <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Oya Factory Agents in ${projectName ?? project}`}>
+      <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />Oya Factory Agents
     </button>
     <div id="sidebar-members" hidden={!expanded}>
       {members.length === 0 && <div className="member-empty">
@@ -245,7 +245,7 @@ function ProjectRow({ path }: { path: string }) {
       )}
       {menu?.kind === "more" && (
         <Floating anchor={menu.at} onClose={() => setMenu(null)}>
-          {outside && <><button onClick={() => (setMenu(null), void useStore.getState().offerMove(path))}><Icon name="arrow-right" size={14} /> Move into Keel workspace…</button><div className="sep" /></>}
+          {outside && <><button onClick={() => (setMenu(null), void useStore.getState().offerMove(path))}><Icon name="arrow-right" size={14} /> Move into Oya Factory workspace…</button><div className="sep" /></>}
           <button onClick={() => (setMenu(null), void closeProject(path))}>Close project (its daemon stops; branches stay)</button>
         </Floating>
       )}
@@ -274,7 +274,7 @@ function ProjectRow({ path }: { path: string }) {
             <Icon name="copy" size={14} /> Copy path
           </button>
           {outside && <button onClick={() => (setCtx(null), void useStore.getState().offerMove(path))}>
-            <Icon name="arrow-right" size={14} /> Move into Keel workspace…
+            <Icon name="arrow-right" size={14} /> Move into Oya Factory workspace…
           </button>}
           <button onClick={() => (setCtx(null), toggle())}>
             <Icon name={p.collapsed ? "chevron-down" : "chevron-right"} size={14} /> {p.collapsed ? "Expand" : "Collapse"}

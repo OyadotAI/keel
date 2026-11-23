@@ -64,6 +64,6 @@ export function acceptedReceipt(current: Lane, id: string): Partial<Lane> {
 
 /** A new submission must not overwrite an external owner's turn or an unconfirmed receipt. */
 export function submissionBlock(lane: Lane, prompt: string): string | undefined {
-  if (lane.elsewhere) return "This session is running outside Keel. Stop it there before resuming here.";
+  if (lane.elsewhere) return "This session is running outside Oya Factory. Stop it there before resuming here.";
   if (lane.receipt && lane.receipt.prompt !== prompt) return "The previous submission has not been confirmed. Retry it before sending another message.";
 }

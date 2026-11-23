@@ -112,6 +112,16 @@ jobs:
           packaging/sidecar.sh
           cd desktop/src-tauri && cargo test
 
+      # Compile the shipping NSIS hooks and exercise shortcut ownership without real installs.
+      - name: Windows installer shortcut contracts
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (!(Test-Path $nsis) -and !(Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis --version=3.11 --yes --no-progress
+          }
+          python -B -m unittest discover -s packaging/tests -p 'test_windows_installer.py'
+
   # Keel is subject to its own scanner. If the readiness bar is worth holding other repositories
   # to, it is worth holding this one to — and a regression here means the scanner shipped a false
   # positive, which is the most damaging bug class it has.

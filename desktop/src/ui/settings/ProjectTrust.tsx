@@ -38,7 +38,7 @@ function usePermissionChanges(project: string | undefined, endpoint: Endpoint | 
     try {
       const result = await post(endpoint, path, body);
       if (path === "/api/permissions/trust") {
-        if (result !== false) throw new Error("Keel did not confirm that trust was withdrawn. Try again.");
+        if (result !== false) throw new Error("Oya Factory did not confirm that trust was withdrawn. Try again.");
         useStore.setState((s) => s.projects[project] ? { trusted: { ...s.trusted, [project]: false } } : {});
       }
       setError(undefined);
@@ -68,7 +68,7 @@ export function ProjectTrust({ project, name, endpoint, error: connectionError, 
             <p>{permissions.trusted ? "Permitted actions run without asking. Explicit deny rules still apply." : "Agents ask before actions outside your allowed rules."}</p></div>
           <button className={permissions.trusted ? undefined : "primary"} disabled={busy} onClick={() => permissions.trusted ? void change("/api/permissions/trust", { trusted: false }) : projectTrust.open(project)}>{busy ? "Saving…" : permissions.trusted ? "Stop trusting" : "Trust this project…"}</button>
         </div>
-        <p className="trust-automation">Keel also keeps its agent team, skills and suggested official-marketplace plugins current here as its own commits. Questions and plan decisions still need your answer.</p>
+        <p className="trust-automation">Oya Factory also keeps its agent team, skills and suggested official-marketplace plugins current here as its own commits. Questions and plan decisions still need your answer.</p>
         <TrustLimitations />
         {mutationError && <Banner tone="error">{mutationError}</Banner>}
       </>}

@@ -31,7 +31,7 @@ describe("the review before a pull request", () => {
     expect(sorted([finding("warning", "w"), finding("blocking", "b")])[0].title).toBe("b");
   });
 
-  it("says Keel restarted when a review it saw running is gone, and keeps saying it", async () => {
+  it("says Oya Factory restarted when a review it saw running is gone, and keeps saying it", async () => {
     answers.push({ review: null, head: "" });
     await refreshReview("quiet", ep);
     expect(reviewOf("quiet")?.restarted).toBe(false);

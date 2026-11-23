@@ -53,7 +53,7 @@ function CurrentActivity({ now, elsewhere }: { now: ReturnType<typeof useNow>; e
   return <button className={`sb-now ${now.tone}`} title={now.tone === "warn" && now.label.startsWith("codex") ? "Codex needs your response in the terminal." : "What the agent is doing"}>
     {now.tone === "warn" ? <Icon name="hand" size={14} /> : <span className={now.tone === "live" ? "busy-dot" : "sb-dot"} />}
     <span className="sb-agent">{AGENT_NAME[now.label.split(" · ")[0] as Agent] ?? "Claude"}</span>
-    <span className="sb-label">{elsewhere ? "running in another terminal — Keel is following" : now.label.replace(/^\S+ · /, "")}</span>
+    <span className="sb-label">{elsewhere ? "running in another terminal — Oya Factory is following" : now.label.replace(/^\S+ · /, "")}</span>
     {!elsewhere && elapsed !== undefined && Number.isFinite(elapsed) && <span className="clock">{clock(elapsed)}</span>}
   </button>;
 }
@@ -62,7 +62,7 @@ function CurrentActivity({ now, elsewhere }: { now: ReturnType<typeof useNow>; e
  *  words, "runs without asking" rather than "trusted". */
 function TrustButton({ project, trusted, plain }: { project: string; trusted: boolean; plain: boolean }) {
   return trusted ? (
-    <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Keel Browser actions. Keel keeps its agent team and plugins current here. Click to change.">
+    <button className="sb-trusted" onClick={() => useStore.setState({ settings: true })} title="Permitted edits, commands, and MCP tools run without asking, including Oya Factory Browser actions. Oya Factory keeps its agent team and plugins current here. Click to change.">
       <Icon name="shield" size={14} /> {plain ? "Runs without asking" : "Trusted"}
     </button>
   ) : (
@@ -117,10 +117,10 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       <LicenseBadge />
       {project?.error ? (
         <button className="bad" onClick={() => l && useStore.getState().load(l.id)}>
-          Keel stopped for this project — Restart
+          Oya Factory stopped for this project — Restart
         </button>
       ) : project && !project.endpoint && project.starting ? (
-        <span className="warn" role="status">Starting Keel…</span>
+        <span className="warn" role="status">Starting Oya Factory…</span>
       ) : null}
       <span className="sb-sep" />
       <button className="sb-shortcuts" onClick={() => useStore.setState({ shortcuts: true })} title="Every keyboard shortcut">

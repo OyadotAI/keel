@@ -46,7 +46,7 @@ export function ShipCard({ lane, ep, wt }: { lane: string; ep: Endpoint; wt?: st
   const card = (offer || step || error) && (
     <div className="ship-row">
       {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span className="ship-text" title={error}>{error ? `${plain ? "Couldn’t save to GitHub" : "Didn’t work"}: ${error.split(/\n|\s+hint:/)[0].trim()}` : words[offer ?? "open"].text}</span>}
-      {!step && <button className="primary" onClick={() => void go()}>{error ? "Try again" : words[offer ?? "open"].button}</button>}
+      {!step && <button onClick={() => void go()}>{error ? "Try again" : words[offer ?? "open"].button}</button>}
       {!step && <button className="ghost review-close" aria-label={CLOSE} title={CLOSE} onClick={close}><Icon name="x" size={14} /></button>}
     </div>
   );

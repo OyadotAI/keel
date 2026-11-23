@@ -124,7 +124,7 @@ export function Diff({ lane, embedded = false }: { lane: string; embedded?: bool
 /// Says which of the reasons it is: the daemon starting, the daemon failing, or git being read.
 function Waiting({ lane }: { lane: string }) {
   const project = useStore((s) => s.projects[s.lanes[lane]?.project ?? ""]);
-  if (project?.error) return <div className="panel-empty error">Keel could not start for this project: {project.error}</div>;
-  if (!project?.endpoint) return <div className="panel-empty muted">Starting Keel for this project…</div>;
+  if (project?.error) return <div className="panel-empty error">Oya Factory could not start for this project: {project.error}</div>;
+  if (!project?.endpoint) return <div className="panel-empty muted">Starting Oya Factory for this project…</div>;
   return <div className="panel-empty muted">Reading git…</div>;
 }

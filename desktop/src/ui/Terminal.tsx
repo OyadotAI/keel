@@ -24,7 +24,7 @@ const ELSEWHERE = 4001;
 
 /// The wheel scrolls the history. A TUI that turns on mouse reporting (Claude Code does) gets
 /// every wheel event instead, and the scrollback above it could no longer be reached. In the
-/// normal buffer the history is Keel's to scroll; in the alternate screen there is none, and the
+/// normal buffer the history is Oya Factory's to scroll; in the alternate screen there is none, and the
 /// wheel is the program's.
 function wheelScrollsHistory(term: import("@xterm/xterm").Terminal) {
   let wheel = 0;
@@ -158,7 +158,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
-      // Keel's own chords go up to the window; every other key, Esc and ⌃C included, is the CLI's.
+      // Oya Factory's own chords go up to the window; every other key, Esc and ⌃C included, is the CLI's.
       term.attachCustomKeyEventHandler((e) => !isKeel(e));
       wheelScrollsHistory(term);
       term.open(host.current);
@@ -275,7 +275,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       <TerminalFileSurface lane={lane} agent={agent} hidden={hidden}>
         <div className="panel-empty" style={{ margin: "auto" }}>
           <h3>This conversation is running in another terminal</h3>
-          <p>Keel is following it: each turn appears on the right as it happens. Starting it here too would be two agents writing one conversation.</p>
+          <p>Oya Factory is following it: each turn appears on the right as it happens. Starting it here too would be two agents writing one conversation.</p>
           <button
             className="primary"
             onClick={() => {

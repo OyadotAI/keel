@@ -252,7 +252,7 @@ async fn script(view: &tauri::Webview, op: &serde_json::Value) -> Result<String,
     // The script returns a JSON string; the platform serialises that value once more on macOS.
     let inner = serde_json::from_str::<String>(&raw).unwrap_or(raw);
     let answer: serde_json::Value = serde_json::from_str(&inner)
-        .map_err(|_| "The page gave an answer Keel could not read.".to_string())?;
+        .map_err(|_| "The page gave an answer Oya Factory could not read.".to_string())?;
     let text = answer["text"].as_str().unwrap_or_default().to_string();
     if answer["ok"] == true {
         Ok(text)

@@ -1,9 +1,16 @@
+// Update retries retain their ordering and identify the branded app in recovery messages.
 import { beforeEach, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const mocks = vi.hoisted(() => ({ check: vi.fn(), invoke: vi.fn(), relaunch: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("react", async (original) => ({
+  ...await original<typeof import("react")>(),
+  useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+}));
 
 beforeEach(() => { vi.resetModules(); vi.resetAllMocks(); });
 
@@ -41,6 +48,11 @@ it("allows a fresh check after installation fails, without relaunching", async (
   await update.check();
   await update.restart();
   expect(mocks.relaunch).not.toHaveBeenCalled();
+  function Failure() {
+    const state = update.useUpdate();
+    return createElement("p", null, state.state === "failed" ? state.why : state.state);
+  }
+  expect(renderToStaticMarkup(createElement(Failure))).toContain("Move Oya Factory to Applications and try again.");
   await update.restart();
   expect(install).toHaveBeenCalledTimes(1);
   await update.check();

@@ -1,4 +1,4 @@
-/* Oya Browser's public-page palette and type keep this directory in the existing Oya brand. */
+/* Current AgentChrome/Oya colors keep Factory and its siblings in one product family. */
 @font-face {
   font-family: "DM Sans";
   font-style: normal;
@@ -9,27 +9,29 @@
 
 :root {
   color-scheme: light;
-  --canvas: #ffffff;
-  --paper: #ffffff;
-  --ink: #1a261e;
-  --body: #454f47;
-  --muted: #535d55;
-  --rule: #e5e9e1;
-  --green: #16733b;
-  --lime: #c7f7a4;
-  --lime-hover: #b8ed90;
-  --lime-border: #b5dc99;
-  --on-lime: #1a331d;
-  --diagram-wash: #f7f9f5;
-  --diagram-line: #dce3d7;
-  --dark: #1b2d22;
-  --dark-raised: #15251b;
-  --dark-line: #425741;
-  --dark-muted: #c3d4bf;
-  --on-dark: #f5f7ed;
-  --header-glass: #ffffffc7;
-  --header-rule: #1a261e14;
-  --halo: #c7f7a426;
+  --ink: #1a1a1a;
+  --paper: #f7f5f0;
+  --lime: #cdf01e;
+  --red: #f2554a;
+  --amber: #f5b14c;
+  --canvas: var(--paper);
+  --body: color-mix(in srgb, var(--ink) 85%, var(--paper));
+  --muted: color-mix(in srgb, var(--ink) 70%, var(--paper));
+  --rule: color-mix(in srgb, var(--ink) 19%, var(--paper));
+  --green: var(--ink);
+  --lime-hover: color-mix(in srgb, var(--lime) 88%, var(--ink));
+  --lime-border: var(--ink);
+  --on-lime: var(--ink);
+  --diagram-wash: color-mix(in srgb, var(--ink) 4%, var(--paper));
+  --diagram-line: color-mix(in srgb, var(--ink) 19%, var(--paper));
+  --dark: var(--ink);
+  --dark-raised: color-mix(in srgb, var(--paper) 6%, var(--ink));
+  --dark-line: color-mix(in srgb, var(--paper) 45%, var(--ink));
+  --dark-muted: color-mix(in srgb, var(--paper) 74%, var(--ink));
+  --on-dark: var(--paper);
+  --header-glass: color-mix(in srgb, var(--paper) 92%, transparent);
+  --header-rule: color-mix(in srgb, var(--ink) 10%, transparent);
+  --halo: color-mix(in srgb, var(--lime) 15%, transparent);
   --font: "DM Sans", sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --container: 1200px;
@@ -83,7 +85,7 @@
   --motion: 180ms;
   --focus-width: 2px;
   --focus-offset: 4px;
-  --image-shadow: 0 12px 32px #0c180d29, 0 1px 3px #0c180d33;
-  --frame-shadow: 0 1px 2px #1a261e0a, 0 18px 40px -28px #1a261e40;
-  --button-shadow: 0 1px 0 #ffffff99 inset, 0 8px 20px -12px #16733b8c;
+  --image-shadow: 0 12px 32px color-mix(in srgb, var(--ink) 16%, transparent), 0 1px 3px color-mix(in srgb, var(--ink) 20%, transparent);
+  --frame-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 4%, transparent), 0 18px 40px -28px color-mix(in srgb, var(--ink) 25%, transparent);
+  --button-shadow: 0 1px 0 color-mix(in srgb, var(--paper) 20%, transparent) inset;
 }

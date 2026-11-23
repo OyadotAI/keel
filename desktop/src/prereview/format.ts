@@ -30,7 +30,7 @@ export function fixPrompt(r: Review, findings: Finding[]): string {
   const list = sorted(findings)
     .map((f, i) => `${i + 1}. [${f.severity}] ${f.title} — ${f.path}:${f.line}${f.body ? `\n   ${f.body.replace(/\n/g, "\n   ")}` : ""}`)
     .join("\n\n");
-  return `Keel's pre-PR review of \`${branch}\` at ${r.sha.slice(0, 7)} (against ${r.base}) found these. Fix the ones that hold; for any you disagree with, say why instead of changing code. Do not open the pull request — the person opens it from the lane after.\n\n${list}`;
+  return `Oya Factory's pre-PR review of \`${branch}\` at ${r.sha.slice(0, 7)} (against ${r.base}) found these. Fix the ones that hold; for any you disagree with, say why instead of changing code. Do not open the pull request — the person opens it from the lane after.\n\n${list}`;
 }
 
 /// "4m 15s", "38s".

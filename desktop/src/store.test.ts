@@ -362,7 +362,7 @@ describe("chat delivery", () => {
     expect(store.getState().lanes.test.running).toBe(false);
   });
 
-  it("a Codex chat lane is not followed; its stream is Keel's own", async () => {
+  it("a Codex chat lane is not followed; its stream is Oya Factory's own", async () => {
     const store = await fixture();
     store.setState((s) => ({ lanes: { test: { ...s.lanes.test, interface: "chat", agent: "codex", known: true, session: "c" } } }));
     store.getState().load("test"); await Promise.resolve(); await Promise.resolve();

@@ -9,7 +9,7 @@ const render = (phase: TrustRequest["phase"], error?: string) => renderToStaticM
 
 it("identifies the captured project and explains every standing permission boundary", () => {
   const html = render("ready");
-  for (const text of ["Trust this project?", "Example", "/scratch/long project", "installs, deletes, network calls and Keel Browser actions", "official marketplace", "Explicit deny rules still apply", "Questions and plan decisions", "Stop trusting", "Settings → Project trust", "Read, Edit and Write path deny rules do not apply"]) expect(html).toContain(text);
+  for (const text of ["Trust this project?", "Example", "/scratch/long project", "installs, deletes, network calls and Oya Factory Browser actions", "official marketplace", "Explicit deny rules still apply", "Questions and plan decisions", "Stop trusting", "Settings → Project trust", "Read, Edit and Write path deny rules do not apply"]) expect(html).toContain(text);
   expect(html).toContain('role="dialog" aria-modal="true"');
   expect(html.indexOf(">Keep asking</button>")).toBeLessThan(html.indexOf(">Trust this project</button>"));
 });

@@ -21,15 +21,15 @@ BRAND_LOGO = "assets/oya-logo.svg"
 SVG_NAMESPACE = "{http://www.w3.org/2000/svg}"
 BRAND_VIEWBOX = "0 0 512 512"
 BRAND_CIRCLES = [
-    {"cx": "276", "cy": "276", "r": "160", "stroke": "#16733b", "stroke-width": "80"},
-    {"cx": "236", "cy": "236", "r": "160", "stroke": "#1a261e", "stroke-width": "80"},
+    {"cx": "276", "cy": "276", "r": "160", "stroke": "#cdf01e", "stroke-width": "80"},
+    {"cx": "236", "cy": "236", "r": "160", "stroke": "#1a1a1a", "stroke-width": "80"},
 ]
 FAVICON_VIEWBOX = "0 0 64 64"
 FAVICON_CIRCLES = [
-    {"cx": "35", "cy": "35", "r": "17", "fill": "none", "stroke": "#39ed35", "stroke-width": "8"},
-    {"cx": "29", "cy": "29", "r": "17", "fill": "none", "stroke": "#f0f0e8", "stroke-width": "8"},
+    {"cx": "35", "cy": "35", "r": "17", "fill": "none", "stroke": "#cdf01e", "stroke-width": "8"},
+    {"cx": "29", "cy": "29", "r": "17", "fill": "none", "stroke": "#f7f5f0", "stroke-width": "8"},
 ]
-FAVICON_BACKGROUND = {"width": "64", "height": "64", "rx": "15", "fill": "#141410"}
+FAVICON_BACKGROUND = {"width": "64", "height": "64", "rx": "15", "fill": "#1a1a1a"}
 
 
 def local_asset(reference, base, root):
@@ -114,6 +114,14 @@ class LandingPageTests(unittest.TestCase):
             with self.subTest(product=product):
                 self.assertIn(product, self.page.ids)
                 self.assertIn((product, destination), self.page.links)
+
+    def test_factory_branding_preserves_the_distinct_reviewer_product(self):
+        """Rename only the desktop product while retaining the public navigation contracts."""
+        source = (PUBLIC / "index.html").read_text()
+        self.assertIn("Get Oya Factory", source)
+        self.assertIn("<strong>Oya Factory</strong>", source)
+        self.assertIn("Set up Keel Reviewer", source)
+        self.assertNotIn("Get Keel", source)
 
     def test_fragment_destinations_are_present_and_unambiguous(self):
         duplicates = [name for name, count in Counter(self.page.ids).items() if count > 1]

@@ -24,7 +24,7 @@ export function SettingsLayout({ trust, preferences, claude, license, updates }:
     <div className="settings-body settings-content">
       <div className="settings-group settings-project-group">{trust}</div>
       <section className="settings-group" aria-labelledby="settings-preferences">
-        <GroupHeading id="preferences" title="Preferences" detail="Make Keel feel like your workspace." />{preferences}
+        <GroupHeading id="preferences" title="Preferences" detail="Make Oya Factory feel like your workspace." />{preferences}
       </section>
       <section className="settings-group" aria-labelledby="settings-claude">
         <GroupHeading id="claude" title="Claude Code" detail="Installation and sign-in for your coding agent." />{claude}

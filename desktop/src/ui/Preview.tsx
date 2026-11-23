@@ -67,7 +67,7 @@ function Running({ lane, url, label, log, stop, plain = false }: { lane: string;
         </>
       ) : url ? (
         <div className="panel-empty">
-          <p className="muted">{plain ? "This app runs somewhere else." : "This server is not on this machine's own address, so it cannot be shown inside Keel."}</p>
+          <p className="muted">{plain ? "This app runs somewhere else." : "This server is not on this machine's own address, so it cannot be shown inside Oya Factory."}</p>
           <button onClick={() => openUrl(url)}>{plain ? "Open in browser" : `Open ${url} in the browser`}</button>
         </div>
       ) : plain ? (
@@ -80,7 +80,7 @@ function Running({ lane, url, label, log, stop, plain = false }: { lane: string;
 }
 
 /// Nothing running: why, if it was tried, and the two ways to start it — the agent, which can
-/// install what is missing and knows the project, or Keel's own guess at the command.
+/// install what is missing and knows the project, or Oya Factory's own guess at the command.
 function NotRunning({ lane, dev, start, plain = false }: { lane: string; dev: NonNullable<ReturnType<typeof useStore.getState>["lanes"][string]["dev"]>; start: () => void; plain?: boolean }) {
   const [said, setSaid] = useState<string>();
   const why = whyStopped(dev.log);
@@ -106,14 +106,14 @@ function NotRunning({ lane, dev, start, plain = false }: { lane: string; dev: No
       <h3>{why ? `The dev server stopped. ${why}` : dev.detected ? "The dev server is not running" : "No dev server found in this project"}</h3>
       {dev.log.length > 0 && <pre className="code small preview-log">{dev.log.slice(-8).join("\n")}</pre>}
       <p className="muted">
-        The agent can start it — installing dependencies first if they are missing — and Keel shows the page here once it says where it is listening.
+        The agent can start it — installing dependencies first if they are missing — and Oya Factory shows the page here once it says where it is listening.
       </p>
       <div className="actions" style={{ justifyContent: "center" }}>
         <button className="primary" onClick={() => void askToRun(lane).then((ok) => setSaid(ok ? "Asked the agent — follow its progress in this lane." : "Could not send the request. Check the lane’s connection and try again."))}>
           Ask the agent to run it
         </button>
         {dev.detected && (
-          <button onClick={start} title={`Keel runs ${dev.detected} itself`}>
+          <button onClick={start} title={`Oya Factory runs ${dev.detected} itself`}>
             Start with <code>{dev.detected}</code>
           </button>
         )}
@@ -124,7 +124,7 @@ function NotRunning({ lane, dev, start, plain = false }: { lane: string; dev: No
 }
 
 /// Hand starting the app to the agent: the project's own `/run` skill or command when it has
-/// one, a plain request otherwise. Run in the background, it becomes a job Keel keeps alive.
+/// one, a plain request otherwise. Run in the background, it becomes a job Oya Factory keeps alive.
 async function askToRun(lane: string): Promise<boolean> {
   const l = useStore.getState().lanes[lane];
   const ep = l && useStore.getState().projects[l.project]?.endpoint;

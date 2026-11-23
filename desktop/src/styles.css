@@ -17,42 +17,50 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* Tokens — Oya's (agentchrome `core/tokens.css`), under Keel's names. The accent is spent on three
-   things only: running, focus, and the one primary button on a surface. Raised surfaces are lifted
-   by shadow with a half-pixel hairline, not boxed by a 1px border. */
+/* AgentChrome's current Oya palette: five base colors, shared by both appearances.
+   Readable accents and lime fills are separate so text and focus also work on paper. */
 :root {
-  --bg: #fbfaf8;
-  --surface: #f0efeb;
-  --chrome: #e8e7e2;
-  --raised: #ffffff;
-  --well: #fafaf8;
-  --line: #dedcd4;
-  --line-strong: #c5c4bb;
-  --text: #1c1c1a;
-  --dim: #45453e;
-  --faint: #62625a;
-  --accent: #356b53;
-  --on-accent: #ffffff;
-  --add: #16774a;
-  --del: #c0322a;
-  --warn: #9a5200;
-  --add-bg: #e5f4eb;
-  --del-bg: #fbe9e7;
+  --ink: #1a1a1a;
+  --paper: #f7f5f0;
+  --lime: #cdf01e;
+  --red: #f2554a;
+  --amber: #f5b14c;
+  --bg: var(--paper);
+  --workspace-bg: color-mix(in srgb, var(--ink) 4%, var(--paper));
+  --surface: color-mix(in srgb, var(--ink) 9%, var(--paper));
+  --chrome: color-mix(in srgb, var(--ink) 12%, var(--paper));
+  --raised: var(--paper);
+  --well: color-mix(in srgb, var(--ink) 6%, var(--paper));
+  --line: color-mix(in srgb, var(--ink) 19%, var(--paper));
+  --control-edge: color-mix(in srgb, var(--paper) 45%, var(--ink));
+  --line-strong: var(--control-edge);
+  --text: var(--ink);
+  --dim: color-mix(in srgb, var(--paper) 30%, var(--ink));
+  --faint: var(--dim);
+  --accent: var(--ink);
+  --accent-fill: var(--lime);
+  --accent-hover: color-mix(in srgb, var(--lime) 88%, var(--ink));
+  --fill-edge: var(--ink);
+  --on-accent: var(--ink);
+  --add: color-mix(in srgb, var(--lime) 34%, var(--ink));
+  --del: color-mix(in srgb, var(--red) 58%, var(--ink));
+  --warn: color-mix(in srgb, var(--amber) 42%, var(--ink));
+  --add-bg: color-mix(in srgb, var(--lime) 12%, var(--bg));
+  --del-bg: color-mix(in srgb, var(--red) 10%, var(--bg));
   --hover: color-mix(in srgb, var(--text) 8%, transparent);
-  --tint: color-mix(in srgb, var(--accent) 9%, transparent);
-  --hairline: #0000001a;
-  --shadow-xs: 0 1px 1px #0000000a, 0 0 0 0.5px var(--hairline);
-  --shadow-sm: 0 1px 2px #00000014, 0 2px 6px #0000000a, 0 0 0 0.5px var(--hairline);
-  --shadow: 0 12px 32px #0000001f, 0 2px 8px #00000014, 0 0 0 0.5px var(--hairline);
-  --shadow-lg: 0 30px 80px #00000033, 0 8px 24px #0000001a, 0 0 0 0.5px var(--hairline);
-  --ring: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
-  /* One spring for everything that moves: it settles without a bounce you can see. */
+  --tint: color-mix(in srgb, var(--lime) 30%, transparent);
+  --hairline: color-mix(in srgb, var(--ink) 10%, transparent);
+  --shadow-xs: 0 1px 1px color-mix(in srgb, var(--ink) 4%, transparent), 0 0 0 0.5px var(--hairline);
+  --shadow-sm: 0 2px 4px color-mix(in srgb, var(--ink) 4%, transparent), 0 6px 18px color-mix(in srgb, var(--ink) 3%, transparent), 0 0 0 0.5px var(--hairline);
+  --shadow: 0 12px 40px color-mix(in srgb, var(--ink) 12%, transparent), 0 0 0 0.5px var(--hairline);
+  --shadow-lg: 0 30px 80px color-mix(in srgb, var(--ink) 20%, transparent), 0 0 0 0.5px var(--hairline);
+  --ring: 0 0 0 2px var(--accent);
   --spring: linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 20.4%, 1.043 24.5%, 1.035 29.4%, 1.007 38.6%, 0.997 48.3%, 1);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --t-fast: 160ms;
   --t-base: 280ms;
   --term-bg: var(--well);
-  --selection: color-mix(in srgb, var(--accent) 30%, transparent);
+  --selection: color-mix(in srgb, var(--lime) 30%, transparent);
   --font: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --t-tiny: 10px;
@@ -66,41 +74,36 @@
   --r-lg: 14px;
   --sidebar-w: 240px;
   --panel-w: 420px;
-  /* The terminal's 16 colours, so the CLI's own palette is Keel's. */
-  --ansi-0: #1c1c1a; --ansi-1: #c0322a; --ansi-2: #16774a; --ansi-3: #9a5200;
-  --ansi-4: #2f5fb3; --ansi-5: #8a3fa0; --ansi-6: #1b7a86; --ansi-7: #62625a;
-  --ansi-8: #45453e; --ansi-9: #d5473e; --ansi-10: #157a13; --ansi-11: #b06a12;
-  --ansi-12: #3d6fc7; --ansi-13: #9d52b3; --ansi-14: #238e9b; --ansi-15: #1c1c1a;
+  --ansi-0: var(--text); --ansi-1: var(--del); --ansi-2: var(--add); --ansi-3: var(--warn);
+  --ansi-4: var(--text); --ansi-5: var(--accent); --ansi-6: var(--dim); --ansi-7: var(--dim);
+  --ansi-8: var(--dim); --ansi-9: var(--del); --ansi-10: var(--add); --ansi-11: var(--warn);
+  --ansi-12: var(--text); --ansi-13: var(--accent); --ansi-14: var(--dim); --ansi-15: var(--text);
   color-scheme: light;
+  accent-color: var(--accent);
 }
 
 :root:where([data-theme="dark"]) {
-  --bg: #0c0c0a;
-  --surface: #1c1c18;
-  --chrome: #30302a;
-  --raised: #242420;
-  --well: #141410;
-  --line: #2c2c26;
-  --line-strong: #48483f;
-  --text: #f4f3ef;
-  --dim: #babab0;
-  --faint: #a3a39b;
-  --accent: #8ac4a3;
-  --on-accent: #0c0c0a;
-  --add: #5cd39a;
-  --del: #ff7b72;
-  --warn: #f2b544;
-  --add-bg: #12281c;
-  --del-bg: #2d1618;
-  --hairline: #ffffff1c;
-  --shadow-xs: 0 1px 1px #00000040, 0 0 0 0.5px var(--hairline);
-  --shadow-sm: 0 1px 2px #00000059, 0 2px 6px #00000033, 0 0 0 0.5px var(--hairline);
-  --shadow: 0 12px 32px #00000073, 0 2px 8px #00000040, 0 0 0 0.5px var(--hairline);
-  --shadow-lg: 0 30px 80px #0000008c, 0 8px 24px #00000059, 0 0 0 0.5px var(--hairline);
-  --ansi-0: #2c2c26; --ansi-1: #ff7b72; --ansi-2: #5cd39a; --ansi-3: #f2b544;
-  --ansi-4: #79a8ff; --ansi-5: #d199ff; --ansi-6: #6fd3dd; --ansi-7: #babab0;
-  --ansi-8: #62625a; --ansi-9: #ff9a92; --ansi-10: #39ed35; --ansi-11: #f7c96b;
-  --ansi-12: #9cbfff; --ansi-13: #ddb3ff; --ansi-14: #93e2ea; --ansi-15: #f4f3ef;
+  --bg: color-mix(in srgb, var(--paper) 3%, var(--ink));
+  --workspace-bg: var(--ink);
+  --surface: color-mix(in srgb, var(--paper) 6%, var(--ink));
+  --chrome: color-mix(in srgb, var(--paper) 12%, var(--ink));
+  --raised: color-mix(in srgb, var(--paper) 10%, var(--ink));
+  --well: var(--ink);
+  --line: color-mix(in srgb, var(--paper) 16%, var(--ink));
+  --text: var(--paper);
+  --dim: color-mix(in srgb, var(--paper) 66%, var(--ink));
+  --accent: var(--lime);
+  --accent-hover: color-mix(in srgb, var(--lime) 80%, var(--paper));
+  --fill-edge: transparent;
+  --add: var(--lime);
+  --del: color-mix(in srgb, var(--red) 65%, var(--paper));
+  --warn: var(--amber);
+  --tint: color-mix(in srgb, var(--lime) 8%, transparent);
+  --hairline: color-mix(in srgb, var(--paper) 14%, transparent);
+  --shadow-xs: 0 0 0 0.5px var(--hairline);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, var(--ink) 30%, transparent), 0 0 0 0.5px var(--hairline);
+  --shadow: 0 12px 40px color-mix(in srgb, var(--ink) 60%, transparent), 0 0 0 0.5px var(--hairline);
+  --shadow-lg: 0 30px 80px color-mix(in srgb, var(--ink) 70%, transparent), 0 0 0 0.5px var(--hairline);
   color-scheme: dark;
 }
 
@@ -134,7 +137,7 @@ button {
   font: 500 var(--t-small) var(--font);
   color: var(--text);
   background: var(--raised);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-edge);
   border-radius: var(--r-sm);
   height: 28px;
   padding: 0 10px;
@@ -155,32 +158,33 @@ button:disabled {
   opacity: 0.45;
   cursor: default;
 }
-/* Focus: a thin line of the accent and a soft ring, never a hard outline. */
+/* Solid readable focus remains visible on both paper and charcoal. */
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--fill-edge);
   color: var(--on-accent);
 }
 button.primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
-  border-color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 button.danger {
-  background: var(--del);
-  border-color: var(--del);
-  color: #fff;
+  background: var(--red);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 button.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--del) 88%, var(--text));
+  background: color-mix(in srgb, var(--red) 88%, var(--paper));
 }
 button.primary kbd,
 button.danger kbd {
@@ -1190,7 +1194,7 @@ pre.code {
 .preview-frame {
   flex: 1;
   border: none;
-  background: #fff;
+  background: var(--paper);
 }
 .readiness {
   display: flex;
@@ -1567,7 +1571,7 @@ input.field,
   font: inherit;
   color: inherit;
   background: var(--raised);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-edge);
   border-radius: var(--r-sm);
   padding: 6px 8px;
 }
@@ -2067,7 +2071,7 @@ button.ghost:hover:not(:disabled) {
   background: var(--hover);
 }
 button.primary {
-  box-shadow: 0 1px 2px #00000026, inset 0 1px 0 #ffffff26;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 14.90%, transparent), inset 0 1px 0 color-mix(in srgb, var(--paper) 14.90%, transparent);
 }
 .menu,
 .popover,
@@ -2305,7 +2309,7 @@ h3 {
   flex: none;
   white-space: nowrap;
   color: var(--on-accent);
-  background: var(--accent);
+  background: var(--accent-fill);
   font-weight: 600;
 }
 .preview-host {
@@ -2529,8 +2533,8 @@ h3 {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #2f5fb3;
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   font: 600 var(--t-tiny) var(--font);
 }
 .pin-body {
@@ -2805,7 +2809,7 @@ h3 {
 .approval-plan { margin: 12px 0; font-size: 12px; }
 .approval-plan summary { cursor: pointer; color: var(--dim); margin-bottom: 8px; }
 .approval-plan .chat-markdown { font-size: 13px; }
-button.primary kbd, button.danger kbd { color: inherit; background: #ffffff18; }
+button.primary kbd, button.danger kbd { color: inherit; background: color-mix(in srgb, var(--paper) 9.41%, transparent); }
 .chat-activity { padding-top: 2px; padding-bottom: 2px; }
 .chat-activity summary:hover { background: var(--surface); }
 .side-panel .turn { padding-top: 18px; padding-bottom: 18px; }

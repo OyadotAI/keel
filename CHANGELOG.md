@@ -5,6 +5,11 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Rebranded the desktop workspace as Oya Factory with Oya rings and AgentChrome’s current
+  paper, charcoal and lime themes; updated product copy and public references while preserving
+  installed data, appearance preferences and published download/update contracts.
+  Retained Windows' legacy NSIS identity for upgrades while branding its installed-program
+  entry and app-owned shortcuts as Oya Factory.
 - Added a workspace Attention list across open projects, with direct routes to unanswered
   requests, agent terminals, errors, failed checks and unseen endings; kept unresolved conditions
   visible after navigation and separated execution endings from project-check evidence.

@@ -14,7 +14,7 @@ pub(crate) fn parent(value: Option<&str>) -> Result<Utf8PathBuf, String> {
         None => default.clone(),
     };
     if path == default {
-        std::fs::create_dir_all(&path).map_err(|e|format!("Keel couldn't create a project in {path}: {e}. Check folder permissions or choose another location."))?;
+        std::fs::create_dir_all(&path).map_err(|e|format!("Oya Factory couldn't create a project in {path}: {e}. Check folder permissions or choose another location."))?;
     }
     if !path.is_dir() {
         return Err(format!(
@@ -47,7 +47,7 @@ pub(super) fn reserve(parent: &Utf8Path, name: &str) -> Result<(String, Utf8Path
             }
             Err(e) => {
                 return Err(format!(
-                    "Keel couldn't create a project at {root}: {e}. Check folder permissions or choose another location."
+                    "Oya Factory couldn't create a project at {root}: {e}. Check folder permissions or choose another location."
                 ));
             }
         }

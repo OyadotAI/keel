@@ -107,7 +107,7 @@ export function Running({ r, head, ...p }: Props & { r: Review; head: string }) 
   const now = useNow(), { busy, open } = useControls(p, r);
   const elapsed = clock(Math.max(0, Math.floor(now / 1000) - r.started));
   const phase = r.cancel_requested ? "Cancelling review…" : r.phase === "waiting" ? "Waiting for the current turn to finish." : r.phase === "checking" ? "Checking branch…" : r.phase === "fetching" ? `Fetching ${r.base}…` : `Reviewing ${short(r.sha)} against ${r.base}…`;
-  return <><Head eyebrow="Keel review · Claude Code" title={phase} meta={elapsed} />
+  return <><Head eyebrow="Oya Factory review · Claude Code" title={phase} meta={elapsed} />
     {head && r.sha && head !== r.sha && <Banner tone="warn">The branch moved to <code>{short(head)}</code>. This review is for <code>{short(r.sha)}</code>.</Banner>}
     <div className="actions"><button disabled={busy} onClick={() => void stopReview(p.lane, p.ep, p.wt)}>Cancel review</button><button disabled={busy} onClick={open}>Open without review</button></div>
     <p className="small muted">Opening without review waits for cancellation to finish before opening.</p><Close {...p} running /></>;
@@ -148,7 +148,7 @@ export function Ended({ r, ...p }: Props & { r?: Review | null }) {
  *  a step still to take, not a failed review: no red, no timer, no details repeating the sentence,
  *  and when the step is a commit, the commit is right here — "Review again" alone was a dead end. */
 function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boolean; again: () => void }) {
-  // What the daemon refused for, not a count of git status: that count includes what Keel keeps
+  // What the daemon refused for, not a count of git status: that count includes what Oya Factory keeps
   // out of every commit, so it never reached zero and the card could never be left.
   const fixable = /^(There are uncommitted|You are on `)/.test(why);
   const [message, setMessage] = useState(() => { const l = useStore.getState().lanes[p.lane]; return l ? shipTitle(l) : ""; }), [committing, setCommitting] = useState(false), [error, setError] = useState("");
@@ -161,7 +161,7 @@ function NotReady({ why, busy, again, ...p }: Props & { why: string; busy: boole
     finally { setCommitting(false); }
   };
   return <><Head icon="hand" color="var(--warn)" title={fixable ? "Save your work first" : "Not ready for a pull request"} />
-    <p className="review-body muted">{fixable ? "Keel puts it on its own branch and saves it — name the change:" : why}</p>
+    <p className="review-body muted">{fixable ? "Oya Factory puts it on its own branch and saves it — name the change:" : why}</p>
     {fixable && <form className="review-commit" onSubmit={(e) => { e.preventDefault(); if (message.trim()) void commit(); }}>
       <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What changed" aria-label="What changed" disabled={committing} />
       <button className="primary" type="submit" disabled={busy || committing || !message.trim()}>{committing ? "Saving…" : "Save and continue"}</button>

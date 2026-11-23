@@ -33,8 +33,8 @@ export function TrustDialogView({ request, name, confirm, retry, close }: {
     <div className="trust-dialog-content" aria-busy={busy}>
       <div className="trust-project-identity"><strong>{name ?? request.project.split(/[\\/]/).filter(Boolean).pop()}</strong><code>{request.project}</code></div>
       <ul className="trust-disclosure">
-        <li>Agents can make permitted file edits, run commands and use MCP tools without asking—including installs, deletes, network calls and Keel Browser actions.</li>
-        <li>Keel can install and update its agent team, skills and suggested plugins from Anthropic’s official marketplace here, as its own commits.</li>
+        <li>Agents can make permitted file edits, run commands and use MCP tools without asking—including installs, deletes, network calls and Oya Factory Browser actions.</li>
+        <li>Oya Factory can install and update its agent team, skills and suggested plugins from Anthropic’s official marketplace here, as its own commits.</li>
         <li>OpenCode lanes load this project’s opencode.json and .opencode/ plugins, which can run code on this machine.</li>
         <li>Explicit deny rules still apply. Questions and plan decisions still need your answer.</li>
       </ul>
