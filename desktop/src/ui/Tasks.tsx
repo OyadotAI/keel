@@ -7,6 +7,7 @@ import type { TaskSummary } from "../delivery/model";
 import { Dialog, Empty, Tabs } from "./kit";
 import { Icon } from "./icons";
 import { label } from "../keys";
+import { missing, useSkillCatalog } from "../recommended-skills";
 import { AgentMark } from "./AgentMark";
 import { IssueIntake } from "./TaskIssue";
 import { RecurringTasks } from "./TaskSchedules";
@@ -14,6 +15,14 @@ import { RecurringTasks } from "./TaskSchedules";
 /** A persistent entry complements Attention even when every task is currently quiet. */
 export function TasksButton({ open }: { open: () => void }) {
   return <button className="attention-entry" onClick={open} aria-haspopup="dialog"><Icon name="branch" size={16} /><span>Tasks</span></button>;
+}
+
+/** Recommended skills this project lacks, under Tasks where a first run looks — most people
+ *  never open Extensions to find them. Absent when there is nothing to add. */
+export function RecommendedButton() {
+  const count = missing(useSkillCatalog() ?? []).length;
+  if (!count) return null;
+  return <button className="attention-entry recommended-entry" onClick={() => useStore.setState({ extensions: true, settings: false, creating: false })} title={`${count} recommended skill${count === 1 ? "" : "s"} for this project`}><Icon name="plus" size={16} /><span>Recommended</span><span className="attention-count">{count}</span></button>;
 }
 
 /** The palette, from the sidebar: everything is findable from one place, as in the window's ⌘K. */

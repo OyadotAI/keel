@@ -93,6 +93,10 @@ pub struct Record {
     /// listing the plugin would otherwise be due again on every wake.
     #[serde(skip)]
     tried_plugins: Vec<String>,
+    /// Recommended catalog skills added this open, by name — what the chip reports.
+    pub skills: Vec<String>,
+    #[serde(skip)]
+    tried_skills: Vec<String>,
 }
 
 fn record() -> &'static Mutex<Record> {
@@ -144,6 +148,7 @@ pub(crate) enum Step {
     Adopt,
     Update,
     Plugin { name: String, marketplace: String },
+    Skill { id: String },
 }
 
 /// What is due, from the plan and the suggestions. Nothing in an untrusted project; the team
@@ -157,6 +162,7 @@ pub(crate) fn due(
     rec: &Record,
     trusted: bool,
     plugins_ok: bool,
+    skills: &[String],
 ) -> Vec<Step> {
     let mut out = Vec::new();
     if !rec.failed_team {
@@ -169,6 +175,16 @@ pub(crate) fn due(
         } else if (!plan.add.is_empty() || !plan.replace.is_empty()) && (trusted || plan.ours) {
             out.push(Step::Update);
         }
+    }
+    // Recommended skills are configuration Keel owes the project, added like the official plugins:
+    // in a trusted project, on its own, once per open whatever came of it.
+    if trusted {
+        out.extend(
+            skills
+                .iter()
+                .filter(|id| !rec.tried_skills.contains(id))
+                .map(|id| Step::Skill { id: id.clone() }),
+        );
     }
     if plugins_ok && trusted {
         out.extend(
@@ -236,6 +252,7 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
         if trigger == Trigger::Click {
             r.failed_team = false;
             r.tried_plugins.clear();
+            r.tried_skills.clear();
         }
     });
     let looked = {
@@ -268,13 +285,23 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
                     settings_are_ours(&root),
                     yours,
                     trusted,
+                    if trusted {
+                        crate::skills::recommended_missing(&root)
+                            .into_iter()
+                            .map(String::from)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 ))
             },
             None,
         )
         .await
     };
-    let Some((plan, suggested, in_progress, writer, settings_ours, yours, trusted)) = looked else {
+    let Some((plan, suggested, in_progress, writer, settings_ours, yours, trusted, skills)) =
+        looked
+    else {
         // Untrusted: nothing happens and nothing is said — unless a result was on screen from
         // before trust was withdrawn, which is cleared where it shows.
         let had = record().locked().phase != Phase::Idle;
@@ -292,7 +319,7 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
         return;
     };
     let rec = record().locked().clone();
-    let mut steps = due(&plan, &suggested, &rec, trusted, settings_ours);
+    let mut steps = due(&plan, &suggested, &rec, trusted, settings_ours, &skills);
     // Plugins need a logged-in `claude`. Asked before anything else is decided, so a pass with
     // only the person's edits in its way waits quietly instead of running for nothing on every
     // wake — which is what it did on a machine where `claude` was not logged in.
@@ -448,6 +475,23 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
                         r.error = Some(why);
                     }),
                 }
+            }
+            Step::Skill { id } => {
+                update(|r| r.step = Some(format!("Adding the {id} skill…")));
+                let (st, name) = (state.clone(), id.clone());
+                let result = blocking(
+                    move || crate::skills::add_vendored(&st, &name),
+                    Err("the write was cancelled".into()),
+                )
+                .await;
+                wrote |= result.is_ok();
+                update(|r| {
+                    r.tried_skills.push(id.clone());
+                    match &result {
+                        Ok(_) => r.skills.push(id.clone()),
+                        Err(e) => r.error = Some(format!("Couldn't add the {id} skill: {e}")),
+                    }
+                });
             }
             Step::Plugin { name, marketplace } => {
                 nth += 1;
@@ -685,7 +729,7 @@ mod tests {
         ];
         let mut rec = Record::default();
         rec.tried_plugins.push("security-guidance".into());
-        let steps = due(&plan, &suggested, &rec, true, true);
+        let steps = due(&plan, &suggested, &rec, true, true, &[]);
         assert_eq!(
             steps,
             vec![
@@ -698,25 +742,25 @@ mod tests {
         );
         // Untrusted: the team it already has is kept current; no plugin is installed.
         assert_eq!(
-            due(&plan, &suggested, &rec, false, true),
+            due(&plan, &suggested, &rec, false, true, &[]),
             vec![Step::Update]
         );
         assert_eq!(
-            due(&plan, &suggested, &rec, true, false),
+            due(&plan, &suggested, &rec, true, false, &[]),
             vec![Step::Update]
         );
         rec.failed_team = true;
         assert_eq!(
-            due(&plan, &suggested, &rec, true, false),
+            due(&plan, &suggested, &rec, true, false, &[]),
             Vec::<Step>::new()
         );
         let fresh = crate::team::Plan::default();
         assert_eq!(
-            due(&fresh, &[], &Record::default(), true, false),
+            due(&fresh, &[], &Record::default(), true, false, &[]),
             vec![Step::Adopt]
         );
         assert!(
-            due(&fresh, &[], &Record::default(), false, false).is_empty(),
+            due(&fresh, &[], &Record::default(), false, false, &[]).is_empty(),
             "an untrusted project without a team is never given one"
         );
         let lookalike = crate::team::Plan {
@@ -726,7 +770,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            due(&lookalike, &[], &Record::default(), false, false).is_empty(),
+            due(&lookalike, &[], &Record::default(), false, false, &[]).is_empty(),
             "a file at a team path that Keel did not write is not a team to update without trust"
         );
     }
@@ -776,6 +820,28 @@ mod tests {
         assert_eq!(log(&root).len(), 2);
         assert!(bus.try_recv().is_err());
         assert_eq!(record().locked().phase, Phase::Done);
+    }
+
+    /// A recommended skill is added on its own in a trusted project, once per open, and never in
+    /// an untrusted one.
+    #[test]
+    fn recommended_skills_are_due_only_with_trust_and_once() {
+        let plan = crate::team::Plan {
+            present: true,
+            ours: true,
+            ..Default::default()
+        };
+        let skills = vec!["ui-ux-pro-max".to_string()];
+        let mut rec = Record::default();
+        assert_eq!(
+            due(&plan, &[], &rec, true, false, &skills),
+            vec![Step::Skill {
+                id: "ui-ux-pro-max".into()
+            }]
+        );
+        assert!(due(&plan, &[], &rec, false, false, &skills).is_empty());
+        rec.tried_skills.push("ui-ux-pro-max".into());
+        assert!(due(&plan, &[], &rec, true, false, &skills).is_empty());
     }
 
     #[tokio::test]

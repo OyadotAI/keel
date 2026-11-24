@@ -35,6 +35,17 @@ pub struct Entry {
     present: Option<&'static str>,
     /// Whether the script's interpreter is on `PATH`. Only meaningful when `script` is set.
     python: bool,
+    /// Why this project should have it, when it should: the app lists it as recommended and
+    /// counts it until it is added.
+    recommended: Option<&'static str>,
+}
+
+/// Why a catalog skill fits this project, or `None`.
+fn recommendation(
+    skill: &keel_generator::skills::Vendored,
+    frontend: bool,
+) -> Option<&'static str> {
+    (skill.for_frontend && frontend).then_some("This project has a frontend.")
 }
 
 #[derive(Serialize)]
@@ -1208,6 +1219,8 @@ fn read_catalog(root: &Utf8Path) -> Result<Catalog, String> {
         .ok()
         .map(Utf8PathBuf::from);
     let python = python3_available();
+    let frontend =
+        keel_scanner::RepoContext::load(root).is_ok_and(|c| keel_scanner::has_frontend(&c));
     let mut entries = Vec::new();
     for v in keel_generator::skills::catalog() {
         let project = root.join(".claude/skills").join(v.id);
@@ -1231,9 +1244,37 @@ fn read_catalog(root: &Utf8Path) -> Result<Catalog, String> {
             script: v.script,
             present,
             python,
+            recommended: recommendation(v, frontend),
         });
     }
     Ok(Catalog { entries })
+}
+
+/// The catalog skills recommended for this project that it — and this machine's own skills —
+/// do not have yet: what automatic setup adds in a trusted project.
+pub(crate) fn recommended_missing(root: &Utf8Path) -> Vec<&'static str> {
+    read_catalog(root)
+        .map(|c| {
+            c.entries
+                .into_iter()
+                .filter(|e| e.recommended.is_some() && e.present.is_none())
+                .map(|e| e.id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Add one vendored skill and commit it alone, as automatic setup does; the reason on failure.
+pub(crate) fn add_vendored(state: &Arc<AppState>, id: &str) -> Result<Installed, String> {
+    let skill =
+        keel_generator::skills::find(id).ok_or_else(|| format!("Keel has no skill named {id}."))?;
+    let files: Vec<(&'static str, &'static [u8])> = skill
+        .files
+        .iter()
+        .map(|(p, b)| (*p, b.as_bytes()))
+        .collect();
+    let present = format!("{id} is already in this project — nothing was changed.");
+    install(state, skill.id, &files, true, &present).map_err(|(_, e)| e)
 }
 
 /// Whether a working `python3` is on `PATH`, without running one (see `usable_on_path`).
@@ -1306,6 +1347,14 @@ fn install(
 mod tests {
     use super::*;
     use crate::serve::Held;
+
+    /// The design skill is recommended where there is a frontend, and only there.
+    #[test]
+    fn a_catalog_skill_is_recommended_for_a_frontend() {
+        let ui = keel_generator::skills::find("ui-ux-pro-max").unwrap();
+        assert!(recommendation(ui, true).is_some());
+        assert!(recommendation(ui, false).is_none());
+    }
 
     fn repo() -> (tempfile::TempDir, Arc<AppState>, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();

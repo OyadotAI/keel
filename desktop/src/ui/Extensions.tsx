@@ -1,4 +1,5 @@
 import { UpdateButton } from "./UpdateButton";
+import { missing, SKILLS_CHANGED, useSkillCatalog } from "../recommended-skills";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { EVENTS, groupHooks, tilde } from "../hooks";
 import { useEffect, useRef, useState } from "react";
@@ -48,12 +49,6 @@ interface Workspace {
   plugins: InstalledPlugin[];
 }
 interface AgentProfile { name: string; display_name: string; avatar?: string | null }
-interface CatalogSkill {
-  id: string;
-  description: string;
-  author: string;
-  present?: string | null;
-}
 interface CatalogPlugin {
   name: string;
   description: string;
@@ -226,23 +221,27 @@ const SKILL_GROUPS: [string, (n: Named) => boolean][] = [
 /// no row repeats it), one line of description each, and the catalog one click away. Writing a
 /// skill used to sit below all seventy of them.
 function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void> }) {
-  const [catalog, setCatalog] = useState<CatalogSkill[]>();
+  const catalog = useSkillCatalog();
   const [writing, setWriting] = useState(false);
   const [filter, setFilter] = useState("");
-  useEffect(() => {
-    get<{ entries: CatalogSkill[] }>(ep, "/api/skills/catalog").then((c) => setCatalog(c.entries), () => setCatalog([]));
-  }, [ep]);
+  const add = (id: string) => call(async () => { await post(ep, "/api/skills/add", { id, commit: true }); window.dispatchEvent(new Event(SKILLS_CHANGED)); });
+  const recommended = missing(catalog ?? []);
   const dirOf = (path?: string) => (path ? path.replace(/\/SKILL\.md$/i, "") : "");
   const q = filter.trim().toLowerCase();
   const shown = ws.skills.filter((n) => !q || `${n.name} ${n.description ?? ""}`.toLowerCase().includes(q));
-  const remove = (n: Named) => call(() => post(ep, "/api/skills/remove", { dir: dirOf(n.path), commit: true }));
+  const remove = (n: Named) => call(async () => { await post(ep, "/api/skills/remove", { dir: dirOf(n.path), commit: true }); window.dispatchEvent(new Event(SKILLS_CHANGED)); });
   return (
     <section className="settings-section skills">
       <div className="skills-bar">
         <input className="field" aria-label="Filter skills" placeholder={`Filter ${ws.skills.length} skills`} value={filter} onChange={(e) => setFilter(e.target.value)} />
-        <button className="primary" onClick={() => setWriting(true)}><Icon name="plus" size={13} />New skill</button>
+        <button onClick={() => setWriting(true)}><Icon name="plus" size={13} />New skill</button>
       </div>
       {writing && <WriteSkill ep={ep} call={call} close={() => setWriting(false)} />}
+      {recommended.length > 0 && <div className="skill-recommended"><h3>Recommended for this project <span className="tab-count">{recommended.length}</span></h3>
+        <ul className="skill-list">{recommended.map((c) => <li key={c.id} title={c.description}>
+          <span className="skill-name">{c.id}</span><span className="skill-desc">{c.recommended} {c.description}</span>
+          <button className="primary" onClick={() => add(c.id)}>Add</button>
+        </li>)}</ul></div>}
       {!ws.skills.length && <p className="muted">No skills yet. Write one, or add one from the catalog below.</p>}
       {ws.skills.length > 0 && !shown.length && <p className="muted">No skill matches “{filter}”.</p>}
       {SKILL_GROUPS.map(([title, keep]) => {
@@ -257,7 +256,7 @@ function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
       <details className="delivery-section skill-catalog"><summary>Add from Oya Factory's catalog</summary>
         {!catalog ? <p className="muted">Reading…</p> : <ul className="skill-list">{catalog.map((c) => <li key={c.id} title={c.description}>
           <span className="skill-name">{c.id}</span><span className="skill-desc">{c.description}</span>
-          {c.present ? <span className="small faint">Added</span> : <button className="link small" onClick={() => call(() => post(ep, "/api/skills/add", { id: c.id, commit: true }))}>Add</button>}
+          {c.present ? <span className="small faint">Added</span> : <button className="link small" onClick={() => add(c.id)}>Add</button>}
         </li>)}</ul>}
       </details>
     </section>

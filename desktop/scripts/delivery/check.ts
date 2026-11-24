@@ -38,7 +38,7 @@ window.fetch=async(input,init)=>{
     {name:"motion-graphics",scope:"user",description:"A short, design-led motion graphic where motion is the message — kinetic typography, stat count-up, chart hit."},
     {name:"code-review",scope:"user",plugin:"code-review",description:"Code review a pull request"},
   ]}});
-  if(target.pathname==="/api/skills/catalog")return Response.json({entries:[{id:"release-notes",description:"Write release notes from the git log.",author:"oya"}]});
+  if(target.pathname==="/api/skills/catalog")return Response.json({entries:[{id:"ui-ux-pro-max",description:"Before building a UI: a design system — style, palette, font pairing, layout and a pre-delivery checklist.",author:"Next Level Builder",present:null,recommended:"This project has a frontend."},{id:"release-notes",description:"Write release notes from the git log.",author:"oya"}]});
   let body={};try{body=JSON.parse(String(init?.body??"{}"));}catch{/* Read-only calls have no body. */}
   try{const data=target.pathname==="/api/tasks"&&many?manyTasks(fixture.respond(target.pathname,method,body,target.searchParams) as {tasks:unknown[]}):fixture.respond(target.pathname,method,body,target.searchParams);if(data===undefined)return base(input,init);if(method==="POST")queueMicrotask(()=>deliveryChanged(ep));return Response.json(data);}
   catch(error){return new Response(String(error),{status:409});}

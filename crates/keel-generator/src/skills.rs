@@ -1,4 +1,4 @@
-//! Skills Keel can add to a project on request — never by default.
+//! Skills Keel can add to a project on request — never by default, but recommended where they fit.
 //!
 //! The team in `crate::team` is written into every project; these are not. A skill here is
 //! listed in the app's skill catalog and written only when the person clicks Add, into
@@ -22,6 +22,9 @@ pub struct Vendored {
     pub upstream: &'static str,
     /// The interpreter its scripts need, when it has any. The row says so before Add.
     pub script: Option<&'static str>,
+    /// Recommended for a project with a frontend: the app says so until it is added, rather than
+    /// leaving it to be found in a catalog nobody opens.
+    pub for_frontend: bool,
     /// `(path inside the skill folder, contents)`.
     pub files: &'static [(&'static str, &'static str)],
 }
@@ -59,6 +62,7 @@ pub const UI_UX_PRO_MAX: Vendored = Vendored {
     author: "Next Level Builder",
     upstream: "github.com/nextlevelbuilder/ui-ux-pro-max-skill@dcc40ff5",
     script: Some("python3"),
+    for_frontend: true,
     // `.gitignore` is Keel's own: the skill runs Python, and `__pycache__` would otherwise
     // ride into the next turn's checkpoint in every repository that does not ignore it.
     files: vendored!("ui-ux-pro-max":
