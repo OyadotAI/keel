@@ -9,6 +9,8 @@
 use std::path::{Path, PathBuf};
 
 const OLD: &str = "ai.oya.keel";
+/// The identifier the app was renamed to, and the only one that inherits the old state.
+const RENAMED: &str = "ai.oya.factory";
 /// Present once the carry-over has been done (or found nothing to do), so it runs exactly once.
 const MARKER: &str = ".migrated-from-ai.oya.keel";
 
@@ -57,11 +59,13 @@ fn base() -> Option<PathBuf> {
 }
 
 /// Called first thing in `main`, before the window and its webview are created, with the
-/// identifier this build runs as, so a development build (`ai.oya.factory.dev`) only ever writes
-/// into its own storage and never into the installed app's.
+/// identifier this build runs as: only the renamed app (`ai.oya.factory`) imports, so a development
+/// or demo build starts clean and never touches — or shows — the installed app's state.
 pub fn migrate(identifier: &str) {
     let Some(base) = base() else { return };
-    if identifier == OLD {
+    // Only the renamed app carries the old one's state: a development or demo build has its own
+    // identity precisely so it starts clean, and must never show the person's real projects.
+    if identifier != RENAMED {
         return;
     }
     if let Err(e) = carry(&base.join(OLD), &base.join(identifier), PARTS) {
