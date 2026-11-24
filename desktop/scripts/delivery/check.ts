@@ -25,7 +25,7 @@ function manyTasks(page:{tasks:unknown[]}){
   ]};
 }
 if(params.get("open")==="start")setTimeout(()=>useStore.setState({starting:useStore.getState().order[0]}),500);
-if(params.get("open")==="tasks"){const tryOpen=(left:number)=>{const b=[...document.querySelectorAll<HTMLButtonElement>("button.attention-entry")].find((x)=>x.textContent?.includes("Tasks"));if(b&&!document.querySelector(".delivery-dialog"))b.click();else if(left>0)setTimeout(()=>tryOpen(left-1),250);};setTimeout(()=>tryOpen(20),500);}
+if(params.get("open")==="tasks"||params.get("open")?.startsWith("recurring")){const tab=()=>{if(!params.get("open")?.startsWith("recurring"))return;[...document.querySelectorAll<HTMLButtonElement>(".tasks-toolbar [role=tab]")].find((x)=>x.textContent?.startsWith("Recurring"))?.click();if(params.get("open")==="recurring-new")setTimeout(()=>document.querySelector<HTMLButtonElement>(".recurring-new")?.click(),200);};const tryOpen=(left:number)=>{const b=[...document.querySelectorAll<HTMLButtonElement>("button.attention-entry")].find((x)=>x.textContent?.includes("Tasks"));if(b&&!document.querySelector(".delivery-dialog")){b.click();setTimeout(tab,300);}else if(left>0)setTimeout(()=>tryOpen(left-1),250);};setTimeout(()=>tryOpen(20),500);}
 window.fetch=async(input,init)=>{
   const target=new URL(String(input),location.href),method=init?.method??"GET";
   if(!target.pathname.startsWith("/api/"))return base(input,init);

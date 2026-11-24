@@ -15,3 +15,7 @@ it("shows a dispatcher halt and explicit Retry while retaining active Stop",()=>
   const html=renderToStaticMarkup(<RecurringTasks ep={{port:123,token:"test"}} page={page} open={async()=>{}}/>);
   expect(html).toContain("Recurring dispatch paused");expect(html).toContain("Retry recurring dispatcher");expect(html).toContain("Stop active run");expect(html).toContain("Dispatch paused");
 });
+it("states a cadence in the largest unit that divides it",async()=>{
+  const { every } = await import("./TaskSchedules");
+  expect(every(86400)).toBe("1 day");expect(every(6*3600)).toBe("6 hours");expect(every(45*60)).toBe("45 minutes");expect(every(60)).toBe("1 minute");
+});

@@ -111,3 +111,31 @@ button.start-agent .agent-mark { flex: none; }
 .delivery-section-head h3 { display: inline-flex; align-items: center; gap: 6px; }
 .delivery-head .delivery-section > summary { font-weight: 450; color: var(--dim); font-size: var(--t-small); padding: 2px 0; }
 button.danger-item { color: var(--del); }
+
+/* Recurring: a list first, the form only when asked for. Fields share one height and one column
+   rhythm; the cadence reads "Every 1 day", not "1440 minutes". */
+.recurring-head { display: flex; align-items: center; gap: var(--s-3); margin: var(--s-1) 0 var(--s-3); }
+.recurring-head p { flex: 1; margin: 0; font-size: var(--t-small); color: var(--dim); }
+.recurring-head button.recurring-new { flex: none; }
+.recurring-empty { color: var(--dim); text-align: center; padding: var(--s-6) 0; margin: 0; }
+.recurring-halt { padding: var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--surface); }
+.recurring-halt p { margin: 0 0 var(--s-2); }
+.recurring-history { margin-top: var(--s-3); }
+.task-list li.schedule-row { gap: var(--s-2); padding: var(--s-2) var(--s-3); }
+.schedule-row .task-main { padding: 2px 0; }
+button.schedule-toggle { height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--dim); font-size: var(--t-small); }
+button.schedule-toggle.on { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.schedule-form { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-1); }
+.schedule-form h3 { margin: 0; }
+.schedule-form label { display: flex; flex-direction: column; gap: 6px; font-size: var(--t-small); color: var(--dim); }
+.schedule-form .field { width: 100%; max-width: none; margin: 0; height: 34px; padding: 0 10px; color: var(--text); font: var(--t-body) / 1.4 var(--font); background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: none; }
+.schedule-form .field:focus { outline: none; border-color: var(--line-strong); }
+.schedule-form input.field::placeholder, .schedule-form textarea.field::placeholder { color: var(--dim); opacity: .6; }
+/* Native selects pin their text to the top in WebKit; drawn here, with a chevron from the tokens. */
+.schedule-form select.field { appearance: none; -webkit-appearance: none; padding: 0 28px 0 10px; line-height: 32px; background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%), linear-gradient(135deg, var(--dim) 50%, transparent 50%); background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.schedule-form textarea.field { height: auto; min-height: 88px; padding: 8px 10px; resize: vertical; }
+.schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+.schedule-every { display: grid; grid-template-columns: 72px 1fr; gap: 6px; }
+.schedule-foot { display: flex; align-items: center; gap: var(--s-3); padding-top: var(--s-2); border-top: 1px solid var(--hairline); }
+.schedule-foot p { flex: 1; margin: 0; }
+@media (max-width: 520px) { .schedule-grid { grid-template-columns: 1fr; } }
