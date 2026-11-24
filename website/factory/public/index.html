@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- oyafactory.com: Oya Factory's own landing page. Static, no script, no tracking. -->
+<!-- oyafactory.com: Oya Factory's own landing page. Static, no tracking; one line of script keeps the hero's year current. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -36,7 +36,7 @@
   <main id="main">
     <section class="hero wrap" aria-labelledby="hero-title">
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>An agentic development environment</p>
-      <h1 id="hero-title"><span class="h1-lead">It's 2026.</span> Are you still using <em>one&nbsp;agent?</em></h1>
+      <h1 id="hero-title"><span class="h1-lead">It's <time class="this-year" datetime="2026">2026</time>.</span> Are you still using <em>one&nbsp;agent?</em></h1>
       <p class="lede">Oya Factory puts a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode. Run them side by side, each task on its own branch, with your project's checks on every turn.</p>
       <div class="ctas">
         <a class="button primary" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download for macOS &amp; Windows</a>
@@ -215,5 +215,9 @@
       <a href="/llms.txt">llms.txt</a>
     </nav>
   </footer>
+  <script>
+    // The hero's year is always this one; the HTML keeps 2026 for crawlers and no-script readers.
+    for (const el of document.querySelectorAll(".this-year")) { const y = String(new Date().getFullYear()); el.textContent = y; el.dateTime = y; }
+  </script>
 </body>
 </html>
