@@ -405,8 +405,9 @@ fn record_panics() {
 
 fn main() {
     record_panics();
+    let context = tauri::generate_context!();
     // Before any webview exists: the storage it opens is the one this fills.
-    legacy::migrate();
+    legacy::migrate(&context.config().identifier);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -436,7 +437,7 @@ fn main() {
             browser::browser_place,
             browser::browser_close
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("the window")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {

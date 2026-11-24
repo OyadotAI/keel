@@ -39,9 +39,11 @@ desktop-test:
 	packaging/sidecar.sh && cd desktop/src-tauri && cargo fmt -- --check && cargo test --quiet
 
 # The desktop app with a live reload, against a daemon built from this tree.
+# A development build has its own identity, so its storage, window and data never touch the
+# installed Oya Factory running beside it.
 dev:
 	cd desktop && pnpm install --frozen-lockfile --silent
-	packaging/sidecar.sh && cd desktop && pnpm tauri dev
+	packaging/sidecar.sh && cd desktop && pnpm tauri dev --config '{"identifier":"ai.oya.factory.dev","productName":"Oya Factory Dev","app":{"windows":[{"label":"main","title":"Oya Factory Dev","width":1280,"height":820,"minWidth":720,"minHeight":480,"theme":"Dark"}]}}'
 
 scan: build
 	cargo run --quiet -- scan .

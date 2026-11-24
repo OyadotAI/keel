@@ -9,7 +9,6 @@
 use std::path::{Path, PathBuf};
 
 const OLD: &str = "ai.oya.keel";
-const NEW: &str = "ai.oya.factory";
 /// Present once the carry-over has been done (or found nothing to do), so it runs exactly once.
 const MARKER: &str = ".migrated-from-ai.oya.keel";
 
@@ -57,10 +56,15 @@ fn base() -> Option<PathBuf> {
     None
 }
 
-/// Called first thing in `main`, before the window and its webview are created.
-pub fn migrate() {
+/// Called first thing in `main`, before the window and its webview are created, with the
+/// identifier this build runs as, so a development build (`ai.oya.factory.dev`) only ever writes
+/// into its own storage and never into the installed app's.
+pub fn migrate(identifier: &str) {
     let Some(base) = base() else { return };
-    if let Err(e) = carry(&base.join(OLD), &base.join(NEW), PARTS) {
+    if identifier == OLD {
+        return;
+    }
+    if let Err(e) = carry(&base.join(OLD), &base.join(identifier), PARTS) {
         eprintln!("Oya Factory: could not carry over saved state from {OLD}: {e}");
     }
 }
@@ -85,7 +89,7 @@ fn carry(old: &Path, new: &Path, parts: &[Part]) -> std::io::Result<()> {
     std::fs::create_dir_all(new)?;
     std::fs::write(
         new.join(MARKER),
-        format!("Copied from {OLD} on first launch as {NEW}.\n"),
+        format!("Copied from {OLD} on first launch.\n"),
     )
 }
 
