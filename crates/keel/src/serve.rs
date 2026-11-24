@@ -1308,10 +1308,6 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/open-url", axum::routing::post(crate::fsops::open_url))
         .route("/api/claude", get(crate::clitools::claude_status))
-        .route(
-            "/api/license",
-            get(crate::license::api_status).post(crate::license::api_install),
-        )
         // POST: it runs a downloaded script, so it is never a GET, on top of `pair::guard`'s refusal of
         // any cross-site or unauthenticated caller.
         .route(
@@ -1361,8 +1357,6 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
     crate::events::watch(state.clone());
     // A trusted project keeps Keel's own team, skills and suggested plugins current on its own.
     crate::setup::watch(state);
-    // The daily usage report LICENSE.md describes. Fails quietly; nothing waits on it.
-    tokio::spawn(crate::license::report_daily());
 
     let (ip, reach) = bind_address();
     let addr = SocketAddr::from((ip, port));

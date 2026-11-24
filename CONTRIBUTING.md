@@ -121,7 +121,7 @@ never belong in a pull request.
 
 ## License and orientation
 
-Submit only code and assets you have the right to contribute under the project's [license](LICENSE.md).
+Submit only code and assets you have the right to contribute under the project's [MIT License](LICENSE).
 Keep applicable copyright notices and identify third-party code or assets and their licenses.
 
 Review [Privacy](docs/privacy.md) before adding telemetry or diagnostics. Never attach prompts,

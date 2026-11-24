@@ -640,23 +640,6 @@ async fn decide(
     // short-circuited, on any project.
     let is_question = is_question(&hook.tool_name);
 
-    // The license meter. Every effectful step passes this hook, so this is the one place it is
-    // counted; a question is not a step. Before trust: trust is about permission, this is not.
-    // The SDK asks about a hooked tool only after the hook already counted it.
-    let counted = sdk
-        && crate::permissions::HOOKED_TOOLS
-            .split('|')
-            .any(|t| t == hook.tool_name);
-    if !is_question
-        && !counted
-        && let Err(reason) = crate::serve::blocking(crate::license::step, Ok(())).await
-    {
-        return Ok(Json(Decision {
-            decision: "deny".into(),
-            reason,
-        }));
-    }
-
     // The person's own browser is not a Keel turn's to drive, however its server is named; the
     // refusal says where the lane's browser is, so the agent does not go looking for another.
     if drives_another_browser(&hook.tool_name) {

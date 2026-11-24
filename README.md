@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows-black?style=flat" alt="macOS and Windows"></a>
-  <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-source--available-blue.svg?style=flat" alt="Source-available license"></a>
+  <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat" alt="MIT license"></a>
   <a href="https://oyabrowser.com"><img src="https://img.shields.io/badge/sponsored%20by-OyaBrowser.com-7928CA?style=flat" alt="Sponsored by OyaBrowser.com"></a>
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel.dmg"><img src="https://img.shields.io/badge/download-macOS-007AFF?style=flat" alt="Download Oya Factory for macOS"></a>
   <a href="https://github.com/OyadotAI/keel-releases/releases/latest/download/Keel-setup.exe"><img src="https://img.shields.io/badge/download-Windows-007AFF?style=flat" alt="Download Oya Factory for Windows"></a>
@@ -266,6 +266,6 @@ Oya Factory is created and maintained by **Mohamed Alkiswani** ([mk@getoya.ai](m
 
 ## License
 
-Source available, free for solo developers: 200 agent steps a day, with an anonymous daily usage report.
+Free and open source under the [MIT License](LICENSE). No step limits, no license keys, no usage reporting.
 Teams, companies and commercial use need a license — email [sales@getoya.ai](mailto:sales@getoya.ai).
-What Oya Factory generates in your project is yours. See [LICENSE.md](LICENSE.md).
+What Oya Factory generates in your project is yours.

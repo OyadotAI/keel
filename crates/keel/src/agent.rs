@@ -1353,7 +1353,6 @@ pub async fn chat(
         // OpenCode's tool shells lead process groups of their own and survive its interrupt
         // (measured), so Stop walks its tree first and leaves what it found here.
         let stragglers = (provider == "opencode").then(|| stopper.detaches(&lane, token));
-        let run_usage = crate::license::run(repo.clone()).await;
 
         // Drained, always, and not only to report it.
         //
@@ -1709,7 +1708,6 @@ pub async fn chat(
             #[cfg(unix)]
             crate::signals::end_each(&detached.left.locked());
         }
-        drop(run_usage);
         // Reaped: off the parent-death list before the pid can be reused by something else.
         drop(_tracked);
         // Stopped — the person pressed Stop, or closed the window or the lane — is how a turn

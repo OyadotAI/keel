@@ -5,13 +5,12 @@ import { BrowserPreference } from "./BrowserPreference";
 import { InterfaceSetting } from "./InterfaceSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { useStore } from "../store";
-import { ClaudeSection, LicenseSection, UpdatesSection } from "./SettingsServices";
+import { ClaudeSection, UpdatesSection } from "./SettingsServices";
 import { ProjectTrust } from "./settings/ProjectTrust";
 import { QuickCommands } from "./settings/QuickCommands";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { useProjectConnection } from "./settings/connection";
 import "./settings/Settings.css";
-export { until } from "./SettingsServices";
 
 /** Open at project trust every time while keeping unrelated preferences available offline. */
 export function Settings() {
@@ -30,7 +29,6 @@ export function Settings() {
       trust={<><ProjectTrust key={project ?? "no-project"} project={project} name={name} endpoint={endpoint} error={connection.error} retry={connection.retry} /><QuickCommands key={`quick-${project ?? ""}`} project={project} /></>}
       preferences={<><AppearanceSetting /><NotificationSetting /><InterfaceSetting applyToLane /><BrowserPreference /></>}
       claude={endpoint ? <ClaudeSection key={project} ep={endpoint} /> : <p className="muted">{unavailable}</p>}
-      license={endpoint ? <LicenseSection key={project} ep={endpoint} /> : <section className="settings-section"><h2>License</h2><p className="muted">{unavailable}</p></section>}
       updates={<UpdatesSection />}
     />
   </div>;

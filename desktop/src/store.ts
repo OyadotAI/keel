@@ -4,7 +4,7 @@
 // streamed token re-renders the one block it landed in. Updates arrive one batch per frame from
 // the stream worker, never one per event.
 
-import { readSetup, readSetupRecord, type Meter, type Readiness, type SetupRecord, type Warning } from "./setup";
+import { readSetup, readSetupRecord, type Readiness, type SetupRecord, type Warning } from "./setup";
 import { childScope, disconnectedChildren, type ChildSnapshot } from "./subagents";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
@@ -267,8 +267,6 @@ interface State {
   setup: Record<string, Warning[]>;
   /// What the daemon's automatic setup did or is doing per project: the chip's source when trusted.
   setupRun: Record<string, SetupRecord>;
-  /// The license in force. Machine-wide, so one value whichever project's daemon read it last.
-  license?: Meter;
   /// Open readiness findings per project, for the tab's count.
   readiness: Record<string, Readiness>;
   /// Setup warnings "Install all" handed to a lane's agent, per project, so the popover says they
@@ -452,8 +450,8 @@ export const useStore = create<State>()((set, getState, api) => {
     soon(`setup:${path}`, () =>
       // Ask about `claude` only for a project that runs it: a lane with no agent yet starts as Claude.
       readSetup(ep, !lanesOf(path).length || lanesOf(path).some((id) => getState().lanes[id]?.agent === "claude")).then(
-        ({ warnings, readiness, license }) =>
-          set((s) => ({ setup: { ...s.setup, [path]: warnings }, readiness: readiness ? { ...s.readiness, [path]: readiness } : s.readiness, license: license ?? s.license })),
+        ({ warnings, readiness }) =>
+          set((s) => ({ setup: { ...s.setup, [path]: warnings }, readiness: readiness ? { ...s.readiness, [path]: readiness } : s.readiness })),
         () => undefined,
       ),
     );

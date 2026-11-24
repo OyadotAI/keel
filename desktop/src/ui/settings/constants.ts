@@ -3,5 +3,5 @@ export const SETTINGS_DESTINATIONS = [
   { id: "trust", label: "Project trust", icon: "shield" },
   { id: "preferences", label: "Preferences", icon: "gear" },
   { id: "claude", label: "Claude Code", icon: "terminal" },
-  { id: "license", label: "License & updates", icon: "lock" },
+  { id: "updates", label: "Updates", icon: "rotate-cw" },
 ] as const;

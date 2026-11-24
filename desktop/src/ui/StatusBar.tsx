@@ -5,7 +5,6 @@ import { count } from "./Turn";
 import { Icon } from "./icons";
 import { label } from "../keys";
 import { SetupBadge } from "./SetupWarnings";
-import { until } from "./Settings";
 import type { Tab } from "./Lane";
 import { activity } from "../activity";
 import { usageSummary } from "../session-usage";
@@ -20,17 +19,6 @@ function useNow(lane?: string): { label: string; since?: string; tone: "idle" | 
   if (!l) return { label: "", tone: "idle" };
   const a = activity(l);
   return { ...a, label: `${l.agent} · ${a.label}` };
-}
-
-/// The license in force and when it ends; the key itself is changed in Settings.
-function LicenseBadge() {
-  const license = useStore((s) => s.license);
-  if (!license) return null;
-  return (
-    <button onClick={() => useStore.setState({ settings: true })} title={license.licensee ? `Licensed to ${license.licensee}. Click to change the key.` : `Free tier: ${license.cap} agent steps a day, reset at 00:00 UTC. Click to add a license key.`}>
-      {license.licensee ? `Licensed · ${until(license.expires)}` : `Free · ${license.steps}/${license.cap} today`}
-    </button>
-  );
 }
 
 function SessionUsage({ lane, open }: { lane: Lane; open: () => void }) {
@@ -113,7 +101,6 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       {l && !plain && <SessionUsage lane={l} open={() => openTab("context")} />}
       {l && <SetupBadge project={l.project} showTab={() => openTab("readiness")} />}
       {l && <TrustButton project={l.project} trusted={trusted} plain={plain} />}
-      <LicenseBadge />
       {project?.error ? (
         <button className="bad" onClick={() => l && useStore.getState().load(l.id)}>
           Oya Factory stopped for this project — Restart

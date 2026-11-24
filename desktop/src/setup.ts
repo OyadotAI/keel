@@ -97,7 +97,7 @@ export const blocks = (w: Warning) => w.id.startsWith("claude/");
 /// Where a warning lives, which is where its fix lands: the machine (Claude Code itself) or this
 /// folder (its files, its plugins). The popover's third group, this session, is not a property of
 /// the warning but of what was handed to a lane — see `handed` in the store.
-export const scope = (w: Warning): "global" | "folder" => (blocks(w) || w.id === "keel/unread-claude" || w.id.startsWith("license/") ? "global" : "folder");
+export const scope = (w: Warning): "global" | "folder" => (blocks(w) || w.id === "keel/unread-claude" ? "global" : "folder");
 
 interface Finding {
   id: string;
@@ -106,14 +106,6 @@ interface Finding {
   detail: string;
   path?: string | null;
   fix?: { description: string };
-}
-export interface Meter {
-  steps: number;
-  cap: number | null;
-  licensee: string | null;
-  email: string;
-  /// The key's last valid day (UTC), or null on the free tier.
-  expires: string | null;
 }
 
 
@@ -126,16 +118,15 @@ export interface Readiness {
 }
 
 ///
-/// Only what stops a lane from working is a warning: the CLI missing or logged out, the day's steps
-/// spent, a check that could not run. Suggestions (plugins, a team update, a thin CLAUDE.md, a
+/// Only what stops a lane from working is a warning: the CLI missing or logged out, or a check
+/// that could not run. Suggestions (plugins, a team update, a thin CLAUDE.md, a
 /// README) live in Extensions and Readiness, where someone goes to look for them — a first run
 /// that greets a new project with "6 to set up" is friction, not help. `usesClaude` is false when
 /// every lane of the project runs Codex or Antigravity, which need no `claude` on the machine.
-export async function readSetup(ep: Endpoint, usesClaude = true): Promise<{ warnings: Warning[]; readiness?: Readiness; license?: Meter }> {
-  const [claude, state, meter] = await Promise.allSettled([
+export async function readSetup(ep: Endpoint, usesClaude = true): Promise<{ warnings: Warning[]; readiness?: Readiness }> {
+  const [claude, state] = await Promise.allSettled([
     usesClaude ? get<{ installed: boolean; authenticated: boolean }>(ep, "/api/claude") : Promise.resolve({ installed: true, authenticated: true }),
     get<{ scan: { findings: Finding[]; ignored: string[] } }>(ep, "/api/state"),
-    get<Meter | null>(ep, "/api/license"),
   ]);
   const out: Warning[] = [];
   if (claude.status === "fulfilled") {
@@ -148,14 +139,8 @@ export async function readSetup(ep: Endpoint, usesClaude = true): Promise<{ warn
     const open = state.value.scan.findings.filter((f) => !ignored.has(f.id));
     readiness = { open: open.length, critical: open.some((f) => f.severity === "critical") };
   } else out.push(unread("scan", "the project's configuration", state.reason));
-  // The free tier's daily steps, once they are spent: a refused step is never the first anyone
-  // hears of the limit. A meter that cannot be read says nothing — it is not setup.
-  if (meter.status === "fulfilled" && meter.value?.cap != null && meter.value.steps >= meter.value.cap) {
-    const { cap, email } = meter.value;
-    out.push({ id: "license/daily-limit", severity: "critical", title: `Today's ${cap} free agent steps are used`, detail: `Agents can read but not run commands or edit until 00:00 UTC. Teams, companies and more steps: ${email}.`, fix: "settings" });
-  }
   const rank = { critical: 0, high: 1, medium: 2 };
-  return { warnings: out.sort((a, b) => rank[a.severity] - rank[b.severity]), readiness, license: meter.status === "fulfilled" ? (meter.value ?? undefined) : undefined };
+  return { warnings: out.sort((a, b) => rank[a.severity] - rank[b.severity]), readiness };
 }
 
 const unread = (id: string, what: string, why: unknown): Warning => ({

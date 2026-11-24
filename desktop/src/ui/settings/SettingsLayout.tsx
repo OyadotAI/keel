@@ -3,11 +3,11 @@ import { useState, type ReactNode } from "react";
 import { Icon } from "../icons";
 import { SETTINGS_DESTINATIONS } from "./constants";
 
-interface Props { trust: ReactNode; preferences: ReactNode; claude: ReactNode; license: ReactNode; updates: ReactNode }
+interface Props { trust: ReactNode; preferences: ReactNode; claude: ReactNode; updates: ReactNode }
 type Destination = typeof SETTINGS_DESTINATIONS[number]["id"];
 
 /** Focus labelled destinations without replacing controls, losing drafts, or stopping login streams. */
-export function SettingsLayout({ trust, preferences, claude, license, updates }: Props) {
+export function SettingsLayout({ trust, preferences, claude, updates }: Props) {
   const [selected, setSelected] = useState<Destination>("trust");
   function jump(id: Destination) {
     setSelected(id);
@@ -29,8 +29,8 @@ export function SettingsLayout({ trust, preferences, claude, license, updates }:
       <section className="settings-group" aria-labelledby="settings-claude">
         <GroupHeading id="claude" title="Claude Code" detail="Installation and sign-in for your coding agent." />{claude}
       </section>
-      <section className="settings-group" aria-labelledby="settings-license">
-        <GroupHeading id="license" title="License & updates" detail="Your access and the version you’re running." />{license}{updates}
+      <section className="settings-group" aria-labelledby="settings-updates">
+        <GroupHeading id="updates" title="Updates" detail="The version you’re running. Oya Factory is free and open source (MIT)." />{updates}
       </section>
     </div>
   </div>;

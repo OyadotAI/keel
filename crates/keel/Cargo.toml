@@ -3,7 +3,7 @@
 name = "keel"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "keel"
@@ -19,7 +19,6 @@ keel-scanner.workspace = true
 keel-providers.workspace = true
 keel-generator.workspace = true
 keel-workspace.workspace = true
-keel-license.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true

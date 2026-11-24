@@ -124,9 +124,8 @@ comparison does not establish universal superiority or reproduce Orca's reliabil
 
 ## Adoption is a separate question
 
-Orca advertises an MIT license. Keel's current `LICENSE.md` specifies its Solo License,
-organization licensing, an unlicensed daily step limit, and usage reporting. Those are
-different adoption terms; this work does not change them or infer their effect on adoption.
+Orca advertises an MIT license, and as of November 2026 so does Oya Factory: the Solo License,
+the daily step limit and the usage report are gone, so the two no longer differ on licensing.
 
 The current Keel source also includes Claude, Codex, Antigravity, and OpenCode integrations,
 an editor, live subagent panes, and task handoffs. Comparisons based only on older Keel

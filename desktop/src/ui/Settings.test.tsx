@@ -16,7 +16,8 @@ beforeEach(() => { fake.active = undefined; fake.order = []; fake.lanes = {}; fa
 it("keeps project trust, all application groups and updates visible without an open project", () => {
   const html = renderToStaticMarkup(<Settings />);
   expect(html).toContain("Open a project to manage trust and permission rules.");
-  for (const label of ["Appearance", "Notifications", "Chat interface", "Browser for coding agents", "Claude Code", "License", "Check for updates", "Done"]) expect(html).toContain(label);
+  for (const label of ["Appearance", "Notifications", "Chat interface", "Browser for coding agents", "Claude Code", "Updates", "Check for updates", "Done"]) expect(html).toContain(label);
+  expect(html).not.toContain("License key");
   expect(html.indexOf('id="settings-trust"')).toBeLessThan(html.indexOf('id="settings-preferences"'));
   expect(html).not.toContain(">Trust this project…</button>");
 });

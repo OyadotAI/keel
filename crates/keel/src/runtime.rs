@@ -677,7 +677,6 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
         "mode":q.mode, "model":q.model, "effort":crate::agent::effort_arg(q.effort.as_deref()), "attachments":q.attachments, "settings":settings, "port":state.port(),
         "executable":crate::permissions::program(provider).to_string_lossy(),
     }})).await?;
-    let run_usage = crate::license::run(repo.clone()).await;
     let mut session = q.session.clone();
     let mut usage = None;
     let mut code = -1;
@@ -833,7 +832,6 @@ async fn run(state: Arc<AppState>, q: ChatQuery, tx: &Tx) -> Result<(), String> 
             _ => {}
         }
     }
-    drop(run_usage);
     *r.output.locked() = None;
     state.finished(lane, token);
     let stopped = state.was_interrupted(lane, token) || code == -1;

@@ -1071,7 +1071,6 @@ dependencies = [
  "ignore",
  "keel-generator",
  "keel-harness",
- "keel-license",
  "keel-mcp",
  "keel-providers",
  "keel-scanner",
@@ -1117,21 +1116,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "keel-license"
-version = "0.1.0"
-source = "git+ssh://git@github.com/OyadotAI/keel-license.git?rev=06a3116a2ca4839fd9150ec4bbb014ea2c4e891e#06a3116a2ca4839fd9150ec4bbb014ea2c4e891e"
-dependencies = [
- "base64",
- "camino",
- "getrandom 0.3.4",
- "reqwest",
- "ring",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

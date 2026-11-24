@@ -13,7 +13,7 @@ resolver = "3"
 [workspace.package]
 version = "0.4.89"
 edition = "2024"
-license-file = "LICENSE.md"
+license = "MIT"
 repository = "https://github.com/OyadotAI/keel"
 
 [workspace.dependencies]
@@ -21,9 +21,6 @@ keel-harness = { path = "crates/keel-harness" }
 keel-mcp = { path = "crates/keel-mcp" }
 keel-scanner = { path = "crates/keel-scanner" }
 keel-workspace = { path = "crates/keel-workspace" }
-# Private (OyadotAI/keel-license): the license meter, keys and usage report. Fetched over SSH;
-# CI reads it with a deploy key. A published source tree patches this to a stub.
-keel-license = { git = "ssh://git@github.com/OyadotAI/keel-license.git", rev = "06a3116a2ca4839fd9150ec4bbb014ea2c4e891e" }
 keel-providers = { path = "crates/keel-providers" }
 keel-generator = { path = "crates/keel-generator" }
 
