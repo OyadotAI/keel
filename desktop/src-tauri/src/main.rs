@@ -8,6 +8,7 @@
 
 mod browser;
 mod dropped;
+mod legacy;
 #[path = "../../../crates/keel-workspace/src/locations.rs"]
 mod locations;
 mod preview;
@@ -404,6 +405,8 @@ fn record_panics() {
 
 fn main() {
     record_panics();
+    // Before any webview exists: the storage it opens is the one this fills.
+    legacy::migrate();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
