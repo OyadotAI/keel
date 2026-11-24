@@ -61,18 +61,27 @@ fn body(
     data: &Value,
     budget: usize,
 ) -> Result<String, String> {
+    let title = format!(
+        "Title: {}\n",
+        prefix(data["title"].as_str().unwrap_or(""), LABEL_BYTES)
+    );
+    let budget = budget.saturating_sub(title.len());
     let mut lines = String::new();
     let elements = data["elements"].as_array().cloned().unwrap_or_default();
     let mut count = 0;
     for row in &elements {
         let line = format!(
-            "{} {}{}",
+            "{} {}{}{}",
             row["role"].as_str().unwrap_or("element"),
             prefix(&row["name"].to_string(), LABEL_BYTES),
             if row["covered"] == true {
                 " (covered)"
             } else {
                 ""
+            },
+            match row["facts"].as_object().filter(|facts| !facts.is_empty()) {
+                Some(facts) => format!(" {}", serde_json::to_string(facts).unwrap_or_default()),
+                None => String::new(),
             }
         );
         if lines.len() + line.len() + ROW_RESERVE > budget {
@@ -93,7 +102,7 @@ fn body(
         budget.saturating_sub(lines.len()),
     );
     Ok(format!(
-        "{text}\nElements:\n{lines}{} elements omitted by the result limit.\n",
+        "{title}{text}\nElements:\n{lines}{} elements omitted by the result limit.\n",
         elements.len() - count
     ))
 }

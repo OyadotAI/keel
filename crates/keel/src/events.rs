@@ -494,7 +494,7 @@ async fn watch_tree(state: Arc<AppState>) {
             for wt in checkouts {
                 let dir = match &wt {
                     None => root.clone(),
-                    Some(name) => root.join(crate::worktree::DIR).join(name),
+                    Some(name) => crate::worktree::dir(&root).join(name),
                 };
                 let hash = crate::serve::blocking(move || status_hash(&dir), 0).await;
                 let before = seen.insert(wt.clone(), hash);
@@ -555,7 +555,7 @@ fn git_dirs(
         .filter_map(|wt| {
             let dir = match wt {
                 None => root.to_path_buf(),
-                Some(name) => root.join(crate::worktree::DIR).join(name),
+                Some(name) => crate::worktree::dir(root).join(name),
             };
             let git = crate::git::read(&dir, &["rev-parse", "--absolute-git-dir"])?;
             let git = std::path::PathBuf::from(git.trim());

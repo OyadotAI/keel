@@ -21,6 +21,7 @@
     OPERATION_MS: 13e3,
     MAX_PENDING: 128,
     MAX_LABEL: 120,
+    MAX_OPTIONS: 8,
     PROFILE_ID_CHARS: 20,
     MAX_ERROR: 1e3,
     TOKEN_WORDS: 4,
@@ -101,6 +102,74 @@
     return inverse ? { x: (point.x - box.left) / box.sx, y: (point.y - box.top) / box.sy } : { x: box.left + point.x * box.sx, y: box.top + point.y * box.sy };
   }
 
+  // browser/src/preload/debug-controls.ts
+  var ROLES = /* @__PURE__ */ new Set([
+    "button",
+    "link",
+    "textbox",
+    "combobox",
+    "tab",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "searchbox",
+    "gridcell",
+    "treeitem"
+  ]);
+  function debugInteractive(node) {
+    return node.matches(
+      "a[href],button,input:not([type=hidden]),select,textarea,summary,[onclick],[oncontextmenu],[draggable=true]"
+    ) || ROLES.has(node.getAttribute("role") ?? "") || node.hasAttribute("contenteditable") && node.isContentEditable;
+  }
+  function text(value) {
+    return (value ?? "").replace(/\s+/g, " ").trim().slice(0, BROWSER_DEBUG.MAX_LABEL);
+  }
+  function ariaName(node) {
+    const direct = text(node.getAttribute("aria-label"));
+    if (direct) return direct;
+    const root = node.getRootNode();
+    return text(
+      (node.getAttribute("aria-labelledby") ?? "").split(/\s+/).map((id) => root.getElementById?.(id)?.textContent ?? "").join(" ")
+    );
+  }
+  function nativeName(node) {
+    const field = node;
+    return text(
+      field.labels?.length ? [...field.labels].map((label) => label.textContent).join(" ") : node.closest("label")?.textContent
+    );
+  }
+  function debugLabel(node) {
+    const named = ariaName(node) || nativeName(node);
+    if (named) return named;
+    const button = node instanceof HTMLInputElement && ["submit", "reset", "button"].includes(node.type);
+    const content = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? button ? node.value : "" : node.innerText;
+    return text(content || node.getAttribute("title") || node.getAttribute("placeholder") || node.getAttribute("name"));
+  }
+  function debugFieldFacts(node) {
+    const facts = {};
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+      facts.value = node.type === "password" ? "\u2022\u2022\u2022\u2022" : text(node.value);
+      if (node.placeholder) facts.placeholder = text(node.placeholder);
+      if (node.readOnly) facts.readonly = true;
+    }
+    if (node instanceof HTMLInputElement && ["checkbox", "radio"].includes(node.type)) facts.checked = node.checked;
+    if (node instanceof HTMLSelectElement) {
+      facts.value = text(node.value);
+      facts.options = [...node.options].slice(0, BROWSER_DEBUG.MAX_OPTIONS).map((option) => text(option.text));
+      facts.optionsOmitted = Math.max(0, node.options.length - BROWSER_DEBUG.MAX_OPTIONS);
+    }
+    if ("disabled" in node && node.disabled || node.getAttribute("aria-disabled") === "true") facts.disabled = true;
+    if ("required" in node && node.required) facts.required = true;
+    if (node.hasAttribute("aria-checked")) facts.checked = node.getAttribute("aria-checked");
+    return facts;
+  }
+
   // browser/src/preload/debug-nodes.ts
   var DebugNodes = class {
     /** A new read invalidates the old nodes; references never retarget matching replacement markup. */
@@ -135,7 +204,7 @@
       this.nodes.clear();
       const rows = this.controls().map((node) => this.row(node));
       return {
-        title: document.title,
+        title: document.title.slice(0, BROWSER_DEBUG.MAX_LABEL),
         url: location.href,
         text: (document.body?.innerText ?? "").slice(0, BROWSER_DEBUG.MAX_TEXT),
         elements: rows
@@ -149,7 +218,7 @@
       }
       return found;
     }
-    /** Password values and typed input values never enter a read. */
+    /** Private node identities retain baseline names and redact password field contents. */
     row(node) {
       const id = ++this.next;
       this.nodes.set(id, node);
@@ -157,7 +226,8 @@
         id,
         tag: node.localName,
         role: debugRole(node),
-        name: label(node),
+        name: debugLabel(node),
+        facts: debugFieldFacts(node),
         href: node instanceof HTMLAnchorElement ? node.href : null,
         bounds: debugRect(node.getBoundingClientRect()),
         covered: covered(node)
@@ -176,21 +246,16 @@
       return { ...debugPoint(node), bounds: debugRect(node.getBoundingClientRect()) };
     }
     /** Frame typing retains the existing explicit DOM value contract and reports its actual method. */
-    type(id, text, submit) {
+    type(id, text2, submit) {
       const node = this.get(id);
-      if (node instanceof HTMLSelectElement) return choose(node, text);
-      if (node.isContentEditable) node.textContent = text;
-      else setInput(node, text);
+      if (node instanceof HTMLSelectElement) return choose(node, text2);
+      if (node.isContentEditable) node.textContent = text2;
+      else setInput(node, text2);
       node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
       node.dispatchEvent(new Event("change", { bubbles: true }));
       if (submit) node.closest("form")?.requestSubmit();
     }
   };
-  function interactive(node) {
-    return node.matches(
-      "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[contenteditable=true],[onclick]"
-    );
-  }
   function shown(node) {
     const rect = node.getBoundingClientRect(), style = getComputedStyle(node);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
@@ -203,12 +268,6 @@
     } catch {
       return true;
     }
-  }
-  function label(node) {
-    const text = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? "" : node.innerText;
-    return String(
-      node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.getAttribute("name") || text || ""
-    ).replace(/\s+/g, " ").trim().slice(0, BROWSER_DEBUG.MAX_LABEL);
   }
   function setInput(node, value) {
     if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement))
@@ -249,13 +308,15 @@
   function scanDebugControls(root, roots, found) {
     for (const node of root.querySelectorAll("*")) {
       if (node.shadowRoot) roots.push(node.shadowRoot);
-      if (found.length < BROWSER_DEBUG.MAX_ELEMENTS && interactive(node) && shown(node)) found.push(node);
+      if (found.length < BROWSER_DEBUG.MAX_ELEMENTS && debugInteractive(node) && shown(node)) found.push(node);
     }
   }
   function debugRole(node) {
     const declared = node.getAttribute("role");
     if (declared) return declared;
     if (node instanceof HTMLAnchorElement) return "link";
+    if (node.localName === "summary") return "button";
+    if (node.hasAttribute("contenteditable") && node.isContentEditable) return "textbox";
     if (node instanceof HTMLSelectElement) return "combobox";
     if (node instanceof HTMLTextAreaElement) return "textbox";
     if (node instanceof HTMLInputElement)

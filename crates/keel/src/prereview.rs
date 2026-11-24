@@ -189,7 +189,7 @@ fn start_with(
     };
     let root = state.repo();
     let wt = dir
-        .strip_prefix(root.join(crate::worktree::DIR))
+        .strip_prefix(crate::worktree::dir(&root))
         .ok()
         .map(|n| n.as_str().to_string());
     let stop = Arc::new(AtomicBool::new(false));

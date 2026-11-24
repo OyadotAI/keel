@@ -82,6 +82,16 @@ fn store_key(project: &str) -> [u8; 16] {
     hash.to_be_bytes()
 }
 
+/// Existing Windows project cookies retain their storage namespace across the requested bundle rename.
+#[cfg(any(windows, test))]
+fn browser_profile_directory(local_data: &std::path::Path, project: &str) -> std::path::PathBuf {
+    const LEGACY_BROWSER_NAMESPACE: &str = "ai.oya.keel";
+    local_data
+        .join(LEGACY_BROWSER_NAMESPACE)
+        .join("browser")
+        .join(hex(store_key(project)))
+}
+
 /// The Windows data directory's name; macOS takes the key itself.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn hex(key: [u8; 16]) -> String {
@@ -218,13 +228,8 @@ async fn create(
     }
     #[cfg(windows)]
     {
-        let dir = app
-            .path()
-            .app_local_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("browser")
-            .join(hex(store_key(project)));
-        builder = builder.data_directory(dir);
+        let root = app.path().local_data_dir().map_err(|e| e.to_string())?;
+        builder = builder.data_directory(browser_profile_directory(&root, project));
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = project;
@@ -482,6 +487,20 @@ fn close(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_renames_preserve_existing_windows_project_browser_profiles() {
+        let root = std::path::Path::new("local-app-data");
+        let expected = root
+            .join("ai.oya.keel")
+            .join("browser")
+            .join(hex(store_key("/project")));
+        assert_eq!(browser_profile_directory(root, "/project"), expected);
+        assert_ne!(
+            browser_profile_directory(root, "/project"),
+            browser_profile_directory(root, "/another")
+        );
+    }
 
     #[test]
     fn a_lane_id_is_a_label_and_nothing_else_is() {

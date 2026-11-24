@@ -187,7 +187,7 @@ fn repository(real: &Utf8Path) -> Option<Refusal> {
         });
     }
     let list = ask(&["worktree", "list", "--porcelain"]).unwrap_or_default();
-    let keel = real.join(crate::worktree::DIR);
+    let keel = crate::worktree::dir(real);
     list.lines()
         .filter_map(|l| l.strip_prefix("worktree "))
         .map(|p| Utf8Path::new(p).real().unwrap_or_else(|_| p.into()))
@@ -324,7 +324,7 @@ pub fn run(state: &Arc<AppState>, from: &Utf8Path, roots: &Roots) -> Result<Move
         std::iter::once(("keel:move".to_string(), real.clone())).chain(lanes.iter().map(|l| {
             (
                 format!("keel:move:{l}"),
-                real.join(crate::worktree::DIR).join(l),
+                crate::worktree::dir(&real).join(l),
             )
         }))
     {

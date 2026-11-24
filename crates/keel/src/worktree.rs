@@ -34,7 +34,16 @@ pub fn path_of(root: &Utf8Path, name: &str) -> Result<Utf8PathBuf, String> {
     if !valid_name(name) {
         return Err(format!("{name:?} is not a lane name"));
     }
-    Ok(root.join(DIR).join(name))
+    Ok(dir(root).join(name))
+}
+
+/// Where lane checkouts live, joined one component at a time. `root.join(DIR)` on Windows is
+/// `C:\repo\.keel/worktrees`: it compares equal component by component but not as a string, and a
+/// task's owner is stored resolved (`C:\repo\.keel\worktrees\…`) and compared as a string — so
+/// every issue or scheduled task there was refused as "owner changed" at publish time.
+pub fn dir(root: &Utf8Path) -> Utf8PathBuf {
+    DIR.split('/')
+        .fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
 fn branch_of(name: &str) -> String {
@@ -225,7 +234,7 @@ fn create_at_ref(root: &Utf8Path, name: &str, base: &str, start: &str) -> Result
     git(root, &["rev-parse", "--verify", "HEAD"])
         .map_err(|_| "This repository has no commits yet, so there is nothing to branch from.")?;
 
-    let dir = root.join(DIR);
+    let dir = dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // Everything under here is a checkout of this repository, not content of it.
     let ignore = dir.join(".gitignore");
@@ -411,7 +420,7 @@ pub fn repair(root: &Utf8Path) -> Result<(), String> {
             Ok(live) => live.starts_with(&common_real),
         }
     };
-    let lanes: Vec<Utf8PathBuf> = std::fs::read_dir(root.join(DIR))
+    let lanes: Vec<Utf8PathBuf> = std::fs::read_dir(dir(root))
         .map(|dir| {
             dir.flatten()
                 .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -466,7 +475,7 @@ pub fn list(root: &Utf8Path) -> Vec<Worktree> {
     let mut out: Vec<Worktree> = registered(root)
         .into_iter()
         .map(|name| {
-            let path = root.join(DIR).join(&name);
+            let path = dir(root).join(&name);
             let branch = branch_of(&name);
             // Against where the lane started, not against where the project happens to be
             // standing now. A lane cut from `release` while the project sits on `main` had every
@@ -1043,6 +1052,19 @@ pub async fn api_commit(
 
 #[cfg(test)]
 mod tests {
+    /// A lane's path is written the way the platform resolves it, so a task owner saved resolved
+    /// compares equal as a string. Fails on Windows with `root.join(".keel/worktrees")`.
+    #[test]
+    fn a_lane_path_uses_the_platform_separator() {
+        let root = camino::Utf8Path::new("repo");
+        let built = path_of(root, "task-x").unwrap();
+        assert_eq!(
+            built.as_str(),
+            root.join(".keel").join("worktrees").join("task-x").as_str()
+        );
+        assert_eq!(dir(root).components().count(), 3);
+    }
+
     use super::*;
 
     #[test]

@@ -1172,7 +1172,7 @@ fn pr_checkout(root: &camino::Utf8Path, cwd: &camino::Utf8Path) -> Option<camino
         return Some(root);
     }
     let name = t.strip_prefix(&lanes).ok()?.to_str()?;
-    (!name.contains('/')).then(|| root.join(crate::worktree::DIR).join(name))
+    (!name.contains('/')).then(|| crate::worktree::dir(&root).join(name))
 }
 
 /// The command with every heredoc's body taken out. A body is data the shell hands to a program,

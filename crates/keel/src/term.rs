@@ -396,7 +396,7 @@ fn pty_thread(
                         session: session.clone(),
                         checkout: cwd.to_string(),
                         wt: checkout
-                            .strip_prefix(repo.join(crate::worktree::DIR))
+                            .strip_prefix(crate::worktree::dir(repo))
                             .ok()
                             .map(|s| s.to_string()),
                     },

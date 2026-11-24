@@ -206,6 +206,59 @@ mod fixture {
             "fixed inspection retains disclosed DOM typing",
         )
     }
+    async fn baseline_read(
+        app: &tauri::AppHandle,
+        project: &str,
+        frame: &str,
+    ) -> Result<(), String> {
+        let html = r#"<label for="n">First name</label><input id="n"><span id="l">Work email</span><input aria-labelledby="l"><details><summary>Advanced</summary></details><div role="option" tabindex="0">Inbox</div><div id="editor" contenteditable="plaintext-only">Draft</div><select aria-label="Plan"><option>Free</option><option>Team</option></select>"#;
+        evaluate(
+            app,
+            project,
+            Some(frame),
+            &format!(
+                "document.body.insertAdjacentHTML('beforeend',{}),true",
+                serde_json::to_string(html).unwrap()
+            ),
+        )
+        .await?;
+        let read = act(app, project, json!({"op":"read_frames"})).await?;
+        for name in [
+            "First name",
+            "Work email",
+            "Advanced",
+            "Inbox",
+            "Draft",
+            "Plan",
+        ] {
+            ensure(
+                element(&read, frame, name).is_ok(),
+                "baseline controls retain actionable names",
+            )?;
+        }
+        let text = read["text"].as_str().unwrap_or("");
+        ensure(
+            text.contains("Title: Child form") && text.contains("\"options\":[\"Free\",\"Team\"]"),
+            "frame title and option facts retained",
+        )?;
+        act(
+            app,
+            project,
+            json!({"op":"type","target":element(&read,frame,"Draft")?,"text":"Updated draft"}),
+        )
+        .await?;
+        ensure(
+            evaluate(
+                app,
+                project,
+                Some(frame),
+                "document.getElementById('editor').textContent",
+            )
+            .await?
+                == "Updated draft",
+            "plaintext-only private typing capability",
+        )
+    }
     async fn run(app: &tauri::AppHandle, url: &str, project: &str) -> Result<(), String> {
         act(app, project, json!({"op":"open","url":url})).await?;
         show(app, true).await?;
@@ -233,6 +286,7 @@ mod fixture {
         .await?;
         click(app, project, &frame, 2).await?;
         overlay(app, project, &frame).await?;
+        baseline_read(app, project, &frame).await?;
         println!(
             "PASS embedded public adapter: frame read/eval/hit/native click/type,375px screenshot,zero-effect snapshot/hidden refusals,reset recovery,overlay,identity"
         );
