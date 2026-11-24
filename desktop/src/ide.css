@@ -246,7 +246,7 @@
 .git-card-handle::after { content: ""; width: 28px; height: 3px; background: var(--line-strong); border-radius: 3px; }
 .git-card-handle:hover::after, .git-card-handle:active::after { background: var(--accent); }
 .git-card-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ide-center, .shell-dock { border-radius: 14px; }
+.ide-center { border-radius: 14px; }
 
 /* A collapsed card keeps a full-width, keyboard-accessible handle for reopening it. */
 .coding-section-toggle:hover, .graph-toggle:hover { background: var(--hover); }
