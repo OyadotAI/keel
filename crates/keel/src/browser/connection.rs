@@ -92,6 +92,8 @@ pub(super) struct Client {
     session: Option<String>,
     next: u64,
     tools: std::collections::HashSet<String>,
+    #[cfg(test)]
+    listener: fn(u16, &Installation) -> Result<u32, String>,
 }
 impl Client {
     pub fn new(connection: Connection) -> Result<Self, String> {
@@ -108,14 +110,19 @@ impl Client {
             session: None,
             next: 0,
             tools: Default::default(),
+            #[cfg(test)]
+            listener: detection::listener,
         })
     }
     async fn ownership(&self) -> Result<(), String> {
         let port = self.connection.url.port().unwrap();
         let installation = self.connection.installation.clone();
         let expected = self.connection.process;
-        let actual =
-            crate::serve::in_blocking(move || detection::listener(port, &installation)).await?;
+        #[cfg(not(test))]
+        let listener = detection::listener;
+        #[cfg(test)]
+        let listener = self.listener;
+        let actual = crate::serve::in_blocking(move || listener(port, &installation)).await?;
         if actual != expected {
             return Err(RESTARTED.into());
         }
@@ -137,10 +144,10 @@ impl Client {
                 .await;
         }
     }
-    /// A loopback fixture still proves the listener is this executable; no production verification is bypassed.
-    #[cfg(all(test, any(target_os = "macos", windows)))]
+    /// Scripted sessions supply listener identity without host process inspection or an installed Oya.
+    #[cfg(test)]
     pub(super) fn fixture(url: reqwest::Url) -> Self {
-        Self::new(Connection {
+        let mut client = Self::new(Connection {
             url,
             authorization: "Bearer fixture".into(),
             process: std::process::id(),
@@ -152,7 +159,17 @@ impl Client {
                     .into_owned(),
             },
         })
-        .unwrap()
+        .unwrap();
+        client.fixture_listener(|_, _| Ok(std::process::id()));
+        client
+    }
+    /// Failure fixtures replace only the lookup so the real ownership gate still rejects requests.
+    #[cfg(test)]
+    pub(super) fn fixture_listener(
+        &mut self,
+        listener: fn(u16, &Installation) -> Result<u32, String>,
+    ) {
+        self.listener = listener;
     }
     pub async fn initialize(&mut self) -> Result<(), String> {
         self.rpc("initialize",serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Keel","version":env!("CARGO_PKG_VERSION")}})).await?;

@@ -5,6 +5,10 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Made browser recovery and session-cleanup fixtures independent of host listener inspection,
+  enabled the same coverage on Linux, and pinned refusal of authenticated requests after a
+  denied or replaced listener. Removed repository-level automatic plugin enrollment so the
+  strict self-scan passes without relaxing its executable-configuration checks.
 - Rebranded the desktop workspace as Oya Factory with Oya rings and AgentChrome’s current
   paper, charcoal and lime themes; updated product copy and public references while preserving
   installed data, appearance preferences and published download/update contracts.

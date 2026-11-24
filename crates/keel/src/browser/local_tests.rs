@@ -98,11 +98,9 @@ async fn live_form_fills_from_one_read() {
         .await;
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[path = "local_recovery_tests.rs"]
 mod recovery;
 
-#[cfg(any(target_os = "macos", windows))]
 mod retirement {
     use super::super::*;
     use axum::{Json, extract::State, routing::post};
@@ -121,6 +119,7 @@ mod retirement {
 
     /// Session state shared by retirement checks and scripted page-recovery checks.
     pub(super) struct Fixture {
+        requests: AtomicUsize,
         deletes: AtomicUsize,
         lease: AtomicBool,
         closed: Notify,
@@ -142,6 +141,7 @@ mod retirement {
         State(state): State<Arc<Fixture>>,
         Json(message): Json<serde_json::Value>,
     ) -> ([(&'static str, &'static str); 1], Json<serde_json::Value>) {
+        state.requests.fetch_add(1, Ordering::SeqCst);
         let result = if message["method"] == "tools/list" {
             let tools = if state.fail_init {
                 vec![]
@@ -175,6 +175,7 @@ mod retirement {
         )
     }
     async fn deleted(State(state): State<Arc<Fixture>>) {
+        state.requests.fetch_add(1, Ordering::SeqCst);
         state.deletes.fetch_add(1, Ordering::SeqCst);
         state.lease.store(false, Ordering::SeqCst);
         state.closed.notify_one();
@@ -185,6 +186,7 @@ mod retirement {
             .parse()
             .unwrap();
         let state = Arc::new(Fixture {
+            requests: AtomicUsize::new(0),
             deletes: AtomicUsize::new(0),
             lease: AtomicBool::new(true),
             closed: Notify::new(),
@@ -241,5 +243,40 @@ mod retirement {
         drop(page);
         assert_closed(&state).await;
         server.abort();
+    }
+    async fn assert_identity_failure_sends_nothing(
+        listener: fn(u16, &super::super::super::detection::Installation) -> Result<u32, String>,
+        expected: &str,
+    ) {
+        let (mut client, state, server) = fixture(false).await;
+        client.initialize().await.unwrap();
+        let requests = state.requests.load(Ordering::SeqCst);
+        client.fixture_listener(listener);
+        assert_eq!(client.initialize().await.unwrap_err(), expected);
+        assert_eq!(
+            client
+                .tool("open_tab", json!({"url":"https://example.test"}))
+                .await
+                .unwrap_err(),
+            expected
+        );
+        client.close().await;
+        assert_eq!(state.requests.load(Ordering::SeqCst), requests);
+        assert_eq!(state.deletes.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn denied_listener_receives_no_authenticated_requests_or_cleanup() {
+        const DENIED: &str = "Listener inspection denied";
+        assert_identity_failure_sends_nothing(|_, _| Err(DENIED.into()), DENIED).await;
+    }
+    #[tokio::test]
+    async fn replaced_listener_receives_no_authenticated_requests_or_cleanup() {
+        const DIFFERENT_PID: u32 = 0;
+        assert_identity_failure_sends_nothing(
+            |_, _| Ok(DIFFERENT_PID),
+            super::super::super::connection::RESTARTED,
+        )
+        .await;
     }
 }

@@ -1,3 +1,4 @@
+//! Repository-supplied agent configuration stays untrusted even when execution is indirect.
 use crate::{Check, Dimension, Finding, Fix, RepoContext, Severity};
 
 /// Agent configuration carried inside the repository itself.
@@ -185,6 +186,21 @@ mod tests {
         )]);
         let findings = UntrustedAgentConfig.run(&ctx);
         assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn flags_plugin_enrollment_without_inline_hooks() {
+        let (_dir, ctx) = fixture(&[(
+            ".claude/settings.json",
+            r#"{"extraKnownMarketplaces":{"example":{"source":{"source":"github","repo":"example/plugins"}}},"enabledPlugins":{"frontend@example":true}}"#,
+        )]);
+        let findings = UntrustedAgentConfig.run(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(
+            findings[0].path.as_deref(),
+            Some(".claude/settings.json".as_ref())
+        );
     }
 
     #[test]
