@@ -8,9 +8,9 @@ const luminance = (hex: string) => {
 };
 const contrast = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
 
-for (const dark of [false, true]) {
-  it(`${dark ? "dark" : "light"} transcripts reuse the native terminal palette`, () => {
-    const p = terminalPalette(dark), css = terminalPaneColors(dark), xterm = terminalXtermTheme(dark);
+{
+  it(`transcripts reuse the native terminal palette`, () => {
+    const p = terminalPalette(), css = terminalPaneColors(), xterm = terminalXtermTheme();
     expect(css["--child-bg"]).toBe(xterm.background);
     expect(css["--child-fg"]).toBe(xterm.foreground);
     expect(css["--child-tool"]).toBe(xterm.cyan);
@@ -19,8 +19,8 @@ for (const dark of [false, true]) {
     expect(css["--child-muted"]).toBe(xterm.white);
     expect(xterm.brightGreen).toBe(p.ansi[10]);
   });
-  it(`${dark ? "dark" : "light"} transcript text meets contrast on each surface where it is used`, () => {
-    const css = terminalPaneColors(dark);
+  it(`transcript text meets contrast on each surface where it is used`, () => {
+    const css = terminalPaneColors();
     const colors = ["--child-fg", "--child-muted", "--child-link", "--child-keyword", "--child-string", "--child-number", "--child-error"];
     for (const surface of ["--child-bg", "--child-surface"]) {
       for (const color of colors) expect(contrast(css[color], css[surface]), `${color} on ${surface}`).toBeGreaterThanOrEqual(4.5);

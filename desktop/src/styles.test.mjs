@@ -12,10 +12,9 @@ const channels = (hex) => hex.slice(1).match(/../g).map((channel) => parseInt(ch
 const luminance = (hex) => channels(hex).map((channel) => channel / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
 const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
 
-function tokens(source, dark) {
+function tokens(source) {
   const values = {};
-  for (const [, selector, body] of source.matchAll(/(?:^|\n):root([^{}]*)\{([^}]+)\}/g)) {
-    if (selector.includes("dark") && !dark) continue;
+  for (const [, , body] of source.matchAll(/(?:^|\n):root([^{}]*)\{([^}]+)\}/g)) {
     for (const [, name, value] of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) values[name] = value.trim();
   }
   return values;
@@ -35,8 +34,8 @@ it("uses the same five Oya base colors in the desktop and public website", () =>
   for (const source of [read("./design/tokens.css"), website]) expect([...new Set(source.match(/#[\da-f]{6}\b/gi))]).toEqual(BASES);
 });
 
-for (const dark of [false, true]) {
-  const values = { ...tokens(styles, dark), ...tokens(workspace, dark), ...tokens(ide, dark) };
+for (const dark of [true]) {
+  const values = { ...tokens(styles), ...tokens(workspace), ...tokens(ide) };
   const color = (name) => resolve(values[name], values);
   it(`${dark ? "dark" : "light"} preview annotation numbers use contrasting foreground and fill`, () => {
     const pin = styles.match(/\.pin-n\s*\{([^}]+)\}/)[1];
@@ -45,7 +44,7 @@ for (const dark of [false, true]) {
     expect(contrast(foreground, background)).toBeGreaterThanOrEqual(4.5);
   });
   it(`${dark ? "dark" : "light"} window and independent terminal colors share readable Oya roles`, () => {
-    const terminal = terminalPalette(dark);
+    const terminal = terminalPalette();
     expect(color("--well")).toBe(terminal.background);
     expect(color("--surface")).toBe(terminal.surface);
     expect(color("--text")).toBe(terminal.foreground);

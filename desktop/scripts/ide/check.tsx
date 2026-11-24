@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { useStore } from "../../src/store";
 import { useIde } from "../../src/ide";
 import { applyFrames } from "../../src/reduce";
-import { setAppearance } from "../../src/appearance";
 import { App } from "../../src/ui/App";
 import "../../src/styles.css";
 import "../../src/workspace.css";
@@ -12,8 +11,6 @@ import "../../src/ide.css";
 
 const params = new URLSearchParams(location.search);
 const wide = params.get("graph") === "wide";
-const theme = params.get("theme");
-if (theme === "light" || theme === "dark") setAppearance(theme);
 if (params.has("sidebar")) localStorage.setItem("--coding-sidebar-w", params.get("sidebar")!);
 if (wide) localStorage.setItem("keel.sidebar", "1");
 function wideHistory() {

@@ -8,7 +8,6 @@ import { requestChatFocus } from "../chat-focus";
 import { childrenOf, childScope, useChildPane, useChildReading, releaseGridText, SHORT_ID, type Invocation, type ChildOutput, type Shown } from "../subagents";
 import { gridColumns, useHeldSlots, useFlip, useLiveInvocations, useVisibleChildren, usePaneMotion, useReducedMotion, PANE_OPEN_MS, PANE_CLOSE_MS, PANE_MOVE_MS, SPLIT_LINGER_MS } from "../subagents";
 import { useGridOutput } from "../subagent-output";
-import { onTerminalTheme, terminalDark } from "../terminal-theme";
 import { terminalPaneColors } from "../design/terminal";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { MemberAvatar } from "./MemberAvatar";
@@ -71,7 +70,6 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
   useGridOutput(lane, scope, visible, ep);
   useEffect(() => { if (hidden) releaseGridText(scope); }, [scope, hidden]);
   const [width, setWidth] = useState(0), [scrolled, setScrolled] = useState(false);
-  const dark = useSyncExternalStore(onTerminalTheme, terminalDark, () => false);
   const font = useSyncExternalStore(onTerminalFont, terminalFont, () => 13);
   useEffect(() => {
     const node = grid.current; if (!node) return;
@@ -82,7 +80,7 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
   const { columns, span, template } = gridLayout(width, shown.length, open.length, !!maxed);
   const lastOpen = open.at(-1)?.slot;
   useFlip(grid, shown.map((child) => child.slot + (sizes[child.slot] ?? "")).join() + "/" + columns, reduced);
-  const style = { ...terminalPaneColors(dark), "--terminal-columns": columns, "--terminal-rows": template, "--child-terminal-font": font + "px", "--pane-open-ms": PANE_OPEN_MS + "ms", "--pane-close-ms": PANE_CLOSE_MS + "ms", "--pane-move-ms": PANE_MOVE_MS + "ms" } as CSSProperties;
+  const style = { ...terminalPaneColors(), "--terminal-columns": columns, "--terminal-rows": template, "--child-terminal-font": font + "px", "--pane-open-ms": PANE_OPEN_MS + "ms", "--pane-close-ms": PANE_CLOSE_MS + "ms", "--pane-move-ms": PANE_MOVE_MS + "ms" } as CSSProperties;
   const returnToMain = () => { main.current?.scrollIntoView({ block: "nearest" }); focusMain(lane); };
   const agentName = current?.agent === "claude" ? "Claude Code" : AGENT_NAME[current?.agent ?? "claude"];
   const mainName = surface === "chat" ? "Conversation" : "Main terminal";

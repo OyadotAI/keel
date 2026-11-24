@@ -6,9 +6,10 @@
 .delivery-dialog select,.delivery-panel select { min-height: 30px; max-width: 100%; }
 .delivery-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 12px 0; }
 .delivery-panel { height: 100%; overflow: auto; padding: 16px; min-width: 0; font-size: 14px; }
-.delivery-panel h2 { font-size: var(--t-title); line-height: 1.3; margin: 4px 0 10px; overflow-wrap: anywhere; }
-.delivery-panel h3,.delivery-dialog h3 { font-size: 16px; margin: 18px 0 10px; }
-.delivery-intake,.delivery-corrections,.delivery-publication,.delivery-schedule-form { border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.delivery-panel h2 { font-size: var(--t-title); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
+.delivery-panel h3,.delivery-dialog h3 { font-size: var(--t-body); font-weight: 600; margin: 0; }
+.delivery-intake,.delivery-schedule-form { border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.delivery-corrections,.delivery-publication { padding: var(--s-3) 0; border-top: 1px solid var(--hairline); }
 .delivery-source { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; font-family: var(--mono); max-height: 200px; overflow: auto; }
 .delivery-task-list,.delivery-correction-list { list-style: none; padding: 0; margin: 0; }
 .delivery-task-list li,.delivery-correction-list li { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -89,3 +90,24 @@ button.start-agent .agent-mark { flex: none; }
 .start-note { margin: 8px 0 0; font-size: var(--t-small); color: var(--dim); }
 .start-project .actions { margin-top: 20px; }
 @media (max-width: 480px) { .start-agents { grid-template-columns: 1fr; } }
+
+/* The Checks tab, summary first: title, one status line with its one action, and everything else
+   behind a disclosure. */
+.delivery-head { display: flex; flex-direction: column; gap: var(--s-1); margin-bottom: var(--s-3); }
+.delivery-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; font-size: var(--t-small); color: var(--dim); }
+.delivery-status-row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-2); border-radius: var(--r-md); background: var(--surface); }
+.check-status { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: var(--s-2); font-weight: 500; }
+.check-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+.check-status.pass .check-dot { background: var(--accent-fill); }
+.check-status.stale .check-dot { background: var(--warn); }
+.check-status.fail .check-dot { background: var(--del); }
+.delivery-section { margin: 0; }
+.delivery-section > summary { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) 0; list-style: none; cursor: pointer; font-weight: 600; color: var(--text); }
+.delivery-section > summary::-webkit-details-marker { display: none; }
+.delivery-section > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--dim); border-bottom: 1.5px solid var(--dim); transform: rotate(-45deg); transition: transform var(--t-fast) var(--ease); }
+.delivery-section[open] > summary::before { transform: rotate(45deg); }
+.delivery-section > summary .mono { font-weight: 400; font-size: var(--t-small); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delivery-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin-bottom: var(--s-2); }
+.delivery-section-head h3 { display: inline-flex; align-items: center; gap: 6px; }
+.delivery-head .delivery-section > summary { font-weight: 450; color: var(--dim); font-size: var(--t-small); padding: 2px 0; }
+button.danger-item { color: var(--del); }

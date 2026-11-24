@@ -41,7 +41,7 @@ export function findCount(query: string, r?: { resultIndex: number; resultCount:
 }
 
 /// The bar. `focusTerminal` puts typing back where it was when the bar closes.
-export function TerminalFind({ search, onClose, focusTerminal, selectToken, dark }: { search: SearchAddon; onClose: () => void; focusTerminal: () => void; selectToken: number; dark: boolean }) {
+export function TerminalFind({ search, onClose, focusTerminal, selectToken }: { search: SearchAddon; onClose: () => void; focusTerminal: () => void; selectToken: number }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<{ resultIndex: number; resultCount: number }>();
@@ -56,7 +56,7 @@ export function TerminalFind({ search, onClose, focusTerminal, selectToken, dark
   useEffect(() => input.current?.select(), [selectToken]);
   const go = (forward: boolean, q = query) => {
     if (!q) return search.clearDecorations();
-    const opts = { decorations: terminalFindDecorations(dark), incremental: false };
+    const opts = { decorations: terminalFindDecorations(), incremental: false };
     if (forward) search.findNext(q, opts);
     else search.findPrevious(q, opts);
   };

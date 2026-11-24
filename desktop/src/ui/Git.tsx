@@ -1,4 +1,5 @@
 // Source Control composes checkout mutations, branch discovery, and commit history.
+import { Floating } from "./Menu";
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, type Endpoint } from "../api";
 import { prepare, type DiffResponse, type Prepared } from "../git";
@@ -120,10 +121,8 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
           </span>
         )}
         <span style={{ flex: 1 }} />
-
+        <GitHeaderActions ep={ep} wt={wt} current={current} running={running} pending={pending} act={act} remotes={branches?.remotes} />
       </div>
-      <RemoteActions ep={ep} wt={wt} current={current} running={running} pending={pending} act={act} remotes={branches?.remotes} />
-      <LaneGitActions wt={wt} busy={running || pending} />
       <Tabs
         className="tabs-sub"
         tabs={[
@@ -155,7 +154,7 @@ function GitContent({ lane, ep, wt, act, section, log, branches, pending, runnin
     case "history": return <History lane={lane} ep={ep} wt={wt} log={log} act={act} />;
     case "branches": return <BranchList lane={lane} ep={ep} wt={wt} branches={branches} act={act} pending={pending} running={running} error={branchError} retry={retryBranches} />;
     case "pr": return <PullRequest ep={ep} wt={wt} lane={lane} />;
-    case "remotes": return <><RemoteActions ep={ep} wt={wt} current={branches?.local.find((b) => b.current)} running={running} pending={pending} act={act} remotes={branches?.remotes} /><LaneGitActions wt={wt} busy={running || pending} /></>;
+    case "remotes": return <div className="panel-head git-remotes"><span className="small muted">{branches?.remotes.length ? branches.remotes.join(", ") : "No remote yet"}</span><span style={{ flex: 1 }} /><GitHeaderActions ep={ep} wt={wt} current={branches?.local.find((b) => b.current)} running={running} pending={pending} act={act} remotes={branches?.remotes} /></div>;
   }
 }
 function GitFeedback({ error, note, retry }: { error?: string; note?: string; retry: () => void }) {
@@ -203,20 +202,39 @@ export function CommitReview({ ep, wt, commit }: { ep: Endpoint; wt?: string; co
 
 type Act = GitAction;
 
-function RemoteActions({ ep, wt, current, running, pending, act, remotes }: { ep: Endpoint; wt?: string; current?: Branch; running: boolean; pending: boolean; act: Act; remotes?: string[] }) {
-  const [remote, setRemote] = useState("");
-  return (<><div className="git-remote-actions" role="group" aria-label="Remote actions">
-        <button disabled={pending} onClick={() => act("Fetched all remotes.", () => post(ep, "/api/git/remote", { action: "fetch" }, { wt }))}>Fetch</button>
-        <button disabled={pending || running || !current?.upstream} title={running ? "Wait for the agent to finish" : current?.upstream ? "Fast-forward only" : "Set an upstream before pulling"} onClick={() => act("Pulled upstream changes.", () => post(ep, "/api/git/remote", { action: "pull" }, { wt }))}>Pull{current?.behind ? ` ↓${current.behind}` : ""}</button>
-        <button disabled={pending || running} title={current?.upstream ? `Push to ${current.upstream}` : "Push and set upstream"} onClick={() => act("Pushed.", () => post<string>(ep, "/api/git/push", {}, { wt }))}>Push{current?.ahead ? ` ↑${current.ahead}` : ""}</button>
-      </div>
-      {remotes?.length === 0 && <div className="git-add-remote"><input className="field" aria-label="Origin remote URL" placeholder="https://github.com/owner/repo.git" value={remote} onChange={(e) => setRemote(e.target.value)} /><button disabled={pending || !remote.trim()} onClick={() => act("Added origin.", () => post(ep, "/api/git/remote", { action: "add", url: remote.trim() }, { wt }))}>Add origin</button></div>}
-    </>);
+/// Sync as three small icons in the branch row, and the rare actions — merging or discarding the
+/// lane, adding a remote — one click away under ⋯, so the panel opens on the changes themselves.
+function GitHeaderActions(props: { ep: Endpoint; wt?: string; current?: Branch; running: boolean; pending: boolean; act: Act; remotes?: string[] }) {
+  return <><SyncButtons {...props} /><GitMoreMenu {...props} /></>;
 }
 
-function LaneGitActions({ wt, busy }: { wt?: string; busy: boolean }) {
-  if (!wt) return null;
-  return <div className="git-remote-actions" role="group" aria-label="Lane branch actions"><button disabled={busy} onClick={() => useStore.setState({ asking: "merge" })}>Merge lane…</button><button disabled={busy} onClick={() => useStore.setState({ asking: "discard" })}>Discard lane…</button></div>;
+function SyncButtons({ ep, wt, current, running, pending, act, remotes }: { ep: Endpoint; wt?: string; current?: Branch; running: boolean; pending: boolean; act: Act; remotes?: string[] }) {
+  const busy = pending || running, upstream = current?.upstream, hasRemote = !!remotes?.length;
+  const pullTitle = running ? "Wait for the agent to finish" : upstream ? `Pull ${upstream} (fast-forward only)` : "Set an upstream before pulling";
+  const pushTitle = !hasRemote ? "Add a remote to push" : upstream ? `Push to ${upstream}` : "Push and set upstream";
+  return <>
+    <button className="ghost" aria-label="Fetch all remotes" title="Fetch all remotes" disabled={pending || !hasRemote} onClick={() => void act("Fetched all remotes.", () => post(ep, "/api/git/remote", { action: "fetch" }, { wt }))}><Icon name="rotate-cw" size={13} /></button>
+    <button className="ghost git-sync" aria-label="Pull upstream changes" title={pullTitle} disabled={busy || !upstream} onClick={() => void act("Pulled upstream changes.", () => post(ep, "/api/git/remote", { action: "pull" }, { wt }))}>↓{current?.behind || ""}</button>
+    <button className="ghost git-sync" aria-label="Push branch" title={pushTitle} disabled={busy || !hasRemote} onClick={() => void act("Pushed.", () => post<string>(ep, "/api/git/push", {}, { wt }))}>↑{current?.ahead || ""}</button>
+  </>;
+}
+
+/// Merging or discarding the lane and adding a remote: rare, so one click away under ⋯.
+function GitMoreMenu({ ep, wt, running, pending, act, remotes }: { ep: Endpoint; wt?: string; running: boolean; pending: boolean; act: Act; remotes?: string[] }) {
+  const [menu, setMenu] = useState<DOMRect | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [remote, setRemote] = useState("");
+  const busy = pending || running;
+  const pick = (run: () => void) => () => { setMenu(null); run(); };
+  const add = () => { setAdding(false); void act("Added origin.", () => post(ep, "/api/git/remote", { action: "add", url: remote.trim() }, { wt })); };
+  return <>
+    <button className="ghost" aria-label="More git actions" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><Icon name="more" size={15} /></button>
+    {menu && <Floating anchor={menu} onClose={() => setMenu(null)}>
+      {wt && <><button disabled={busy} onClick={pick(() => useStore.setState({ asking: "merge" }))}>Merge lane…</button><button className="danger-item" disabled={busy} onClick={pick(() => useStore.setState({ asking: "discard" }))}>Discard lane…</button><div className="sep" /></>}
+      <button onClick={pick(() => setAdding(true))}>{remotes?.length ? "Add another remote…" : "Add origin…"}</button>
+    </Floating>}
+    {adding && <form className="git-add-remote" onSubmit={(e) => { e.preventDefault(); if (remote.trim()) add(); }}><input autoFocus className="field" aria-label="Origin remote URL" placeholder="https://github.com/owner/repo.git" value={remote} onChange={(e) => setRemote(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setAdding(false)} /><button type="submit" disabled={pending || !remote.trim()}>Add</button></form>}
+  </>;
 }
 
 function History({ lane, ep, wt, log, act }: { lane: string; ep: Endpoint; wt?: string; log?: Commit[]; act: Act }) {

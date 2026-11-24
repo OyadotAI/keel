@@ -6,6 +6,9 @@ import { mutateTask, requestId, receiptStatus, refreshDelivery, watchReceipt, ty
 import { DeliveryCorrections } from "./DeliveryCorrections";
 import { DeliveryPublication } from "./DeliveryPublication";
 import { TaskHandoff } from "./TaskHandoff";
+import { Floating } from "./Menu";
+import { Icon } from "./icons";
+import { agentName } from "../store";
 
 /** Evidence remains readable when ownership is unavailable, with mutations disabled until recovery. */
 export function Delivery({ ep, lane, view, ask }: { ep: Endpoint; lane: string; view: TaskView; ask: (what: "merge" | "discard") => void }) {
@@ -22,19 +25,40 @@ export function Delivery({ ep, lane, view, ask }: { ep: Endpoint; lane: string; 
   async function retry(receipt: Receipt) { try { await mutateTask(ep,view,`publication/${receipt.id}/retry`,{});setOperation(await watchReceipt(ep,receipt.id,lane)); } catch(error) {setError(String(error));} }
   async function stop(receipt: Receipt) { try {await mutateTask(ep,view,`checks/${receipt.id}/stop`,{});await refreshDelivery(ep,lane);}catch(error){setError(String(error));} }
   return <div className="delivery-panel">
-    <DeliveryHeading view={view} /><DeliveryFacts view={view} running={!!l?.running} ended={!!l?.conv.turns.at(-1)?.ended} />
+    <DeliveryHeading view={view} />
+    <div className="delivery-status-row"><CheckStatus view={view} />
+      <button disabled={unavailable || busy || l?.running} onClick={() => void runChecks()}>{busy ? "Checking…" : "Run checks"}</button>
+      <DeliveryMenu refresh={() => void refreshDelivery(ep, lane)} merge={l?.wt ? { disabled: unavailable || !view.checks_passed || !!l.running, run: () => ask("merge") } : undefined} discard={l?.wt ? { disabled: !!l.running, run: () => ask("discard") } : undefined} /></div>
     {(view.owner_error || view.control_error || view.evidence_error) && <p className="error">{view.owner_error || view.control_error || view.evidence_error}</p>}
-    <div className="actions"><button disabled={unavailable || busy || l?.running} onClick={() => void runChecks()}>{busy ? "Checking…" : "Run project checks"}</button><button onClick={() => void refreshDelivery(ep, lane)}>Refresh evidence</button>{l?.wt && <><button disabled={unavailable || !view.checks_passed || !!l.running} onClick={() => ask("merge")}>Merge…</button><button disabled={!!l.running} onClick={() => ask("discard")}>Discard…</button></>}</div>
-    <CheckDetails view={view} />
+    <details className="delivery-section"><summary>Details</summary><DeliveryFacts view={view} running={!!l?.running} ended={!!l?.conv.turns.at(-1)?.ended} /><CheckDetails view={view} /><SavedOperations view={view} inspect={inspect} retry={retry} stop={stop} /></details>
     <DeliveryCorrections ep={ep} lane={lane} view={view} /><DeliveryPublication ep={ep} lane={lane} view={view} />
-    <SavedOperations view={view} inspect={inspect} retry={retry} stop={stop} />
     {operation && <p role="status">{operation.kind}: {operation.phase}{operation.error && ` · ${operation.error}`}</p>}{error && <p className="error" role="alert">{error}</p>}<TaskHandoff lane={lane} />
   </div>;
 }
 
 function DeliveryHeading({ view }: { view: TaskView }) {
   const record = view.record, source = record.source.snapshot;
-  return <header><p className="eyebrow">Delivery</p><h2>{record.title || "Conversation task"}</h2>{source ? <a href={source.url}>{source.repository}#{source.number}</a> : record.source.kind === "recurring" && <p className="small">Recurring: {record.source.name} · revision {record.source.revision}</p>}{source && <details><summary>Saved issue source</summary><pre className="delivery-source">{source.body}</pre></details>}<p className="small muted">Current owner: {view.owner?.provider ?? "unconfirmed"} · {view.owner?.lane ?? "unavailable"}</p></header>;
+  return <header className="delivery-head"><h2>{record.title || "Conversation task"}</h2><p className="delivery-meta">{source ? <a href={source.url}>{source.repository}#{source.number}</a> : record.source.kind === "recurring" ? <span>Recurring: {record.source.name}</span> : <span>Conversation</span>}<span>·</span><span>{view.owner ? agentName(view.owner.provider) : "Owner unconfirmed"}</span></p>{source && <details className="delivery-section"><summary>Issue source</summary><pre className="delivery-source">{source.body}</pre></details>}</header>;
+}
+
+/// The one line that says where the task stands: did the project's checks pass, on this checkout.
+function CheckStatus({ view }: { view: TaskView }) {
+  const check = view.record.checks.at(-1);
+  const tone = !check ? "none" : check.status === "passed" ? (view.checks_current ? "pass" : "stale") : "fail";
+  const words = !check ? "No checks yet" : view.checks_current ? `Checks ${check.status}` : `Checks ${check.status} on an earlier commit`;
+  return <span className={`check-status ${tone}`}><span className="check-dot" aria-hidden="true" />{words}</span>;
+}
+
+/// Refreshing, merging and discarding are rare next to running checks: one click away under ⋯.
+function DeliveryMenu({ refresh, merge, discard }: { refresh: () => void; merge?: { disabled: boolean; run: () => void }; discard?: { disabled: boolean; run: () => void } }) {
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const pick = (run: () => void) => () => { setAt(null); run(); };
+  return <><button className="ghost" aria-label="More task actions" aria-haspopup="menu" onClick={(e) => setAt(e.currentTarget.getBoundingClientRect())}><Icon name="more" size={15} /></button>
+    {at && <Floating anchor={at} onClose={() => setAt(null)}>
+      <button onClick={pick(refresh)}>Refresh evidence</button>
+      {merge && <button disabled={merge.disabled} onClick={pick(merge.run)}>Merge…</button>}
+      {discard && <><div className="sep" /><button className="danger-item" disabled={discard.disabled} onClick={pick(discard.run)}>Discard…</button></>}
+    </Floating>}</>;
 }
 function DeliveryFacts({ view, running, ended }: { view: TaskView; running: boolean; ended: boolean }) {
   const check = view.record.checks.at(-1);

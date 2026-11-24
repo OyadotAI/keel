@@ -11,7 +11,6 @@ import { isKeel } from "../keys";
 import type { SearchAddon } from "@xterm/addon-search";
 import { TerminalFind, useFindKey } from "./TerminalFind";
 import { onTerminalFont, terminalFont } from "../zoom";
-import { onTerminalTheme, terminalDark } from "../terminal-theme";
 import { terminalXtermTheme as theme } from "../design/terminal";
 import { SubagentsPane } from "./SubagentsPane";
 import { TerminalFileSurface } from "./TerminalFileFeedback";
@@ -58,7 +57,7 @@ function xtermOptions() {
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 5_000,
-    theme: theme(terminalDark()),
+    theme: theme(),
   };
 }
 
@@ -117,7 +116,7 @@ function terminalReady(options: { opening: ReturnType<typeof terminalConnectionF
   if (options.agent && !options.hidden.current) consumeChatFocus(options.lane, options.term);
 }
 
-export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane: string; agent?: boolean; hidden?: boolean; onExit?: () => void }) {
+export function Terminal({ lane, agent = false, hidden = false, onExit, onTitle }: { lane: string; agent?: boolean; hidden?: boolean; onExit?: () => void; onTitle?: (title: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => {});
   const visibilityRef = useRef<() => void>(() => {});
@@ -168,7 +167,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       const [{ Terminal: XTerm }, { FitAddon }, { SearchAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search")]);
       await import("@xterm/xterm/css/xterm.css");
       if (disposed || !host.current) return;
-      setBg(theme(terminalDark()).background);
+      setBg(theme().background);
       const term = new XTerm(xtermOptions());
       const fit = new FitAddon();
       term.loadAddon(fit);
@@ -178,13 +177,6 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       wheelScrollsHistory(term);
       term.open(host.current);
       const unfollow = followBottom(term, host.current);
-      // Every terminal follows the choice, live. A running agent keeps the colours it started
-      // with until it next starts — Claude Code reads its theme once, at launch.
-      const retheme = () => {
-        term.options.theme = theme(terminalDark());
-        setBg(theme(terminalDark()).background);
-      };
-      const untheme = onTerminalTheme(retheme);
       const current = useStore.getState().lanes[lane];
       const params = new URLSearchParams();
       if (wt) params.set("wt", wt);
@@ -197,7 +189,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
         // Claude Code is started in the terminal's theme; Codex and agy ask the terminal itself.
-        params.set("theme", terminalDark() ? "dark" : "light");
+        params.set("theme", "dark");
       }
       // The token goes as a subprotocol: a page's WebSocket cannot set headers, and a URL is
       // somewhere it would be logged.
@@ -214,7 +206,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       ws.onmessage = (e) => {
         // A text frame is the tab title, never output: writing it to the screen printed `zsh`
         // into the shell.
-        if (typeof e.data === "string") setTitle(e.data);
+        if (typeof e.data === "string") { setTitle(e.data); onTitleRef.current?.(e.data); }
         else term.write(new Uint8Array(e.data as ArrayBuffer), unfollow.settle);
       };
       ws.onclose = (e) => {
@@ -251,7 +243,6 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         openingFocus.dispose();
         unfont();
         unfollow();
-        untheme();
         unregister();
         observer.disconnect();
         input.dispose();
@@ -269,6 +260,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
 
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const onTitleRef = useRef(onTitle);
+  onTitleRef.current = onTitle;
   const takeoverRef = useRef(false);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
@@ -339,9 +332,9 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         </div>
       )}
       {!agent && quickError && <div className="terminal-state small"><span className="error">{quickError}</span></div>}
-      {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
+      {!agent && !onTitle && title && state === "open" && <div className="panel-head small muted">{title}</div>}
       <div className="terminal-frame">
-        {finding && search && state === "open" && <TerminalFind search={search} dark={terminalDark()} selectToken={findToken} onClose={() => setFinding(false)} focusTerminal={() => host.current?.querySelector("textarea")?.focus()} />}
+        {finding && search && state === "open" && <TerminalFind search={search} selectToken={findToken} onClose={() => setFinding(false)} focusTerminal={() => host.current?.querySelector("textarea")?.focus()} />}
         <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
       </div>
       </SubagentsPane>

@@ -201,6 +201,9 @@ button.primary:focus-visible { box-shadow: var(--ring); }
 /* Source control: stable file navigation and a persistent diff, sized to the inspector. */
 .git-panel { display: flex; flex-direction: column; height: 100%; min-width: 0; container-type: inline-size; }
 .git-panel > .panel-head, .git-panel > .tabs { flex: none; }
+.git-panel > .panel-head, .git-remotes { flex-wrap: wrap; gap: 6px; }
+.panel-head button.git-sync { width: auto; min-width: 24px; padding: 0 5px; font: 500 var(--t-small) var(--mono); }
+.panel-head .git-add-remote { flex-basis: 100%; flex-direction: row; padding: 4px 0 2px; }
 .git-body, .git-scroll { flex: 1; min-height: 0; min-width: 0; }
 .git-body { overflow: hidden; }
 .git-scroll { overflow: auto; }

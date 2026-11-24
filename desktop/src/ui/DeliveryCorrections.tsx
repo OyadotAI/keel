@@ -6,6 +6,7 @@ import { mutateTask, requestId, watchReceipt,useCorrectionDraft, type TaskView, 
 
 /** Each item keeps its original range and delivery history after the agent responds. */
 export function DeliveryCorrections({ ep, lane, view }: { ep: Endpoint; lane: string; view: TaskView }) {
+  const [adding, setAdding] = useState(false);
   const scope=JSON.stringify([view.record.owner.checkout,view.record.task]);
   const [draft,setDraft,clearDraft]=useCorrectionDraft(`${scope}:new`), [error, setError] = useState(""), [busy, setBusy] = useState(false), [status, setStatus] = useState("");
   const terminal = useStore((s) => s.lanes[lane]?.interface === "terminal"), running = useStore((s) => s.lanes[lane]?.running);
@@ -18,10 +19,9 @@ export function DeliveryCorrections({ ep, lane, view }: { ep: Endpoint; lane: st
     const result = await mutateTask<Receipt>(ep, view, "batches", { ...input, receipt }); setStatus(`Correction batch: ${result.phase}`);
     if (result.phase !== "queued") { const latest = await watchReceipt(ep, receipt, lane); setStatus(`Correction batch: ${latest.phase}${latest.error ? ` · ${latest.error}` : ""}`); }
   }
-  return <section className="delivery-corrections"><h3>Corrections · {unresolved.length} unresolved</h3>
-    <p className="small muted">Sending feedback and finishing a response leave corrections unresolved. Resolve them after inspection.</p>
-    <label>Add a task correction<textarea className="field" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="What should change? Select a diff line to anchor a correction." /></label><div className="actions"><button disabled={unavailable || busy || !draft.trim()} onClick={() => void act(async () => { await mutateTask(ep, view, "corrections", { revision: record.revision, body: draft, anchor: null }); clearDraft(); })}>Save correction</button>
-      {terminal ? <button disabled={busy || running} onClick={() => void act(async () => { await useStore.getState().switchInterface(lane, "chat"); })}>Continue this task in chat</button> : <button className="primary" disabled={unavailable || busy || !unresolved.length} onClick={() => void act(send)}>Send unresolved in one chat request</button>}
+  return <section className="delivery-corrections"><div className="delivery-section-head"><h3 title="Sending feedback and finishing a response leave corrections unresolved. Resolve them after inspection.">Corrections{unresolved.length ? <span className="tab-count">{unresolved.length}</span> : null}</h3>{!adding && <button className="link" onClick={() => setAdding(true)}>Add correction</button>}</div>
+    {adding && <><textarea autoFocus className="field" aria-label="Add a task correction" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="What should change? Select a diff line to anchor a correction." /><div className="actions"><button disabled={unavailable || busy || !draft.trim()} onClick={() => void act(async () => { await mutateTask(ep, view, "corrections", { revision: record.revision, body: draft, anchor: null }); clearDraft(); setAdding(false); })}>Save correction</button><button className="link" onClick={() => setAdding(false)}>Cancel</button></div></>}
+    <div className="actions">{terminal ? <button disabled={busy || running} onClick={() => void act(async () => { await useStore.getState().switchInterface(lane, "chat"); })}>Continue this task in chat</button> : unresolved.length > 0 && <button disabled={unavailable || busy} onClick={() => void act(send)}>Send {unresolved.length} to the agent</button>}
       {record.publication?.url && <button disabled={unavailable || busy} onClick={() => void act(async () => { await mutateTask(ep, view, "feedback", {}); })}>Refresh PR feedback</button>}</div>
     {terminal && <p className="small muted">Stop active terminal work first, then explicitly continue with the same provider in chat to send a durable batch.</p>}
     {record.feedback && <p className="small muted">Feedback at {record.feedback.head.slice(0, 12)} · {new Date(record.feedback.fetched_at).toLocaleString()} · {record.feedback.complete ? "Complete read" : "Incomplete; prior corrections retained"}{record.feedback.errors.map((e) => ` · ${e}`)}</p>}

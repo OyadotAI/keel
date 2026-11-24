@@ -5,7 +5,6 @@ import { App } from "../../src/ui/App";
 import { useStore, type Lane, type Pending } from "../../src/store";
 import { applyFrames } from "../../src/reduce";
 import { useIde } from "../../src/ide";
-import { setAppearance } from "../../src/appearance";
 import { MAC } from "../../src/keys";
 import { attentionFixtureData } from "./data";
 import { verifyRequestControls } from "./layout";
@@ -15,8 +14,6 @@ import "../../src/ide.css";
 import "../../src/attention.css";
 
 const params = new URLSearchParams(location.search);
-const theme = params.get("theme");
-if (theme === "light" || theme === "dark") setAppearance(theme);
 const endpoint = { port: location.port ? Number(location.port) : 1420, token: "synthetic-fixture" };
 Object.assign(window, { __TAURI_INTERNALS__: { metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } }, transformCallback: () => 1, unregisterCallback: () => {}, invoke: async () => 1 }, __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} } });
 

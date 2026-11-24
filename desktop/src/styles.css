@@ -1865,13 +1865,21 @@ input.field,
 .shell-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 6px 0 12px;
+  gap: var(--s-2);
+  height: 32px;
+  padding: 0 var(--s-2) 0 var(--s-3);
   font: 500 var(--t-small) var(--font);
   color: var(--dim);
-  border-bottom: 1px solid var(--line);
   flex: none;
+}
+.shell-bar .shell-name {
+  color: var(--text);
+}
+.shell-bar .shell-title {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .shell .terminal {
   flex: 1;

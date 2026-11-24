@@ -44,18 +44,21 @@ export function Agents() {
 
 /// A shell in the lane's checkout, under the agent: for the command you want to run yourself.
 export function Shell({ lane, close, hidden = false }: { lane: string; close: () => void; hidden?: boolean }) {
+  // One header: the shell's own title (zsh, pwsh…) sits beside "Terminal" rather than in a second row.
+  const [title, setTitle] = useState("");
   return (
     <div className="shell" style={hidden ? { display: "none" } : undefined}>
       <div className="shell-bar">
         <Icon name="terminal" size={13} />
-        <span>Terminal</span>
+        <span className="shell-name">Terminal</span>
+        {title && <span className="shell-title">{title}</span>}
         <span className="spacer" />
         <button className="ghost" onClick={close} aria-label="Close the shell" title={`Close the shell (${label({ key: "j" })})`}>
           <Icon name="x" size={14} />
         </button>
       </div>
       <Suspense fallback={null}>
-        <Terminal lane={lane} hidden={hidden} onExit={close} />
+        <Terminal lane={lane} hidden={hidden} onExit={close} onTitle={setTitle} />
       </Suspense>
     </div>
   );

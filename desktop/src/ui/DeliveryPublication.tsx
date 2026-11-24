@@ -23,13 +23,14 @@ export function DeliveryPublication({ ep, lane, view }: { ep: Endpoint; lane: st
     const receipt = await mutateTask<Receipt>(ep, view, "publication", { receipt: id, ...input }); setReceipt(receipt); setReceipt(await watchReceipt(ep, id, lane));
   }
   const edit = (patch: Partial<typeof form>) => editPrDraft(record.task, checkout, { ...form, ...patch });
-  return <section className="delivery-publication" aria-label="Pull request"><h3>Pull request</h3><p className="mono small">{record.branch || "Current task branch"} → {form.base || record.base}</p>
+  return <section className="delivery-publication" aria-label="Pull request"><details className="delivery-section" open={!!record.publication}><summary>Pull request <span className="mono">{record.branch || "task branch"} → {form.base || record.base}</span></summary>
     <label>Title<input className="field" value={form.title} onChange={(event) => edit({ title: event.target.value })} aria-label="Pull request title" /></label><label>Body<textarea className="field delivery-pr-body" value={form.body} onChange={(event) => edit({ body: event.target.value })} aria-label="Pull request body" /></label>
     <label className="pr-draft"><input type="checkbox" checked={form.draft} onChange={(event) => edit({ draft: event.target.checked })} />Open as a draft</label><p className="small muted">{draft.dirty ? "Draft edits retained in this window. Save to the task or publish to preserve them with the shared task." : "Draft saved with this task."} Review is advisory; publication is your choice.</p>
     <PublicationControls busy={busy} unavailable={unavailable} dirty={draft.dirty} running={!!running} reviewPending={!!review?.operation} view={view} form={form} save={() => act("Saving…", save)} review={() => act("Reviewing…", async () => { await save(); await startReview(lane,ep,wt); })} publish={() => act("Publishing…",publish)} />
     <PreReview lane={lane} ep={ep} wt={wt} place="tab" />
     <SavedAdvisory view={view} />
     <PublicationResult view={view} />
+    </details>
     {busy && <p role="status">{busy}</p>}{observed && <p role="status">Publication: {observed.phase}{observed.error && ` · ${observed.error}`}</p>}{error && <p className="error" role="alert">{error}</p>}
   </section>;
 }

@@ -95,7 +95,8 @@
 /* The terminal is a stable sibling of code and chat; hiding it keeps the PTY alive. */
 .main { position: relative; }
 .shell-dock[hidden], .ide-git-slot[hidden] { display: none; }
-.shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: var(--shell-h); z-index: 3; background: var(--bg); border: 1px solid var(--line); border-radius: 0 0 10px 10px; overflow: hidden; }
+/* Flush with the conversation above it: one hairline, no box of its own. */
+.shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: var(--shell-h); z-index: 3; background: var(--term-bg); border: 0; box-shadow: 0 -1px 0 var(--hairline); border-radius: 0 0 14px 14px; overflow: hidden; }
 .shell-dock .shell { height: 100%; position: static; }
 .main.has-shell .agent-pane { padding-bottom: var(--shell-h); }
 .main.with-panel .shell-dock { right: calc(var(--panel-w) + 10px); }

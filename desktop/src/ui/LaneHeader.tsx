@@ -9,7 +9,6 @@ import { AgentMark } from "./AgentMark";
 import { Dialog, restoreFocus } from "./kit";
 import { label } from "../keys";
 import { LaneViewSwitch } from "./LaneViewSwitch";
-import { TerminalThemeButton } from "./TerminalThemeButton";
 import { usePlain } from "../plain";
 
 export type Asking = "merge" | "discard" | "close" | null;
@@ -79,7 +78,6 @@ export function LaneHeader({ lane, toggleShell, shell }: { lane: string; toggleS
       </div>
       <UpdateButton />
       <LaneViewSwitch lane={lane} />
-      <TerminalThemeButton lane={lane} />
       <button className="ghost shell-toggle" aria-pressed={shell} aria-label={shell ? "Close the terminal" : "Open a terminal"} title={`Terminal (${label({ key: "j" })})`} onClick={toggleShell}>
         <Icon name="terminal" />
       </button>
