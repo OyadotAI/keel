@@ -9,7 +9,7 @@ Made by: Oya (https://oya.dev)
 
 ## In one line
 
-Claude Code is cool.You know what's cooler? A whole team of agents.
+It's 2026. Are you still using one agent?
 
 Oya Factory puts a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode. Run them side by side, each task on its own branch, with your project's checks on every turn.
 
