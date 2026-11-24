@@ -65,17 +65,17 @@ export function TeamUpdate({ ep, project, plan, reread }: { ep: Endpoint; projec
     </div>;
   }
   if (!offered(plan) || !plan) return <>{banner}{last && <Group title="Waiting on your commit" paths={last.uncommitted} reason={YOURS} />}</>;
-  return <div className="team-install">
-    <h3>Team update available · {pending(plan)} files</h3>
-    <p className="small muted">Oya Factory's agent team has changed since this project added it. Files you haven't edited are replaced and new ones are added; files you changed stay as they are. {absent(plan)}</p>
-    {/* Before the lists, which can run long: the button is what this panel is for. */}
-    <button className="primary" disabled={run?.running} onClick={update}>{run?.running ? "Updating…" : "Update team"}</button>
-    <p className="small muted">Commits only the files below, as "Update the agent team".</p>
+  // One row and its button; the why and the file lists are a click away, since they can run long.
+  return <div className="team-install team-offer">
+    <div className="team-offer-row"><strong>Team update available</strong><span className="small muted">{pending(plan)} files</span><span className="spacer" /><button className="primary" disabled={run?.running} onClick={update}>{run?.running ? "Updating…" : "Update team"}</button></div>
     {banner}
-    <Group title="Replaced" paths={plan.replace} />
-    <Group title="Added" paths={plan.add} sub={added ? "For Antigravity (.agents/) and Codex (.codex/agents/)." : undefined} />
-    <Group title="Kept, you changed it" paths={plan.kept} reason={KEPT} />
-    <Group title="Not restored" paths={plan.not_restored} reason={DELETED} />
+    <details className="delivery-section"><summary>What changes</summary>
+      <p className="small muted">Oya Factory's agent team changed since this project added it. Files you haven't edited are replaced and new ones added, as one commit, "Update the agent team"; files you changed stay as they are. {absent(plan)}</p>
+      <Group title="Replaced" paths={plan.replace} />
+      <Group title="Added" paths={plan.add} sub={added ? "For Antigravity (.agents/) and Codex (.codex/agents/)." : undefined} />
+      <Group title="Kept, you changed it" paths={plan.kept} reason={KEPT} />
+      <Group title="Not restored" paths={plan.not_restored} reason={DELETED} />
+    </details>
   </div>;
 }
 

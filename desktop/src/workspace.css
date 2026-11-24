@@ -523,3 +523,14 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 .approval-details > summary { cursor: pointer; font-size: var(--t-small); color: var(--dim); }
 
 .appearance-zoom { margin-top: var(--s-3); }
+
+/* Extensions: a row shows what a thing is; its controls appear when you point at it or tab to it,
+   and a description is two lines with the rest on hover. */
+.ext-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ext-edit { display: inline-flex; align-items: center; gap: 8px; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+li:hover > .ext-edit, li:focus-within > .ext-edit { opacity: 1; }
+.hook-events { margin: 2px 0 0; font-size: var(--t-small); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.team-offer { padding: var(--s-3); border-radius: var(--r-md); background: var(--surface); }
+.team-offer-row { display: flex; align-items: center; gap: var(--s-2); }
+.team-offer-row .spacer { flex: 1; }
+.team-offer .delivery-section > summary { font-weight: 450; color: var(--dim); font-size: var(--t-small); }

@@ -22,6 +22,8 @@ export const EVENTS: Record<string, string> = {
   PostCompact: "After compacting",
   SessionStart: "When a session starts",
   SessionEnd: "When a session ends",
+  StopFailure: "When a turn fails",
+  TeammateIdle: "When a teammate goes idle",
 };
 
 const SCRIPT = /(?:"|')?((?:\$\{?HOME-?\}?|~|\/)[^\s"';|&]*\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|ps1|cmd))\b/g;

@@ -203,7 +203,7 @@ function List({ items, empty, remove }: { items: Named[]; empty: string; remove?
               </span>
               {n.generated && <span className="pill" style={{ marginLeft: 4 }}>generated</span>}
             </div>
-            {n.description && <div className="small muted">{n.description}</div>}
+            {n.description && <div className="small muted ext-desc" title={n.description}>{n.description}</div>}
           </div>
           {remove && n.scope === "project" && !n.plugin && (
             <button className="link small" onClick={() => remove(n)}>
@@ -239,7 +239,7 @@ function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () 
               <li key={c.id} style={{ alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 500 }}>{c.id}</div>
-                  <div className="small muted">{c.description}</div>
+                  <div className="small muted ext-desc" title={c.description}>{c.description}</div>
                 </div>
                 {c.present ? (
                   <span className="small faint">installed</span>
@@ -347,8 +347,8 @@ function AgentProfileRow({ agent, profile, save }: { agent: Named; profile: Agen
     </button>
     <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { void image(e.target.files?.[0]); e.target.value = ""; }} />
     <div style={{ flex: 1, minWidth: 130 }}><div style={{ fontWeight: 500 }}>{agent.name}<span className="pill" style={{ marginLeft: 6 }}>{scopeLabel(agent.scope)}</span></div><div className="small muted">@{agent.name} in chat</div></div>
-    <input aria-label={`${agent.name} display name`} value={displayName} placeholder={agent.name} onChange={(e) => setDisplayName(e.target.value)} onBlur={() => { if (displayName !== profile.display_name) void save({ ...profile, display_name: displayName }); }} />
-    <button className="link small" onClick={() => picker.current?.click()}>Image…</button>
+    <span className="ext-edit"><input aria-label={`${agent.name} display name`} value={displayName} placeholder="Display name" onChange={(e) => setDisplayName(e.target.value)} onBlur={() => { if (displayName !== profile.display_name) void save({ ...profile, display_name: displayName }); }} />
+    <button className="link small" onClick={() => picker.current?.click()}>Image…</button></span>
   </li>;
 }
 
@@ -538,11 +538,10 @@ function Plugins({ ep, ws, stream, running }: { ep: Endpoint; ws: Workspace; str
                 <div style={{ flex: 1 }}>
                   <span style={{ fontWeight: 500 }}>{p.name}</span>{" "}
                   <span className="small faint">
-                    {p.marketplace}
-                    {p.version ? ` · ${p.version}` : ""}
-                    {p.enabled ? "" : " · disabled"}
+                    {[source(p.marketplace), p.version, p.enabled ? "" : "disabled"].filter(Boolean).join(" · ")}
                   </span>
                 </div>
+                <span className="ext-edit">
                 <button className="link small" disabled={!!running} onClick={() => act(p, p.enabled ? "disable" : "enable")}>
                   {p.enabled ? "Disable" : "Enable"}
                 </button>
@@ -552,6 +551,7 @@ function Plugins({ ep, ws, stream, running }: { ep: Endpoint; ws: Workspace; str
                 <button className="link small" disabled={!!running} onClick={() => act(p, "uninstall")}>
                   Uninstall
                 </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -572,6 +572,18 @@ function Plugins({ ep, ws, stream, running }: { ep: Endpoint; ws: Workspace; str
   );
 }
 
+/// A hook's events as one line: the first three, then how many more (all of them on hover).
+function eventLine(events: string[]): string {
+  const named = events.map((e) => EVENTS[e] ?? e);
+  return named.length <= 3 ? named.join(" · ") : `${named.slice(0, 3).join(" · ")} · +${named.length - 3} more`;
+}
+
+/// Where a plugin comes from, when that is worth reading: the official marketplace is every other
+/// row, and "marketplace_entry" is a placeholder in the catalog's data rather than a name.
+function source(marketplace?: string | null): string {
+  return !marketplace || marketplace === "claude-plugins-official" || marketplace === "marketplace_entry" ? "" : marketplace;
+}
+
 function Catalog({ list, install, running }: { list: CatalogPlugin[]; install: (p: CatalogPlugin) => void; running?: string }) {
   if (!list.length) return <p className="muted">Nothing to show.</p>;
   return (
@@ -580,9 +592,9 @@ function Catalog({ list, install, running }: { list: CatalogPlugin[]; install: (
         <li key={`${p.marketplace}:${p.name}`} style={{ alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 500 }}>
-              {p.name} <span className="small faint">{p.marketplace}</span>
+              {p.name} <span className="small faint">{source(p.marketplace)}</span>
             </div>
-            <div className="small muted">{p.reason ?? p.description}</div>
+            <div className="small muted ext-desc" title={p.reason ?? p.description ?? undefined}>{p.reason ?? p.description}</div>
           </div>
           <button disabled={!!running} onClick={() => install(p)}>
             Install
@@ -624,13 +636,7 @@ function Hooks({ ws }: { ws: Workspace }) {
               {g.owner && <span className="faint small">from {g.owner}</span>}
               <span className="pill">{scopeLabel(g.scope)}</span>
             </div>
-            <div className="hook-events">
-              {g.events.map((e) => (
-                <span key={e} className="hook-event" title={e}>
-                  {EVENTS[e] ?? e}
-                </span>
-              ))}
-            </div>
+            <p className="hook-events" title={g.events.map((e) => EVENTS[e] ?? e).join(" · ")}>{eventLine(g.events)}</p>
             <details className="hook-command">
               <summary className="small faint">Show the command · {tilde(g.source)}</summary>
               <pre className="code">{g.command}</pre>
