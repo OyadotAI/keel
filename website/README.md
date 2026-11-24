@@ -29,8 +29,9 @@ real keyboard, or responsive browser testing.
   `agentchrome/ui/src/components/oya-logo.tsx`, with a lime back ring and ink front ring.
   The favicon uses the same mark on ink with a paper front ring. Current brand source
   was checked against the local AgentChrome checkout on 2026-11-23.
-- Keel's screenshot is the unaltered image supplied by the user on 2026-11-04, stored at
-  `public/assets/keel-workspace-6a5ef2e2c367.png`. It shows a live agent terminal and embedded browser.
+- Oya Factory's screenshot, `public/assets/oya-factory-workspace.png`, is the 0.4.90 desktop UI rendered
+  from the app's own page with realistic sample content (`desktop/scripts/delivery/check.html?bare&shot`),
+  cropped above the status bar. It is shared with oyafactory.com (`factory/`).
 - DM Sans is copied from `desktop/src/fonts/dm-sans-latin.woff2`; its original SIL Open Font
   License is retained in `public/assets/OFL.txt`.
 - Browser and Reviewer diagrams are HTML/CSS illustrations, explicitly labeled as such.

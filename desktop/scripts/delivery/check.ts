@@ -46,6 +46,6 @@ window.fetch=async(input,init)=>{
 const lane=useStore.getState().lanes.update;
 useStore.setState((state)=>({lanes:{...state.lanes,update:{...lane,agent:"codex",session:"fixture",known:true,isolated:true,wt:"task-fixture",git:{is_repo:true,branch:fixture.view.record.branch,head:fixture.view.identity?.head,changes:[{path:"src/checkout.ts",status:" M",label:"modified",staged:false,dir:false}]} }},panelTab:"review"}));
 void refreshDelivery(ep);
-const verify=document.createElement("button");verify.textContent="Verify Delivery controls";Object.assign(verify.style,{position:"fixed",right:"0",bottom:"0",zIndex:"100"});
+const verify=document.createElement("button");if(params.has("shot"))verify.hidden=true;verify.textContent="Verify Delivery controls";Object.assign(verify.style,{position:"fixed",right:"0",bottom:"0",zIndex:"100"});
 verify.onclick=()=>{verify.remove();requestAnimationFrame(()=>requestAnimationFrame(()=>{const output=document.createElement("output");output.textContent=verifyDeliveryControls(document);Object.assign(output.style,{position:"fixed",right:"0",bottom:"0",zIndex:"100",background:"var(--raised)"});document.body.append(output);}));};document.body.append(verify);
 Object.assign(window,{deliveryFixture:{fixture,useStore,ep,refresh:()=>deliveryChanged(ep),openDiff:()=>{useStore.setState((state)=>({lanes:{...state.lanes,update:{...state.lanes.update,viewing:"src/checkout.ts",diff:prepare(fixture.respond("/api/git/diff","GET",{},new URLSearchParams()) as Parameters<typeof prepare>[0])}}}));useStore.setState({panelTab:"git"});}}});

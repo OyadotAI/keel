@@ -1,0 +1,107 @@
+/* oyafactory.com — dark, like the app. The five Oya colours and nothing else: ink is the ground,
+   paper the type, lime the one accent per screen, red and amber unused here. */
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url("assets/dm-sans-latin.woff2") format("woff2");
+}
+:root {
+  --ink: #1a1a1a;
+  --paper: #f7f5f0;
+  --lime: #cdf01e;
+  --bg: var(--ink);
+  --raised: color-mix(in srgb, var(--paper) 5%, var(--ink));
+  --text: var(--paper);
+  --dim: color-mix(in srgb, var(--paper) 62%, var(--ink));
+  --hairline: color-mix(in srgb, var(--paper) 12%, transparent);
+  --font: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --wrap: 1120px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 17px / 1.6 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+code { font: 0.88em var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--raised); }
+.wrap { width: min(var(--wrap), 100% - 40px); margin-inline: auto; }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 16px; top: 16px; z-index: 10; padding: 8px 12px; background: var(--lime); color: var(--ink); border-radius: 6px; }
+:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; border-radius: 4px; }
+
+/* Navigation */
+.nav { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.02em; text-decoration: none; }
+.nav nav { display: flex; align-items: center; gap: 28px; font-size: 15px; }
+.nav nav a { color: var(--dim); text-decoration: none; transition: color 160ms; }
+.nav nav a:hover { color: var(--text); }
+.nav nav a.nav-cta { color: var(--text); padding: 7px 14px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--hairline); }
+
+/* Hero, over faint vertical lanes: one per agent, running side by side. */
+.hero { position: relative; padding: 96px 0 56px; text-align: center; }
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(50% - 50vw);
+  z-index: -1;
+  background: repeating-linear-gradient(90deg, transparent 0 119px, var(--hairline) 119px 120px);
+  mask-image: radial-gradient(ellipse 60% 70% at 50% 30%, var(--ink), transparent 75%);
+}
+.eyebrow { display: inline-flex; align-items: center; gap: 10px; margin: 0 0 28px; padding: 6px 14px; border-radius: 999px; font-size: 14px; color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 12px var(--lime); }
+h1 { margin: 0 auto; max-width: 17ch; font-size: clamp(44px, 7.4vw, 96px); line-height: 0.98; font-weight: 750; letter-spacing: -0.045em; }
+h1 em { font-style: normal; color: var(--lime); }
+.lede { max-width: 640px; margin: 28px auto 0; font-size: clamp(17px, 2vw, 20px); color: var(--dim); }
+.ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
+.button { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 999px; font-weight: 600; font-size: 16px; text-decoration: none; box-shadow: inset 0 0 0 1px var(--hairline); transition: transform 160ms, background 160ms; }
+.button:hover { background: var(--raised); }
+.button.primary { background: var(--lime); color: var(--ink); box-shadow: none; }
+.button.primary:hover { background: color-mix(in srgb, var(--lime) 88%, var(--paper)); transform: translateY(-1px); }
+.fine { margin: 18px 0 0; font-size: 14px; color: var(--dim); }
+
+/* The product, framed the way the app frames its own panes. */
+.shot { margin-top: 24px; margin-bottom: 0; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 16px; box-shadow: 0 0 0 1px var(--hairline), 0 40px 120px color-mix(in srgb, var(--lime) 9%, transparent); }
+
+.agents { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 56px 0 24px; }
+.agents p { margin: 0; font-size: 14px; color: var(--dim); }
+.agents ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 36px; margin: 0; padding: 0; list-style: none; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+
+/* Pillars and features */
+h2 { margin: 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.05; font-weight: 720; letter-spacing: -0.035em; }
+h3 { margin: 0 0 8px; font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
+.how { padding: 120px 0 40px; }
+.pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin: 56px 0 0; padding: 0; list-style: none; }
+.pillars li { padding-top: 22px; border-top: 1px solid var(--hairline); }
+.pillars p, .grid p { margin: 0; color: var(--dim); font-size: 16px; }
+.num { display: block; margin-bottom: 14px; font: 500 14px var(--mono); color: var(--lime); }
+.features { padding: 100px 0 40px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 48px 0 0; padding: 0; list-style: none; background: var(--hairline); border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--hairline); }
+.grid li { padding: 28px; background: var(--bg); transition: background 160ms; }
+.grid li:hover { background: var(--raised); }
+
+/* Closing */
+.open { display: flex; align-items: center; justify-content: space-between; gap: 32px; margin-top: 110px; padding: 56px; border-radius: 24px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.open p { max-width: 520px; margin: 16px 0 0; color: var(--dim); }
+.open .ctas { margin: 0; flex: none; }
+.foot { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 64px 0 48px; font-size: 14px; }
+.foot nav { display: flex; flex-wrap: wrap; gap: 22px; }
+.foot nav a { color: var(--dim); text-decoration: none; }
+.foot nav a:hover { color: var(--text); }
+
+@media (max-width: 860px) {
+  .nav nav a:not(.nav-cta) { display: none; }
+  .hero { padding-top: 64px; }
+  .pillars, .grid { grid-template-columns: 1fr; }
+  .open { flex-direction: column; align-items: flex-start; padding: 32px; }
+  .foot { flex-direction: column; align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }

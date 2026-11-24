@@ -1,0 +1,111 @@
+<!doctype html>
+<!-- oyafactory.com: Oya Factory's own landing page. Static, no script, no tracking. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oya Factory — run every coding agent, see everything they do</title>
+  <meta name="description" content="Oya Factory is a free, open-source desktop workspace for Claude Code, Codex, Antigravity and OpenCode. Every task on its own branch, every change on screen, your checks after every turn.">
+  <link rel="canonical" href="https://oyafactory.com/">
+  <meta property="og:title" content="Oya Factory">
+  <meta property="og:description" content="Run every coding agent. See everything they do. Free and open source.">
+  <meta property="og:image" content="https://oyafactory.com/assets/oya-factory-workspace.png">
+  <meta property="og:url" content="https://oyafactory.com/">
+  <meta name="theme-color" content="#1a1a1a">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="assets/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="nav wrap">
+    <a class="brand" href="/" aria-label="Oya Factory home"><img src="assets/logo.svg" alt="" width="28" height="28"><span>Oya Factory</span></a>
+    <nav aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#open">Open source</a>
+      <a class="nav-cta" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>An agentic development environment</p>
+      <h1 id="hero-title">Run every coding agent.<br><em>See everything</em> they do.</h1>
+      <p class="lede">Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side — each task on its own branch — and puts every diff, command and check on screen the moment it happens.</p>
+      <div class="ctas">
+        <a class="button primary" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download for macOS &amp; Windows</a>
+        <a class="button" href="https://github.com/OyadotAI/keel">View on GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+      <p class="fine">Free and open source · MIT · No account, no license key, no step limits</p>
+    </section>
+
+    <figure class="shot wrap">
+      <img src="assets/oya-factory-workspace.png" width="1440" height="866" alt="Oya Factory: a sidebar of projects and lanes, a finished Codex turn in the conversation, and the Checks panel showing the project's checks passed on the current commit.">
+    </figure>
+
+    <section class="agents wrap" aria-label="Supported agents">
+      <p>Works with the agents you already use</p>
+      <ul><li>Claude Code</li><li>Codex</li><li>Antigravity</li><li>OpenCode</li></ul>
+    </section>
+
+    <section class="how wrap" id="how" aria-labelledby="how-title">
+      <h2 id="how-title">The terminal shows you text.<br>Oya Factory shows you the work.</h2>
+      <ol class="pillars">
+        <li>
+          <span class="num">01</span>
+          <h3>Visible</h3>
+          <p>Each turn is one reviewable record: the files it changed, the commands it ran with their output, your project's checks, the time and the cost. A command that needs your yes arrives as a question in the conversation, not a refusal in a log.</p>
+        </li>
+        <li>
+          <span class="num">02</span>
+          <h3>Clean git</h3>
+          <p>A lane is a branch is a worktree. Every turn is checkpointed and can be rewound; merging is a <code>--no-ff</code> you can read later. Nothing lands in your history that you couldn't reconstruct.</p>
+        </li>
+        <li>
+          <span class="num">03</span>
+          <h3>Many agents, one machine</h3>
+          <p>Run several lanes at once, Claude in one and Codex in the next. Each is legible on its own, and two agents are never allowed to write the same working tree.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="features wrap" id="features" aria-labelledby="features-title">
+      <h2 id="features-title">Everything a day of agent work needs</h2>
+      <ul class="grid">
+        <li><h3>Your checks, every turn</h3><p>Your project's own <code>make check</code>, tests or lint run after each turn, and the verdict sits beside the reply.</p></li>
+        <li><h3>Rewind any turn</h3><p>A snapshot before every turn. Undo what an agent did without touching what you did.</p></li>
+        <li><h3>Stage one hunk</h3><p>Keep three of an agent's four edits. Hunks are matched by content, so nothing stages at the wrong place.</p></li>
+        <li><h3>Issue to pull request</h3><p>Start a task from a GitHub issue on its own branch, send corrections, and publish one traceable PR.</p></li>
+        <li><h3>Recurring tasks</h3><p>A saved instruction on a schedule — nightly dependency checks, weekly cleanups — each run on its own branch.</p></li>
+        <li><h3>A browser for your agents</h3><p>Each lane gets its own browser tab, so an agent can test the page it just built without touching yours.</p></li>
+        <li><h3>Point at the pixel</h3><p>Click an element in the live preview, say what should change, and see whether the right file changed.</p></li>
+        <li><h3>Find in the terminal</h3><p>⌘F through an agent's scrollback, and quick commands you save once and run from anywhere.</p></li>
+        <li><h3>Set up right, automatically</h3><p>An agent team, recommended skills and a readiness scan, kept current as Oya Factory improves.</p></li>
+      </ul>
+    </section>
+
+    <section class="open wrap" id="open" aria-labelledby="open-title">
+      <div>
+        <h2 id="open-title">Free. Open source. Yours.</h2>
+        <p>Oya Factory is MIT licensed. Read the code, change it, ship it. What it writes into your projects is yours. It runs on your machine: your agents talk to their own providers, and Oya Factory puts no server of its own in between.</p>
+      </div>
+      <div class="ctas">
+        <a class="button primary" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download Oya Factory</a>
+        <a class="button" href="https://github.com/OyadotAI/keel">Star on GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot wrap">
+    <a class="brand" href="/"><img src="assets/logo.svg" alt="" width="22" height="22"><span>Oya Factory</span></a>
+    <nav aria-label="More from Oya">
+      <a href="https://oya.dev">oya.dev</a>
+      <a href="https://oyabrowser.com">Oya Browser</a>
+      <a href="https://github.com/OyadotAI/keel">Source</a>
+      <a href="https://github.com/OyadotAI/keel/blob/main/docs/privacy.md">Privacy</a>
+      <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE">MIT License</a>
+    </nav>
+  </footer>
+</body>
+</html>

@@ -37,7 +37,9 @@ window.WebSocket = FixtureSocket as unknown as typeof WebSocket;
 
 const question: Pending = { id: "q-request", lane: "question", session_id: "fixture", tool: "AskUserQuestion", command: "", rules: [], input: { questions: [{ question: "Which checkout behavior should we keep?", options: [{ label: "Keep existing behavior" }, { label: "Use the new flow" }] }] } };
 function ended(status: string, check?: string) {
-  const conv = applyFrames({ turns: [] }, [{ op: "open", turn: "fixture-turn", prompt: "Improve checkout behavior" }, { op: "text", turn: "fixture-turn", step: "reply", kind: "say", append: "Synthetic result. Inspect the project checks before sharing the change." }, { op: "close", turn: "fixture-turn", reason: status }]);
+  // `?shot` reads like a real turn, for product screenshots; the default says it is synthetic.
+  const reply = params.has("shot") ? "Done. The receipt now keeps its checkout identity across retries, and a test pins it: a retried payment can no longer attach to a different cart. Project checks passed on this commit." : "Synthetic result. Inspect the project checks before sharing the change.";
+  const conv = applyFrames({ turns: [] }, [{ op: "open", turn: "fixture-turn", prompt: params.has("shot") ? "Make checkout receipts keep their identity when a payment is retried" : "Improve checkout behavior" }, { op: "text", turn: "fixture-turn", step: "reply", kind: "say", append: reply }, { op: "close", turn: "fixture-turn", reason: status }]);
   conv.turns[0] = { ...conv.turns[0], ended: true, gate: check ? { status: check, command: "pnpm test", problems: check === "failed" ? [{ file: "src/checkout.ts", line: 42, message: "Expected a retried checkout to retain its idempotency key" }] : [] } : undefined };
   return conv;
 }
