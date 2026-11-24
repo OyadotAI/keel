@@ -68,8 +68,14 @@ h1 em { font-style: normal; color: var(--lime); }
 .button.primary { background: var(--lime); color: var(--ink); box-shadow: none; }
 .button.primary:hover { background: color-mix(in srgb, var(--lime) 88%, var(--paper)); transform: translateY(-1px); }
 .fine { margin: 18px 0 0; font-size: 14px; color: var(--dim); }
-.used-by { margin: 40px 0 0; font-size: 15px; color: var(--dim); }
-.used-by strong { color: var(--text); font-weight: 650; letter-spacing: -0.01em; }
+/* Used by: one muted row; marks where a company's mark may be used, typeset names otherwise. */
+.logos { margin: 64px 0 0; }
+.logos p { margin: 0 0 18px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.logos ul { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 44px; margin: 0; padding: 0; list-style: none; }
+.logos li { display: inline-flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 700; letter-spacing: -0.03em; color: color-mix(in srgb, var(--paper) 70%, var(--ink)); transition: color 200ms; }
+.logos li:hover { color: var(--paper); }
+.logos svg { width: 24px; height: 24px; }
+.logos .more { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--dim); }
 
 /* The product, framed the way the app frames its own panes. */
 .shot { margin-top: 24px; margin-bottom: 0; }
