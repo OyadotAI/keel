@@ -122,6 +122,10 @@ pub struct Plan {
     /// Whether this project has Keel's team at all. A project with none is the scanner's
     /// `agent/no-reviewers`, and is not an update.
     pub present: bool,
+    /// Whether Keel provably wrote the team that is there: at least one agent file is byte-for-byte
+    /// a version Keel shipped. `present` alone is any file at a team path — `.claude/agents/pm.md`
+    /// is a common name — so an update without trust is only for a team that is `ours`.
+    pub ours: bool,
     pub agents: Agents,
 }
 
@@ -189,6 +193,10 @@ pub fn plan(root: &Utf8Path, agents: &[Agent]) -> Plan {
         present: tmpl::agents()
             .iter()
             .any(|(rel, _)| root.join(rel).exists()),
+        ours: tmpl::agents().iter().any(|(rel, body)| {
+            std::fs::read(root.join(rel))
+                .is_ok_and(|b| lf(&b) == body.as_bytes() || shipped(rel, &b))
+        }),
         agents: Agents {
             claude: agents.contains(&Agent::Claude),
             antigravity: agents.contains(&Agent::Antigravity),
@@ -526,6 +534,22 @@ mod tests {
     fn write(root: &Utf8Path, rel: &str, body: &str) {
         std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
         std::fs::write(root.join(rel), body).unwrap();
+    }
+
+    /// A team is Keel's only when one of its files is a version Keel shipped: the person's own
+    /// `pm.md` at the same path is a team that is present, not one Keel may update unasked.
+    #[test]
+    fn a_team_is_ours_only_when_keel_wrote_a_file_of_it() {
+        let (_d, root) = repo();
+        write(&root, ".claude/agents/pm.md", "my own pm");
+        let theirs = plan(&root, &[Agent::Claude]);
+        assert!(theirs.present && !theirs.ours);
+        let old = old_version(".claude/agents/principal.md");
+        write(&root, ".claude/agents/principal.md", &old);
+        assert!(plan(&root, &[Agent::Claude]).ours, "an older shipped version is ours");
+        std::fs::remove_file(root.join(".claude/agents/principal.md")).unwrap();
+        write(&root, ".claude/agents/qa.md", tmpl::QA_AGENT);
+        assert!(plan(&root, &[Agent::Claude]).ours, "the current version is ours");
     }
 
     /// An old Keel's untouched file is stale; an edited one is the person's; a deleted one stays

@@ -52,7 +52,7 @@ export function TeamUpdate({ ep, project, plan, reread }: { ep: Endpoint; projec
   const added = !!plan?.add.some((p) => p.startsWith(".agents/") || p.startsWith(".codex/"));
   // A team the project already has is kept current on its own, trusted or not; only adding one
   // waits on trust. Either way this card then says what is happening, not what to click.
-  if ((trusted || plan?.present) && recordShown(record)) {
+  if ((trusted || plan?.ours) && recordShown(record)) {
     const auto = <AutoTeam ep={ep} record={record} />;
     if (!offered(plan) || !plan) return <>{auto}{banner}</>;
     return <div className="team-install">

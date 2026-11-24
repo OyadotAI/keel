@@ -166,7 +166,7 @@ pub(crate) fn due(
             if trusted {
                 out.push(Step::Adopt);
             }
-        } else if !plan.add.is_empty() || !plan.replace.is_empty() {
+        } else if (!plan.add.is_empty() || !plan.replace.is_empty()) && (trusted || plan.ours) {
             out.push(Step::Update);
         }
     }
@@ -245,7 +245,7 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
                 let trusted = crate::permissions::trusted(&root);
                 let plan = crate::team::plan(&root, &crate::team::installed());
                 // Untrusted, only an out-of-date team is worth a pass: the update needs no trust.
-                let stale = plan.present && (!plan.add.is_empty() || !plan.replace.is_empty());
+                let stale = plan.ours && (!plan.add.is_empty() || !plan.replace.is_empty());
                 if !trusted && !stale {
                     return None;
                 }
@@ -673,6 +673,7 @@ mod tests {
     fn due_skips_failed_plugins_third_party_and_an_untrusted_or_logged_out_machine() {
         let plan = crate::team::Plan {
             present: true,
+            ours: true,
             add: vec![".claude/agents/pm.md".into()],
             ..Default::default()
         };
@@ -717,6 +718,16 @@ mod tests {
         assert!(
             due(&fresh, &[], &Record::default(), false, false).is_empty(),
             "an untrusted project without a team is never given one"
+        );
+        let lookalike = crate::team::Plan {
+            present: true,
+            ours: false,
+            add: vec![".claude/agents/qa.md".into()],
+            ..Default::default()
+        };
+        assert!(
+            due(&lookalike, &[], &Record::default(), false, false).is_empty(),
+            "a file at a team path that Keel did not write is not a team to update without trust"
         );
     }
 

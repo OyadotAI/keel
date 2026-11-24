@@ -7,6 +7,8 @@ export interface TeamPlan {
   kept: string[];
   not_restored: string[];
   present: boolean;
+  /** Keel provably wrote the team that is there, so it is kept current without trust. */
+  ours?: boolean;
   agents: { claude: boolean; antigravity: boolean; codex: boolean };
 }
 
