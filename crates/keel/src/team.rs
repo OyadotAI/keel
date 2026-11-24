@@ -546,10 +546,16 @@ mod tests {
         assert!(theirs.present && !theirs.ours);
         let old = old_version(".claude/agents/principal.md");
         write(&root, ".claude/agents/principal.md", &old);
-        assert!(plan(&root, &[Agent::Claude]).ours, "an older shipped version is ours");
+        assert!(
+            plan(&root, &[Agent::Claude]).ours,
+            "an older shipped version is ours"
+        );
         std::fs::remove_file(root.join(".claude/agents/principal.md")).unwrap();
         write(&root, ".claude/agents/qa.md", tmpl::QA_AGENT);
-        assert!(plan(&root, &[Agent::Claude]).ours, "the current version is ours");
+        assert!(
+            plan(&root, &[Agent::Claude]).ours,
+            "the current version is ours"
+        );
     }
 
     /// An old Keel's untouched file is stale; an edited one is the person's; a deleted one stays
