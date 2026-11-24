@@ -257,7 +257,9 @@ pub(crate) fn message(
 ) -> String {
     let mut out = format!("{subject}\n\n");
     match by {
-        By::Open => out.push_str("Keel wrote this on project open, in a trusted project.\n"),
+        By::Open => {
+            out.push_str("Keel wrote this on project open, keeping its own files current.\n")
+        }
         By::Click => out.push_str(&format!("Keel wrote this when you clicked {clicked}.\n")),
     }
     for (title, paths) in sections {

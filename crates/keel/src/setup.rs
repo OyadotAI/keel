@@ -1,11 +1,12 @@
-//! Automatic setup: in a trusted project the daemon keeps Keel's own agent team, skills and
-//! suggested plugins current on its own — on open, when a writer claim frees, and when the
-//! project's git state changes — and keeps one record of what it did for every window to read.
+//! Automatic setup: the daemon keeps Keel's own agent team current in every project that has one,
+//! and in a trusted project also adds the team and the suggested plugins — on open, when a
+//! writer claim frees, and when the project's git state changes — keeping one record of what it
+//! did for every window to read. Updating needs no trust because it only refreshes files Keel
+//! wrote, never over the person's edits; adding a team or a plugin is a decision about the
+//! project, so that stays behind trust.
 //!
 //! The daemon rather than the page, because trust is read here, claims live here, and a project
-//! with two windows (or none) must converge exactly once. Nothing is written in an untrusted
-//! project: trust is the one decision that already means "Keel may act here without asking",
-//! and it is visible and withdrawable for as long as it holds.
+//! with two windows (or none) must converge exactly once.
 use crate::lock::Locked;
 use crate::serve::{AppState, blocking};
 use crate::team::By;
@@ -157,18 +158,19 @@ pub(crate) fn due(
     trusted: bool,
     plugins_ok: bool,
 ) -> Vec<Step> {
-    if !trusted {
-        return Vec::new();
-    }
     let mut out = Vec::new();
     if !rec.failed_team {
+        // Adding a team is a decision about the project; keeping the one it has current is
+        // maintenance of Keel's own files, so an update needs no trust — only adopting does.
         if !plan.present {
-            out.push(Step::Adopt);
+            if trusted {
+                out.push(Step::Adopt);
+            }
         } else if !plan.add.is_empty() || !plan.replace.is_empty() {
             out.push(Step::Update);
         }
     }
-    if plugins_ok {
+    if plugins_ok && trusted {
         out.extend(
             suggested
                 .iter()
@@ -241,10 +243,12 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
         blocking(
             move || {
                 let trusted = crate::permissions::trusted(&root);
-                if !trusted {
+                let plan = crate::team::plan(&root, &crate::team::installed());
+                // Untrusted, only an out-of-date team is worth a pass: the update needs no trust.
+                let stale = plan.present && (!plan.add.is_empty() || !plan.replace.is_empty());
+                if !trusted && !stale {
                     return None;
                 }
-                let plan = crate::team::plan(&root, &crate::team::installed());
                 // The person's own uncommitted edits, which an open never writes over: known
                 // before anything is touched, so a wait on them is a wait and not a run.
                 let yours: Vec<String> = plan
@@ -263,13 +267,14 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
                     state.writer_of(&root),
                     settings_are_ours(&root),
                     yours,
+                    trusted,
                 ))
             },
             None,
         )
         .await
     };
-    let Some((plan, suggested, in_progress, writer, settings_ours, yours)) = looked else {
+    let Some((plan, suggested, in_progress, writer, settings_ours, yours, trusted)) = looked else {
         // Untrusted: nothing happens and nothing is said — unless a result was on screen from
         // before trust was withdrawn, which is cleared where it shows.
         let had = record().locked().phase != Phase::Idle;
@@ -287,7 +292,7 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
         return;
     };
     let rec = record().locked().clone();
-    let mut steps = due(&plan, &suggested, &rec, true, settings_ours);
+    let mut steps = due(&plan, &suggested, &rec, trusted, settings_ours);
     // Plugins need a logged-in `claude`. Asked before anything else is decided, so a pass with
     // only the person's edits in its way waits quietly instead of running for nothing on every
     // wake — which is what it did on a machine where `claude` was not logged in.
@@ -364,7 +369,8 @@ async fn pass(state: &Arc<AppState>, trigger: Trigger) {
     for step in steps {
         // Trust withdrawn mid-pass stops the next unit; the one in flight is one commit of
         // Keel's own paths, and undoing that would be a history rewrite nobody asked for.
-        let still = {
+        // A team update needs no trust; adopting and plugins stop if it was withdrawn mid-pass.
+        let still = step == Step::Update || {
             let root = root.clone();
             blocking(move || crate::permissions::trusted(&root), false).await
         };
@@ -689,7 +695,11 @@ mod tests {
                 }
             ]
         );
-        assert!(due(&plan, &suggested, &rec, false, true).is_empty());
+        // Untrusted: the team it already has is kept current; no plugin is installed.
+        assert_eq!(
+            due(&plan, &suggested, &rec, false, true),
+            vec![Step::Update]
+        );
         assert_eq!(
             due(&plan, &suggested, &rec, true, false),
             vec![Step::Update]
@@ -703,6 +713,10 @@ mod tests {
         assert_eq!(
             due(&fresh, &[], &Record::default(), true, false),
             vec![Step::Adopt]
+        );
+        assert!(
+            due(&fresh, &[], &Record::default(), false, false).is_empty(),
+            "an untrusted project without a team is never given one"
         );
     }
 
@@ -732,7 +746,7 @@ mod tests {
         assert_eq!(head[0], "Add the agent team");
         let body = crate::git::run(&root, &["log", "-1", "--format=%b"]).unwrap();
         assert!(
-            body.starts_with("Keel wrote this on project open, in a trusted project."),
+            body.starts_with("Keel wrote this on project open, keeping its own files current."),
             "{body}"
         );
         assert!(body.contains(".claude/agents/pm.md"));

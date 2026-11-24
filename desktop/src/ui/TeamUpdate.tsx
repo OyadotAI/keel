@@ -50,8 +50,9 @@ export function TeamUpdate({ ep, project, plan, reread }: { ep: Endpoint; projec
   }
   const banner = run && <Banner tone={run.state.tone}>{run.state.text}</Banner>;
   const added = !!plan?.add.some((p) => p.startsWith(".agents/") || p.startsWith(".codex/"));
-  if (trusted && recordShown(record)) {
-    // Oya Factory keeps the team current on its own; this card says what it is doing, not what to click.
+  // A team the project already has is kept current on its own, trusted or not; only adding one
+  // waits on trust. Either way this card then says what is happening, not what to click.
+  if ((trusted || plan?.present) && recordShown(record)) {
     const auto = <AutoTeam ep={ep} record={record} />;
     if (!offered(plan) || !plan) return <>{auto}{banner}</>;
     return <div className="team-install">
