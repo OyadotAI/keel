@@ -21,7 +21,7 @@ out = ["# Oya Factory — full description", "",
        "Source: https://github.com/OyadotAI/keel (MIT licence)", "Made by: Oya (https://oya.dev)", "",
        "## In one line", "", text(re.search(r'<h1 id="hero-title">(.*?)</h1>', home, re.S).group(1)), "",
        text(re.search(r'<p class="lede">(.*?)</p>', home, re.S).group(1)), "",
-       text(re.search(r'<p class="used-by">(.*?)</p>', home, re.S).group(1)) + ".", "",
+       "Used by engineers at " + ", ".join(text(n) for n in re.findall(r"<li[^>]*>(?:<svg.*?</svg>)?([^<]+)</li>", re.search(r'<div class="logos">(.*?)</div>', home, re.S).group(1)) if "more" not in n) + " and other companies.", "",
        "## Why engineers switch", ""] + reasons(home)
 out += ["## The platform", ""]
 for h, p in re.findall(r'<h3>(.*?)</h3>\s*<p>(.*?)</p>', re.search(r'<div class="tiles">(.*?)</section>', home, re.S).group(1), re.S):

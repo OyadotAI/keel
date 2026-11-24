@@ -1,6 +1,6 @@
 # Oya Factory — full description
 
-> Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side with a built-in team of agents, checks every turn with your project's own tests, and rewinds any turn. Free, open source, for macOS and Windows.
+> Oya Factory is for AI-native teams that want to ship 100x faster and still keep the SDLC: a built-in team of agents around Claude Code, Codex, Antigravity and OpenCode, your checks on every turn, any turn rewindable. Free and open source for macOS and Windows.
 
 Website: https://oyafactory.com/
 Download: https://github.com/OyadotAI/keel-releases/releases/latest
@@ -11,9 +11,9 @@ Made by: Oya (https://oya.dev)
 
 It's 2026. Are you still using one agent?
 
-Oya Factory puts a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode. Run them side by side, each task on its own branch, with your project's checks on every turn.
+Oya Factory is for AI-native teams that want to ship 100× faster and still keep the SDLC: a product manager, designer, principal engineer, QA, reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode — scope, design, build, review and test on every task, your checks on every turn.
 
-Used by engineers at Amazon, Google, Salesforce and other companies.
+Used by engineers at Oya, Google, Amazon, Salesforce, Jumper Media and other companies.
 
 ## Why engineers switch
 
