@@ -197,6 +197,11 @@ fn read(store: &Utf8Path) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// How long an install waits for a turn to free the project before it gives up and says so.
+const WAIT_FOR_TREE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// How often it looks again while it waits.
+const WAIT_STEP: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// `claude <args>` in the repository, streaming its output; when `project`, as Keel's write of
 /// `rel` — under the tree's writer claim, the repository's own copy set aside first, the result
 /// recorded (and committed when asked) after. Returns the exit code.
@@ -234,11 +239,28 @@ pub async fn run(
     if !project {
         return crate::plugins::pipe(&mut claude(), tx, tap).await;
     }
-    let held = match crate::writes::hold(state, &root, "project-config") {
-        Ok(h) => h,
-        Err((_, why)) => {
-            say(why).await;
-            return 1;
+    // A turn writing the project holds its one writer slot. An install waits for it rather than
+    // refusing: a refusal here was one log line under an exit code, and read as "it didn't
+    // install". Said once, retried every couple of seconds, and given up on at the ceiling.
+    let deadline = std::time::Instant::now() + WAIT_FOR_TREE;
+    let mut said = false;
+    let held = loop {
+        match crate::writes::hold(state, &root, "project-config") {
+            Ok(h) => break h,
+            Err((status, why))
+                if status == axum::http::StatusCode::CONFLICT
+                    && std::time::Instant::now() < deadline =>
+            {
+                if !said {
+                    say(format!("Waiting: {why}")).await;
+                    said = true;
+                }
+                tokio::time::sleep(WAIT_STEP).await;
+            }
+            Err((_, why)) => {
+                say(why).await;
+                return 1;
+            }
         }
     };
     let prep = root.clone();

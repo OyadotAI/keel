@@ -52,3 +52,18 @@
 
 /* A recommendation reads as an offer: the accent on the count, nothing louder. */
 .recommended-entry .attention-count { color: var(--accent); font-weight: 600; }
+/* The Recommended dialog: one row per skill or plugin, its why, and its own Install. */
+.rec { display: flex; flex-direction: column; gap: 12px; min-width: min(560px, 80vw); }
+.rec-list { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow: auto; }
+.rec-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; box-shadow: 0 1px 0 var(--hairline); }
+.rec-row:last-child { box-shadow: none; }
+.rec-main { flex: 1; min-width: 0; }
+.rec-main p { margin: 0; }
+.rec-name { display: flex; align-items: center; gap: 8px; }
+.rec-kind { color: var(--faint); font-size: var(--t-small); }
+.rec-why { margin-top: 4px !important; color: var(--text); font-size: var(--t-small); }
+.rec-desc { margin-top: 2px !important; color: var(--dim); font-size: var(--t-small); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rec-status { margin-top: 6px !important; font-size: var(--t-small); color: var(--dim); }
+.rec-status.done { color: var(--add); }
+.rec-status.failed { color: var(--del); white-space: pre-wrap; }
+.rec-row > button { flex: none; }

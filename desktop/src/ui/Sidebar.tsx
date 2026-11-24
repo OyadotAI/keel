@@ -69,10 +69,10 @@ export function Sidebar({ explorer, showCode, attention }: { explorer?: ReactNod
       <div className="workspace-brand"><span className="brand-symbol"><BrandMark size={32} /></span><strong>Oya Factory</strong></div>
       <div className="sidebar-actions">
         <button className="open" onClick={pickProject} title={`Open a project folder (${label({ key: "o" })})`}>
-          <Icon name="folder" size={17} /> Open project…
+          <Icon name="folder" size={16} /> Open project…
         </button>
         <button className="ghost" onClick={() => useStore.setState({ creating: true, settings: false })} aria-label="New project" title="New project from a template, or clone from GitHub">
-          <Icon name="plus" size={17} />
+          <Icon name="plus" size={16} />
         </button>
       </div>
       {attention}

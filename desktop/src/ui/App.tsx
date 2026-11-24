@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode, type Dispatch, type S
 import { Sidebar, pickProject } from "./Sidebar";
 import { Shortcuts } from "./Shortcuts";
 import { focusTerminal } from "./kit";
-import { useStore, agentName, oneShot, projectTrust } from "../store";
+import { AGENT_NAME, useStore, agentName, oneShot, projectTrust, type Agent } from "../store";
 import { BROWSER_CHOICE } from "../browser-preference";
 import { Settings } from "./Settings";
 import { NewProject } from "./NewProject";
@@ -420,6 +420,7 @@ function useCommands({ lane, showAttention, showTab, togglePanel, toggleSidebar,
     }
     out.push({ id: "new", title: "New lane", detail: s.projects[l.project]?.name, keys: label({ key: "n" }), run: () => newIn(lane!, false) });
     out.push({ id: "new-branch", title: "New lane on its own branch", detail: s.projects[l.project]?.name, keys: label({ key: "n", shift: true }), run: () => newIn(lane!, true) });
+    for (const [agent, name] of Object.entries(AGENT_NAME) as [Agent, string][]) out.push({ id: `new-branch-${agent}`, title: `New ${name} lane on its own branch`, detail: s.projects[l.project]?.name, run: () => s.select(s.newLane(l.project, true, agent)) });
     if (l.wt) {
       out.push({ id: "merge", title: "Merge lane…", keys: label({ key: "m", shift: true }), run: () => setAsking("merge") });
       out.push({ id: "discard", title: "Discard lane…", keys: label({ key: "Backspace", shift: true }), run: () => setAsking("discard") });

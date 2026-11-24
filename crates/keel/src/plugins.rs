@@ -221,11 +221,14 @@ pub async fn list(
     Query(q): Query<CatalogQuery>,
 ) -> axum::Json<CatalogResponse> {
     crate::serve::in_blocking(move || {
-        let repo = q.repo.map(Utf8PathBuf::from);
-        // Extensions asks without a repo; Keel installs at project scope, so "installed" is about
-        // this daemon's project, or its own installs would read as missing.
-        let project = repo.clone().unwrap_or_else(|| state.repo());
-        axum::Json(catalog_for(repo.as_deref(), &project))
+        // Extensions and the Recommended dialog ask without a repo: this daemon's project is the
+        // one both "installed" and "relevant" are about, or a JavaScript project is recommended
+        // rust-analyzer and its own project-scope installs read as missing.
+        let project = q
+            .repo
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| state.repo());
+        axum::Json(catalog_for(Some(&project), &project))
     })
     .await
 }

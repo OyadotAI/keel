@@ -7,7 +7,8 @@ import type { TaskSummary } from "../delivery/model";
 import { Dialog, Empty, Tabs } from "./kit";
 import { Icon } from "./icons";
 import { label } from "../keys";
-import { missing, useSkillCatalog } from "../recommended-skills";
+import { useRecommendations } from "../recommended-skills";
+import { RecommendedDialog } from "./RecommendedDialog";
 import { AgentMark } from "./AgentMark";
 import { IssueIntake } from "./TaskIssue";
 import { RecurringTasks } from "./TaskSchedules";
@@ -17,12 +18,18 @@ export function TasksButton({ open }: { open: () => void }) {
   return <button className="attention-entry" onClick={open} aria-haspopup="dialog"><Icon name="branch" size={16} /><span>Tasks</span></button>;
 }
 
-/** Recommended skills this project lacks, under Tasks where a first run looks — most people
- *  never open Extensions to find them. Absent when there is nothing to add. */
+/** Recommended skills and plugins this project lacks, under Tasks where a first run looks — most
+ *  people never open Extensions to find them. Opens the dialog that names each and installs it.
+ *  Absent when there is nothing to add, except while its dialog is open. */
 export function RecommendedButton() {
-  const count = missing(useSkillCatalog() ?? []).length;
-  if (!count) return null;
-  return <button className="attention-entry recommended-entry" onClick={() => useStore.setState({ extensions: true, settings: false, creating: false })} title={`${count} recommended skill${count === 1 ? "" : "s"} for this project`}><Icon name="plus" size={16} /><span>Recommended</span><span className="attention-count">{count}</span></button>;
+  const rec = useRecommendations();
+  const [open, setOpen] = useState(false);
+  const count = rec.skills.length + rec.plugins.length;
+  if (!count && !open) return null;
+  return <>
+    {count > 0 && <button className="attention-entry recommended-entry" onClick={() => setOpen(true)} aria-haspopup="dialog" title={`${count} recommended for this project`}><Icon name="plus" size={16} /><span>Recommended</span><span className="attention-count">{count}</span></button>}
+    {open && <RecommendedDialog close={() => setOpen(false)} />}
+  </>;
 }
 
 /** The palette, from the sidebar: everything is findable from one place, as in the window's ⌘K. */
