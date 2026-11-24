@@ -43,6 +43,7 @@ pub(crate) fn register(repo: &Utf8Path, mut source: Source) -> Result<String, St
         return Err("Task checkout must belong to this project.".into());
     }
     source.checkout = checkout.to_string();
+    crate::delivery::guard_registration(repo, &source)?;
     Repository::new(repo)?.change(|store| register_in(store, source))
 }
 
@@ -55,7 +56,12 @@ fn register_in(store: &mut Store, source: Source) -> Result<String, String> {
         })
     });
     if let Some(task) = existing {
-        if task.owner.provider != source.provider || task.owner.session != source.session {
+        let bootstrap_alias = task.owner.lane == source.lane
+            && task.owner.provider == source.provider
+            && source.session == source.lane;
+        if !bootstrap_alias
+            && (task.owner.provider != source.provider || task.owner.session != source.session)
+        {
             return Err(
                 "This source was handed to another coding agent. Continue from its current owner."
                     .into(),
@@ -81,7 +87,7 @@ fn register_in(store: &mut Store, source: Source) -> Result<String, String> {
         let oldest = store
             .tasks
             .values()
-            .filter(|t| t.continuation.is_none())
+            .filter(|t| t.continuation.is_none() && !t.pinned)
             .min_by(|a, b| a.updated_at.cmp(&b.updated_at))
             .map(|t| t.id.clone())
             .ok_or("Shared task storage is full of handed-off tasks. Finish or discard one, then retry.")?;
@@ -98,6 +104,7 @@ fn register_in(store: &mut Store, source: Source) -> Result<String, String> {
         notes: Notes::default(),
         evidence: Vec::new(),
         incomplete: true,
+        pinned: false,
         stopped_at: None,
         saved: Vec::new(),
         continuation: None,
@@ -134,10 +141,8 @@ pub(crate) fn session(repo: &Utf8Path, lane: &str, session: &str) -> Result<(), 
             .find(|t| t.owner.lane == lane)
             .ok_or("No task for this lane")?;
         task.owner.session = session.into();
-        for member in &mut task.members {
-            if member.lane == lane {
-                member.session = session.into();
-            }
+        if !task.members.contains(&task.owner) {
+            task.members.push(task.owner.clone());
         }
         Ok(())
     })
@@ -195,6 +200,7 @@ pub(crate) fn input(
 }
 /// Transferred checkouts accept agent starts only from their current owner; old sources remain readable.
 pub(crate) fn guard(repo: &Utf8Path, lane: &str, checkout: &Utf8Path) -> Result<(), String> {
+    crate::delivery::guard(repo, lane, checkout)?;
     let repository = Repository::new(repo)?;
     if !repository.root.join(".keel/tasks/state.json").exists() {
         return Ok(());

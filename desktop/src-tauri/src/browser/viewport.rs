@@ -29,6 +29,30 @@ struct Settings {
     reset: bool,
 }
 
+/// A hide request revokes native input before waiting for the active browser operation to settle.
+pub(super) fn intend(label: &str, bounds: Option<Bounds>) {
+    if let Some(state) = locked(&STATES)
+        .as_mut()
+        .and_then(|states| states.get_mut(label))
+    {
+        state.shown = bounds.is_some();
+        if let Some(bounds) = bounds {
+            state.bounds = Some(bounds);
+        }
+    }
+}
+/// Fixed-size snapshot mode takes precedence over an automatic view that is currently parked.
+pub(super) fn input_reason(label: &str) -> Option<&'static str> {
+    let state = state(label);
+    if state.size.is_some() {
+        Some("fixed_snapshot")
+    } else if !state.shown {
+        Some("parked")
+    } else {
+        None
+    }
+}
+
 /// Panel changes remember their automatic bounds without resizing an overridden page.
 pub async fn place(view: &tauri::Webview, bounds: Option<Bounds>) -> Result<(), String> {
     let size = {
@@ -45,9 +69,7 @@ pub async fn place(view: &tauri::Webview, bounds: Option<Bounds>) -> Result<(), 
     };
     match (bounds, size) {
         (Some(bounds), None) => crate::preview::place(view, &bounds).await,
-        _ => view
-            .set_position(LogicalPosition::new(OFF.0, OFF.1))
-            .map_err(|e| e.to_string()),
+        _ => park(view).await,
     }
 }
 
@@ -159,10 +181,9 @@ async fn resize(
     shown: bool,
 ) -> Result<(), String> {
     if let Some((width, height)) = size {
-        view.set_position(LogicalPosition::new(OFF.0, OFF.1))
-            .map_err(|e| e.to_string())?;
         view.set_size(LogicalSize::new(width, height))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        park(view).await
     } else if shown {
         if let Some(bounds) = bounds {
             crate::preview::place(view, &bounds).await?;
@@ -230,6 +251,38 @@ pub async fn refresh(app: &tauri::AppHandle, label: &str) {
     }
 }
 
+/// Keep parked content below native title-bar insets so CSS dimensions equal the requested viewport.
+pub(super) async fn park(view: &tauri::Webview) -> Result<(), String> {
+    view.set_position(LogicalPosition::new(OFF.0, OFF.1))
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let top = parked_inset(view).await?;
+        if top > 0.0 {
+            view.set_position(LogicalPosition::new(OFF.0, OFF.1 + top))
+                .map_err(|e| e.to_string())?;
+            let _ = parked_inset(view).await?;
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+async fn parked_inset(view: &tauri::Webview) -> Result<f64, String> {
+    use objc2_app_kit::NSView;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    view.with_webview(move |platform| {
+        let native = unsafe { &*(platform.inner() as *const NSView) };
+        native.layoutSubtreeIfNeeded();
+        let top = native.safeAreaInsets().top;
+        let _ = tx.send(top);
+    })
+    .map_err(|e| e.to_string())?;
+    tokio::time::timeout(super::METADATA_WAIT, rx)
+        .await
+        .map_err(|_| "Native viewport inset measurement timed out.")?
+        .map_err(|_| "The browser closed during viewport placement.".into())
+}
+
 fn emit(app: &tauri::AppHandle, label: &str, image: Option<capture::Image>, error: Option<String>) {
     let _ = app.emit_to("main", "browser-preview", json!({"lane":label.trim_start_matches("browser-"),"image":image,"fixed":state(label).size.is_some(),"error":error}));
 }
@@ -245,6 +298,10 @@ pub async fn screenshot(view: &tauri::Webview) -> Result<capture::Output, String
             "Screenshot viewport: {info}. Image: {width} × {height} px. Mobile mode: unsupported."
         ),
         image: Some(image),
+        data: Some(
+            json!({"viewport":serde_json::from_str::<serde_json::Value>(&info).unwrap_or(serde_json::Value::Null),"image":{"width":width,"height":height}}),
+        ),
+        ..Default::default()
     })
 }
 

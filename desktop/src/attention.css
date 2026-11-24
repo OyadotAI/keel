@@ -34,3 +34,15 @@
 @media (pointer: coarse) {
   .attention-entry, .dialog .attention-content .actions button { min-height: 44px; }
 }
+
+/* Decisions get one scroller in short windows; the composer cannot shrink their controls away. */
+@media (max-height: 650px) {
+  .agent-pane:has(> .chat-dock [data-attention-request]) > .agents { flex: 0 1 0; overflow: hidden; }
+  .agent-pane > .chat-dock:has([data-attention-request]) { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+  .agent-pane > .chat-dock:has([data-attention-request]) > * { flex-shrink: 0; }
+  .agent-pane > .chat-dock:has([data-attention-request]) :is(.strip, .runtime-approval, .plan-approval, .approval-context, .plan-approval-body) { flex: none; max-height: none; overflow: visible; }
+  .agent-pane > .chat-dock:has([data-attention-request]) .actions { flex-wrap: wrap; }
+  .agent-pane > .chat-dock:has([data-attention-request]) .actions button { height: auto; min-height: 32px; white-space: normal; overflow-wrap: anywhere; font-size: 14px; }
+  .agent-pane > .chat-dock:has([data-attention-request]) :is(.question-field .actions button.primary, .composer-send.primary:not(:disabled)) { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .agent-pane > .chat-dock:has([data-attention-request]) .question-field .actions button[aria-pressed=true] { box-shadow: inset 0 0 0 2px var(--accent); }
+}

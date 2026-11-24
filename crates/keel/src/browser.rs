@@ -22,6 +22,8 @@ mod detection;
 mod local;
 mod output;
 mod preference;
+mod references;
+mod reply;
 mod settings;
 mod viewport;
 pub(crate) use bindings::{
@@ -30,6 +32,7 @@ pub(crate) use bindings::{
 pub(crate) use choice::{oya_app, oya_installed};
 pub(crate) use output::SCREENSHOT_WIRE_BYTES;
 pub use output::{Image, Output};
+pub(crate) use reply::{selected as selected_backend, tool_reply};
 pub(crate) use settings::{
     reconnect, save as preference_save, set_lane, show as show_local, status as preference_status,
 };
@@ -60,6 +63,15 @@ pub enum Op {
         url: String,
     },
     Read,
+    ReadFrames,
+    Eval {
+        expression: String,
+        frame: Option<String>,
+    },
+    HitTest {
+        x: f64,
+        y: f64,
+    },
     Viewport {
         settings: Viewport,
     },
@@ -126,7 +138,45 @@ pub fn op(name: &str, args: &Value) -> Result<Op, String> {
         "browser_open" => Op::Open {
             url: web_only(args["url"].as_str().unwrap_or(""))?,
         },
-        "browser_read" => Op::Read,
+        "browser_read" => match args.get("frames") {
+            None | Some(Value::Bool(false)) => Op::Read,
+            Some(Value::Bool(true)) => Op::ReadFrames,
+            _ => return Err("`frames` must be a boolean.".into()),
+        },
+        "browser_eval" => {
+            const MAX_EXPRESSION_BYTES: usize = 32 * 1024;
+            let expression = args["expression"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty() && s.len() <= MAX_EXPRESSION_BYTES)
+                .ok_or("`expression` must be nonempty JavaScript, at most 32 KiB.")?;
+            let frame =
+                match args.get("frame") {
+                    None => None,
+                    Some(Value::String(s)) if !s.is_empty() && s.len() <= 128 => Some(s.clone()),
+                    _ => return Err(
+                        "`frame` must be an opaque reference from browser_read with frames:true."
+                            .into(),
+                    ),
+                };
+            Op::Eval {
+                expression: expression.into(),
+                frame,
+            }
+        }
+        "browser_hit_test" => {
+            let point = |key: &str| {
+                args[key]
+                    .as_f64()
+                    .filter(|n| n.is_finite() && *n >= 0.0)
+                    .ok_or(format!(
+                        "`{key}` must be a finite nonnegative viewport CSS coordinate."
+                    ))
+            };
+            Op::HitTest {
+                x: point("x")?,
+                y: point("y")?,
+            }
+        }
         "browser_viewport" => Op::Viewport {
             settings: Viewport::parse(args)?,
         },
@@ -182,6 +232,8 @@ pub fn is_tool(name: &str) -> bool {
         name,
         "browser_open"
             | "browser_read"
+            | "browser_eval"
+            | "browser_hit_test"
             | "browser_viewport"
             | "browser_screenshot"
             | "browser_click"
@@ -235,15 +287,43 @@ pub async fn call(
         .filter(|l| !l.is_empty())
         .ok_or("The Browser tab belongs to a lane, and this call came from none.")?;
     let op = op(name, args)?;
-    // Which browser runs this call is the lane's, read now — or asked now, the first time.
-    if let Some(project) = project
-        && let Some(bound) = bindings::authorize(project, lane, binding)?
-        && choice::choose(&bound.project, lane, &bound).await? == preference::Backend::LocalOya
-    {
-        return bindings::local(bound, op)
-            .await?
-            .bounded(name == "browser_screenshot");
+    let bound = project
+        .map(|project| bindings::authorize(project, lane, binding))
+        .transpose()?
+        .flatten();
+    let backend = match &bound {
+        Some(bound) => choice::choose(&bound.project, lane, bound).await?,
+        None => preference::Backend::Embedded,
+    };
+    let stamp = bound
+        .as_ref()
+        .map(|bound| bound.references.locked().begin(backend, &op))
+        .transpose()?;
+    let answer = if backend == preference::Backend::LocalOya {
+        bindings::local(bound.clone().ok_or("No browser binding")?, op).await
+    } else {
+        embedded(lane, op).await
+    };
+    let answer = answer.and_then(|mut output| {
+        let identity = output.identity.get_or_insert_with(|| json!({}));
+        identity["selected_backend"] = json!(if backend == preference::Backend::LocalOya {
+            "local_oya"
+        } else {
+            "embedded"
+        });
+        output.bounded(name == "browser_screenshot")
+    });
+    if let (Some(bound), Some(stamp)) = (bound, stamp) {
+        bound.references.locked().finish(
+            stamp,
+            answer.as_ref().is_ok_and(|output| output.ok != Some(false)),
+        );
     }
+    answer
+}
+
+/// Only the already selected embedded adapter receives this event; its answer cannot choose a backend.
+async fn embedded(lane: &str, op: Op) -> Answer {
     some_window(crate::events::windows())?;
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = format!(
@@ -261,7 +341,7 @@ pub async fn call(
     };
     crate::events::emit("browser", None, json!({ "id": id, "lane": lane, "op": op }));
     match tokio::time::timeout(wait, rx).await {
-        Ok(Ok(answer)) => answer?.bounded(name == "browser_screenshot"),
+        Ok(Ok(answer)) => answer,
         _ => Err(format!(
             "The Browser tab did not answer within {} s. The page may still be loading; read it again, or say what you could not do.",
             wait.as_secs()
@@ -270,7 +350,7 @@ pub async fn call(
 }
 
 /// What a window posts back: the op's text, or why it could not be done.
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct Result_ {
     pub id: String,
     pub ok: bool,
@@ -278,6 +358,12 @@ pub struct Result_ {
     pub text: String,
     #[serde(default)]
     pub image: Option<Image>,
+    #[serde(default)]
+    pub identity: Option<Value>,
+    #[serde(default)]
+    pub data: Option<Value>,
+    #[serde(default)]
+    pub outcome: Option<String>,
 }
 
 /// Answer a waiting call. `false` for an id nobody is waiting on — a result that arrived after its
@@ -287,10 +373,14 @@ pub async fn api_result(Json(r): Json<Result_>) -> Json<bool> {
     let Some(tx) = waiters().locked().remove(&r.id) else {
         return Json(false);
     };
-    let answer = if r.ok {
+    let answer = if r.ok || r.identity.is_some() {
         Ok(Output {
             text: capped(r.text),
             image: r.image,
+            identity: r.identity,
+            data: r.data,
+            outcome: r.outcome,
+            ok: Some(r.ok),
         })
     } else {
         Err(capped(r.text))
@@ -356,9 +446,32 @@ pub fn schemas() -> Vec<Value> {
         ),
         tool(
             "browser_read",
-            "Read the page in this lane's Browser tab: its title, address, visible text, and its interactive elements numbered as [n]. Use browser_screenshot for an image. Frame coverage depends on the selected browser: embedded mode reads the top frame only; local Oya uses its frame support. If content is missing, report that limit.",
-            serde_json::Map::new(),
+            "Read the page in this lane's Browser tab: its title, address, visible text, and its interactive elements numbered as [n]. Use browser_screenshot for an image. Use frames:true to include independently labelled descendant documents, including cross-origin frames, with opaque frame references and actionable numbers. Unread frames are explicit. The default reads the main document.",
+            props(&[(
+                "frames",
+                json!({"type":"boolean","description":"Include every descendant frame, with frame references and actionable element numbers."}),
+            )]),
             &[],
+            true,
+        ),
+        tool(
+            "browser_eval",
+            "Run a JavaScript expression in the owned page's main world, or in the exact frame reference from browser_read({frames:true}). This can mutate the page. Returns bounded JSON; unsupported values and timeouts are explicit and never retried.",
+            props(&[
+                ("expression", json!({"type":"string","maxLength":32768})),
+                ("frame", json!({"type":"string"})),
+            ]),
+            &["expression"],
+            false,
+        ),
+        tool(
+            "browser_hit_test",
+            "Find the real element under top-level viewport CSS coordinates, through frame boundaries. Returns element geometry, pointer-events and frame identity; reports incomplete traversal explicitly. Does not scroll, click or focus.",
+            props(&[
+                ("x", json!({"type":"number","minimum":0})),
+                ("y", json!({"type":"number","minimum":0})),
+            ]),
+            &["x", "y"],
             true,
         ),
         tool(
@@ -377,14 +490,14 @@ pub fn schemas() -> Vec<Value> {
         ),
         tool(
             "browser_click",
-            "Click element [n] from the last browser_read. Read again afterwards to see what changed.",
+            "Send native mouse movement, down and up to element [n] from the last browser_read. The result reports native events sent; blocked or stale targets are refused without a DOM-click fallback. Read again afterwards.",
             props(&[("element", element.clone())]),
             &["element"],
             false,
         ),
         tool(
             "browser_type",
-            "Type text into field [n] from the last browser_read, replacing what is there. `submit` presses Enter after, which submits a form. A `<select>` takes the option's text or value. The text is shown to the person with the call, like any tool's input: never type a secret they did not give you for this.",
+            "Type text into field [n] from the last browser_read, replacing what is there. `submit` requests form submission after the value update. The result reports the input method. A `<select>` takes the option's text or value. The text is shown to the person with the call, like any tool's input: never type a secret they did not give you for this.",
             props(&[
                 ("element", element.clone()),
                 ("text", json!({ "type": "string" })),
@@ -492,6 +605,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn diagnostic_arguments_preserve_exact_frame_references_and_reject_invalid_points() {
+        assert_eq!(
+            op("browser_read", &json!({"frames":true})).unwrap(),
+            Op::ReadFrames
+        );
+        assert!(op("browser_read", &json!({"frames":"true"})).is_err());
+        assert_eq!(
+            op(
+                "browser_eval",
+                &json!({"expression":"document.title","frame":"f-exact"})
+            )
+            .unwrap(),
+            Op::Eval {
+                expression: "document.title".into(),
+                frame: Some("f-exact".into())
+            }
+        );
+        for args in [
+            json!({"expression":""}),
+            json!({"expression":"1","frame":null}),
+            json!({"expression":"x".repeat(32769)}),
+        ] {
+            assert!(op("browser_eval", &args).is_err());
+        }
+        for args in [
+            json!({"x":-1,"y":0}),
+            json!({"x":"1","y":0}),
+            json!({"x":0}),
+        ] {
+            assert!(op("browser_hit_test", &args).is_err());
+        }
+        let eval = schemas()
+            .into_iter()
+            .find(|t| t["name"] == "browser_eval")
+            .unwrap();
+        assert_eq!(
+            eval["annotations"]["readOnlyHint"], false,
+            "eval can mutate a page"
+        );
+    }
+
     #[tokio::test]
     async fn no_window_fails_at_once_and_no_lane_is_refused() {
         assert!(
@@ -527,6 +682,7 @@ mod tests {
             ok: true,
             text: "Example Domain".into(),
             image: None,
+            ..Default::default()
         }))
         .await;
         assert!(taken);
@@ -536,6 +692,7 @@ mod tests {
             ok: true,
             text: String::new(),
             image: None,
+            ..Default::default()
         }))
         .await;
         assert!(!late, "an answer to nobody is said to be late");

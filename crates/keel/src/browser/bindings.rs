@@ -22,6 +22,7 @@ pub(super) struct Binding {
     pub project: Utf8PathBuf,
     pub provider: String,
     pub page: tokio::sync::Mutex<Page>,
+    pub references: Mutex<super::references::References>,
 }
 #[derive(Default)]
 struct Registry {
@@ -67,6 +68,7 @@ pub(crate) fn prepare(
             project,
             provider: provider.into(),
             page: Default::default(),
+            references: Default::default(),
         }),
     );
     drop(registry);
@@ -74,6 +76,9 @@ pub(crate) fn prepare(
     Ok(())
 }
 pub(super) fn changed(lane: &str) {
+    if let Some(binding) = get(lane) {
+        binding.references.locked().invalidate();
+    }
     crate::events::emit("browser.binding", None, serde_json::json!({"lane":lane}));
 }
 pub(crate) fn id(lane: &str) -> Option<String> {
@@ -198,6 +203,7 @@ mod tests {
             project: project.clone(),
             provider: "codex".into(),
             page: Default::default(),
+            references: Default::default(),
         });
         registry().locked().by_lane.insert(lane.into(), binding);
         assert!(authorize(&project, lane, Some("current")).is_ok());

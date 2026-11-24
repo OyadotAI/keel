@@ -129,6 +129,8 @@ pub struct Gate {
     pub ms: Option<u64>,
     #[serde(default)]
     pub problems: Vec<Problem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::delivery::CheckEvidence>,
 }
 
 /// `verify::Problem`, owned. That one borrows its severity for the life of the process; this
@@ -217,6 +219,8 @@ pub enum Fact {
         ms: Option<u64>,
         #[serde(default)]
         problems: Vec<Problem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Box<crate::delivery::CheckEvidence>>,
     },
     #[serde(rename = "turn.commit")]
     Commit { sha: String },
@@ -270,6 +274,7 @@ impl Fact {
             command: g.command.clone(),
             ms: g.ms,
             problems: g.problems.clone(),
+            evidence: g.evidence.clone().map(Box::new),
         }
     }
     fn usage(u: &Usage) -> Fact {
@@ -323,12 +328,14 @@ impl Record {
                 command,
                 ms,
                 problems,
+                evidence,
             } => {
                 self.gate = Some(Gate {
                     status: status.clone(),
                     command: command.clone(),
                     ms: *ms,
                     problems: problems.clone(),
+                    evidence: evidence.as_deref().cloned(),
                 })
             }
             Fact::Commit { sha } => self.commit = Some(sha.clone()),
@@ -1023,12 +1030,38 @@ pub async fn finish(
             String::new(),
         )
         .await;
+        let mut evidence = crate::serve::blocking(
+            {
+                let checkout = checkout.clone();
+                let source = format!("turn:{session}:{turn}");
+                let command = announced.clone();
+                move || crate::delivery::begin_check(&checkout, source, Some(command)).ok()
+            },
+            None,
+        )
+        .await;
+        if let Some(check) = &evidence {
+            let (repo, session, checkout, check) = (
+                repo.clone(),
+                session.clone(),
+                checkout.clone(),
+                check.clone(),
+            );
+            crate::serve::blocking(
+                move || {
+                    let _ = crate::delivery::persist_check(&repo, &session, &checkout, &check);
+                },
+                (),
+            )
+            .await;
+        }
         if !announced.is_empty() {
             emit_now(Fact::Gate {
                 status: "running".into(),
                 command: Some(announced.clone()),
                 ms: None,
                 problems: Vec::new(),
+                evidence: evidence.clone().map(Box::new),
             })
             .await;
         }
@@ -1052,12 +1085,47 @@ pub async fn finish(
             _ if announced.is_empty() => verdict.command.clone(),
             _ => announced,
         };
+        if let Some(check) = &mut evidence {
+            let checkout = checkout.clone();
+            let mut saved = check.clone();
+            let status = verdict.status;
+            let command = Some(command.clone());
+            let issues = problems.clone();
+            *check = crate::serve::blocking(
+                move || {
+                    crate::delivery::end_check(&checkout, &mut saved, status, command, issues);
+                    saved
+                },
+                check.clone(),
+            )
+            .await;
+        }
         let g = Gate {
             status: verdict.status.to_string(),
             command: Some(command),
             ms: Some(started.elapsed().as_millis() as u64),
             problems,
+            evidence,
         };
+        if let Some(check) = &g.evidence {
+            let (repo, session, checkout, check) = (
+                repo.clone(),
+                session.clone(),
+                checkout.clone(),
+                check.clone(),
+            );
+            crate::serve::blocking(
+                move || {
+                    if let Err(error) =
+                        crate::delivery::persist_check(&repo, &session, &checkout, &check)
+                    {
+                        tracing::warn!("Check history could not be saved: {error}");
+                    }
+                },
+                (),
+            )
+            .await;
+        }
         emit_now(Fact::gate(&g)).await;
         gate = Some(g);
     }
@@ -1148,12 +1216,8 @@ pub async fn finish(
             let made: Result<Option<String>, String> = crate::serve::blocking(
                 move || {
                     crate::worktree::checkpoint_only(&checkout, &message, &own).map(|done| {
-                        done.then(|| {
-                            crate::repo::git_log(&checkout, 1)
-                                .first()
-                                .map(|c| c.sha.clone())
-                        })
-                        .flatten()
+                        done.then(|| crate::git::trimmed(&checkout, &["rev-parse", "HEAD"]).ok())
+                            .flatten()
                     })
                 },
                 Err("the commit was cancelled".into()),
@@ -1171,6 +1235,41 @@ pub async fn finish(
                 None
             });
             if let Some(sha) = sha {
+                if let Some(check) = gate.as_mut().and_then(|gate| gate.evidence.as_mut())
+                    && still_ours()
+                {
+                    let checkout = f.checkout.clone();
+                    let mut saved = check.clone();
+                    let captured = sha.clone();
+                    let updated = crate::serve::blocking(
+                        move || {
+                            crate::delivery::bind_successor(&checkout, &mut saved, &captured);
+                            saved
+                        },
+                        check.clone(),
+                    )
+                    .await;
+                    if still_ours() {
+                        *check = updated;
+                    }
+                    let (repo, session, checkout, check) = (
+                        repo.clone(),
+                        session.clone(),
+                        f.checkout.clone(),
+                        check.clone(),
+                    );
+                    crate::serve::blocking(
+                        move || {
+                            let _ =
+                                crate::delivery::persist_check(&repo, &session, &checkout, &check);
+                        },
+                        (),
+                    )
+                    .await;
+                    if let Some(gate) = &gate {
+                        emit_now(Fact::gate(gate)).await;
+                    }
+                }
                 emit_now(Fact::Commit { sha }).await;
                 crate::events::emit("git.changed", f.checkout_name(), serde_json::Value::Null);
                 crate::events::emit("tree.changed", f.checkout_name(), serde_json::Value::Null);
@@ -1830,6 +1929,7 @@ mod tests {
                 command: Some("make check".into()),
                 ms: Some(1),
                 problems,
+                evidence: None,
             },
         );
         assert_eq!(
@@ -1897,6 +1997,7 @@ mod tests {
                 command: Some("make check".into()),
                 ms: Some(4100),
                 problems: vec![],
+                evidence: None,
             },
         };
         let json = serde_json::to_string(&e).unwrap();

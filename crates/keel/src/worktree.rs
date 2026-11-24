@@ -178,6 +178,24 @@ pub fn create(root: &Utf8Path, name: &str) -> Result<Worktree, String> {
 }
 
 fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String> {
+    create_at_ref(root, name, base, base)
+}
+
+/// A durable launch retries against its captured commit while retaining the intended merge base.
+pub(crate) fn create_exact(
+    root: &Utf8Path,
+    name: &str,
+    base: &str,
+    sha: &str,
+) -> Result<Worktree, String> {
+    if !is_branch(root, base) || !crate::github_read::valid_sha(sha) {
+        return Err("The captured base branch or commit is unavailable.".into());
+    }
+    git(root, &["cat-file", "-e", &format!("{sha}^{{commit}}")])?;
+    create_at_ref(root, name, base, sha)
+}
+
+fn create_at_ref(root: &Utf8Path, name: &str, base: &str, start: &str) -> Result<Worktree, String> {
     let path = path_of(root, name)?;
     if path.exists() {
         return Err(format!("lane {name} already exists"));
@@ -223,7 +241,7 @@ fn create_at(root: &Utf8Path, name: &str, base: &str) -> Result<Worktree, String
             "-b",
             &branch_of(name),
             path.as_str(),
-            base,
+            start,
         ],
     )?;
     remember_base(root, name, base);

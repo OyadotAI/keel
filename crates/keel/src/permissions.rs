@@ -10,6 +10,9 @@
 //! every subsequent run. Approval stays a human act; it just happens in the IDE instead of a
 //! terminal prompt.
 
+mod local;
+pub(crate) use local::{Lease, local_path, read_local, replace_local, try_lease};
+
 use axum::{
     Json,
     extract::{Query, State},
@@ -386,6 +389,8 @@ struct Stored {
     /// better trade than a guardrail people route around.
     #[serde(default)]
     trusted: bool,
+    #[serde(default)]
+    trust_revision: u64,
 }
 
 fn read(repo: &Utf8Path) -> Stored {
@@ -520,7 +525,35 @@ fn save(repo: &Utf8Path, allow: &BTreeSet<String>) -> Result<(), String> {
 }
 
 pub fn set_trusted(repo: &Utf8Path, on: bool) -> Result<(), String> {
-    update(repo, |stored| stored.trusted = on)
+    let _acceptance = acceptance_lease(repo)?;
+    let mut entropy = [0; std::mem::size_of::<u64>()];
+    getrandom::fill(&mut entropy).map_err(|_| "Could not create a fresh trust generation.")?;
+    let generation = u64::from_ne_bytes(entropy).max(1);
+    update(repo, |stored| {
+        if stored.trusted != on || stored.trust_revision == 0 {
+            stored.trust_revision = generation;
+        }
+        stored.trusted = on;
+    })
+}
+
+/// Revocation fences queued authority even if trust is granted again before the next tick.
+pub(crate) fn trust_stamp(repo: &Utf8Path) -> Option<String> {
+    let mut file = open_store(repo, false).ok()?;
+    let stored = read_store(&mut file);
+    (stored.trusted && stored.trust_revision != 0).then(|| stored.trust_revision.to_string())
+}
+
+/// Revocation and definition edits cannot complete across the durable acceptance of new work.
+pub(crate) fn acceptance_lease(repo: &Utf8Path) -> Result<Lease, String> {
+    try_acceptance_lease(repo)?.ok_or(
+        "An execution request is being accepted. Retry this action after its status updates."
+            .into(),
+    )
+}
+/// Queued work can keep waiting when a user action currently owns the short acceptance fence.
+pub(crate) fn try_acceptance_lease(repo: &Utf8Path) -> Result<Option<Lease>, String> {
+    try_lease(&format!("acceptance-{}.lock", key_of(repo)?))
 }
 
 /// Rules the project already declares by its own toolchain.
@@ -1339,6 +1372,33 @@ mod tests {
             load(&root).contains("Bash(sh *)"),
             "rules survive withdrawal"
         );
+    }
+
+    #[test]
+    fn saved_rules_preserve_explicit_automation_trust_generation() {
+        let (_d, root) = repo(&[]);
+        set_trusted(&root, true).unwrap();
+        let stamp = trust_stamp(&root).unwrap();
+        remember(&root, "Bash(sh *)", "project", None).unwrap();
+        assert_eq!(trust_stamp(&root), Some(stamp.clone()));
+        set_trusted(&root, false).unwrap();
+        assert_eq!(trust_stamp(&root), None);
+        set_trusted(&root, true).unwrap();
+        assert_ne!(trust_stamp(&root), Some(stamp));
+    }
+
+    #[test]
+    fn legacy_trust_requires_explicit_renewal_before_automation_authority() {
+        let (_d, root) = repo(&[]);
+        update(&root, |stored| stored.trusted = true).unwrap();
+        assert!(trusted(&root));
+        assert_eq!(trust_stamp(&root), None);
+        set_trusted(&root, true).unwrap();
+        let original = trust_stamp(&root).unwrap();
+        update(&root, |stored| stored.trust_revision = 0).unwrap();
+        assert_eq!(trust_stamp(&root), None);
+        set_trusted(&root, true).unwrap();
+        assert_ne!(trust_stamp(&root), Some(original));
     }
 
     /// A trusted project passes a blanket rule too, so the hook path and the plain permission path

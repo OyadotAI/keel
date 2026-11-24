@@ -92,7 +92,7 @@ pub fn git_act(
     root: &Utf8Path,
     action: &str,
     path: &str,
-    hunk: Option<usize>,
+    hunk: Option<&str>,
 ) -> Result<(), String> {
     // Same as the diff: stage or discard has to happen in the repository that owns the file.
     let (owner, inner) = crate::gitroots::resolve(root, path);
@@ -120,29 +120,15 @@ pub fn git_act(
         }
         // One hunk, not the file. Reviewing a four-hunk edit and wanting three of them is the
         // ordinary case, and "discard the file and ask again" throws away the three.
-        "discard-hunk" => {
-            let n = hunk.ok_or("which hunk?")?;
-            let raw = git_run(root, &["diff", "--no-color", "-U3", "--", path])?;
-            let patch = one_hunk(&raw, n).ok_or(format!("no hunk {n} in {path}"))?;
-            let mut child = crate::git::command(root)
-                .args(["apply", "-R", "--recount", "--unidiff-zero", "-"])
-                .stdin(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            use std::io::Write;
-            child
-                .stdin
-                .take()
-                .ok_or("no stdin")?
-                .write_all(patch.as_bytes())
-                .map_err(|e| e.to_string())?;
-            let out = child.wait_with_output().map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(())
+        "discard-hunk" | "stage-hunk" => {
+            let id = hunk.ok_or("which hunk?")?;
+            let patch = hunk_by_id(&unstaged_raw(root, path)?, id).ok_or(HUNK_CHANGED)?;
+            let apply: &[&str] = if action == "stage-hunk" {
+                &["apply", "--cached", "--recount", "--unidiff-zero", "-"]
             } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+                &["apply", "-R", "--recount", "--unidiff-zero", "-"]
+            };
+            apply_patch(root, apply, &patch)
         }
         "discard" | "discard-worktree" => {
             // Outside a repository every file reads as untracked, and "discard" trashed the
@@ -173,22 +159,72 @@ pub fn git_act(
     }
 }
 
-/// The file header and the `n`th `@@` block of a unified diff, as a patch of its own.
-fn one_hunk(raw: &str, n: usize) -> Option<String> {
+/// What a hunk action says when the file moved under it. The handler answers 409 for it.
+pub const HUNK_CHANGED: &str = "This hunk changed since it was shown. The diff has been reloaded.";
+
+/// The unstaged diff of one path: the one source both the shown hunk ids and the hunk actions
+/// read, so the arguments behind the hash cannot drift apart.
+fn unstaged_raw(root: &Utf8Path, path: &str) -> Result<String, String> {
+    git_run(root, &["diff", "--no-color", "-U3", "--", path])
+}
+
+/// A unified diff split into its file header and each `@@` block's raw text.
+fn split_hunks(raw: &str) -> (String, Vec<String>) {
     let mut header = String::new();
     let mut hunks: Vec<String> = Vec::new();
-    for line in raw.lines() {
+    // Line endings kept as git wrote them: a CRLF file's patch without its `\r` no longer applies.
+    for line in raw.split_inclusive('\n') {
         if line.starts_with("@@") {
-            hunks.push(format!("{line}\n"));
+            hunks.push(line.to_string());
         } else if let Some(last) = hunks.last_mut() {
             last.push_str(line);
-            last.push('\n');
         } else {
             header.push_str(line);
-            header.push('\n');
         }
     }
-    hunks.get(n).map(|h| header + h)
+    (header, hunks)
+}
+
+/// A hunk's identity is its content, not its position: the agent rewriting the file between
+/// render and click shifts every ordinal, and an ordinal would then stage or throw away code
+/// the person never saw. A hash of the text refuses that instead.
+fn hunk_id(text: &str) -> String {
+    use sha2::Digest;
+    let d = sha2::Sha256::digest(text.as_bytes());
+    d.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The file header and the hunk whose id is `id`, as a patch of its own.
+fn hunk_by_id(raw: &str, id: &str) -> Option<String> {
+    let (header, hunks) = split_hunks(raw);
+    hunks
+        .into_iter()
+        .find(|h| hunk_id(h) == id)
+        .map(|h| header + &h)
+}
+
+/// `git apply` with the patch on stdin; git's own message on failure.
+fn apply_patch(root: &Utf8Path, args: &[&str], patch: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = crate::git::command(root)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or("no stdin")?
+        .write_all(patch.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// One commit, for the list beside the working tree.
@@ -358,6 +394,7 @@ pub fn git_commit_diff(
             let (hunks, note) = capped(parse_hunks(&raw));
             DiffResponse {
                 path: path.to_string(),
+                identity: None,
                 hunks,
                 untracked: false,
                 note,
@@ -1262,9 +1299,8 @@ mod git_tests {
         assert_eq!(hunks[1].lines[1].new, Some(8));
     }
 
-    /// Discarding one hunk leaves the other. The reason the action exists at all.
-    #[test]
-    fn one_hunk_can_be_discarded_on_its_own() {
+    /// A repository with one committed 30-line file edited in two far-apart places: two hunks.
+    fn two_hunk_repo() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let run = |args: &[&str]| {
@@ -1281,25 +1317,147 @@ mod git_tests {
         std::fs::write(root.join("a.txt"), &body).unwrap();
         run(&["add", "-A"]);
         run(&["commit", "--quiet", "-m", "seed"]);
-
-        // Two edits far enough apart to be two hunks.
         let edited = body
             .replace("line 2\n", "LINE 2\n")
             .replace("line 28\n", "LINE 28\n");
         std::fs::write(root.join("a.txt"), &edited).unwrap();
-        assert_eq!(git_diff(&root, "a.txt").hunks.len(), 2);
+        (dir, root)
+    }
 
-        git_act(&root, "discard-hunk", "a.txt", Some(0)).expect("discard the first");
+    fn ids(root: &Utf8Path) -> Vec<String> {
+        git_diff(root, "a.txt")
+            .hunks
+            .into_iter()
+            .filter_map(|h| h.id)
+            .collect()
+    }
+
+    /// Discarding one hunk leaves the other. The reason the action exists at all.
+    #[test]
+    fn one_hunk_can_be_discarded_on_its_own() {
+        let (_dir, root) = two_hunk_repo();
+        let first = ids(&root).remove(0);
+        git_act(&root, "discard-hunk", "a.txt", Some(&first)).expect("discard the first");
         let now = std::fs::read_to_string(root.join("a.txt")).unwrap();
         assert!(now.contains("line 2\n"), "the first edit is gone");
         assert!(now.contains("LINE 28\n"), "the second survives");
         assert_eq!(git_diff(&root, "a.txt").hunks.len(), 1);
-
-        assert!(
-            git_act(&root, "discard-hunk", "a.txt", Some(5)).is_err(),
-            "no such hunk"
-        );
         assert!(git_act(&root, "discard-hunk", "a.txt", None).is_err());
+    }
+
+    /// Staging one hunk puts exactly that hunk in the index and leaves the other unstaged.
+    #[test]
+    fn stage_hunk_stages_only_that_hunk() {
+        let (_dir, root) = two_hunk_repo();
+        let second = ids(&root).remove(1);
+        git_act(&root, "stage-hunk", "a.txt", Some(&second)).expect("stage the second");
+        let staged = git_diff_area(&root, "a.txt", Some(true));
+        assert_eq!(staged.hunks.len(), 1);
+        assert!(staged.hunks[0].lines.iter().any(|l| l.text == "LINE 28"));
+        let unstaged = git_diff_area(&root, "a.txt", Some(false));
+        assert_eq!(unstaged.hunks.len(), 1);
+        assert!(unstaged.hunks[0].lines.iter().any(|l| l.text == "LINE 2"));
+    }
+
+    /// A CRLF file's hunks keep their `\r`, or neither action applies — the Windows case.
+    #[test]
+    fn a_crlf_file_stages_and_discards_one_hunk() {
+        let (_dir, root) = two_hunk_repo();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["config", "core.autocrlf", "false"]);
+        let body: String = (1..=30).map(|i| format!("line {i}\r\n")).collect();
+        std::fs::write(root.join("a.txt"), &body).unwrap();
+        run(&["commit", "--quiet", "-am", "crlf"]);
+        let edited = body
+            .replace("line 2\r\n", "LINE 2\r\n")
+            .replace("line 28\r\n", "LINE 28\r\n");
+        std::fs::write(root.join("a.txt"), &edited).unwrap();
+        let mut both = ids(&root);
+        git_act(&root, "stage-hunk", "a.txt", Some(&both.remove(1))).expect("stage on CRLF");
+        git_act(&root, "discard-hunk", "a.txt", Some(&both.remove(0))).expect("discard on CRLF");
+        let now = std::fs::read(root.join("a.txt")).unwrap();
+        assert!(
+            now.windows(8).any(|w| w == b"line 2\r\n"),
+            "discarded back to CRLF"
+        );
+    }
+
+    /// A file that moved between render and click is refused, never acted on at the wrong place.
+    #[test]
+    fn a_hunk_changed_since_shown_is_refused() {
+        let (_dir, root) = two_hunk_repo();
+        let first = ids(&root).remove(0);
+        let moved = std::fs::read_to_string(root.join("a.txt"))
+            .unwrap()
+            .replace("LINE 2\n", "LINE TWO\n");
+        std::fs::write(root.join("a.txt"), &moved).unwrap();
+        for action in ["stage-hunk", "discard-hunk"] {
+            assert_eq!(
+                git_act(&root, action, "a.txt", Some(&first)),
+                Err(HUNK_CHANGED.to_string())
+            );
+        }
+        assert!(
+            std::fs::read_to_string(root.join("a.txt"))
+                .unwrap()
+                .contains("LINE TWO")
+        );
+    }
+
+    /// Only the unstaged diff is actionable: staged, committed and untracked hunks carry no id.
+    #[test]
+    fn staged_and_untracked_diffs_carry_no_hunk_id() {
+        let (_dir, root) = two_hunk_repo();
+        assert_eq!(ids(&root).len(), 2);
+        git_act(&root, "stage", "a.txt", None).unwrap();
+        let fallback = git_diff(&root, "a.txt");
+        assert!(!fallback.hunks.is_empty(), "falls back to the staged diff");
+        assert!(fallback.hunks.iter().all(|h| h.id.is_none()));
+        assert!(
+            git_diff_area(&root, "a.txt", Some(true))
+                .hunks
+                .iter()
+                .all(|h| h.id.is_none())
+        );
+        std::fs::write(root.join("new.txt"), "fresh\n").unwrap();
+        assert!(
+            git_diff(&root, "new.txt")
+                .hunks
+                .iter()
+                .all(|h| h.id.is_none())
+        );
+    }
+
+    /// A hunk cut by the line cap has not been seen whole, so it cannot be staged or discarded.
+    #[test]
+    fn a_trimmed_hunk_carries_no_id() {
+        let big = || Hunk {
+            header: "@@ -1 +1 @@".into(),
+            lines: (0..MAX_DIFF_LINES)
+                .map(|_| DiffLine {
+                    kind: "add",
+                    old: None,
+                    new: None,
+                    text: String::new(),
+                })
+                .collect(),
+            id: Some("x".into()),
+        };
+        let (kept, note) = capped(vec![big(), big()]);
+        assert!(note.is_some());
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].id.is_some(), "shown whole");
+        let mut cut = big();
+        cut.lines.truncate(10);
+        let (kept, _) = capped(vec![cut, big()]);
+        assert!(kept[0].id.is_some());
+        assert!(kept[1].id.is_none(), "cut by the cap");
     }
 
     /// The one every tester hit: auto-commit is on, so seconds after the agent writes a file the
@@ -1375,6 +1533,8 @@ fn label_for(status: &str) -> &'static str {
 
 #[derive(Default, Serialize)]
 pub struct DiffResponse {
+    /// Captured with the rendered diff; changed inputs prevent attaching a fabricated current anchor.
+    pub identity: Option<crate::delivery::CheckoutIdentity>,
     pub path: String,
     pub hunks: Vec<Hunk>,
     /// True when the file is untracked, so there is no baseline to diff against.
@@ -1391,6 +1551,10 @@ pub struct DiffResponse {
 pub struct Hunk {
     pub header: String,
     pub lines: Vec<DiffLine>,
+    /// Set only on a hunk of the unstaged diff that is shown whole: it is what Stage and
+    /// Discard send back, and its absence is what hides them (staged, committed, untracked, cut).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1423,6 +1587,8 @@ pub fn git_diff_area(root: &Utf8Path, path: &str, staged: Option<bool>) -> DiffR
         && root.join(path).is_file()
         && git(root, &["ls-files", "--error-unmatch", "--", path]).is_none();
 
+    // Whether `raw` is the unstaged diff, the one hunk actions apply to.
+    let mut actionable = false;
     let (raw, note) = if untracked {
         match std::fs::read_to_string(root.join(path)) {
             Ok(content) => {
@@ -1440,16 +1606,16 @@ pub fn git_diff_area(root: &Utf8Path, path: &str, staged: Option<bool>) -> DiffR
                 Some("This file is not on disk any more.".to_string()),
             ),
         }
-    } else if let Some(staged) = staged {
-        let mut args = vec!["diff", "--no-color", "-U3"];
-        if staged {
-            args.push("--cached");
-        }
-        args.extend(["--", path]);
+    } else if staged == Some(true) {
+        let args = ["diff", "--cached", "--no-color", "-U3", "--", path];
         (git(root, &args).unwrap_or_default(), None)
+    } else if staged == Some(false) {
+        actionable = true;
+        (unstaged_raw(root, path).unwrap_or_default(), None)
     } else {
-        let unstaged = git(root, &["diff", "--no-color", "-U3", "--", path]).unwrap_or_default();
+        let unstaged = unstaged_raw(root, path).unwrap_or_default();
         if !unstaged.trim().is_empty() {
+            actionable = true;
             (unstaged, None)
         } else {
             let staged = git(root, &["diff", "--cached", "--no-color", "-U3", "--", path])
@@ -1462,9 +1628,16 @@ pub fn git_diff_area(root: &Utf8Path, path: &str, staged: Option<bool>) -> DiffR
         }
     };
 
-    let (hunks, trimmed) = capped(parse_hunks(&raw));
+    let mut parsed = parse_hunks(&raw);
+    if actionable {
+        for (h, text) in parsed.iter_mut().zip(split_hunks(&raw).1) {
+            h.id = Some(hunk_id(&text));
+        }
+    }
+    let (hunks, trimmed) = capped(parsed);
     DiffResponse {
         path: path.to_string(),
+        identity: None,
         // The cap's own note wins: "this is not all of it" is the more important thing to say.
         note: trimmed.or(note),
         hunks,
@@ -1498,7 +1671,12 @@ fn capped(hunks: Vec<Hunk>) -> (Vec<Hunk>, Option<String>) {
         if lines >= MAX_DIFF_LINES {
             break;
         }
+        let whole = h.lines.len();
         h.lines.truncate(MAX_DIFF_LINES - lines);
+        if h.lines.len() < whole {
+            // A hunk the person has not seen all of is not one they can stage.
+            h.id = None;
+        }
         lines += h.lines.len();
         kept.push(h);
     }
@@ -1578,6 +1756,7 @@ fn parse_hunks(raw: &str) -> Vec<Hunk> {
             hunks.push(Hunk {
                 header: line.to_string(),
                 lines: Vec::new(),
+                id: None,
             });
             continue;
         }

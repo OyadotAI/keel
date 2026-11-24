@@ -44,6 +44,7 @@ export function label(c: Chord): string {
 /// nothing else, so a key the CLI uses (Ctrl+_ for undo, say) still reaches it.
 export const KEEL: Chord[] = [
   { key: "k" },
+  { key: "f" },
   { key: "." },
   { key: "o" },
   { key: "l" },

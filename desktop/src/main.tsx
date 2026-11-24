@@ -7,6 +7,7 @@ import "./styles.css";
 import "./workspace.css";
 import "./ide.css";
 import "./attention.css";
+import "./delivery.css";
 
 // A link in the agent's reply opens in the browser. Followed in place, it replaced the whole app
 // with that page and left no way back but quitting.

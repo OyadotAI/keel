@@ -6,10 +6,14 @@
 //!
 //! So Keel runs them itself after every turn. The agent does not get to grade its own work.
 
+mod owned;
+#[cfg(test)]
+mod owned_tests;
 use crate::lock::Locked;
 use crate::signals::Leads;
 use axum::response::sse::{Event, Sse};
 use camino::Utf8Path;
+pub(crate) use owned::check_owned;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::process::Stdio;
@@ -487,7 +491,6 @@ pub async fn run(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     tokio::spawn(async move {
-        let started = std::time::Instant::now();
         // Events are relayed as they happen: the sink is synchronous, so it hands each one to a
         // task that does the awaiting. The sink owns the sender and goes with the run, which is
         // what ends the relay; `done` waits for it so nothing arrives after.
@@ -502,8 +505,11 @@ pub async fn run(
                 }
             })
         };
-        let verdict = run_all(
-            &repo,
+        let result = check_owned(
+            state,
+            repo,
+            query.lane,
+            None,
             move |event| {
                 let e = match event {
                     GateEvent::None(why) => Event::default().event("none").data(why),
@@ -525,30 +531,26 @@ pub async fn run(
         )
         .await;
         let _ = forward.await;
-        let code = match verdict.status {
-            "passed" | "none" => 0,
-            _ => 1,
-        };
-        if verdict.status != "none" {
-            let _ = tx
-                .send(Ok(Event::default().event("done").data(code.to_string())))
-                .await;
-        }
-        if let Some(lane) = query.lane.filter(|l| !l.is_empty()) {
-            crate::turns::emit_for_lane(
-                &state,
-                &lane,
-                crate::turns::Fact::Gate {
-                    status: verdict.status.to_string(),
-                    command: Some(verdict.command),
-                    ms: Some(started.elapsed().as_millis() as u64),
-                    problems: verdict
-                        .problems
-                        .iter()
-                        .map(crate::turns::Problem::from)
-                        .collect(),
-                },
-            );
+        match result {
+            Ok(check) => {
+                if let Ok(body) = serde_json::to_string(&check) {
+                    let _ = tx
+                        .send(Ok(Event::default().event("evidence").data(body)))
+                        .await;
+                }
+                if check.status != "none" {
+                    let code = if check.status == "passed" { 0 } else { 1 };
+                    let _ = tx
+                        .send(Ok(Event::default().event("done").data(code.to_string())))
+                        .await;
+                }
+            }
+            Err(error) => {
+                let _ = tx
+                    .send(Ok(Event::default().event("fatal").data(error)))
+                    .await;
+                let _ = tx.send(Ok(Event::default().event("done").data("1"))).await;
+            }
         }
     });
 

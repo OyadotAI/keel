@@ -6,6 +6,7 @@ use std::time::Duration;
 const TOKEN_BYTES: usize = 4096;
 const CONFIGURED_LIMIT: usize = 64;
 const RESPONSE_BYTES: usize = 128 * 1024;
+const DEBUG_RESPONSE_BYTES: usize = 256 * 1024;
 const CONNECT_WAIT: Duration = Duration::from_secs(5);
 const CALL_WAIT: Duration = Duration::from_secs(20);
 
@@ -241,6 +242,34 @@ impl Client {
         }
         Ok(text)
     }
+    /// Diagnostic failures retain the adapter's observed identity and structured JSON value.
+    pub async fn diagnostic(&mut self, name: &str, args: Value) -> Result<super::Output, String> {
+        if !self.supports(name) {
+            return Err("This Oya version does not expose the requested browser diagnostic tool. Update Oya; no other browser was used.".into());
+        }
+        let response = self
+            .rpc(
+                "tools/call",
+                serde_json::json!({"name":name,"arguments":args}),
+            )
+            .await?;
+        if let Some(reply) = response.get("structuredContent") {
+            return serde_json::from_value(reply.clone())
+                .map_err(|_| "Oya returned an invalid browser diagnostic reply.".into());
+        }
+        let text = response["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(if text.is_empty() {
+            "Oya returned no browser diagnostic envelope.".into()
+        } else {
+            text
+        })
+    }
     async fn rpc(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.ownership().await?;
         self.next = self.next.saturating_add(1);
@@ -281,6 +310,12 @@ impl Client {
         }
         let limit = if method == "tools/call" && params["name"] == "screenshot" {
             super::SCREENSHOT_WIRE_BYTES
+        } else if method == "tools/call"
+            && params["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("browser_"))
+        {
+            DEBUG_RESPONSE_BYTES
         } else {
             RESPONSE_BYTES
         };

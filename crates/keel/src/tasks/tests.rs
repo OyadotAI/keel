@@ -43,6 +43,7 @@ fn checkpoints_and_ordered_shared_changelog_survive_reopening_without_native_mem
             command: Some("make check".into()),
             ms: None,
             problems: vec![],
+            evidence: None,
         },
     )
     .unwrap();

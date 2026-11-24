@@ -31,6 +31,7 @@ function inactiveObservation(observed: Observation | undefined): Observation | u
 
 import { typeInto, interruptTerminal, terminalConnected, exitTerminal } from "./typers";
 import { bindReview, refreshReview } from "./prereview";
+import { deliveryChanged, refreshDelivery, type Owner } from "./delivery";
 import { closeTab, onBrowser, type Op as BrowserOp } from "./browser";
 import { inArea, prepare, type DiffResponse, type GitStatus, type Prepared } from "./git";
 
@@ -290,6 +291,7 @@ interface State {
   closeProject(path: string): Promise<void>;
   newLane(project: string, isolated?: boolean, agent?: Agent, surface?: ChatInterface): string;
   adoptContinuation(source: string, continuation: import("./handoffs").Continuation): string;
+  adoptTask(project: string, owner: Owner, title: string): string;
   newConversationFrom(lane: string): string | undefined;
   referenceFile(lane: string, reference: FileReference): Promise<boolean>;
   removeReference(lane: string, reference: FileReference): void;
@@ -584,6 +586,7 @@ export const useStore = create<State>()((set, getState, api) => {
       if (d) set((s) => ({ setupRun: { ...s.setupRun, [path]: d } }));
     },
     connected: (path, ep) => {
+      void refreshDelivery(ep);
       // Whatever happened in the gap is gone: read everything this daemon owns, once.
       trust(path, ep);
       setup(path, ep);
@@ -615,6 +618,7 @@ export const useStore = create<State>()((set, getState, api) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;
       for (const lid of lanesOf(path)) if (!only || only === lid) void refreshReview(lid, ep, getState().lanes[lid]?.wt, true);
     },
+    "delivery.changed": (_path, ep) => deliveryChanged(ep),
     "monitors.changed": (path, _ep, data) => {
       const only = (data as { data?: { lane?: string } })?.data?.lane;
       for (const lid of lanesOf(path)) if (!only || only === lid) soon(`jobs:${lid}`, () => getState().refreshJobs(lid));
@@ -1364,6 +1368,13 @@ export const useStore = create<State>()((set, getState, api) => {
       return lid;
     },
 
+    adoptTask(project, owner, title) {
+      const lid = owner.lane;
+      if (!getState().lanes[lid]) {
+        set((s) => ({ lanes: { ...s.lanes, [lid]: { id: lid, project, title, interface: "chat", session: owner.session, agent: owner.provider, wt: owner.wt ?? undefined, isolated: !!owner.wt, known: true, managed: true, loaded: false, running: false, naming: { revision: 0 }, jobs: [], queued: [], pending: [], conv: empty } }, projects: { ...s.projects, [project]: { ...s.projects[project], lanes: [...s.projects[project].lanes, lid] } } }));
+      }
+      getState().select(lid); return lid;
+    },
     adoptContinuation(source, continuation) {
       const current = getState().lanes[source];
       if (!current) throw new Error("The source lane is closed. Reopen it from History.");

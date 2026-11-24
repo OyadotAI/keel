@@ -1,0 +1,7 @@
+<!-- Runs the real App against controlled delivery APIs; no provider or GitHub action is performed. -->
+<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Delivery workflow QA</title></head><body><div id="root"></div><script>
+// Keep fixture failures visible to Oya's DOM reader without needing a second browser tool.
+function fixtureError(error) { const output=document.createElement('pre');output.setAttribute('role','alert');output.style.cssText='position:fixed;inset:20px;z-index:1000;overflow:auto;white-space:pre-wrap;color:#fff;background:#700;padding:20px';output.textContent=String(error?.stack??error);document.body.append(output); }
+window.addEventListener('error',(event)=>fixtureError(event.error??event.message));
+window.addEventListener('unhandledrejection',(event)=>fixtureError(event.reason));
+</script><script type="module" src="./check.ts"></script></body></html>

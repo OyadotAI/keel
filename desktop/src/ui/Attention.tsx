@@ -4,13 +4,27 @@ import { useStore } from "../store";
 import { attentionCoverage, attentionItems, type AttentionItem } from "../attention";
 import { Dialog } from "./kit";
 import { Icon, type IconName } from "./icons";
+import { projectDelivery,savedAttention,useDeliveryRevision,openTask,orderAttention } from "../delivery";
+
+function useSavedItems() {
+  useDeliveryRevision();
+  const projects = useStore((s) => s.projects), order = useStore((s) => s.order);
+  return order.flatMap((path) => {
+    const project = projects[path], ep = project?.endpoint;
+    if (!ep) return [];
+    const data = projectDelivery(ep);
+    return savedAttention(data?.tasks, data?.schedules).map((item) => ({ ...item, project: path, projectName: project.name, ep, disconnected: !!data?.error }));
+  });
+}
 
 const REASON_ICON: Record<string, IconName> = { input: "hand", error: "x-circle", checks: "x-circle", update: "list" };
 
 /** A primitive selector keeps streaming text in other lanes from rerendering the entry. */
 export function AttentionButton({ open }: { open: () => void }) {
-  const count = useStore((state) => attentionItems(state).length);
-  return <button className="attention-entry" onClick={open} aria-haspopup="dialog" aria-label={`Attention · ${count} ${count === 1 ? "lane" : "lanes"}`}>
+  const liveSignature = useStore((state) => JSON.stringify(attentionItems(state).map((item) => item.lane))), saved = useSavedItems();
+  const live: string[] = JSON.parse(liveSignature);
+  const count = live.length + saved.filter((item) => !live.some((lane) => item.lanes.includes(lane))).length;
+  return <button className="attention-entry" onClick={open} aria-haspopup="dialog" aria-label={`Attention · ${count} ${saved.length ? "items" : count === 1 ? "lane" : "lanes"}`}>
     <Icon name="list" size={16} /><span>Attention</span><span className="attention-count">{count}</span>
   </button>;
 }
@@ -53,12 +67,14 @@ function useAttentionModal(root: React.RefObject<HTMLDivElement | null>, ids: st
 }
 
 /** Coverage is explicit: opening the dialog does not load dormant lanes or claim global health. */
-export function AttentionDialog({ close, activate, openProject }: { close: () => void; activate: (lane: string) => void; openProject: () => Promise<unknown> }) {
+export function AttentionDialog({ close, activate, openProject, openRecurring }: { close: () => void; activate: (lane: string) => void; openProject: () => Promise<unknown>; openRecurring?: (project: string) => void }) {
   const [picking, setPicking] = useState(false), [error, setError] = useState<string>();
   const order = useStore((state) => state.order), projects = useStore((state) => state.projects), lanes = useStore((state) => state.lanes);
   const source = useMemo(() => ({ order, projects, lanes }), [order, projects, lanes]);
   const items = useMemo(() => attentionItems(source), [source]), coverage = attentionCoverage(source);
-  const root = useRef<HTMLDivElement>(null), onFocus = useAttentionModal(root, items.map((item) => item.lane));
+  const saved = useSavedItems(), rows=orderAttention(items,saved,order);
+  async function openSaved(item: typeof saved[number]) { try { if (item.recurring) { openRecurring?.(item.project); close(); } else if (item.task) { await openTask(item.project, item.ep, item.task, item.title); close(); } } catch (error) { setError(String(error)); } }
+  const root = useRef<HTMLDivElement>(null), onFocus = useAttentionModal(root, rows.map(row=>row.kind==="live"?row.item.lane:`${row.item.project}:${row.item.id}`));
   const empty = !coverage.projects ? "Open a project to see questions, errors, failed checks, and new endings here." : coverage.unloaded ? "No loaded updates yet." : "No attention items in loaded conversations.";
   async function pick() {
     setPicking(true); setError(undefined);
@@ -67,10 +83,14 @@ export function AttentionDialog({ close, activate, openProject }: { close: () =>
   }
   return <Dialog title="Attention" onClose={close}><div className="attention-content" ref={root} onFocusCapture={(event) => onFocus(event.target)}>
     <p className="attention-subtitle">Across open projects · Updates Oya Factory has received</p>
-    <span className="sr-only" role="status" aria-live="polite">{items.length} lanes in Attention</span>
-    <div className="attention-scroll">{items.length ? <ol className="attention-list">{items.map((item, index) => <AttentionRow key={item.lane} item={item} first={index === 0} activate={activate} />)}</ol> : <p className="attention-empty">{empty}</p>}</div>
+    <span className="sr-only" role="status" aria-live="polite">{rows.length} items in Attention</span>
+    <div className="attention-scroll">{rows.length ? <ol className="attention-list">{rows.map((row,index)=>row.kind==="live" ? <AttentionRow key={row.item.lane} item={row.item} first={index===0} activate={activate} /> : <SavedAttentionRow key={`${row.item.project}:${row.item.id}`} item={row.item} first={index===0} open={openSaved} />)}</ol> : <p className="attention-empty">{empty}</p>}</div>
     {!!coverage.unloaded && <p className="attention-coverage">Some conversations haven’t loaded yet. This list includes updates Oya Factory has received.</p>}
     {error && <p role="alert">{error}</p>}
-    <div className="actions attention-footer">{!coverage.projects && <button className="primary" disabled={picking} onClick={() => void pick()}>{picking ? "Opening project…" : "Open project…"}</button>}<button className={`attention-close${!items.length && coverage.projects ? " primary" : ""}`} onClick={close}>Close</button></div>
+    <div className="actions attention-footer">{!coverage.projects && <button className="primary" disabled={picking} onClick={() => void pick()}>{picking ? "Opening project…" : "Open project…"}</button>}<button className={`attention-close${!rows.length && coverage.projects ? " primary" : ""}`} onClick={close}>Close</button></div>
   </div></Dialog>;
+}
+
+function SavedAttentionRow({item,first,open}:{item:ReturnType<typeof useSavedItems>[number];first:boolean;open:(item:ReturnType<typeof useSavedItems>[number])=>Promise<void>}) {
+  return <li className="attention-row" data-attention-row={`${item.project}:${item.id}`}><div className="attention-identity"><span className="attention-project">{item.projectName}</span><strong className="attention-title">{item.title}</strong><ul className="attention-reasons">{item.reasons.map((reason,index)=><li key={index}>{reason}</li>)}</ul>{item.disconnected&&<p>Disconnected — saved details may be out of date.</p>}</div><button className={first?"primary":undefined} onClick={()=>void open(item)}>{item.recurring?"Review recurring task":"Open delivery"}</button></li>;
 }

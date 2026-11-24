@@ -1,10 +1,22 @@
 //! Pull-request creation captures an immutable target and reconciles existing PRs before retries.
+mod delivery;
 mod github;
 mod opening;
 mod repository;
 mod target;
+pub(crate) use delivery::{capture as capture_delivery, publish as publish_delivery};
 pub use opening::create;
 use serde::Deserialize;
+
+/// Read adapters share origin's parsed repository name without exposing credential-bearing URLs.
+pub(crate) fn source_identity(repo: &camino::Utf8Path) -> Result<(String, String), String> {
+    use sha2::{Digest, Sha256};
+    let remote = crate::git::run(repo, &["remote", "get-url", "--push", "--all", "origin"])?;
+    Ok((
+        repository::source(remote.trim())?,
+        format!("{:x}", Sha256::digest(remote.trim().as_bytes())),
+    ))
+}
 
 /// User intent is separate from the commit/branch guards captured before a push.
 #[derive(Deserialize, Default)]

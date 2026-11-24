@@ -9,7 +9,11 @@ import { listen } from "@tauri-apps/api/event";
 import { post, type Endpoint } from "./api";
 
 export interface Op {
-  op: "open" | "read" | "viewport" | "screenshot" | "click" | "type" | "key" | "scroll" | "back" | "forward" | "reload";
+  op: "open" | "read" | "read_frames" | "eval" | "hit_test" | "viewport" | "screenshot" | "click" | "type" | "key" | "scroll" | "back" | "forward" | "reload";
+  expression?: string;
+  frame?: string;
+  x?: number;
+  y?: number;
   url?: string;
   target?: number;
   text?: string;
@@ -63,7 +67,10 @@ export function activity(op: Op): string {
     case "open": return `opening ${op.url?.replace(/^https?:\/\//, "")}`;
     case "viewport": return op.settings?.reset ? "resetting viewport" : `setting viewport to ${op.settings?.width} × ${op.settings?.height}`;
     case "screenshot": return "taking a screenshot";
+    case "read_frames":
     case "read": return "analyzing the page";
+    case "eval": return "evaluating JavaScript";
+    case "hit_test": return `hit-testing point (${op.x}, ${op.y})`;
     case "click": return `clicking element ${op.target}`;
     case "type": return `typing ${op.text?.length ?? 0} characters into element ${op.target}${op.submit ? ", then submitting" : ""}`;
     case "key": return `pressing ${op.key}`;
@@ -74,7 +81,7 @@ export function activity(op: Op): string {
 
 /// Run one op in the lane's tab. The person's own back, forward, reload and address go through here
 /// too, so they wait their turn behind the agent's.
-export function act(lane: string, project: string, op: Op): Promise<string | {text: string; image?: {data: string; mime_type: string}}> {
+export function act(lane: string, project: string, op: Op): Promise<string | {text: string; image?: {data: string; mime_type: string}; identity?: unknown; data?: unknown; outcome?: string; ok?: boolean}> {
   return invoke("browser_act", { lane, project, op });
 }
 

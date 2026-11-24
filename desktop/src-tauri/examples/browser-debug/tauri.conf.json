@@ -1,0 +1,16 @@
+{
+  "productName": "Oya Factory diagnostic fixture",
+  "version": "0.0.0",
+  "identifier": "ai.oya.factory.diagnostic-fixture",
+  "build": {},
+  "app": {
+    "security": {
+      "capabilities": []
+    }
+  },
+  "bundle": {
+    "icon": [
+      "../../icons/icon.png"
+    ]
+  }
+}

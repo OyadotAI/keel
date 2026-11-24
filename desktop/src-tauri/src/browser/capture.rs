@@ -13,16 +13,31 @@ pub struct Image {
 }
 
 /// Both old textual operations and captures use the same desktop response envelope.
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct Output {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<Image>,
+    /// Native browser/session metadata survives page-controlled failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<serde_json::Value>,
+    /// JSON is carried independently of human-readable text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+    /// Explicit completion state prevents an uncertain timeout becoming success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// A native error can still return its identity envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
 }
 impl Output {
     /// Normal actions remain text, including when a preview refresh fails after their effect.
     pub fn text(text: String) -> Self {
-        Self { text, image: None }
+        Self {
+            text,
+            ..Default::default()
+        }
     }
 }
 

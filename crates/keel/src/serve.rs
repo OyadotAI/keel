@@ -24,6 +24,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub struct AppState {
+    pub(crate) deliveries:
+        std::sync::Mutex<std::collections::HashMap<String, Arc<crate::delivery::Service>>>,
+    check_operations: std::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
     pub(crate) chats: crate::chat::Chats,
     pub(crate) runtimes: crate::runtime::Runtimes,
     /// A `Mutex`, not an `RwLock`: every reader clones it immediately and holds it for
@@ -146,6 +149,8 @@ impl Drop for CheckoutWriter {
 impl AppState {
     pub fn new(repo: Utf8PathBuf) -> Self {
         Self {
+            deliveries: Default::default(),
+            check_operations: Default::default(),
             chats: Default::default(),
             runtimes: Default::default(),
             repo: std::sync::Mutex::new(repo),
@@ -164,6 +169,8 @@ impl AppState {
     /// that has since moved.
     pub fn empty() -> Self {
         Self {
+            deliveries: Default::default(),
+            check_operations: Default::default(),
             chats: Default::default(),
             runtimes: Default::default(),
             repo: std::sync::Mutex::new(crate::prefs::no_project()),
@@ -180,6 +187,40 @@ impl AppState {
 
     pub fn project_open(&self) -> bool {
         self.open.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Includes preparation and final checks, so a task cannot dispatch over its own settling turn.
+    pub(crate) fn has_turn(&self, lane: &str) -> bool {
+        self.running.locked().contains_key(lane)
+    }
+
+    /// A cancellation receipt owns one claim generation, never whichever work later occupies its lane.
+    pub(crate) fn register_check(&self, id: &str, lane: &str, token: u64) {
+        self.check_operations
+            .locked()
+            .insert(id.into(), (lane.into(), token));
+    }
+
+    /// Cleanup cannot remove a newer operation that happens to reuse the same receipt key.
+    pub(crate) fn finish_check(&self, id: &str, token: u64) {
+        let mut checks = self.check_operations.locked();
+        if checks.get(id).is_some_and(|(_, current)| *current == token) {
+            checks.remove(id);
+        }
+    }
+
+    /// A late Stop is harmless after its exact check claim has ended, even when the lane is busy again.
+    pub(crate) fn stop_check(&self, id: &str) -> bool {
+        let checks = self.check_operations.locked();
+        let Some((lane, token)) = checks.get(id) else {
+            return false;
+        };
+        let mut running = self.running.locked();
+        let Some(turn) = running.get_mut(lane).filter(|turn| turn.token == *token) else {
+            return false;
+        };
+        turn.checks_stopped = true;
+        true
     }
 
     pub fn port(&self) -> u16 {
@@ -917,6 +958,10 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
     }
 
     let state = Arc::new(state);
+    let delivery_state = state.clone();
+    tokio::spawn(async move {
+        let _ = in_blocking(move || crate::delivery::service(&delivery_state)).await;
+    });
 
     let app = Router::new()
         .route("/api/state", get(api_state))
@@ -960,6 +1005,70 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         )
         .route("/api/raw", get(api_raw))
         .route("/api/task", get(crate::tasks::inspect))
+        .route("/api/tasks", get(crate::delivery::list))
+        .route("/api/tasks/{id}", get(crate::delivery::task))
+        .route(
+            "/api/tasks/{id}/recover",
+            axum::routing::get(crate::delivery::recover).post(crate::delivery::recover),
+        )
+        .route(
+            "/api/tasks/{id}/checks",
+            axum::routing::post(crate::delivery::checks),
+        )
+        .route(
+            "/api/tasks/{id}/corrections",
+            axum::routing::post(crate::delivery::add_correction),
+        )
+        .route(
+            "/api/tasks/{id}/corrections/{correction}",
+            axum::routing::post(crate::delivery::edit_correction),
+        )
+        .route(
+            "/api/tasks/{id}/batches",
+            axum::routing::post(crate::delivery::send_batch),
+        )
+        .route(
+            "/api/tasks/{id}/feedback",
+            axum::routing::post(crate::delivery::refresh_feedback),
+        )
+        .route(
+            "/api/tasks/{id}/form",
+            axum::routing::post(crate::delivery::save_form),
+        )
+        .route(
+            "/api/tasks/{id}/form/seed",
+            axum::routing::post(crate::delivery::form),
+        )
+        .route(
+            "/api/tasks/{id}/publication",
+            axum::routing::post(crate::delivery::publish),
+        )
+        .route(
+            "/api/tasks/{id}/publication/{receipt}/retry",
+            axum::routing::post(crate::delivery::retry_publication),
+        )
+        .route(
+            "/api/delivery/schedules",
+            axum::routing::get(crate::delivery::schedules).post(crate::delivery::save_schedule),
+        )
+        .route(
+            "/api/delivery/schedules/{id}",
+            axum::routing::post(crate::delivery::schedule_action),
+        )
+        .route(
+            "/api/tasks/{id}/checks/{receipt}/stop",
+            axum::routing::post(crate::delivery::stop_checks),
+        )
+        .route("/api/delivery/by-lane", get(crate::delivery::by_lane))
+        .route(
+            "/api/delivery/issues/preview",
+            axum::routing::post(crate::delivery::preview),
+        )
+        .route(
+            "/api/delivery/tasks/start",
+            axum::routing::post(crate::delivery::start),
+        )
+        .route("/api/delivery/receipts/{id}", get(crate::delivery::receipt))
         .route("/api/task/save", axum::routing::post(crate::tasks::save))
         .route("/api/task/stop", axum::routing::post(crate::tasks::stop))
         .route(
@@ -2114,9 +2223,16 @@ async fn api_git_diff(
 ) -> Json<crate::repo::DiffResponse> {
     Json(
         blocking(
-            move || match query.staged {
-                Some(staged) => crate::repo::git_diff_area(&repo, &query.path, Some(staged)),
-                None => crate::repo::git_diff(&repo, &query.path),
+            move || {
+                let before = crate::delivery::capture(&repo).ok();
+                let mut diff = query
+                    .staged
+                    .map(|staged| crate::repo::git_diff_area(&repo, &query.path, Some(staged)))
+                    .unwrap_or_else(|| crate::repo::git_diff(&repo, &query.path));
+                if before == crate::delivery::capture(&repo).ok() {
+                    diff.identity = before;
+                }
+                diff
             },
             Default::default(),
         )
@@ -2134,8 +2250,9 @@ struct GitDiffQuery {
 struct GitActRequest {
     action: String,
     path: String,
-    /// For `discard-hunk`: which `@@` block, counting from zero.
-    hunk: Option<usize>,
+    /// For `stage-hunk` and `discard-hunk`: the hunk's id as the diff reported it — its content,
+    /// so a file that moved since it was shown is refused rather than acted on at the wrong place.
+    hunk: Option<String>,
 }
 
 /// Stage, unstage or discard one file, from the Changes panel.
@@ -2427,7 +2544,7 @@ async fn api_git_act(
     let root = state.repo();
     blocking(
         move || {
-            let first = crate::repo::git_act(&repo, &req.action, &req.path, req.hunk);
+            let first = crate::repo::git_act(&repo, &req.action, &req.path, req.hunk.as_deref());
             match first {
                 // Staging and unstaging only. `discard` and `discard-hunk` throw work away, and
                 // looking somewhere else for a file to throw away is not a helpful second guess —
@@ -2437,7 +2554,7 @@ async fn api_git_act(
                         && root != repo
                         && matches!(req.action.as_str(), "stage" | "unstage") =>
                 {
-                    crate::repo::git_act(&root, &req.action, &req.path, req.hunk)
+                    crate::repo::git_act(&root, &req.action, &req.path, req.hunk.as_deref())
                 }
                 other => other,
             }
@@ -2446,7 +2563,14 @@ async fn api_git_act(
     )
     .await
     .map(|()| Json(true))
-    .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))
+    .map_err(|e| {
+        let status = if e == crate::repo::HUNK_CHANGED {
+            axum::http::StatusCode::CONFLICT
+        } else {
+            axum::http::StatusCode::BAD_REQUEST
+        };
+        (status, e)
+    })
 }
 
 #[derive(serde::Deserialize)]

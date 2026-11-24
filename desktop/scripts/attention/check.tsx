@@ -7,6 +7,8 @@ import { applyFrames } from "../../src/reduce";
 import { useIde } from "../../src/ide";
 import { setAppearance } from "../../src/appearance";
 import { MAC } from "../../src/keys";
+import { attentionFixtureData } from "./data";
+import { verifyRequestControls } from "./layout";
 import "../../src/styles.css";
 import "../../src/workspace.css";
 import "../../src/ide.css";
@@ -22,13 +24,7 @@ const fetchPage = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const target = new URL(String(input), location.href);
   if (!target.pathname.startsWith("/api/")) return fetchPage(input, init);
-  const data: Record<string, unknown> = {
-    "/api/git/status": { is_repo: true, branch: "keel/attention-qa", changes: [], head: "fixture-head" },
-    "/api/dev": { running: false, log: [] },
-    "/api/prereview": { confirmed: true, form: { title: "", draft: false }, target: { branch: "keel/attention-qa", base: "main" } },
-    "/api/file": { text: "Synthetic fixture" },
-  };
-  return Response.json(data[target.pathname] ?? []);
+  return Response.json(attentionFixtureData(target.pathname));
 };
 class FixtureSocket extends EventTarget {
   static OPEN = 1;
@@ -75,6 +71,8 @@ useIde.getState().setLayout(params.get("layout") === "ide" ? "ide" : "chat");
 function patch(id: string, patch: Partial<Lane>) { useStore.setState((state) => ({ lanes: { ...state.lanes, [id]: { ...state.lanes[id], ...patch } } })); }
 function remove(id: string) { useStore.setState((state) => ({ lanes: Object.fromEntries(Object.entries(state.lanes).filter(([key]) => key !== id)), projects: Object.fromEntries(Object.entries(state.projects).map(([path, project]) => [path, { ...project, lanes: project.lanes.filter((lane) => lane !== id) }])) })); }
 function Controls() {
+  const [visible, setVisible] = React.useState(true);
+  const [layoutResult, setLayoutResult] = React.useState("");
   const [focus, setFocus] = React.useState("No focused control");
   React.useEffect(() => {
     const changed = () => {
@@ -86,8 +84,11 @@ function Controls() {
     document.addEventListener("focusin", changed);
     return () => document.removeEventListener("focusin", changed);
   }, []);
+  if (!visible) return layoutResult ? <output style={{ position: "fixed", bottom: 0, right: 0, zIndex: 100, background: "var(--raised)", padding: 4 }}>{layoutResult}</output> : null;
   return <div style={{ position: "fixed", top: 0, right: 0, zIndex: 100, display: "flex", gap: 4, maxWidth: "100vw", flexWrap: "wrap", background: "var(--raised)", padding: 4, fontSize: 12 }}>
     <strong>Synthetic Attention QA</strong><output>Focus: {focus}</output><button onClick={reset}>Reset scenarios</button>
+    <button onClick={() => setVisible(false)}>Hide QA controls</button>
+    <button onClick={() => { setVisible(false); requestAnimationFrame(() => requestAnimationFrame(() => setLayoutResult(verifyRequestControls(document)))); }}>Check request controls</button>
     <button onClick={() => patch("question", { pending: [], questionDrafts: {} })}>Resolve question</button>
     <button onClick={() => patch("checks", { conv: ended("done", "passed") })}>Pass checks</button>
     <button onClick={() => remove("question")}>Remove question lane</button>

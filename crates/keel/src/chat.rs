@@ -424,8 +424,28 @@ pub struct Send {
 
 pub async fn send(
     State(state): State<Arc<AppState>>,
-    Json(mut request): Json<Send>,
+    Json(request): Json<Send>,
 ) -> Result<Json<Value>, Error> {
+    // no-blocking: submit moves validation, checkout and journal I/O onto blocking workers.
+    let submission = submit(state, request.id, request.query).await?;
+    Ok(Json(serde_json::to_value(submission).map_err(internal)?))
+}
+
+/// Acknowledgement proves acceptance of this request, independently of its later execution outcome.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Submission {
+    pub id: String,
+    pub accepted: bool,
+    pub running: bool,
+}
+
+/// Delivery and recurrence share the HTTP path's durable, fingerprinted launch receipt.
+pub(crate) async fn submit(
+    state: Arc<AppState>,
+    id: String,
+    query: ChatQuery,
+) -> Result<Submission, Error> {
+    let mut request = Send { id, query };
     let lane = request
         .query
         .lane
@@ -560,9 +580,75 @@ pub async fn send(
     let running = tokio::task::spawn_blocking(move || journal.locked().running)
         .await
         .map_err(internal)?;
-    Ok(Json(
-        json!({"id": id, "accepted": accepted, "running": running}),
-    ))
+    Ok(Submission {
+        id,
+        accepted,
+        running,
+    })
+}
+
+/// Saved receipt inspection never launches work, including when a restarted journal reports interruption.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct ReceiptStatus {
+    pub accepted: bool,
+    pub running: bool,
+    pub interrupted: bool,
+    pub finished: bool,
+    pub error: Option<String>,
+}
+
+/// A batch retry inspects its own accepted record rather than the latest turn in the same lane.
+pub(crate) fn receipt_status(
+    state: &AppState,
+    lane: &str,
+    id: &str,
+) -> Result<ReceiptStatus, Error> {
+    let journal = history(state, lane)?;
+    let h = journal.locked();
+    let position = h.records.iter().position(|r| {
+        r.event == "accepted"
+            && serde_json::from_str::<Value>(r.data.get()).is_ok_and(|v| v["id"] == id)
+    });
+    let Some(position) = position else {
+        return Ok(ReceiptStatus {
+            accepted: false,
+            running: h.running,
+            interrupted: false,
+            finished: false,
+            error: None,
+        });
+    };
+    let rest: Vec<_> = h.records[position + 1..]
+        .iter()
+        .take_while(|r| r.event != "accepted")
+        .collect();
+    let finished = rest.iter().any(|r| r.event == "idle");
+    let interrupted = rest
+        .iter()
+        .any(|r| r.event == "fatal" && r.data.get().contains("daemon restarted"));
+    let error = rest.iter().find_map(|record| {
+        let data: Value = serde_json::from_str(record.data.get()).ok()?;
+        if record.event == "fatal" {
+            return Some(
+                data.as_str()
+                    .unwrap_or("The agent did not finish successfully.")
+                    .to_string(),
+            );
+        }
+        (record.event == "fact" && data["kind"] == "turn.failed").then(|| {
+            data["tail"]
+                .as_str()
+                .unwrap_or("The agent did not finish successfully.")
+                .to_string()
+        })
+    });
+    Ok(ReceiptStatus {
+        accepted: true,
+        running: !finished && h.running,
+        interrupted,
+        finished,
+        error,
+    })
 }
 
 #[derive(Deserialize)]
@@ -774,6 +860,28 @@ mod tests {
         let h = history(&state, "partial-lane").unwrap();
         assert_eq!(h.locked().records.len(), 4);
         assert!(!h.locked().accept("send-two", "prompt-b").unwrap());
+    }
+
+    #[test]
+    fn receipt_completion_keeps_provider_failure_distinct_from_success() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(camino::Utf8PathBuf::from_path_buf(root.path().into()).unwrap());
+        let history = history(&state, "failed-receipt").unwrap();
+        {
+            let mut journal = history.locked();
+            journal.accept("send-one", "fingerprint").unwrap();
+            journal
+                .push("fatal", json!("The packaged runtime is missing."))
+                .unwrap();
+            journal.push("idle", Value::Null).unwrap();
+        }
+        let status = receipt_status(&state, "failed-receipt", "send-one").unwrap();
+        assert!(status.accepted && status.finished);
+        assert!(!status.interrupted);
+        assert_eq!(
+            status.error.as_deref(),
+            Some("The packaged runtime is missing.")
+        );
     }
     #[test]
     fn sse_handles_split_unicode_multiline_data_and_heartbeats() {

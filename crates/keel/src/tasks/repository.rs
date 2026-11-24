@@ -24,6 +24,7 @@ impl Repository {
         Ok(path)
     }
     fn load(&self, path: &Utf8Path) -> Result<Store, String> {
+        let minimum = self.format_version()?;
         let mut bytes = Vec::new();
         match std::fs::File::open(path) {
             Ok(file) => {
@@ -33,7 +34,7 @@ impl Repository {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Store {
-                    version: 1,
+                    version: minimum,
                     project: self.root.to_string(),
                     ..Default::default()
                 });
@@ -48,9 +49,10 @@ impl Repository {
         let mut store: Store = serde_json::from_slice(&bytes).map_err(|_| {
             "Could not read task storage. The existing file was preserved.".to_string()
         })?;
-        if store.version != 1 {
+        if ![LEGACY_VERSION, PINNED_VERSION].contains(&store.version) {
             return Err("Task storage belongs to another version.".into());
         }
+        store.version = store.version.max(minimum);
         // A project moved on disk (`relocate`) keeps its `.keel` folder and with it paths under
         // the old location; re-root them rather than refusing every turn in the moved project.
         if store.project != self.root.as_str() {
@@ -78,11 +80,37 @@ impl Repository {
         // must not stop every turn in the project. `change` sets the file aside under its lock.
         Ok(self.load(&path).unwrap_or_else(|_| self.fresh()))
     }
+    /// Managed task mutation needs confirmed ownership, so advisory corruption cannot erase a writer guard.
+    pub(super) fn read_strict(&self) -> Result<Store, String> {
+        self.load(&self.safe_path(".keel/tasks/state.json")?)
+    }
     fn fresh(&self) -> Store {
         Store {
-            version: 1,
+            version: self.format_version().unwrap_or(PINNED_VERSION),
             project: self.root.to_string(),
             ..Default::default()
+        }
+    }
+
+    fn format_version(&self) -> Result<u32, String> {
+        let marker = self.safe_path(".keel/tasks/version")?;
+        let bytes = match std::fs::File::open(marker) {
+            Ok(file) => {
+                let mut bytes = Vec::new();
+                file.take(FORMAT_MARKER.len() as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map(|_| bytes)
+            }
+            Err(error) => Err(error),
+        };
+        match bytes {
+            Ok(bytes) if bytes == FORMAT_MARKER => Ok(PINNED_VERSION),
+            Ok(_) => Err(
+                "Task format marker belongs to another version. Existing storage was preserved."
+                    .into(),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LEGACY_VERSION),
+            Err(error) => Err(error.to_string()),
         }
     }
     /// Load for a write: a file that cannot be loaded is renamed beside itself — kept, never
@@ -119,19 +147,21 @@ impl Repository {
         let _ = lock;
         crate::writes::locked(path.as_std_path(), || {
             self.safe_path(".keel/tasks/state.json")?;
-            let ignore = self.safe_path(".keel/.gitignore")?;
-            let mut patterns = std::fs::read_to_string(&ignore).unwrap_or_default();
-            for pattern in [".gitignore", "tasks/", "guidance/", "CHANGELOG.md"] {
-                if !patterns.lines().any(|line| line == pattern) {
-                    patterns.push_str(&format!("\n{pattern}\n"));
-                }
-            }
-            crate::writes::replace(ignore.as_std_path(), patterns.as_bytes())?;
+            self.format_version()?;
+            crate::writes::ignore_metadata(&self.root, &["tasks/", "guidance/", "CHANGELOG.md"])?;
             let mut store = self.load_or_reset(&path)?;
+            let previous_version = store.version;
             let out = action(&mut store)?;
+            store.version = store.version.max(previous_version);
             let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
             if bytes.len() as u64 > STORE_BYTES {
                 return Err("Task storage is full; the previous checkpoint was preserved.".into());
+            }
+            if store.version >= PINNED_VERSION {
+                crate::writes::replace(
+                    self.safe_path(".keel/tasks/version")?.as_std_path(),
+                    FORMAT_MARKER,
+                )?;
             }
             crate::writes::replace(path.as_std_path(), &bytes)?;
             // State is authoritative. A projection failure is retryable, never a lost checkpoint.

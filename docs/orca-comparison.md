@@ -12,10 +12,10 @@ behavior, not reliability, usability, adoption causes, or superiority.
 | --- | --- | --- |
 | Find the next human action | A cross-worktree agents feed, blocking questions, completion updates, unread state, and links to the relevant pane. | Per-lane waiting indicators, unseen endings, errors, check results, and project/lane navigation. |
 | Know what finished | Notifications describe working-to-idle transitions and structured-chat endings; experimental workers report success/failure against task and dispatch IDs. | Turn records distinguish execution from project checks; pre-PR reviews retain commit identity and stale-result handling. |
-| Start from an issue | GitHub issue actions open a workspace composer with the source issue; bots delegate changes into worker worktrees and return PRs. | Isolated lanes, shared task memory, explicit provider handoffs, and PR preparation. Source-issue intake is a separate gap. |
-| Request a revision | Diff comments can be batched into agent feedback; unresolved notes can be included again. PR views can pass failed-check names and links to an agent. | Diff inspection, project-check evidence, and the existing review feedback flow. Persistent correction tracking would require its own design. |
+| Start from an issue | GitHub issue actions open a workspace composer with the source issue; bots delegate changes into worker worktrees and return PRs. | Manual GitHub issue preview and isolated persistent tasks, with verified fork-parent intake, frozen base commits, source snapshots, restart recovery and provider handoff. |
+| Request a revision | Diff comments can be batched into agent feedback; unresolved notes can be included again. PR views can pass failed-check names and links to an agent. | Durable diff-range corrections, versioned daemon-owned batches, explicit resolution, manual GitHub check/thread refresh and live remote-head reconfirmation before dispatch. |
 | Work away from the laptop | SSH workspaces, paired remote servers, experimental environment recipes, and a beta mobile companion. | A local daemon and authenticated pairing foundations; these do not establish an equivalent packaged remote/mobile workflow. |
-| Run recurring work | Persistent bots accept schedules and external requests from Slack, GitHub, and Linear. | Agent sessions and supervised background commands. Background commands are not a recurring scheduler. |
+| Run recurring work | Persistent bots accept schedules and external requests from Slack, GitHub, and Linear. | Local fixed-interval definitions using ordinary isolated tasks; one active scheduled occurrence per project, duration limits, explicit enable/pause/stop and no restart replay. External triggers and autonomous publication remain out. |
 
 Primary sources:
 
@@ -62,25 +62,65 @@ Existing Keel sources used to assess that scope include `desktop/src/activity.ts
 
 ## Implementation and verification
 
-The working-tree implementation adds the pure Attention model, navigation/focus policy, scoped
+The implementation adds the pure Attention model, navigation/focus policy, scoped
 styles, and `ui/Attention.tsx`. It integrates the entry with App, Sidebar and StatusBar, adds
 request/error/Turns navigation targets, and guards Terminal readiness against taking focus
 from a newer destination. A fresh shell retains its explicit composer focus request until a
 new interaction supersedes it. `desktop/scripts/attention/` supplies an opt-in synthetic
 fixture of the real App. Feature behavior is documented in `docs/features.md`.
 
-Observed checks: `make check` passed, including 499 desktop tests (51 new tests across the
-Attention model, navigation, rendering and terminal-focus policy), the runtime and native
-suites, and the initial-load budget at 346 KB gzip against 400 KB. The standalone fixture
-also passed TypeScript checking. Reviewer, security and reliability completed source reviews;
-their supported findings were repaired and rechecked.
+Observed checks: `make check` passed on the stable `ca57ad4` snapshot plus the Attention
+follow-up: 500 desktop tests, 61 runtime tests, 12 native tests, and the initial-load budget
+at 346 KB gzip against 400 KB. The standalone fixture also passed TypeScript checking and
+lint. Reviewer, security and reliability completed source reviews; their supported findings
+were repaired and rechecked. The focused follow-up review found no supported defects.
+Concurrent broad UI edits in the shared workspace were excluded from this gate and UI verdict.
 
-UI QA remains blocked: Oya's `browser_open` and one recovery `browser_read` both returned
-`Tab 26 not found`. HTTP readiness establishes that the fixture server is reachable, not that
-the UI works. The QA verdict is **do not ship pending UI verification**, with no Attention
-defect reproduced. Rendered navigation, keyboard behavior, delayed socket focus, narrow layouts,
-screenshots, native PTY input and the real folder picker remain unverified. Restore this lane's
-Oya connection through **Browser → Retry connection** and rerun QA before release.
+Oya's connection was restored. Rendered QA covered Attention ordering, combined reasons,
+source-owned request/error/check retention, update acknowledgement, exact destinations,
+source resolution and removal, empty/partial/disconnected states, long lists and both themes.
+It found an invalid branch API response in the synthetic fixture and a real 720×480 layout
+defect that collapsed answer controls below the composer. The fixture now exercises the real
+branch consumer; short windows with pending cards now use one vertical dock scroller without
+unmounting the terminal. A rendered hit-target regression failed for all four answer controls
+before the repair and passed afterward. Final QA reproduced that pass in both themes and
+both workspace layouts with the fixture toolbar hidden.
+Two stress cases also reached all 18 enabled controls across long questions, a JSON form,
+a 30-step plan and a command approval. Keyboard traversal scrolled the answer field into
+view; invalid JSON displayed validation, and cancelling the plan reader preserved pending
+requests. Resolving that lane's last request removed its row and restored the normal layout;
+resizing to 1280×800 also restored the larger layout.
+
+Final QA verdict: **ship for the tested snapshot**, with no remaining reproduced defect in
+the covered scenarios. Scratch variants were restored, the five follow-up files hash-matched
+the shared checkout, the owned fixture server was stopped and the browser viewport was reset.
+
+The follow-up preserves existing focus behavior when a request resolves. The designer's
+suggestion to advance focus automatically to the next pending card was deferred by the
+technical scope of this CSS repair; request lifecycle behavior was kept unchanged.
+
+This is the real App rendered with synthetic services, not an end-to-end native agent run.
+Native PTY input, OS and delayed-socket focus timing, real daemon recovery and the real folder
+picker remain unverified. The concurrent live-root UI changes remain outside this verdict.
+
+## Follow-on: supervised delivery
+
+The subsequent request expanded the finish line beyond Attention to **issue or saved recurring
+instruction → isolated persistent task → current evidence → corrections → one traceable PR**.
+The original Attention scope and QA above describe that earlier increment only.
+
+This package adds GitHub issue intake, durable correction batches, manual failed-check and
+review-thread refresh, shared editable PR preparation, captured publication retries, and local
+fixed-interval recurring tasks. Checks and advisory review retain separate identity and currency;
+finishing a response or sending feedback cannot close a correction. A remote PR at another
+commit stays unconfirmed. Pausing, editing or revoking trust during preparation fences automatic
+acceptance, and an active recurring run remains recoverable outside the bounded history page.
+See [Supervised delivery](delivery.md) for the complete behavior and operational limits.
+
+External Slack/Linear triggers, autonomous publication, packaged remote/SSH execution, mobile,
+calendar/cron, additional providers and licensing remain outside the expanded scope. The
+advantage pursued here is a recoverable, evidence-backed supervised delivery workflow; the
+comparison does not establish universal superiority or reproduce Orca's reliability.
 
 ## Adoption is a separate question
 

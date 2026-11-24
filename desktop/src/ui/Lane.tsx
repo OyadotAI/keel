@@ -87,7 +87,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
   });
   const turnRunning = useStore((s) => !!s.lanes[lane]?.running);
   const browsing = !!useTab(lane)?.browsing && turnRunning;
-  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Review", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context", browser: "Browser" };
+  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Delivery", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context", browser: "Browser" };
   // Counts as badges, so a tab says there is something there without being opened.
   const badge: Partial<Record<Tab, ReactNode>> = {
     git: changed ? <span className="tab-count">{changed}</span> : null,

@@ -13,6 +13,7 @@ impl Fixture {
         let root = Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
         let id = crate::context::request_id();
         reviews().locked().push(Entry {
+            root: root.clone(),
             review: Review {
                 id: id.clone(),
                 revision: 0,

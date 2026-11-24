@@ -140,7 +140,17 @@ pub fn output_before(
     deadline: Instant,
     stop: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<Output> {
-    collect_until(command, deadline, stop, None)
+    collect_until(command, deadline, stop, None, None)
+}
+
+/// Bound captured subprocess output before allocation; oversized remote data kills and reaps its tree.
+pub(crate) fn bounded_before(
+    command: Command,
+    deadline: Instant,
+    limit: usize,
+) -> std::io::Result<Output> {
+    static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    collect_until(command, deadline, &NEVER, None, Some(limit))
 }
 
 /// Stream under the same deadline as preparation, without retaining provider file contents.
@@ -150,7 +160,7 @@ pub fn stream_before(
     stop: &std::sync::atomic::AtomicBool,
     consume: impl FnMut(&[u8]) + Send + 'static,
 ) -> std::io::Result<Output> {
-    collect_until(command, deadline, stop, Some(Box::new(consume)))
+    collect_until(command, deadline, stop, Some(Box::new(consume)), None)
 }
 
 type Consumer = Box<dyn FnMut(&[u8]) + Send>;
@@ -161,6 +171,7 @@ fn collect_until(
     deadline: Instant,
     stop: &std::sync::atomic::AtomicBool,
     mut consume: Option<Consumer>,
+    limit: Option<usize>,
 ) -> std::io::Result<Output> {
     use crate::signals::Leads;
     check_deadline(deadline, stop)?;
@@ -182,6 +193,7 @@ fn collect_until(
     let (out_buf, err_buf): (Shared, Shared) = Default::default();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let streaming = consume.is_some();
+    let overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     for (stdout, buf, pipe) in [
         (
             true,
@@ -201,11 +213,13 @@ fn collect_until(
         ),
     ] {
         let tx = tx.clone();
+        let overflow = overflow.clone();
         let mut consume = if stdout { consume.take() } else { None };
         let cap = match (streaming, stdout) {
             (true, true) => 0,
             (true, false) => STREAM_STDERR_BYTES,
-            _ => usize::MAX,
+            (_, true) => limit.unwrap_or(usize::MAX),
+            _ => limit.map_or(usize::MAX, |n| n.min(STREAM_STDERR_BYTES)),
         };
         std::thread::spawn(move || {
             if let Some(mut p) = pipe {
@@ -221,6 +235,9 @@ fn collect_until(
                             let mut buf = buf.locked();
                             let keep = n.min(cap.saturating_sub(buf.len()));
                             buf.extend_from_slice(&chunk[..keep]);
+                            if limit.is_some() && keep != n {
+                                overflow.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -234,6 +251,14 @@ fn collect_until(
     let status = loop {
         match child.try_wait()? {
             Some(status) => break status,
+            None if overflow.load(std::sync::atomic::Ordering::Relaxed) => {
+                crate::signals::end_tree(pid);
+                let _ = child.wait();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "output exceeded its size limit and was stopped",
+                ));
+            }
             None if stop.load(std::sync::atomic::Ordering::Relaxed) => {
                 crate::signals::end_tree(pid);
                 let _ = child.wait();
@@ -282,6 +307,12 @@ fn collect_until(
         }
     }
     check_deadline(deadline, stop)?;
+    if overflow.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "output exceeded its size limit",
+        ));
+    }
     let take = |b: &Shared| {
         use crate::lock::Locked;
         std::mem::take(&mut *b.locked())
@@ -502,5 +533,15 @@ mod tests {
         let out = output(c).expect("it completed");
         assert_eq!(out.stdout.len(), 400_000, "every byte came back");
         assert!(out.status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_remote_output_is_rejected_before_unbounded_collection() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "yes unbounded"]);
+        let error =
+            bounded_before(command, Instant::now() + Duration::from_secs(5), 1024).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 }

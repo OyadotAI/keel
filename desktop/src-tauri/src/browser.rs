@@ -12,7 +12,11 @@
 //! string synchronously and every wait is here, each with its own ceiling shorter than the
 //! daemon's, so the agent hears which thing did not happen rather than a generic timeout.
 
+#[path = "browser/capture.rs"]
 mod capture;
+#[path = "browser/debug/mod.rs"]
+mod debug;
+#[path = "browser/viewport.rs"]
 mod viewport;
 use crate::preview::{Bounds, web_only};
 use std::collections::HashMap;
@@ -147,6 +151,7 @@ fn make_room(app: &tauri::AppHandle) {
         (live.remove(at).label, lease)
     };
     if let Some(view) = app.get_webview(&gone) {
+        debug::forget(&view);
         let _ = view.close();
     }
     let lane = gone.trim_start_matches("browser-").to_string();
@@ -157,7 +162,12 @@ fn make_room(app: &tauri::AppHandle) {
     );
 }
 
-fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Result<(), String> {
+async fn create(
+    app: &tauri::AppHandle,
+    label: &str,
+    project: &str,
+    url: Url,
+) -> Result<(), String> {
     make_room(app);
     let window = app.get_window("main").ok_or("The main window is gone.")?;
     let lane = label.trim_start_matches("browser-").to_string();
@@ -165,37 +175,43 @@ fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Resul
     let opener = app.clone();
     let named = label.to_string();
     #[allow(unused_mut)]
-    let mut builder = WebviewBuilder::new(label, WebviewUrl::External(url))
-        .on_navigation(|to| web_only(to) || matches!(to.scheme(), "about" | "blob" | "data"))
-        .on_download(|_, _| false)
-        .on_permission_request(|_, _| tauri::webview::PermissionResponse::Deny)
-        // A link that opens a window opens here instead, if it is somewhere the tab may go.
-        .on_new_window(move |to, _| {
-            if web_only(&to)
-                && let Some(view) = opener.get_webview(&named)
-            {
-                let _ = view.navigate(to);
-            }
-            tauri::webview::NewWindowResponse::Deny
-        })
-        .on_page_load(move |view, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                page_loaded(view.label());
-            }
-            let _ = handle.emit_to(
-                "main",
-                "browser-page",
-                serde_json::json!({
-                    "lane": lane,
-                    "url": payload.url().as_str(),
-                    "loading": matches!(payload.event(), tauri::webview::PageLoadEvent::Started),
-                }),
-            );
-        })
-        .focused(false)
-        // ponytail: macOS 14 and later only; on Windows a tab no lane is showing is throttled, and
-        // each op waits briefly after acting. A WebView2 policy hook if that proves too slow.
-        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
+    let mut builder = WebviewBuilder::new(
+        label,
+        WebviewUrl::External("about:blank".parse().expect("blank URL")),
+    )
+    .on_navigation(|to| web_only(to) || matches!(to.scheme(), "about" | "blob" | "data"))
+    .on_download(|_, _| false)
+    .on_permission_request(|_, _| tauri::webview::PermissionResponse::Deny)
+    // A link that opens a window opens here instead, if it is somewhere the tab may go.
+    .on_new_window(move |to, _| {
+        if web_only(&to)
+            && let Some(view) = opener.get_webview(&named)
+        {
+            let _ = view.navigate(to);
+        }
+        tauri::webview::NewWindowResponse::Deny
+    })
+    .on_page_load(move |view, payload| {
+        if payload.url().scheme() == "about" {
+            return;
+        }
+        if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+            page_loaded(view.label());
+        }
+        let _ = handle.emit_to(
+            "main",
+            "browser-page",
+            serde_json::json!({
+                "lane": lane,
+                "url": payload.url().as_str(),
+                "loading": matches!(payload.event(), tauri::webview::PageLoadEvent::Started),
+            }),
+        );
+    })
+    .focused(false)
+    // ponytail: macOS 14 and later only; on Windows a tab no lane is showing is throttled, and
+    // each op waits briefly after acting. A WebView2 policy hook if that proves too slow.
+    .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
     #[cfg(target_os = "macos")]
     {
         builder = builder.data_store_identifier(store_key(project));
@@ -219,12 +235,25 @@ fn create(app: &tauri::AppHandle, label: &str, project: &str, url: Url) -> Resul
             viewport::initial_size(label),
         )
         .map_err(|e| e.to_string())?;
+    let view = app
+        .get_webview(label)
+        .ok_or("The native browser closed during initialization.")?;
+    if let Err(why) = debug::install(&view).await {
+        let _ = view.close();
+        return Err(why);
+    }
+    viewport::park(&view).await?;
+    view.navigate(url).map_err(|e| e.to_string())?;
     touch(label, Some(false));
     Ok(())
 }
 
 /// Run a script op and return its text, or why it could not be done.
 async fn script(view: &tauri::Webview, op: &serde_json::Value) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    if op["op"] == "viewport_info" {
+        return debug::metrics(view).await.map(|value| value.to_string());
+    }
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let tx = Mutex::new(Some(tx));
     view.eval_with_callback(format!("({SCRIPT})({op})"), move |raw| {
@@ -269,6 +298,36 @@ pub async fn browser_act(
     project: String,
     op: serde_json::Value,
 ) -> Result<capture::Output, String> {
+    let named = label(&lane)?;
+    let before = match app.get_webview(&named) {
+        Some(view) => Some(debug::identity(&view).await),
+        None => None,
+    };
+    let result = perform(&app, &lane, &project, op).await;
+    let identity=match app.get_webview(&named){Some(view)=>debug::identity(&view).await,None=>before.unwrap_or(serde_json::json!({"contacted":true,"browser":"Inside Oya Factory","version":app.package_info().version.to_string(),"engine":null,"profile":null,"dpr":null}))};
+    let mut output = match result {
+        Ok(out) => out,
+        Err(why) => capture::Output {
+            text: why,
+            ok: Some(false),
+            outcome: Some("failed".into()),
+            ..Default::default()
+        },
+    };
+    output.identity = Some(identity);
+    if output.ok.is_none() {
+        output.ok = Some(true);
+        output.outcome = Some("completed".into());
+    }
+    Ok(output)
+}
+
+async fn perform(
+    app: &tauri::AppHandle,
+    lane: &str,
+    project: &str,
+    op: serde_json::Value,
+) -> Result<capture::Output, String> {
     let label = label(&lane)?;
     let turn = turn(&label);
     let _turn = turn.lock().await;
@@ -302,7 +361,7 @@ pub async fn browser_act(
                 false
             }
             None => {
-                create(&app, &label, &project, url.clone())?;
+                create(&app, &label, &project, url.clone()).await?;
                 true
             }
         };
@@ -335,6 +394,15 @@ pub async fn browser_act(
         .get_webview(&label)
         .ok_or("This lane's Browser tab has no page yet. Open one with browser_open.")?;
     touch(&label, None);
+    if matches!(kind, "read_frames" | "eval" | "hit_test" | "click")
+        || cfg!(target_os = "macos") && matches!(kind, "read" | "type")
+    {
+        let result = debug::perform(&view, &op).await;
+        if result.as_ref().is_ok_and(|output| output.ok != Some(false)) {
+            viewport::refresh(app, &label).await;
+        }
+        return result;
+    }
     let navigates = matches!(kind, "back" | "forward" | "reload");
     let loaded = navigates.then(|| await_load(&label));
     let text = script(&view, &op).await?;
@@ -358,6 +426,7 @@ pub async fn browser_place(
     bounds: Option<Bounds>,
 ) -> Result<(), String> {
     let label = label(&lane)?;
+    viewport::intend(&label, bounds);
     let turn = turn(&label);
     let _turn = turn.lock().await;
     let Some(view) = app.get_webview(&label) else {
@@ -404,6 +473,7 @@ fn close(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     locked(&LIVE).retain(|l| l.label != label);
     page_loaded(label);
     if let Some(view) = app.get_webview(label) {
+        debug::forget(&view);
         view.close().map_err(|e| e.to_string())?;
     }
     Ok(())

@@ -4,6 +4,12 @@ import type { Operation, Review, Scope, Snapshot } from "./model";
 import { bindReview, currentReview, invalidateReviewReads, patchReview, refreshReview, reviewOf, updateReviewForm } from "./state";
 import { beginOpening, clearOpening, prRun, type OpeningInput } from "./opening";
 import { STOP_WAIT, STOP_POLL, STOP_READ_FLOOR } from "./constants";
+import { prepareTaskForm,publishTask } from "../delivery";
+import type { PrForm } from "../delivery";
+
+function reviewOpening(form: PrForm | undefined, source: Snapshot) {
+  return form ? { title: form.title, draft: form.draft, body: form.body } : { title: source.form.title, draft: source.form.draft, body: source.review?.opening.body ?? "" };
+}
 
 const MESSAGES: Record<Operation, string> = { start: "Review start wasn’t confirmed.", cancel: "Couldn’t cancel the review.", dismiss: "Couldn’t dismiss the review.", fix: "Couldn’t send findings.", open: "Couldn’t open the pull request." };
 const entry = (s: Scope) => currentReview(s.lane, s.ep, s.wt);
@@ -31,7 +37,9 @@ export function startReview(lane: string, ep: Endpoint, wt?: string, form?: { ti
     if (!source || (source.review && !source.review.outcome)) return false;
     patchReview(lane, before, { confirmed: false });
     try {
-      const result = await post<{ started: boolean }>(ep, "/api/prereview/start", { lane, title: source.form.title, draft: source.form.draft, body: source.review?.opening.body ?? "" }, { wt });
+      const prepared = await prepareTaskForm(ep, lane);
+      const form = prepared?.form;
+      const result = await post<{ started: boolean }>(ep, "/api/prereview/start", { lane, ...reviewOpening(form, source) }, { wt });
       if (!result?.started) throw new Error("The server did not accept the review request.");
     } catch (error) {
       const read = await refresh(scope), now = entry(scope);
@@ -109,6 +117,8 @@ export function openPullRequest(ep: Endpoint, wt: string | undefined, opening: O
     if (!current || !await settled(scope, current.review)) return false;
     const ready = entry(scope);
     if (!ready) return false;
+    const prepared = await prepareTaskForm(ep, lane);
+    if (prepared) return publishTask(ep, lane, prepared);
     return beginOpening(ep, wt, { ...opening, body: opening.body ?? ready.review?.opening.body, title: ready.form.title, draft: ready.form.draft, head: opening.head ?? (ready.head || undefined), branch: opening.branch ?? (ready.target?.branch || undefined), base: opening.base ?? ready.target?.base });
   });
 }

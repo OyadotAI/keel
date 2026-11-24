@@ -12,7 +12,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 const ep = { port: 12345, token: "fixture" };
 
 beforeEach(() => {
-  vi.resetModules(); vi.clearAllMocks();
+  vi.resetModules(); vi.resetAllMocks();
+  // `select` schedules job and dev-server reads that can fire after a test ends; they must settle.
+  mocks.get.mockResolvedValue(undefined);
+  mocks.post.mockResolvedValue(undefined);
   const saved = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => saved.set(k, v), removeItem: (k: string) => saved.delete(k) });
   mocks.open.mockReturnValue({ close: vi.fn() });

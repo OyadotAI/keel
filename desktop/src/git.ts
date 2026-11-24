@@ -38,8 +38,10 @@ export interface DiffLine {
 }
 
 export interface DiffResponse {
+  identity?: import("./delivery").CheckoutIdentity | null;
   path: string;
-  hunks: { header: string; lines: DiffLine[] }[];
+  /// `id` is set only on a hunk of the unstaged diff shown whole — what Stage and Discard send.
+  hunks: { header: string; lines: DiffLine[]; id?: string }[];
   untracked: boolean;
   note?: string | null;
 }
@@ -48,26 +50,38 @@ export interface DiffResponse {
 /// recomputed every one of these in its body, per render, per line, which on a 20,000-line file
 /// was the beachball.
 export interface Prepared {
+  identity?: import("./delivery").CheckoutIdentity | null;
   path: string;
-  rows: ({ kind: "hunk"; text: string } | ({ kind: string } & DiffLine))[];
+  rows: (HunkRow | ({ kind: string } & DiffLine))[];
   adds: number;
   dels: number;
   note?: string | null;
+}
+
+/// A hunk header row; `id`, `n` and `of` let it be staged or discarded on its own.
+export interface HunkRow { kind: "hunk"; text: string; id?: string; n?: number; of?: number; first?: number; last?: number }
+
+/// The new side's first and last line from a `@@ -a,b +c,d @@` header, for "Lines c–d".
+export function hunkLines(header: string): { first: number; last: number } {
+  const m = /\+(\d+)(?:,(\d+))?/.exec(header);
+  const first = m ? Number(m[1]) : 0;
+  const count = m?.[2] === undefined ? 1 : Number(m[2]);
+  return { first, last: first + Math.max(count, 1) - 1 };
 }
 
 export function prepare(d: DiffResponse): Prepared {
   const rows: Prepared["rows"] = [];
   let adds = 0;
   let dels = 0;
-  for (const h of d.hunks) {
-    rows.push({ kind: "hunk", text: h.header });
+  for (const [n, h] of d.hunks.entries()) {
+    rows.push({ kind: "hunk", text: h.header, id: h.id, n: n + 1, of: d.hunks.length, ...hunkLines(h.header) });
     for (const l of h.lines) {
       if (l.kind === "add") adds++;
       else if (l.kind === "del") dels++;
       rows.push(l);
     }
   }
-  return { path: d.path, rows, adds, dels, note: d.note };
+  return { path: d.path, rows, adds, dels, note: d.note, identity: d.identity };
 }
 
 /// The daemon's limit on a lane name (`worktree::valid_name`), less room for a `-xyz` that

@@ -1,4 +1,7 @@
+// Delivery facts use durable task identity; legacy exports remain available for older conversations.
 import { useMemo, useState } from "react";
+import { useDelivery,observedTask } from "../delivery";
+import { Delivery } from "./Delivery";
 import { invoke } from "@tauri-apps/api/core";
 import { url } from "../api";
 import { start, useRun } from "../runs";
@@ -8,6 +11,12 @@ import { Icon } from "./icons";
 
 /// Readiness and exports share a verdict tied to the latest conversation and checkout events.
 export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "discard") => void }) {
+  const ep = useStore((s) => s.projects[s.lanes[lane]?.project]?.endpoint), snapshot = useDelivery(ep, lane);
+  const view=observedTask(snapshot);
+  if (ep && view) return <Delivery ep={ep} lane={lane} view={view} ask={ask} />;
+  return <><LegacyReview lane={lane} ask={ask} />{snapshot.error && <p className="error" role="alert">Delivery state unavailable: {snapshot.error}</p>}</>;
+}
+function LegacyReview({ lane, ask }: { lane: string; ask: (what: "merge" | "discard") => void }) {
   const l = useStore((s) => s.lanes[lane]);
   const ep = useStore((s) => (l ? s.projects[l.project]?.endpoint : undefined));
   const projectName = useStore((s) => (l ? s.projects[l.project]?.name : ""));
@@ -92,7 +101,7 @@ export function Review({ lane, ask }: { lane: string; ask: (what: "merge" | "dis
       <div className="card-head">
         <span className="verdict" style={{ color: blocker ? "var(--warn)" : "var(--add)" }}>
           <Icon name={blocker ? "hand" : "check-circle"} size={14} />
-          {blocker ? "Not ready" : "Ready to merge"}
+          {blocker ? "Checks need attention" : "Checks recorded"}
         </span>
       </div>
       {blocker && <p className="small muted" style={{ margin: "4px 0 0" }}>{blocker}</p>}

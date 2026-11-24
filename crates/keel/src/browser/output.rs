@@ -49,17 +49,41 @@ pub struct Output {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<Image>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
 }
 
 impl Output {
     /// Keep ordinary browser operations textual and subject to the existing text budget.
     pub fn text(text: String) -> Self {
-        Self { text, image: None }
+        Self {
+            text,
+            ..Default::default()
+        }
     }
 
     /// Only a screenshot request may return pixels; never silently truncate a capture.
     pub(super) fn bounded(mut self, screenshot: bool) -> Result<Self, String> {
         self.text = super::capped(self.text);
+        if self
+            .data
+            .as_ref()
+            .is_some_and(|data| data.to_string().len() > super::RESULT_CAP)
+        {
+            self.data = None;
+            self.ok = Some(false);
+            self.outcome = Some("result_too_large".into());
+            self.text="The JSON result exceeded 64 KiB. The operation may have run; no result was truncated or replayed.".into();
+        }
+        if self.ok == Some(false) && self.image.is_none() {
+            return Ok(self);
+        }
         match (&self.image, screenshot) {
             (Some(image), true) => { image.dimensions()?; }
             (None, true) => return Err("The browser returned no screenshot. Update the desktop app or Oya and retry browser_screenshot.".into()),
@@ -93,6 +117,7 @@ mod tests {
         let output = Output {
             text: "Screenshot".into(),
             image: Some(image),
+            ..Default::default()
         }
         .bounded(true)
         .unwrap()
@@ -122,7 +147,8 @@ mod tests {
         assert!(
             Output {
                 text: String::new(),
-                image: Some(image)
+                image: Some(image),
+                ..Default::default()
             }
             .bounded(false)
             .is_err()

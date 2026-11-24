@@ -390,20 +390,36 @@ pub async fn post(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or(json!({}));
-            let answered = if crate::browser::is_tool(name) {
-                Some(match gated(&state, &q, name, &args).await {
-                    Ok(()) => crate::browser::call(
-                        Some(&state.repo()),
-                        q.lane.as_deref(),
-                        q.binding.as_deref(),
-                        name,
-                        &args,
-                    )
-                    .await
-                    .map(|output| output.content()),
-                    Err(why) => Err(why),
-                })
-            } else if name == crate::tasks::TOOL {
+            if crate::browser::is_tool(name) {
+                let selected = crate::browser::selected_backend(&state.repo(), q.lane.as_deref());
+                let result = match gated(&state, &q, name, &args).await {
+                    Ok(()) => {
+                        crate::browser::call(
+                            Some(&state.repo()),
+                            q.lane.as_deref(),
+                            q.binding.as_deref(),
+                            name,
+                            &args,
+                        )
+                        .await
+                    }
+                    Err(text) => Ok(crate::browser::Output {
+                        text,
+                        ok: Some(false),
+                        identity: Some(json!({"contacted":false})),
+                        ..Default::default()
+                    }),
+                };
+                return (
+                    axum::http::StatusCode::OK,
+                    hdr,
+                    Json(rpc_ok(
+                        id,
+                        crate::browser::tool_reply(result, q.lane.as_deref(), selected),
+                    )),
+                );
+            }
+            let answered = if name == crate::tasks::TOOL {
                 Some(
                     crate::tasks::call(state.clone(), q.lane.clone(), args)
                         .await
@@ -624,6 +640,7 @@ mod browser_gate_tests {
                 data: png.into(),
                 mime_type: "image/png".into(),
             }),
+            ..Default::default()
         }))
         .await;
         assert!(accepted);
@@ -631,6 +648,64 @@ mod browser_gate_tests {
         assert_eq!(reply["result"]["isError"], false);
         assert_eq!(reply["result"]["content"][1]["type"], "image");
         assert_eq!(reply["result"]["content"][1]["data"], png);
+    }
+
+    /// Denying any diagnostic prevents metadata collection and all native browser dispatch.
+    #[tokio::test]
+    async fn denying_diagnostics_returns_identity_without_contacting_the_browser() {
+        let _guard = crate::approve::tests::lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let state = Arc::new(AppState::new(root));
+        let mut events = crate::events::subscribe();
+        for (name, args) in [
+            ("browser_eval", json!({"expression":"window.changed=true"})),
+            ("browser_hit_test", json!({"x":1,"y":2})),
+            ("browser_read", json!({"frames":true})),
+        ] {
+            let call = tokio::spawn(post(
+                State(state.clone()),
+                Query(McpQuery {
+                    lane: Some("denied-debug-fixture".into()),
+                    binding: None,
+                }),
+                Json(
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}),
+                ),
+            ));
+            crate::approve::settled(&call, |p| p.lane == "denied-debug-fixture").await;
+            let id = crate::approve::queue()
+                .locked()
+                .iter()
+                .find(|p| p.lane == "denied-debug-fixture")
+                .expect("permission card")
+                .id
+                .clone();
+            crate::approve::queue().locked().retain(|p| p.id != id);
+            let (tx, _) = crate::approve::waiters().locked().remove(&id).unwrap();
+            tx.send(crate::approve::Decision {
+                decision: "deny".into(),
+                reason: "Fixture denial".into(),
+            })
+            .unwrap();
+            let (_, _, Json(reply)) = call.await.unwrap();
+            assert_eq!(reply["result"]["isError"], true);
+            assert_eq!(
+                reply["result"]["structuredContent"]["identity"]["contacted"],
+                false
+            );
+            assert_eq!(
+                reply["result"]["structuredContent"]["identity"]["lane"],
+                "denied-debug-fixture"
+            );
+            while let Ok(event) = events.try_recv() {
+                assert!(
+                    !(event.kind == "browser" && event.data["lane"] == "denied-debug-fixture"),
+                    "denied request reached the browser"
+                );
+            }
+        }
     }
 
     /// Plan mode ignores allow rules for MCP tools not marked read-only, so without the hint every
@@ -716,6 +791,17 @@ mod browser_gate_tests {
             (false, true),
             "untrusted: reading asks"
         );
+        for (name, args) in [
+            ("browser_eval", json!({"expression":"window.changed=true"})),
+            ("browser_hit_test", json!({"x":1,"y":2})),
+            ("browser_read", json!({"frames":true})),
+        ] {
+            assert_eq!(
+                asked(name, args).await,
+                (false, true),
+                "new diagnostics use the existing per-lane gate"
+            );
+        }
         crate::permissions::set_trusted(&root, true).unwrap();
         assert_eq!(
             asked("browser_read", json!({})).await,

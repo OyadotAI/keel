@@ -574,6 +574,46 @@ button.link {
 .terminal.hidden {
   visibility: hidden;
 }
+.terminal-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+/* Floated, not in the flow: opening it must not refit the grid and redraw the agent's screen. */
+.terminal-find {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  height: 28px;
+  width: min(320px, calc(100% - 16px));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 8px;
+  background: var(--raised);
+  box-shadow: var(--shadow-sm);
+  border-radius: 6px;
+  font: var(--t-small) var(--font);
+}
+.terminal-find input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  color: inherit;
+}
+.terminal-find-count {
+  white-space: nowrap;
+  padding: 0 4px;
+}
+.terminal-find-count.dim {
+  color: var(--dim);
+}
 .terminal-host {
   flex: 1;
   min-height: 0;
@@ -1082,8 +1122,19 @@ pre.code {
 .row.hunk {
   color: var(--faint);
   background: var(--surface);
-  font-size: var(--t-tiny);
+  font-size: var(--t-small);
   padding-left: 8px;
+}
+.row.hunk .hunk-header {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hunk-actions {
+  display: flex;
+  gap: 12px;
+  padding: 0 8px;
+  font-family: var(--font);
 }
 .row.add {
   background: var(--add-bg);

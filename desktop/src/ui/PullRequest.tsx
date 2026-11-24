@@ -4,9 +4,17 @@ import { useStore } from "../store";
 import { openPullRequest, reviewForm, startReview, updateReviewForm, usePrRun, useReview } from "../prereview";
 import { formPresentation } from "../prereview";
 import { PreReview } from "./PreReview";
+import { useDelivery,observedTask } from "../delivery";
+import { DeliveryPublication } from "./DeliveryPublication";
 
 /** Review is advisory and separate from opening; both actions preserve the person's current form. */
 export function PullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string }) {
+  const delivery = useDelivery(ep, lane);
+  const view=observedTask(delivery);
+  if (view) return <DeliveryPublication ep={ep} lane={lane} view={view} />;
+  return <LegacyPullRequest ep={ep} wt={wt} lane={lane} />;
+}
+function LegacyPullRequest({ ep, wt, lane }: { ep: Endpoint; wt?: string; lane: string }) {
   const snapshot = useReview(lane, ep, wt), current = useStore((s) => s.lanes[lane]?.git?.branch);
   const opened = usePrRun(ep, wt), { run, review, pending, branch, base, hasResult } = formPresentation(snapshot, opened, current);
   const form = snapshot?.form ?? reviewForm(lane, wt);

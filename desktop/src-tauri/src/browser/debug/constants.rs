@@ -1,0 +1,23 @@
+//! One place bounds native work, inspection output and pointer retries in the embedded adapter.
+use std::time::Duration;
+pub const REQUEST_WAIT: Duration = Duration::from_millis(1500);
+pub const EVAL_WAIT: Duration = Duration::from_secs(5);
+pub const OPERATION_WAIT: Duration = Duration::from_secs(13);
+pub const MAX_PENDING: usize = 128;
+pub const MAX_NATIVE_JSON: usize = 256 * 1024;
+pub const MAX_JSON: usize = 64 * 1024;
+pub const MAX_EXPRESSION: usize = 32 * 1024;
+pub const MAX_DEPTH: usize = 16;
+pub const MAX_ELEMENTS: usize = 128 * 300;
+pub const READ_TEXT_BYTES: usize = 58_000;
+pub const URL_BYTES: usize = 256;
+pub const SECTION_RESERVE: usize = 256;
+pub const ROW_RESERVE: usize = 32;
+pub const LABEL_BYTES: usize = 512;
+pub const OWNER_POLLS: usize = 10;
+pub const OWNER_POLL_DELAY: Duration = Duration::from_millis(10);
+pub const POINTER_POLLS: usize = 50;
+pub const POINTER_POLL_DELAY: Duration = Duration::from_millis(20);
+pub const POINT_TOLERANCE: f64 = 0.5;
+pub const MOVE_EVENT: i32 = 0;
+pub const BUTTON_PAIR_EVENT: i32 = 3;

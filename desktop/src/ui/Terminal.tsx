@@ -1,5 +1,6 @@
 // Native agent and shell terminals retain their process and input ownership across lane switches.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { onQuickFailure, quickFailure, quickWaiting, registerShell, shellFailed } from "../quick-commands";
 import { canAutofocusTerminal, terminalConnectionFocus } from "../terminal-focus";
 import { type Endpoint } from "../api";
 import { AGENT_NAME, useStore } from "../store";
@@ -7,6 +8,8 @@ import { register } from "../typers";
 import { nextFollow, PERSON_SCROLL_MS } from "../terminal-follow";
 import { consumeChatFocus } from "../chat-focus";
 import { isKeel } from "../keys";
+import type { SearchAddon } from "@xterm/addon-search";
+import { TerminalFind, useFindKey } from "./TerminalFind";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
 import { terminalXtermTheme as theme } from "../terminal-palette";
@@ -43,6 +46,22 @@ function wheelScrollsHistory(term: import("@xterm/xterm").Terminal) {
 }
 
 /// Hold the bottom of the output unless the person scrolled away (`terminal-follow.ts`). The
+/// How every terminal starts: the theme and font of the moment, and room for a long scrollback.
+function xtermOptions() {
+  return {
+    // Readable whatever the program asks for: xterm lifts any colour that would fall under
+    // this contrast against its background — Claude Code's dim text included.
+    minimumContrastRatio: 4.5,
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono"),
+    fontSize: terminalFont(),
+    lineHeight: 1.2,
+    cursorBlink: true,
+    allowProposedApi: true,
+    scrollback: 5_000,
+    theme: theme(terminalDark()),
+  };
+}
+
 /// returned function stops watching; its `settle` runs after each write.
 function followBottom(term: import("@xterm/xterm").Terminal, host: HTMLElement) {
   let following = true;
@@ -112,6 +131,14 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   const [bg, setBg] = useState<string>();
   const wtName = useStore((s) => s.lanes[lane]?.wt);
   const elsewhere = useStore((s) => agent && !!s.lanes[lane]?.elsewhere);
+  const quickError = useSyncExternalStore(onQuickFailure, () => quickFailure(lane));
+  const quickWaits = useSyncExternalStore(onQuickFailure, () => quickWaiting(lane));
+  const [search, setSearch] = useState<SearchAddon>();
+  const [finding, setFinding] = useState(false);
+  const [findToken, setFindToken] = useState(0);
+  useFindKey(host, () => { setFinding(true); setFindToken((t) => t + 1); }, elsewhere);
+  // A quick command waiting on a shell that exited starts it again rather than timing out.
+  useEffect(() => { if (!agent && quickWaits && state === "closed") setGeneration((g) => g + 1); }, [agent, quickWaits, state]);
 
   useEffect(() => {
     if (!host.current || elsewhere) return;
@@ -135,29 +162,17 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       }
       if (!ep || disposed || !host.current) {
         openingFocus.dispose();
-        if (!ep && !disposed) setState("closed");
+        if (!ep && !disposed) { setState("closed"); if (!agent) shellFailed(lane, "Oya Factory could not reach this project."); }
         return;
       }
-      const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+      const [{ Terminal: XTerm }, { FitAddon }, { SearchAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search")]);
       await import("@xterm/xterm/css/xterm.css");
       if (disposed || !host.current) return;
-      const css = getComputedStyle(document.documentElement);
-      const dark = terminalDark();
-      setBg(theme(dark).background);
-      const term = new XTerm({
-        // Readable whatever the program asks for: xterm lifts any colour that would fall under
-        // this contrast against its background — Claude Code's dim text included.
-        minimumContrastRatio: 4.5,
-        fontFamily: css.getPropertyValue("--mono"),
-        fontSize: terminalFont(),
-        lineHeight: 1.2,
-        cursorBlink: true,
-        allowProposedApi: true,
-        scrollback: 5_000,
-        theme: theme(dark),
-      });
+      setBg(theme(terminalDark()).background);
+      const term = new XTerm(xtermOptions());
       const fit = new FitAddon();
       term.loadAddon(fit);
+      const search = new SearchAddon(); term.loadAddon(search); setSearch(search);
       // Oya Factory's own chords go up to the window; every other key, Esc and ⌃C included, is the CLI's.
       term.attachCustomKeyEventHandler((e) => !isKeel(e));
       wheelScrollsHistory(term);
@@ -182,7 +197,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
         if (current.known) params.set("resume", "true");
         if (takeoverRef.current) params.set("takeover", "true");
         // Claude Code is started in the terminal's theme; Codex and agy ask the terminal itself.
-        params.set("theme", dark ? "dark" : "light");
+        params.set("theme", terminalDark() ? "dark" : "light");
       }
       // The token goes as a subprotocol: a page's WebSocket cannot set headers, and a URL is
       // somewhere it would be logged.
@@ -218,13 +233,13 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       // opening, or has closed, was lost — after its job had already been marked delivered.
       let unregister = () => {};
       ws.addEventListener("open", () => {
-        if (!agent) return;
+        if (!agent) { unregister = registerShell(lane, (text) => ws.readyState === WebSocket.OPEN && (ws.send(encoder.encode(text)), true)); return; }
         const connection = providerInput(lane, ws, term, () => !hiddenRef.current && useStore.getState().active === lane, () => !disposed);
         visibilityRef.current = connection.refresh;
         unregister = () => { connection.close(); if (visibilityRef.current === connection.refresh) visibilityRef.current = () => {}; };
         useStore.getState().connected(lane);
       });
-      ws.addEventListener("close", () => unregister());
+      ws.addEventListener("close", () => { unregister(); if (!agent) shellFailed(lane, "The shell closed before it opened."); });
       const observer = new ResizeObserver(() => resize());
       observer.observe(host.current);
       // A new size is a new cell grid: refit, so the CLI is told its new rows and columns.
@@ -246,6 +261,8 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
     })();
     return () => {
       disposed = true;
+      setSearch(undefined);
+      setFinding(false);
       cleanup();
     };
   }, [lane, agent, generation, elsewhere]);
@@ -258,6 +275,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
   useEffect(() => {
     visibilityRef.current();
     if (hidden) {
+      setFinding(false);
       // A hidden xterm that keeps focus still takes keystrokes — into a lane nobody can see.
       if (host.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
       return;
@@ -320,8 +338,12 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
           )}
         </div>
       )}
+      {!agent && quickError && <div className="terminal-state small"><span className="error">{quickError}</span></div>}
       {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
-      <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
+      <div className="terminal-frame">
+        {finding && search && state === "open" && <TerminalFind search={search} selectToken={findToken} onClose={() => setFinding(false)} focusTerminal={() => host.current?.querySelector("textarea")?.focus()} />}
+        <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
+      </div>
       </SubagentsPane>
     </TerminalFileSurface>
   );

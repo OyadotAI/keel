@@ -23,6 +23,29 @@ use std::sync::Arc;
 
 pub type Failure = (StatusCode, String);
 
+/// Metadata domains share one ignore-file lease so simultaneous saves cannot drop each other's exclusions.
+pub(crate) fn ignore_metadata(root: &Utf8Path, patterns: &[&str]) -> Result<(), String> {
+    no_link_under(root, ".keel/.gitignore")?;
+    let path = root.join(".keel/.gitignore");
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("The metadata ignore file is a symbolic link.".into());
+    }
+    let key = crate::permissions::key_of(root)?;
+    let _lease = crate::permissions::try_lease(&format!("metadata-ignore-{key}.lock"))?
+        .ok_or("Project metadata is busy. Retry the same request.")?;
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    let before = text.len();
+    for pattern in std::iter::once(&".gitignore").chain(patterns.iter()) {
+        if !text.lines().any(|line| line == *pattern) {
+            text.push_str(&format!("\n{pattern}\n"));
+        }
+    }
+    if text.len() != before {
+        replace(path.as_std_path(), text.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Take `root`'s writer claim for one of Keel's own writes, or say who has it.
 pub fn hold(state: &Arc<AppState>, root: &Utf8Path, what: &str) -> Result<Held, Failure> {
     // The tree is in the key, so the same write in two checkouts does not collide on the key;

@@ -4,6 +4,7 @@ import type { Review, Seen } from "./model";
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), open: vi.fn() }));
 vi.mock("../api", async (original) => ({ ...await original<typeof import("../api")>(), get: api.get, post: api.post }));
 vi.mock("../streams", () => ({ open: api.open }));
+vi.mock("../delivery", () => ({ prepareTaskForm: async () => undefined, publishTask: vi.fn() }));
 
 const ep = { port: 1234, token: "one" }, wt = "owned";
 const review = (outcome: Review["outcome"] = { kind: "verdict", verdict: "do not ship", reason: "", summary: "", findings: [{ path: "a.ts", line: 1, severity: "blocking", title: "Finding", body: "" }], report: "", took: 1 }): Review => ({ id: "run-one", revision: 1, lane: "lane", wt, sha: "abc1234", base: "origin/main", phase: outcome ? "done" : "reviewing", started: 0, opening: { title: "Agent title", body: "Original description", draft: true, base: "main" }, by_agent: true, outcome });

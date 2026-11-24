@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { prepare, slug } from "./git";
+import { hunkLines, prepare, slug } from "./git";
 
 it("prepares a diff once: rows, counts", () => {
   const p = prepare({
@@ -57,4 +57,18 @@ it("matches a chord by its physical key, so shifted brackets still work", () => 
   const mod = mac ? { metaKey: true } : { ctrlKey: true, shiftKey: true };
   expect(matches(e({ ...mod, code: "KeyK", key: "k" }), { key: "k" })).toBe(true);
   expect(matches(e({ code: "KeyK", key: "k" }), { key: "k" })).toBe(false);
+});
+
+it("a hunk row carries the daemon's id and its place, so it can be staged on its own", () => {
+  const p = prepare({ path: "a.ts", untracked: false, hunks: [
+    { header: "@@ -1 +1,2 @@", lines: [], id: "abc" },
+    { header: "@@ -9,3 +10,4 @@", lines: [] },
+  ] });
+  expect(p.rows[0]).toMatchObject({ kind: "hunk", id: "abc", n: 1, of: 2, first: 1, last: 2 });
+  expect(p.rows[1]).toMatchObject({ kind: "hunk", id: undefined, n: 2, of: 2, first: 10, last: 13 });
+});
+
+it("a hunk header with no count is one line", () => {
+  expect(hunkLines("@@ -7 +7 @@ fn x")).toEqual({ first: 7, last: 7 });
+  expect(hunkLines("@@ -1,0 +0,0 @@")).toEqual({ first: 0, last: 0 });
 });

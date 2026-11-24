@@ -28,6 +28,8 @@
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+#[path = "evals/delivery.rs"]
+mod delivery;
 
 /// Skip a paid eval unless the caller asked for it, saying so rather than passing quietly.
 macro_rules! paid {

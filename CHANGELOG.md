@@ -5,6 +5,18 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Changed
+- Added lane-gated page evaluation, frame-aware reads and hit testing with native browser,
+  profile and DPR identity on browser results and errors. Replaced diagnostic DOM clicks with
+  native input on supported paths; explicitly refused shielded macOS Oya and hidden/fixed-size
+  embedded input before effects. Native clicking under Oya's control shield remains unavailable.
+- Set the desktop bundle identifier to `ai.oya.factory` and isolated diagnostic fixtures under
+  `ai.oya.factory.diagnostic-fixture`.
+- Connected GitHub issue previews, isolated persistent tasks, exact check evidence, durable
+  correction batches and captured-commit PR publication in a shared Delivery workflow.
+  Preserved source, drafts, corrections, advisory review history and PR links across restart
+  and provider handoff; added explicit feedback refresh and captured-publication recovery.
+  Added paused-by-default local recurring definitions, one durable scheduled project slot,
+  bounded run limits, overlap/missed-interval history and trust-revocation fences.
 - Made browser recovery and session-cleanup fixtures independent of host listener inspection,
   enabled the same coverage on Linux, and pinned refusal of authenticated requests after a
   denied or replaced listener. Removed repository-level automatic plugin enrollment so the
@@ -21,6 +33,8 @@ All notable changes to Keel are recorded here. Format follows Keep a Changelog.
   visible after navigation and separated execution endings from project-check evidence.
   Closed covering narrow drawers and kept late terminal connections from stealing deliberate
   review or request focus.
+  Kept pending answer and approval controls scrollable in short windows and corrected the
+  Attention fixture's branch-discovery response so Coding Mode can be verified.
 - Kept the SDK's formatting-only structured-output helper available to focused reviews while
   applying the complete trusted reviewer policy, so a completed assessment returns a validated verdict.
 - Replaced sequential CI review orchestration with one read-only focused reviewer, explicit

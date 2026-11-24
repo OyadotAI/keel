@@ -7,6 +7,7 @@ import { AppearanceSetting } from "./AppearanceSetting";
 import { useStore } from "../store";
 import { ClaudeSection, LicenseSection, UpdatesSection } from "./SettingsServices";
 import { ProjectTrust } from "./settings/ProjectTrust";
+import { QuickCommands } from "./settings/QuickCommands";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { useProjectConnection } from "./settings/connection";
 import "./settings/Settings.css";
@@ -26,7 +27,7 @@ export function Settings() {
       <button onClick={() => useStore.setState({ settings: false })}>Done</button>
     </header>
     <SettingsLayout
-      trust={<ProjectTrust key={project ?? "no-project"} project={project} name={name} endpoint={endpoint} error={connection.error} retry={connection.retry} />}
+      trust={<><ProjectTrust key={project ?? "no-project"} project={project} name={name} endpoint={endpoint} error={connection.error} retry={connection.retry} /><QuickCommands key={`quick-${project ?? ""}`} project={project} /></>}
       preferences={<><AppearanceSetting /><NotificationSetting /><InterfaceSetting applyToLane /><BrowserPreference /></>}
       claude={endpoint ? <ClaudeSection key={project} ep={endpoint} /> : <p className="muted">{unavailable}</p>}
       license={endpoint ? <LicenseSection key={project} ep={endpoint} /> : <section className="settings-section"><h2>License</h2><p className="muted">{unavailable}</p></section>}

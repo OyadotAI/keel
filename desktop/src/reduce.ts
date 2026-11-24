@@ -5,6 +5,7 @@
 // touches and the one block or call inside it, and nothing else. A view subscribed to one block
 // re-renders when that block changes and never because a sibling did — which is the whole of what
 // made the Swift transcript slow while a reply streamed.
+import type { CheckEvidence } from "./delivery";
 
 /// `you` is what the person typed while the turn ran, which joined it as the CLI's mid-turn input does.
 export type StepKind = "say" | "think" | "you" | "notice";
@@ -50,6 +51,7 @@ export interface Gate {
   status: string;
   command?: string | null;
   problems?: { file?: string; line?: number; message?: string }[];
+  evidence?: CheckEvidence | null;
 }
 
 export interface Turn {

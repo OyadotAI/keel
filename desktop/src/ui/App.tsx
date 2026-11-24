@@ -1,4 +1,5 @@
 // The main workspace composes lanes and shared waiting indicators without taking terminal input.
+import { quickCommands, runQuickCommand } from "../quick-commands";
 import { UpdateButton } from "./UpdateButton";
 import { waiting as waitingForYou } from "../activity";
 import { restoreZoom, zoom } from "../zoom";
@@ -31,6 +32,7 @@ import { TrustDialog } from "./TrustDialog";
 import { ideCommand } from "../ide-keys";
 import { MAC } from "../keys";
 import { AttentionButton, AttentionDialog } from "./Attention";
+import { TasksButton,TasksDialog } from "./Tasks";
 import { useAttentionNavigation } from "../use-attention-navigation";
 import { revealAttention, ATTENTION_DRAWER_QUERY } from "../attention-navigation";
 
@@ -131,6 +133,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>("turns");
   const [shell, setShell] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false), [tasksInitial, setTasksInitial] = useState<{ project: string; recurring: boolean }>();
   const [conversation, setConversation] = useState(false);
   const attention = useAttentionNavigation((_lane, destination) => revealAttention(destination,
     { panel: setPanel, conversation: setConversation, expanded: setExpanded, tab: setTab, sidebar: setSidebar }, window.matchMedia(ATTENTION_DRAWER_QUERY).matches));
@@ -230,15 +233,16 @@ export function App() {
   const workspace = showPanel && lane ? <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} /> : null;
   return (
     <div className={`app ${sidebar ? "" : "no-sidebar"} ${ideActive ? "ide-layout" : ""} ${conversation ? "ide-conversation-open" : ""}`}>
-      <Sidebar attention={<AttentionButton open={attention.show} />} showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
+      <Sidebar attention={<><AttentionButton open={attention.show} /><TasksButton open={() => setTasksOpen(true)} /></>} showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
       <button className="sidebar-backdrop" style={{ background: "transparent" }} aria-label="Close projects" onClick={toggleSidebar} />
       <Handle name={ideActive ? "--coding-sidebar-w" : "--sidebar-w"} min={240} max={ideActive ? 480 : 360} fallback={ideActive ? 320 : 240} from="left" />
       <WorkspaceMain lane={lane} overlay={overlay} showPanel={showPanel} expanded={expanded} ideActive={ideActive} shell={shell} setShell={setShell} closePanel={closePanel} workspace={workspace} conversation={conversation} setConversation={setConversation} showGit={showGit} />
-      <StatusBar attention={!sidebar && <AttentionButton open={attention.show} />} layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
+      <StatusBar attention={!sidebar && <><AttentionButton open={attention.show} /><TasksButton open={() => setTasksOpen(true)} /></>} layout={lane ? <LayoutSwitch /> : undefined} openTab={showTab} panel={showPanel} togglePanel={togglePanel} sidebar={sidebar} toggleSidebar={toggleSidebar} />
       <Drop />
       <FileReferenceDrag />
       {palette && <PaletteHost lane={lane} close={() => setPalette(false)} actions={{ showAttention: attention.show, showTab, togglePanel, toggleSidebar, focusTerminal, setShell, setAsking }} />}
-      {attention.open && <AttentionDialog close={attention.close} activate={attention.activate} openProject={async () => { await pickProject(); if (useStore.getState().order.length) attention.close(); }} />}
+      {attention.open && <AttentionDialog close={attention.close} activate={attention.activate} openRecurring={(project) => { setTasksInitial({ project, recurring: true }); setTasksOpen(true); }} openProject={async () => { await pickProject(); if (useStore.getState().order.length) attention.close(); }} />}
+      {tasksOpen && <TasksDialog initial={tasksInitial} close={() => { setTasksOpen(false); setTasksInitial(undefined); }} />}
       {ideActive && navigation && lane && <FileNavigation key={`${lane}:${navigation}`} lane={lane} showCode={showCode} />}
       <Shortcuts />
       {asking && lane && <Confirm lane={lane} what={asking} done={() => setAsking(null)} />}
@@ -423,6 +427,7 @@ function useCommands({ lane, showAttention, showTab, togglePanel, toggleSidebar,
     out.push({ id: "close", title: "Close lane", keys: label({ key: "w" }), run: () => setAsking("close") });
     out.push({ id: "focus", title: "Focus composer", keys: label({ key: "l" }), run: focusTerminal });
     out.push({ id: "shell", title: "Toggle the shell", keys: label({ key: "j" }), run: () => setShell((x) => !x) });
+    for (const q of quickCommands(l.project)) out.push({ id: `quick-${q.name}`, title: `Run: ${q.name}`, detail: q.command, run: () => runQuickCommand(lane!, q, () => setShell(() => true)) });
     TABS.forEach((t, i) => out.push({ id: `tab-${t}`, title: `Show ${t[0].toUpperCase()}${t.slice(1)}`, keys: label({ key: String(i + 1), alt: true }), run: () => showTab(t) }));
     out.push({ id: "trust", title: s.trusted[l.project] ? "Stop trusting this project" : "Trust this project…", run: () => s.trusted[l.project] ? useStore.setState({ settings: true }) : projectTrust.open(l.project) });
   }

@@ -75,6 +75,7 @@ pub struct Review {
 
 struct Entry {
     review: Review,
+    root: Utf8PathBuf,
     dir: Utf8PathBuf,
     stop: Arc<AtomicBool>,
 }
@@ -89,6 +90,28 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default()
+}
+
+/// Only actual reviewer output becomes an advisory snapshot; missing outcomes stay unconfirmed.
+fn delivery_evidence(review: &Review) -> crate::delivery::ReviewEvidence {
+    let (verdict, report) = match &review.outcome {
+        Some(Done::Verdict {
+            verdict, report, ..
+        }) => (verdict.clone(), report.clone()),
+        Some(Done::None { line, .. }) => ("no verdict".into(), line.clone()),
+        None => (review.phase.into(), String::new()),
+    };
+    crate::delivery::ReviewEvidence {
+        id: review.id.clone(),
+        sha: review.sha.clone(),
+        base: review.base.clone(),
+        provider: "claude".into(),
+        started_at: review.started.saturating_mul(1000),
+        completed_at: review.outcome.as_ref().map(|_| now().saturating_mul(1000)),
+        verdict,
+        report,
+        confirmed: review.outcome.is_some(),
+    }
 }
 
 /// The lane's entry, or the one nobody's lane names in the same checkout — the `monitor` rule: a
@@ -111,15 +134,23 @@ fn running(e: &Entry) -> bool {
 
 /// Change the lane's record and say so.
 fn set(id: &str, dir: &Utf8Path, change: impl FnOnce(&mut Review)) {
-    let (lane, wt) = {
+    let (lane, wt, root, snapshot) = {
         let mut all = reviews().locked();
         let Some(e) = all.iter_mut().find(|e| e.review.id == id && e.dir == dir) else {
             return;
         };
         change(&mut e.review);
         e.review.revision += 1;
-        (e.review.lane.clone(), e.review.wt.clone())
+        (
+            e.review.lane.clone(),
+            e.review.wt.clone(),
+            e.root.clone(),
+            delivery_evidence(&e.review),
+        )
     };
+    if let Err(error) = crate::delivery::persist_review(&root, &lane, snapshot) {
+        tracing::warn!("Advisory review history could not be saved: {error}");
+    }
     crate::events::emit(
         "reviews.changed",
         wt.as_deref(),
@@ -183,6 +214,7 @@ fn start_with(
             all.remove(oldest);
         }
         all.push(Entry {
+            root: root.clone(),
             review: Review {
                 id: id.clone(),
                 revision: 0,
@@ -199,6 +231,16 @@ fn start_with(
             dir: dir.clone(),
             stop: stop.clone(),
         });
+    }
+    let initial = reviews()
+        .locked()
+        .iter()
+        .find(|entry| entry.review.id == id && entry.dir == dir)
+        .map(|entry| delivery_evidence(&entry.review));
+    if let Some(initial) = initial
+        && let Err(error) = crate::delivery::persist_review(&root, lane, initial)
+    {
+        tracing::warn!("Advisory review start could not be saved: {error}");
     }
     crate::events::emit(
         "reviews.changed",
@@ -662,7 +704,7 @@ pub async fn api_start(
     Checkout(dir): Checkout,
     Json(q): Json<StartBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // no-blocking: inserts a record and spawns the thread that does the work.
+    crate::serve::in_blocking(move||{
     let opening = Opening {
         title: q.title,
         body: q.body,
@@ -682,6 +724,7 @@ pub async fn api_start(
             "A review or Git operation is already using this checkout. Refresh its status and try again.".into(),
         ))
     }
+    }).await
 }
 
 // Unix, as `ci.rs`'s are: the stub `claude` is a shell script.

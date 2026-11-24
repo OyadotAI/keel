@@ -12,18 +12,19 @@ CONFIG = ROOT / "desktop/src-tauri/tauri.conf.json"
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 BUNDLE = Path("desktop/src-tauri/target/universal-apple-darwin/release/bundle")
 APP_NAME = "Oya Factory"
+APP_IDENTIFIER = "ai.oya.factory"
 LEGACY_ARCHIVE = "Keel.app.tar.gz"
 
 
 class ReleaseBrandingTests(unittest.TestCase):
     """Keep product presentation separate from persistent and published technical identities."""
 
-    def test_display_names_change_without_changing_installed_identity_or_feed(self):
-        """Existing installations retain their data, signed update feed and daemon filenames."""
+    def test_factory_namespace_keeps_the_published_feed_and_daemon_filenames(self):
+        """The requested Factory namespace keeps existing updater endpoints and sidecar contracts."""
         config = json.loads(CONFIG.read_text())
         self.assertEqual(APP_NAME, config["productName"])
         self.assertEqual(APP_NAME, config["app"]["windows"][0]["title"])
-        self.assertEqual("ai.oya.keel", config["identifier"])
+        self.assertEqual(APP_IDENTIFIER, config["identifier"])
         self.assertEqual(["binaries/keel", "binaries/keel-node"], config["bundle"]["externalBin"])
         self.assertEqual(
             ["https://github.com/OyadotAI/keel-releases/releases/latest/download/latest.json"],

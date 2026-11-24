@@ -21,6 +21,7 @@ pub(super) struct Page {
     tab: Option<u64>,
     pub url: Option<String>,
     analyzed: bool,
+    framed: bool,
     cleanup_runtime: Option<tokio::runtime::Handle>,
 }
 impl Page {
@@ -38,6 +39,7 @@ impl Page {
         self.tab = None;
         self.url = None;
         self.analyzed = false;
+        self.framed = false;
     }
     /// Every page path selects its owned tab before acting, so closure never targets another tab.
     async fn switch_tab(&mut self, tab: u64) -> Result<Selection, String> {
@@ -71,7 +73,55 @@ impl Page {
         Ok(())
     }
     pub async fn run(&mut self, op: Op) -> Result<Output, String> {
+        let before = self.observe_identity().await;
+        let result = self.run_step(op).await;
+        let observed = self.observe_identity().await.or(before);
+        match result {
+            Ok(mut output) => {
+                if output.identity.is_none() {
+                    output.identity = observed;
+                }
+                Ok(output)
+            }
+            Err(text) if observed.is_some() => Ok(Output {
+                text,
+                identity: observed,
+                ok: Some(false),
+                ..Default::default()
+            }),
+            Err(why) => Err(why),
+        }
+    }
+    /// Metadata runs only after Keel's lane gate, against this session's selected owned tab.
+    async fn observe_identity(&mut self) -> Option<serde_json::Value> {
+        let tab = self.tab?;
+        if !self.client.as_ref()?.supports("browser_identity") {
+            return None;
+        }
+        self.switch_tab(tab).await.ok()?.text().ok()?;
+        let reply = self
+            .client
+            .as_mut()?
+            .diagnostic("browser_identity", json!({}))
+            .await
+            .ok()?;
+        reply.identity
+    }
+    /// Stateful dispatch stays separate from provenance collection so errors preserve observed metadata.
+    async fn run_step(&mut self, op: Op) -> Result<Output, String> {
         let result = match op {
+            Op::Read
+                if self
+                    .client
+                    .as_ref()
+                    .is_some_and(|client| client.supports("browser_read_frames")) =>
+            {
+                self.debug(op).await
+            }
+            Op::ReadFrames | Op::Eval { .. } | Op::HitTest { .. } | Op::Click { .. } => {
+                self.debug(op).await
+            }
+            Op::Type { .. } if self.framed => self.debug(op).await,
             Op::Screenshot => self.capture().await,
             op => self.perform(op).await.map(Output::text),
         };
@@ -82,6 +132,65 @@ impl Page {
             Ok(_) => {}
         }
         result
+    }
+    /// New capabilities never fall back to an older Oya tool with different input or frame semantics.
+    async fn debug(&mut self, op: Op) -> Result<Output, String> {
+        let tab = self
+            .tab
+            .ok_or("Open a page with browser_open before debugging the owned tab.")?;
+        self.switch_tab(tab).await?.text()?;
+        let (name, args) = match op {
+            Op::Read | Op::ReadFrames => {
+                self.framed = true;
+                self.analyzed = true;
+                (
+                    "browser_read_frames",
+                    json!({"frames":matches!(op,Op::ReadFrames)}),
+                )
+            }
+            Op::Eval { expression, frame } => {
+                self.analyzed = false;
+                (
+                    "browser_eval",
+                    match frame {
+                        Some(frame) => json!({"expression":expression,"frame":frame}),
+                        None => json!({"expression":expression}),
+                    },
+                )
+            }
+            Op::HitTest { x, y } => ("browser_hit_test", json!({"x":x,"y":y})),
+            Op::Click { target } => {
+                require_analysis(self.analyzed)?;
+                self.analyzed = false;
+                (
+                    "browser_native_click",
+                    json!({"element":target,"framed":self.framed}),
+                )
+            }
+            Op::Type {
+                target,
+                text,
+                submit,
+            } => {
+                require_analysis(self.analyzed)?;
+                self.analyzed = read_survives_typing(submit);
+                (
+                    "browser_frame_type",
+                    json!({"element":target,"text":text,"submit":submit}),
+                )
+            }
+            _ => return Err("Not a browser diagnostic operation.".into()),
+        };
+        let result = self
+            .client
+            .as_mut()
+            .ok_or("Local Oya is disconnected.")?
+            .diagnostic(name, args)
+            .await?;
+        if result.ok == Some(false) {
+            self.analyzed = false;
+        }
+        Ok(result)
     }
     async fn perform(&mut self, op: Op) -> Result<String, String> {
         if self.client.is_none() {
@@ -108,7 +217,9 @@ impl Page {
                 Ok(result)
             }
             Op::Screenshot => unreachable!(),
+            Op::ReadFrames | Op::Eval { .. } | Op::HitTest { .. } => Err("This Oya version does not expose the requested debugging tool. Update Oya; no other browser was used.".into()),
             Op::Read => {
+                self.framed = false;
                 let text = client
                     .tool("analyze_page", json!({"format":"markdown"}))
                     .await?;

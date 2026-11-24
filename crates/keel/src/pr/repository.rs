@@ -32,7 +32,7 @@ fn valid_name(name: &str) -> bool {
 /// (`git@github-work:owner/repo` — the usual way to keep two accounts apart), a port, or a GitHub
 /// Enterprise host. Only the owner is used (`head`), and `gh` resolves the host itself; accepting
 /// `github.com` alone refused every one of those before anything was pushed.
-fn source(origin: &str) -> Result<String, String> {
+pub(super) fn source(origin: &str) -> Result<String, String> {
     let unknown = || {
         "Could not identify origin's GitHub repository. Check its push URL before opening."
             .to_string()

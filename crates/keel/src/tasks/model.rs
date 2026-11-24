@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub(super) const STORE_BYTES: u64 = 8 * 1024 * 1024;
+pub(super) const LEGACY_VERSION: u32 = 1;
+pub(super) const PINNED_VERSION: u32 = 2;
+pub(super) const FORMAT_MARKER: &[u8] = b"2\n";
 pub(super) const TASK_LIMIT: usize = 128;
 pub(super) const EVENT_LIMIT: usize = 256;
 pub(super) const REVISION_LIMIT: usize = 8;
@@ -73,6 +76,8 @@ pub(crate) struct Task {
     pub notes: Notes,
     pub evidence: Vec<String>,
     pub incomplete: bool,
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(default)]
     pub stopped_at: Option<String>,
     pub saved: Vec<Saved>,
