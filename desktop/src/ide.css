@@ -6,7 +6,7 @@
 .ide-layout .main { position: relative; grid-template-columns: minmax(280px, 1fr) 10px min(var(--ide-chat-w), 55%); grid-template-rows: minmax(0, 1fr); }
 .ide-layout .main > .agent-pane { grid-column: 3; grid-row: 1; }
 .ide-layout .main > .handle { grid-column: 2; grid-row: 1; }
-.ide-center { display: flex; flex-direction: column; grid-column: 1; grid-row: 1; min-height: 0; min-width: 0; overflow: hidden; border-radius: 10px; background: var(--bg); box-shadow: var(--shadow-xs); }
+.ide-center { display: flex; flex-direction: column; grid-column: 1; grid-row: 1; min-height: 0; min-width: 0; overflow: hidden; border-radius: 10px; background: var(--bg); box-shadow: 0 0 0 1px var(--hairline); }
 .ide-layout .lane-header { height: auto; min-height: 68px; flex-wrap: wrap; padding: 12px 16px; gap: 8px; }
 .ide-layout .lane-heading { flex: 1 1 140px; }
 .ide-layout .lane-view-switch { order: 2; }
