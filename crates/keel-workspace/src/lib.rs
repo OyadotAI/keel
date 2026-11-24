@@ -240,19 +240,45 @@ pub(crate) fn frontmatter(contents: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     }
 
+    let block: Vec<&str> = lines.take_while(|line| line.trim() != "---").collect();
     let (mut name, mut description) = (None, None);
-    for line in lines {
+    for (i, line) in block.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed == "---" {
-            break;
-        }
         if let Some(rest) = trimmed.strip_prefix("name:") {
             name = Some(scalar(rest));
         } else if let Some(rest) = trimmed.strip_prefix("description:") {
-            description = Some(scalar(rest));
+            description =
+                Some(block_scalar(rest, line, &block[i + 1..]).unwrap_or_else(|| scalar(rest)));
         }
     }
     (name, description)
+}
+
+/// A YAML block scalar — `description: >` (folded) or `|` (literal), with an optional `-`/`+` —
+/// as its text: the lines indented under the key, folded into one paragraph or kept as lines.
+/// Without this the listing showed the indicator itself, a lone `>`, for every such skill.
+fn block_scalar(rest: &str, key_line: &str, after: &[&str]) -> Option<String> {
+    let indicator = rest.trim();
+    let folded = match indicator.trim_end_matches(['-', '+']) {
+        ">" => true,
+        "|" => false,
+        _ => return None,
+    };
+    let key_indent = key_line.len() - key_line.trim_start().len();
+    let body: Vec<&str> = after
+        .iter()
+        .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() > key_indent)
+        .map(|l| l.trim())
+        .collect();
+    let text = if folded {
+        body.join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        body.join("\n").trim().to_string()
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 /// A one-line YAML scalar as its text: a double-quoted one has its `\"` and `\\` undone, so a
@@ -313,6 +339,29 @@ mod tests {
     #[test]
     fn a_file_without_frontmatter_yields_nothing() {
         assert_eq!(frontmatter("# just a heading\n"), (None, None));
+    }
+
+    /// A folded description (`>`) reads as one paragraph, a literal one (`|`) keeps its lines, and
+    /// neither shows the indicator itself — which every such skill's listing used to.
+    #[test]
+    fn block_scalar_descriptions_read_as_their_text() {
+        let folded =
+            "---\nname: audio\ndescription: >\n  Use when audio\n  needs mixing.\nother: x\n---\n";
+        assert_eq!(
+            frontmatter(folded).1.as_deref(),
+            Some("Use when audio needs mixing.")
+        );
+        let literal = "---\ndescription: |-\n  line one\n  line two\n---\n";
+        assert_eq!(
+            frontmatter(literal).1.as_deref(),
+            Some("line one\nline two")
+        );
+        let empty = "---\ndescription: >\nname: n\n---\n";
+        assert_eq!(
+            frontmatter(empty).1.as_deref(),
+            Some(">"),
+            "an empty block falls back to the raw value"
+        );
     }
 
     #[test]
