@@ -646,3 +646,8 @@ html { overflow-x: clip; }
   th, td { padding: 14px 14px; font-size: 15px; }
   .foot nav a { padding: 6px 0; }
 }
+/* Phones show the middle of each capture (the conversation) at twice the size a whole 1440px
+   window would get, instead of a full window too small to read. */
+@media (max-width: 700px) {
+  .scene.shot-real img, .reveal video { aspect-ratio: 4 / 5; object-fit: cover; object-position: 42% 50%; }
+}
