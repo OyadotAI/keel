@@ -95,12 +95,12 @@
 /* The terminal is a stable sibling of code and chat; hiding it keeps the PTY alive. */
 .main { position: relative; }
 .shell-dock[hidden], .ide-git-slot[hidden] { display: none; }
-/* Flush with the conversation above it, divided by one clear line. */
+/* Flush with the conversation above it. */
 .shell-dock { position: absolute; bottom: 0; left: 0; right: 0; height: var(--shell-h); z-index: 3; background: var(--term-bg); border: 0; box-shadow: 0 -1px 0 var(--line); border-radius: 0 0 14px 14px; overflow: hidden; transition: box-shadow var(--t-fast) var(--ease); }
-/* Lime frames the terminal that has the keyboard — the agent's or the shell's — so where typing
-   goes is never a guess. One at a time: lime on both would say nothing. */
-.shell-dock:focus-within { box-shadow: inset 0 0 0 1px var(--accent-fill); }
-.agent-pane:has(.xterm:focus-within) { box-shadow: 0 0 0 1px var(--accent-fill), var(--shadow-sm); }
+/* Terminals are framed in lime, the agent's and the shell's alike: the brand's one accent marks
+   where a CLI is running. */
+.shell-dock { box-shadow: inset 0 0 0 1px var(--accent-fill); }
+.agent-pane:has(.xterm) { box-shadow: 0 0 0 1px var(--accent-fill), var(--shadow-sm); }
 .shell-dock .shell { height: 100%; position: static; }
 .main.has-shell .agent-pane { padding-bottom: var(--shell-h); }
 .main.with-panel .shell-dock { right: calc(var(--panel-w) + 10px); }
