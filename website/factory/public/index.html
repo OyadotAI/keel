@@ -43,6 +43,18 @@
         <a class="button" href="https://github.com/OyadotAI/keel">View on GitHub <span aria-hidden="true">↗</span></a>
       </div>
       <p class="fine">Free and open source · MIT · No account, no license key, no step limits</p>
+      <div class="pipeline" aria-label="Illustration: a task passing through the agent team, ending with the project's checks passing">
+        <ol>
+          <li style="--i:0"><span class="node">PM</span><small>Scope</small></li>
+          <li style="--i:1"><span class="node">DS</span><small>Design</small></li>
+          <li style="--i:2"><span class="node">PE</span><small>Plan</small></li>
+          <li style="--i:3"><span class="node build">⌘</span><small>Build</small></li>
+          <li style="--i:4"><span class="node">RV</span><small>Review</small></li>
+          <li style="--i:5"><span class="node">QA</span><small>Test</small></li>
+          <li style="--i:6"><span class="node">SC</span><small>Secure</small></li>
+        </ol>
+        <p class="verdict"><span>✓</span> Checks passed · committed</p>
+      </div>
       <p class="used-by">Used by engineers at <strong>Amazon</strong>, <strong>Google</strong>, <strong>Salesforce</strong> and other companies</p>
     </section>
 
@@ -56,13 +68,48 @@
     </section>
 
     <section class="why wrap" id="why" aria-labelledby="why-title">
-      <h2 id="why-title">Why engineers switch to Oya Factory</h2>
+      <h2 id="why-title">Why engineers switch</h2>
       <ol class="reasons">
-        <li><span class="num">01</span><div><h3>Every turn is checked, not trusted</h3><p>Your <code>make check</code>, tests and lint run after each turn, and the verdict sits beside the reply. A turn that fails its checks is never committed for you. Other agent apps show you what the agent said; Oya Factory shows you whether it works.</p></div></li>
-        <li><span class="num">02</span><div><h3>Undo any turn, instantly</h3><p>A snapshot is taken before every turn. When an agent goes sideways, rewind to the moment before it — and if you change your mind, the rewind itself can be undone. No <code>git reflog</code> archaeology.</p></div></li>
-        <li><span class="num">03</span><div><h3>Five agents, zero collisions</h3><p>Every task gets its own branch and worktree, and Oya Factory refuses to let two agents write the same working tree. Run Claude and Codex in parallel without one sweeping up the other's half-written files.</p></div></li>
-        <li><span class="num">04</span><div><h3>Projects set up right, automatically</h3><p>Oya Factory scans your repository, adds an agent team and the skills your stack needs, and keeps them current as it improves. Your agents start every task with the right instructions.</p></div></li>
-        <li><span class="num">05</span><div><h3>Light, private and free</h3><p>A native app on your system's webview, not a bundled browser. No account, no server of ours between you and your code, no step limits. MIT licensed, on macOS and Windows.</p></div></li>
+        <li>
+          <div class="reason-copy"><span class="num">01</span><h3>Every turn is checked, not trusted</h3><p>Your tests run after each turn. A turn that fails is never committed.</p></div>
+          <div class="vis vis-turn" aria-hidden="true">
+            <div class="diff"><span class="del">- receipt.id = cart.id</span><span class="add">+ receipt.id = checkout.id</span><span class="add">+ assert receipt.id == checkout.id</span></div>
+            <div class="run"><span class="spin"></span><code>make check</code><b class="pass">✓ passed</b></div>
+          </div>
+        </li>
+        <li>
+          <div class="reason-copy"><span class="num">02</span><h3>Undo any turn, instantly</h3><p>A snapshot before every turn. Rewind in one click — and undo the rewind.</p></div>
+          <div class="vis vis-rewind" aria-hidden="true">
+            <div class="track"><i></i><i></i><i></i><i class="bad"></i><i class="bad"></i><span class="head"></span></div>
+            <p class="rewound">↺ Rewound to turn 3</p>
+          </div>
+        </li>
+        <li>
+          <div class="reason-copy"><span class="num">03</span><h3>Five agents, zero collisions</h3><p>Every task on its own branch. Two agents never share a working tree.</p></div>
+          <div class="vis vis-lanes" aria-hidden="true">
+            <div class="lane" style="--d:3.2s"><b>Claude Code</b><code>keel/fix-auth</code><span class="bar"></span></div>
+            <div class="lane" style="--d:4.4s"><b>Codex</b><code>keel/search</code><span class="bar"></span></div>
+            <div class="lane" style="--d:2.6s"><b>OpenCode</b><code>keel/db-index</code><span class="bar"></span></div>
+          </div>
+        </li>
+        <li>
+          <div class="reason-copy"><span class="num">04</span><h3>Projects set up right, automatically</h3><p>An agent team, the skills your stack needs and plugins — added and kept current.</p></div>
+          <div class="vis vis-setup" aria-hidden="true">
+            <p style="--i:0">Readiness scan</p><p style="--i:1">Agent team · 7 members</p><p style="--i:2">Recommended skills</p><p style="--i:3">Official plugins</p>
+          </div>
+        </li>
+        <li>
+          <div class="reason-copy"><span class="num">05</span><h3>A fraction of the size</h3><p>A native app on your system's webview — not a bundled copy of Chromium.</p></div>
+          <figure class="vis vis-size" aria-label="Installer sizes. macOS: Oya Factory 111 MB for Intel and Apple Silicon; Orca 303 MB for Apple Silicon only. Windows: Oya Factory 35 MB; Orca 243 MB.">
+            <div class="pair"><span class="os">macOS</span>
+              <div class="row ours"><span class="bar" style="--w:36%"></span><em>Oya Factory 111 MB</em></div>
+              <div class="row"><span class="bar" style="--w:100%"></span><em>Orca 303 MB</em></div></div>
+            <div class="pair"><span class="os">Windows</span>
+              <div class="row ours"><span class="bar" style="--w:12%"></span><em>Oya Factory 35 MB</em></div>
+              <div class="row"><span class="bar" style="--w:80%"></span><em>Orca 243 MB</em></div></div>
+            <figcaption>Installer sizes: Oya Factory 0.4.89 (one macOS file for Intel and Apple Silicon) and Orca 1.4.272 (Apple Silicon file), from each project's GitHub release, 24 Nov 2026.</figcaption>
+          </figure>
+        </li>
       </ol>
     </section>
 
@@ -96,27 +143,6 @@
           <div><h3>Coding mode</h3><p>An editor in the centre with files, source control and the terminal, the agent beside you. Edit, save with ⌘S, accept suggestions with Tab.</p></div>
         </article>
       </div>
-    </section>
-
-    <section class="how wrap" id="how" aria-labelledby="how-title">
-      <h2 id="how-title">The terminal shows you text.<br>Oya Factory shows you the work.</h2>
-      <ol class="pillars">
-        <li>
-          <span class="num">01</span>
-          <h3>Visible</h3>
-          <p>Each turn is one reviewable record: the files it changed, the commands it ran with their output, your project's checks, the time and the cost. A command that needs your yes arrives as a question in the conversation, not a refusal in a log.</p>
-        </li>
-        <li>
-          <span class="num">02</span>
-          <h3>Clean git</h3>
-          <p>A lane is a branch is a worktree. Every turn is checkpointed and can be rewound; merging is a <code>--no-ff</code> you can read later. Nothing lands in your history that you couldn't reconstruct.</p>
-        </li>
-        <li>
-          <span class="num">03</span>
-          <h3>Many agents, one machine</h3>
-          <p>Run several lanes at once, Claude in one and Codex in the next. Each is legible on its own, and two agents are never allowed to write the same working tree.</p>
-        </li>
-      </ol>
     </section>
 
     <section class="features wrap" id="features" aria-labelledby="features-title">

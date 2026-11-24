@@ -12,7 +12,7 @@ def table(src, other):
     return [f"| | Oya Factory | {other} |", "|---|---|---|"] + [f"| {text(a)} | {text(b)} | {text(c)} |" for a, b, c in rows]
 
 def reasons(src):
-    return [f"### {text(h)}\n\n{text(p)}\n" for h, p in re.findall(r'<li><span class="num">\d+</span><div><h3>(.*?)</h3><p>(.*?)</p></div></li>', src)]
+    return [f"### {text(h)}\n\n{text(p)}\n" for h, p in re.findall(r'<span class="num">\d+</span>(?:<div>)?<h3>(.*?)</h3><p>(.*?)</p>', src)]
 
 home = (PUBLIC / "index.html").read_text()
 out = ["# Oya Factory — full description", "",

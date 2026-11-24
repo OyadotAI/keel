@@ -19,23 +19,23 @@ Used by engineers at Amazon, Google, Salesforce and other companies.
 
 ### Every turn is checked, not trusted
 
-Your make check, tests and lint run after each turn, and the verdict sits beside the reply. A turn that fails its checks is never committed for you. Other agent apps show you what the agent said; Oya Factory shows you whether it works.
+Your tests run after each turn. A turn that fails is never committed.
 
 ### Undo any turn, instantly
 
-A snapshot is taken before every turn. When an agent goes sideways, rewind to the moment before it — and if you change your mind, the rewind itself can be undone. No git reflog archaeology.
+A snapshot before every turn. Rewind in one click — and undo the rewind.
 
 ### Five agents, zero collisions
 
-Every task gets its own branch and worktree, and Oya Factory refuses to let two agents write the same working tree. Run Claude and Codex in parallel without one sweeping up the other's half-written files.
+Every task on its own branch. Two agents never share a working tree.
 
 ### Projects set up right, automatically
 
-Oya Factory scans your repository, adds an agent team and the skills your stack needs, and keeps them current as it improves. Your agents start every task with the right instructions.
+An agent team, the skills your stack needs and plugins — added and kept current.
 
-### Light, private and free
+### A fraction of the size
 
-A native app on your system's webview, not a bundled browser. No account, no server of ours between you and your code, no step limits. MIT licensed, on macOS and Windows.
+A native app on your system's webview — not a bundled copy of Chromium.
 
 ## The platform
 
