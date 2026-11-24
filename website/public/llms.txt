@@ -1,0 +1,15 @@
+# Oya
+
+> Oya builds tools for working with AI agents: Oya Factory (a desktop workspace that runs a team of coding agents on your repositories), Oya Browser (a browser for agents) and Keel Reviewer.
+
+## Products
+
+- [Oya Factory](https://oyafactory.com/): free, open-source desktop app for macOS and Windows that runs Claude Code, Codex, Antigravity and OpenCode with a full agent team on every task
+- [Oya Factory, summary for LLMs](https://oyafactory.com/llms.txt)
+- [Oya Factory, full text for LLMs](https://oyafactory.com/llms-full.txt)
+- [Oya Browser](https://oyabrowser.com): a browser for AI agents
+
+## Get Oya Factory
+
+- [Download for macOS and Windows](https://github.com/OyadotAI/keel-releases/releases/latest)
+- [Source code (MIT)](https://github.com/OyadotAI/keel)

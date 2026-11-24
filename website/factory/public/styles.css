@@ -625,3 +625,24 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
   .thread i { position: sticky; }
 }
 @media (min-width: 1280px) { .thread { z-index: 2; } }
+
+/* Phone width. Later rules above reset a few things the earlier phone rules had set, so the
+   single column, the tighter section spacing and the touch sizes are restated last. */
+html { overflow-x: clip; }
+@media (max-width: 860px) {
+  .tiles { grid-template-columns: 1fr; gap: 0; }
+  .tile, .tile.wide, .team, .modes { padding: 28px 0; }
+  .team { grid-template-columns: 1fr; gap: 24px; }
+  .modes { grid-template-columns: 1fr; gap: 24px; }
+  .platform, .compare, .faq { padding-top: 96px; }
+  .proof { padding-top: 96px; }
+  .story { padding-top: 72px; }
+  .beat { min-height: 60vh; }
+  .hero { min-height: 0; padding: 56px 0 96px; }
+  .nav nav a.nav-cta { display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px; }
+  .button { width: 100%; justify-content: center; }
+  .ctas { width: 100%; }
+  .open { padding: 96px 0 72px; }
+  th, td { padding: 14px 14px; font-size: 15px; }
+  .foot nav a { padding: 6px 0; }
+}

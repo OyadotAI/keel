@@ -44,4 +44,7 @@ for slug, name in [("orca", "Orca"), ("conductor", "Conductor")]:
             text(re.search(r'<p class="lede">(.*?)</p>', page, re.S).group(1)), ""] + reasons(page) + table(page, name)
     out += ["", text(re.search(r'<p class="note">(.*?)</p>', page, re.S).group(1)), "", f"Page: https://oyafactory.com/compare/{slug}/", ""]
 (PUBLIC / "llms-full.txt").write_text("\n".join(out) + "\n")
+# Some agents look under /.well-known first.
+(PUBLIC / ".well-known").mkdir(exist_ok=True)
+(PUBLIC / ".well-known" / "llms.txt").write_text((PUBLIC / "llms.txt").read_text())
 print(f"llms-full.txt: {len(out)} lines")

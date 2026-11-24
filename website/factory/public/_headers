@@ -1,0 +1,9 @@
+# Tell agents that fetch the page where the plain-text version is, and let any tool read it.
+/
+  Link: </llms.txt>; rel="alternate"; type="text/plain"; title="LLM summary", </llms-full.txt>; rel="alternate"; type="text/plain"; title="Full text for LLMs"
+/llms.txt
+  Access-Control-Allow-Origin: *
+/llms-full.txt
+  Access-Control-Allow-Origin: *
+/.well-known/llms.txt
+  Access-Control-Allow-Origin: *

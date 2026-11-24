@@ -20,3 +20,7 @@ User-agent: Applebot-Extended
 Allow: /
 
 Sitemap: https://oyafactory.com/sitemap.xml
+
+# For language models and coding agents: a plain-text summary and the full text.
+# https://oyafactory.com/llms.txt
+# https://oyafactory.com/llms-full.txt
