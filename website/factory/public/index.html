@@ -12,18 +12,23 @@
   <meta property="og:image" content="https://oyafactory.com/assets/oya-factory-workspace.png">
   <meta property="og:url" content="https://oyafactory.com/">
   <meta name="theme-color" content="#1a1a1a">
-  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="assets/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="alternate" type="text/plain" href="https://oyafactory.com/llms.txt" title="LLM summary">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "SoftwareApplication", "name": "Oya Factory", "url": "https://oyafactory.com/", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Windows", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://opensource.org/licenses/MIT", "downloadUrl": "https://github.com/OyadotAI/keel-releases/releases/latest", "codeRepository": "https://github.com/OyadotAI/keel", "description": "A free, open-source desktop workspace for running Claude Code, Codex, Antigravity and OpenCode side by side, each task on its own git branch, with every diff, command and check on screen.", "screenshot": "https://oyafactory.com/assets/oya-factory-workspace.png", "publisher": {"@type": "Organization", "name": "Oya", "url": "https://oya.dev"}}, {"@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is Oya Factory?", "acceptedAnswer": {"@type": "Answer", "text": "Oya Factory is a free, open-source desktop app for running AI coding agents — Claude Code, Codex, Antigravity and OpenCode — on your own repositories. Each task runs in its own git branch and worktree, and every diff, command, approval and check result is shown as it happens."}}, {"@type": "Question", "name": "Which coding agents does it support?", "acceptedAnswer": {"@type": "Answer", "text": "Claude Code, OpenAI Codex, Google Antigravity and OpenCode. Oya Factory drives the agent CLIs you already have installed and signed in, so it uses your existing subscriptions."}}, {"@type": "Question", "name": "Is Oya Factory free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. It is MIT licensed, with no account, no license key and no limit on agent steps."}}, {"@type": "Question", "name": "Which platforms does it run on?", "acceptedAnswer": {"@type": "Answer", "text": "macOS and Windows."}}, {"@type": "Question", "name": "Does Oya Factory send my code anywhere?", "acceptedAnswer": {"@type": "Answer", "text": "Oya Factory runs on your machine and has no server of its own in between. Your agents talk to their own providers exactly as they do in a terminal."}}, {"@type": "Question", "name": "How is it different from running an agent in a terminal?", "acceptedAnswer": {"@type": "Answer", "text": "A terminal shows text. Oya Factory gives every task its own branch, runs your project's checks after each turn, checkpoints every turn so it can be rewound, turns permission prompts into questions in the conversation, and lets several agents work at once without sharing a working tree."}}, {"@type": "Question", "name": "Do I have to change my repository?", "acceptedAnswer": {"@type": "Answer", "text": "No. It works on any git repository. It can optionally add an agent team, recommended skills and a readiness scan, which it keeps current."}}, {"@type": "Question", "name": "How does it compare to Orca or Conductor?", "acceptedAnswer": {"@type": "Answer", "text": "In short: Oya Factory focuses on proving each turn — checks, rewind, clean branches — on macOS and Windows; Orca adds remote hosts and a phone app; Conductor is a polished Mac-only app."}}]}]}</script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="nav wrap">
-    <a class="brand" href="/" aria-label="Oya Factory home"><img src="assets/logo.svg" alt="" width="28" height="28"><span>Oya Factory</span></a>
+    <a class="brand" href="/" aria-label="Oya Factory home"><img src="/assets/logo.svg" alt="" width="28" height="28"><span>Oya Factory</span></a>
     <nav aria-label="Primary">
       <a href="#how">How it works</a>
       <a href="#features">Features</a>
-      <a href="#open">Open source</a>
+      <a href="#compare">Compare</a>
+      <a href="#faq">FAQ</a>
       <a class="nav-cta" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download</a>
     </nav>
   </header>
@@ -38,10 +43,11 @@
         <a class="button" href="https://github.com/OyadotAI/keel">View on GitHub <span aria-hidden="true">↗</span></a>
       </div>
       <p class="fine">Free and open source · MIT · No account, no license key, no step limits</p>
+      <p class="used-by">Used by engineers at <strong>Amazon</strong>, <strong>Google</strong>, <strong>Salesforce</strong> and other companies</p>
     </section>
 
     <figure class="shot wrap">
-      <img src="assets/oya-factory-workspace.png" width="1440" height="866" alt="Oya Factory: a sidebar of projects and lanes, a finished Codex turn in the conversation, and the Checks panel showing the project's checks passed on the current commit.">
+      <img src="/assets/oya-factory-workspace.png" width="1440" height="866" alt="Oya Factory: a sidebar of projects and lanes, a finished Codex turn in the conversation, and the Checks panel showing the project's checks passed on the current commit.">
     </figure>
 
     <section class="agents wrap" aria-label="Supported agents">
@@ -85,6 +91,36 @@
       </ul>
     </section>
 
+    <section class="compare wrap" id="compare" aria-labelledby="compare-title">
+      <h2 id="compare-title">Built to prove each turn</h2>
+      <div class="table-scroll"><table>
+        <thead><tr><th scope="col"></th><th scope="col">Oya Factory</th><th scope="col">An agent in a terminal</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Each task on its own branch and worktree</th><td>Yes, automatically</td><td>By hand</td></tr>
+          <tr><th scope="row">Your project's checks after every turn</th><td>Yes, verdict beside the reply</td><td>If you remember to run them</td></tr>
+          <tr><th scope="row">Rewind a turn</th><td>Yes, a snapshot before each</td><td>git reflog, carefully</td></tr>
+          <tr><th scope="row">Permission prompts</th><td>Questions in the conversation</td><td>A prompt in whichever pane</td></tr>
+          <tr><th scope="row">Several agents at once</th><td>Yes, never two in one working tree</td><td>Several terminals, one checkout</td></tr>
+          <tr><th scope="row">Claude Code, Codex, Antigravity, OpenCode</th><td>All four, one workspace</td><td>One CLI per window</td></tr>
+        </tbody>
+      </table></div>
+      <p class="compare-more">Comparing tools? <a href="/compare/orca/">Oya Factory vs Orca</a> · <a href="/compare/conductor/">Oya Factory vs Conductor</a></p>
+    </section>
+
+    <section class="faq wrap" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Questions</h2>
+      <div class="faq-list">
+        <details><summary>What is Oya Factory?</summary><p>Oya Factory is a free, open-source desktop app for running AI coding agents — Claude Code, Codex, Antigravity and OpenCode — on your own repositories. Each task runs in its own git branch and worktree, and every diff, command, approval and check result is shown as it happens.</p></details>
+        <details><summary>Which coding agents does it support?</summary><p>Claude Code, OpenAI Codex, Google Antigravity and OpenCode. Oya Factory drives the agent CLIs you already have installed and signed in, so it uses your existing subscriptions.</p></details>
+        <details><summary>Is Oya Factory free?</summary><p>Yes. It is MIT licensed, with no account, no license key and no limit on agent steps.</p></details>
+        <details><summary>Which platforms does it run on?</summary><p>macOS and Windows.</p></details>
+        <details><summary>Does Oya Factory send my code anywhere?</summary><p>Oya Factory runs on your machine and has no server of its own in between. Your agents talk to their own providers exactly as they do in a terminal.</p></details>
+        <details><summary>How is it different from running an agent in a terminal?</summary><p>A terminal shows text. Oya Factory gives every task its own branch, runs your project's checks after each turn, checkpoints every turn so it can be rewound, turns permission prompts into questions in the conversation, and lets several agents work at once without sharing a working tree.</p></details>
+        <details><summary>Do I have to change my repository?</summary><p>No. It works on any git repository. It can optionally add an agent team, recommended skills and a readiness scan, which it keeps current.</p></details>
+        <details><summary>How does it compare to Orca or Conductor?</summary><p>See the side-by-side pages for Orca and Conductor. In short: Oya Factory focuses on proving each turn — checks, rewind, clean branches — on macOS and Windows; Orca adds remote hosts and a phone app; Conductor is a polished Mac-only app.</p></details>
+      </div>
+    </section>
+
     <section class="open wrap" id="open" aria-labelledby="open-title">
       <div>
         <h2 id="open-title">Free. Open source. Yours.</h2>
@@ -98,13 +134,16 @@
   </main>
 
   <footer class="foot wrap">
-    <a class="brand" href="/"><img src="assets/logo.svg" alt="" width="22" height="22"><span>Oya Factory</span></a>
+    <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="22" height="22"><span>Oya Factory</span></a>
     <nav aria-label="More from Oya">
       <a href="https://oya.dev">oya.dev</a>
       <a href="https://oyabrowser.com">Oya Browser</a>
       <a href="https://github.com/OyadotAI/keel">Source</a>
       <a href="https://github.com/OyadotAI/keel/blob/main/docs/privacy.md">Privacy</a>
       <a href="https://github.com/OyadotAI/keel/blob/main/LICENSE">MIT License</a>
+      <a href="/compare/orca/">vs Orca</a>
+      <a href="/compare/conductor/">vs Conductor</a>
+      <a href="/llms.txt">llms.txt</a>
     </nav>
   </footer>
 </body>

@@ -1,0 +1,148 @@
+# Oya Factory — full description
+
+> A free, open-source (MIT) desktop app for macOS and Windows that runs AI coding agents — Claude Code, OpenAI Codex, Google Antigravity and OpenCode — side by side on your own git repositories, each task on its own branch, with every diff, command, approval and check on screen.
+
+Website: https://oyafactory.com/
+Download: https://github.com/OyadotAI/keel-releases/releases/latest
+Source: https://github.com/OyadotAI/keel (MIT licence)
+Made by: Oya (https://oya.dev)
+
+## What it is
+
+Oya Factory is an agentic development environment: a desktop workspace around the coding agents you already use. It runs the agent CLIs you have installed and signed in, so it uses your own subscriptions. It needs no account and has no license key and no step limits. It is used by engineers at Amazon, Google, Salesforce and other companies.
+
+## Principles
+
+### Visible
+
+Each turn is one reviewable record: the files it changed, the commands it ran with their output, your project's checks, the time and the cost. A command that needs your yes arrives as a question in the conversation, not a refusal in a log.
+
+### Clean git
+
+A lane is a branch is a worktree. Every turn is checkpointed and can be rewound; merging is a --no-ff you can read later. Nothing lands in your history that you couldn't reconstruct.
+
+### Many agents, one machine
+
+Run several lanes at once, Claude in one and Codex in the next. Each is legible on its own, and two agents are never allowed to write the same working tree.
+
+## Features
+
+- **Your checks, every turn**: Your project's own make check, tests or lint run after each turn, and the verdict sits beside the reply.
+- **Rewind any turn**: A snapshot before every turn. Undo what an agent did without touching what you did.
+- **Stage one hunk**: Keep three of an agent's four edits. Hunks are matched by content, so nothing stages at the wrong place.
+- **Issue to pull request**: Start a task from a GitHub issue on its own branch, send corrections, and publish one traceable PR.
+- **Recurring tasks**: A saved instruction on a schedule — nightly dependency checks, weekly cleanups — each run on its own branch.
+- **A browser for your agents**: Each lane gets its own browser tab, so an agent can test the page it just built without touching yours.
+- **Point at the pixel**: Click an element in the live preview, say what should change, and see whether the right file changed.
+- **Find in the terminal**: ⌘F through an agent's scrollback, and quick commands you save once and run from anywhere.
+- **Set up right, automatically**: An agent team, recommended skills and a readiness scan, kept current as Oya Factory improves.
+
+## Oya Factory compared with running an agent in a terminal
+
+| | Oya Factory | An agent in a terminal |
+|---|---|---|
+| Each task on its own branch and worktree | Yes, automatically | By hand |
+| Your project's checks after every turn | Yes, verdict beside the reply | If you remember to run them |
+| Rewind a turn | Yes, a snapshot before each | git reflog, carefully |
+| Permission prompts | Questions in the conversation | A prompt in whichever pane |
+| Several agents at once | Yes, never two in one working tree | Several terminals, one checkout |
+| Claude Code, Codex, Antigravity, OpenCode | All four, one workspace | One CLI per window |
+
+## Frequently asked questions
+
+### What is Oya Factory?
+
+Oya Factory is a free, open-source desktop app for running AI coding agents — Claude Code, Codex, Antigravity and OpenCode — on your own repositories. Each task runs in its own git branch and worktree, and every diff, command, approval and check result is shown as it happens.
+
+### Which coding agents does it support?
+
+Claude Code, OpenAI Codex, Google Antigravity and OpenCode. Oya Factory drives the agent CLIs you already have installed and signed in, so it uses your existing subscriptions.
+
+### Is Oya Factory free?
+
+Yes. It is MIT licensed, with no account, no license key and no limit on agent steps.
+
+### Which platforms does it run on?
+
+macOS and Windows.
+
+### Does Oya Factory send my code anywhere?
+
+Oya Factory runs on your machine and has no server of its own in between. Your agents talk to their own providers exactly as they do in a terminal.
+
+### How is it different from running an agent in a terminal?
+
+A terminal shows text. Oya Factory gives every task its own branch, runs your project's checks after each turn, checkpoints every turn so it can be rewound, turns permission prompts into questions in the conversation, and lets several agents work at once without sharing a working tree.
+
+### Do I have to change my repository?
+
+No. It works on any git repository. It can optionally add an agent team, recommended skills and a readiness scan, which it keeps current.
+
+### How does it compare to Orca or Conductor?
+
+See the side-by-side pages for Orca and Conductor. In short: Oya Factory focuses on proving each turn — checks, rewind, clean branches — on macOS and Windows; Orca adds remote hosts and a phone app; Conductor is a polished Mac-only app.
+
+## Oya Factory vs Orca
+
+Both are free, MIT-licensed desktop apps that run coding agents in parallel, each task in its own git worktree. They differ in what they optimise for.
+
+| | Oya Factory | Orca |
+|---|---|---|
+| Licence | MIT | MIT |
+| Platforms | macOS, Windows | macOS, Windows, Linux |
+| App shell | Tauri with the system webview; a Rust daemon per project | Electron |
+| Agents | Claude Code, Codex, Antigravity, OpenCode | Claude Code, Codex and about 40 CLI agents |
+| Your project's checks after every turn | Yes, with the verdict beside the reply | Not described in its docs |
+| Rewind a turn | Yes, a snapshot before every turn | Not described in its docs |
+| Approvals | Questions in the conversation, held by the daemon | Manual, Auto and Yolo permission modes |
+| Stage one hunk | Yes | Yes, and single lines |
+| Built-in editor | No — diffs to review, your editor to edit | Yes, Monaco |
+| Remote hosts over SSH | No | Yes |
+| Phone app | No | Yes (beta) |
+| Bots from Slack, Linear, GitHub | No; GitHub issues to tasks, and recurring tasks | Yes |
+
+**Choose Oya Factory if:**
+- you want every turn proved: your checks run, a snapshot taken, the diff on screen, before you accept it;
+- you review in your own editor and want the app to stay out of the way;
+- you want a light native-webview app on macOS or Windows.
+
+**Choose Orca if:**
+- you run agents on a remote machine and steer them from a phone;
+- you want bots that take jobs from Slack or Linear;
+- you need Linux or one of the many other agent CLIs it supports.
+
+Orca facts are from orca.dev and its documentation, read on 23 November 2026; they change often, so check the source.
+
+Page: https://oyafactory.com/compare/orca/
+
+## Oya Factory vs Conductor
+
+Both run coding agents side by side, each task in an isolated git workspace, with diffs and pull requests in the app. They differ in platform, licence and what each turn shows you.
+
+| | Oya Factory | Conductor |
+|---|---|---|
+| Licence | Open source, MIT | Not stated on its site |
+| Price | Free | Not stated on its site; it has a Pro plan |
+| Platforms | macOS, Windows | macOS |
+| Agents | Claude Code, Codex, Antigravity, OpenCode | Claude Code, Codex, Cursor, OpenCode |
+| Isolated workspaces | A branch and worktree per lane | A worktree per workspace |
+| Your project's checks after every turn | Yes, with the verdict beside the reply | A Checks tab for CI and merge blockers |
+| Rewind a turn | Yes, a snapshot before every turn | Checkpoints |
+| Pull requests | Yes, from GitHub issues to one traceable PR | Yes, with drafted descriptions and merge |
+| Phone | No | An iOS app and remote control |
+| Cloud workspaces | No; everything runs locally | Yes |
+
+**Choose Oya Factory if:**
+- you work on Windows as well as macOS;
+- you want the source, under MIT, and no account;
+- you want your own checks run and recorded on every turn, with any turn rewindable.
+
+**Choose Conductor if:**
+- you are on a Mac and want its polished interface;
+- you want to follow and merge from your iPhone;
+- you want hosted cloud workspaces.
+
+Conductor facts are from conductor.build and its documentation, read on 23 November 2026; they change often, so check the source.
+
+Page: https://oyafactory.com/compare/conductor/
+
