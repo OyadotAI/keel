@@ -1,5 +1,4 @@
 /* The IDE uses Keel's palette and a quieter, square-edged code surface. */
-:root { --ide-chat-w: 400px; }
 .layout-switch { flex: none; align-self: center; display: flex; margin: 0 10px; }
 .layout-switch button { min-width: 42px; height: 25px; padding: 0 9px; font-size: 12px; }
 .ide-center[hidden], .ide-explorer-slot[hidden] { display: none; }
@@ -132,7 +131,6 @@
 .ide-layout .lane-header .lane-chat-actions { order: 3; margin-left: auto; }
 
 /* Coding Mode keeps working changes and repository topology visible together. */
-:root { --coding-sidebar-w: 320px; --graph-blue: var(--text); --graph-purple: var(--accent); --graph-orange: var(--warn); --graph-green: var(--add); --graph-pink: var(--del); --graph-cyan: var(--dim); }
 .app.ide-layout:not(.no-sidebar) { grid-template-columns: var(--coding-sidebar-w) 6px minmax(0, 1fr); }
 .dialog:has(.ide-navigation) { width: min(600px, 100%); max-height: calc(100dvh - 32px); overflow: auto; }
 .ide-navigation-results { scrollbar-gutter: stable; }
@@ -197,7 +195,6 @@
 @media (max-height: 600px) { .coding-changes { min-height: 110px; } .commit-graph { min-height: 90px; } }
 
 /* Familiar editor token colors, independent from the green/red Git line backgrounds. */
-:root { --syntax-keyword: var(--accent); --syntax-string: var(--warn); --syntax-number: var(--del); --syntax-function: var(--text); --syntax-type: var(--dim); --syntax-variable: var(--text); --syntax-comment: var(--dim); }
 .syntax-code { color: var(--text); }
 .syntax-code .hljs-keyword, .syntax-code .hljs-selector-tag, .syntax-code .hljs-meta { color: var(--syntax-keyword); }
 .syntax-code .hljs-string, .syntax-code .hljs-regexp, .syntax-code .hljs-template-tag { color: var(--syntax-string); }

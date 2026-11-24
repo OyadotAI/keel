@@ -12,7 +12,7 @@ import type { SearchAddon } from "@xterm/addon-search";
 import { TerminalFind, useFindKey } from "./TerminalFind";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
-import { terminalXtermTheme as theme } from "../terminal-palette";
+import { terminalXtermTheme as theme } from "../design/terminal";
 import { SubagentsPane } from "./SubagentsPane";
 import { TerminalFileSurface } from "./TerminalFileFeedback";
 
@@ -341,7 +341,7 @@ export function Terminal({ lane, agent = false, hidden = false, onExit }: { lane
       {!agent && quickError && <div className="terminal-state small"><span className="error">{quickError}</span></div>}
       {!agent && title && state === "open" && <div className="panel-head small muted">{title}</div>}
       <div className="terminal-frame">
-        {finding && search && state === "open" && <TerminalFind search={search} selectToken={findToken} onClose={() => setFinding(false)} focusTerminal={() => host.current?.querySelector("textarea")?.focus()} />}
+        {finding && search && state === "open" && <TerminalFind search={search} dark={terminalDark()} selectToken={findToken} onClose={() => setFinding(false)} focusTerminal={() => host.current?.querySelector("textarea")?.focus()} />}
         <div className="terminal-host" ref={host} style={bg ? { background: bg } : undefined} />
       </div>
       </SubagentsPane>

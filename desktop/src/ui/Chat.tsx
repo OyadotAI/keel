@@ -149,7 +149,7 @@ function Block({ lane, index, step }: { lane: string; index: number; step: strin
   if (!block || (block.kind === "think" && !block.text.trim())) return null;
   if (block.kind === "notice") return <div className="chat-row chat-notice" role="note"><span>{block.text}</span></div>;
   if (block.kind === "you") return <article className="chat-row chat-user chat-steer"><div className="chat-speaker">You · while it worked <Copy text={block.text} /></div><p>{block.text}</p></article>;
-  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={14} /></span>{AGENT_NAME[agent ?? "claude"]}</div>}{block.kind === "think" ? <details className="chat-thinking" open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
+  return <div className="chat-row">{first && <div className="assistant-speaker"><span><BrandMark size={18} /></span>{AGENT_NAME[agent ?? "claude"]}</div>}{block.kind === "think" ? <details className="chat-thinking" open={open} onToggle={(e) => { setOpen(e.currentTarget.open); if (e.currentTarget.open) expanded.add(key); else expanded.delete(key); }}><summary>Reasoning</summary><Markdown text={block.text} /></details> : <Markdown text={block.text} />}</div>;
 }
 
 function Activity({ lane, index, id }: { lane: string; index: number; id: string }) {

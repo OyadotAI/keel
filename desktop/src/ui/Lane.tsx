@@ -18,6 +18,7 @@ import { Context } from "./Context";
 import { label } from "../keys";
 import { walkFiles } from "./kit";
 import { Tabs } from "./kit";
+import { Floating } from "./Menu";
 
 const Terminal = lazy(() => import("./Terminal").then((m) => ({ default: m.Terminal })));
 
@@ -87,7 +88,7 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
   });
   const turnRunning = useStore((s) => !!s.lanes[lane]?.running);
   const browsing = !!useTab(lane)?.browsing && turnRunning;
-  const names: Record<Tab, string> = { turns: "Turns", git: "Git", review: "Delivery", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context", browser: "Browser" };
+  const names: Record<Tab, string> = { turns: "Turns", git: "Changes", review: "Checks", jobs: "Jobs", preview: "Preview", readiness: "Readiness", context: "Context", browser: "Browser" };
   // Counts as badges, so a tab says there is something there without being opened.
   const badge: Partial<Record<Tab, ReactNode>> = {
     git: changed ? <span className="tab-count">{changed}</span> : null,
@@ -99,23 +100,37 @@ export function SidePanel({ lane, tab, setTab, expanded, toggleExpanded, close, 
 
   return (
     <aside id="workspace-panel" className="side-panel" aria-label="Workspace panel">
-      <header className="inspector-heading"><span>Workspace</span><div>
-        <button className="ghost" onClick={toggleExpanded} aria-label={expanded ? "Put the panel back beside the conversation" : "Expand the panel"} title={expanded ? "Restore" : "Expand"}><Icon name="maximize" size={14} /></button>
-        <button className="ghost workspace-close" onClick={close} aria-label="Close workspace panel" title={`Close workspace (${label({ key: "i", alt: true })})`}><Icon name="x" size={16} /><span>Close</span></button>
-      </div></header>
-      <Tabs tabs={TABS.map((id, i) => ({ id, label: (
-            <>
-              {names[id]} {badge[id]}
-            </>
-          ),
-          title: `${names[id]} (${label({ key: String(i + 1), alt: true })})`,
-        }))} value={tab} onChange={setTab}>
-      </Tabs>
+      <PanelTabs tab={tab} setTab={setTab} names={names} badge={badge} expand={{ expanded, toggle: toggleExpanded }}>
+        <button className="ghost" onClick={close} aria-label="Close workspace panel" title={`Close workspace (${label({ key: "i", alt: true })})`}><Icon name="x" size={14} /></button>
+      </PanelTabs>
       <div className="tab-body" data-attention-turns={tab === "turns" ? lane : undefined} tabIndex={tab === "turns" ? -1 : undefined} onKeyDown={walkFiles}>
         {tab === "turns" ? <Turns lane={lane} /> : tab === "git" ? <Git lane={lane} /> : tab === "review" ? <Review lane={lane} ask={ask} /> : tab === "jobs" ? <Jobs lane={lane} /> : tab === "preview" ? <Preview lane={lane} /> : tab === "context" ? <Context key={lane} lane={lane} /> : tab === "browser" ? <Browser lane={lane} /> : <Readiness lane={lane} />}
       </div>
     </aside>
   );
+}
+
+/// The four tabs people live in stay in the strip; the rest are one click behind More, and the one
+/// chosen from there shows as a fifth tab while it is open. ⌥1–8 still follow `TABS`.
+const PRIMARY: Tab[] = ["git", "turns", "review", "browser"];
+function PanelTabs({ tab, setTab, names, badge, expand, children }: { tab: Tab; setTab: (t: Tab) => void; names: Record<Tab, string>; badge: Partial<Record<Tab, ReactNode>>; expand: { expanded: boolean; toggle: () => void }; children: ReactNode }) {
+  const [more, setMore] = useState<DOMRect | null>(null);
+  const shown = PRIMARY.includes(tab) ? PRIMARY : [...PRIMARY, tab];
+  const hidden = TABS.filter((t) => !shown.includes(t));
+  const hiddenBadge = hidden.map((t) => badge[t]).find(Boolean);
+  const item = (id: Tab) => ({ id, label: <>{names[id]} {badge[id]}</>, title: `${names[id]} (${label({ key: String(TABS.indexOf(id) + 1), alt: true })})` });
+  return <>
+    <Tabs tabs={shown.map(item)} value={tab} onChange={setTab}>
+      <button className="ghost panel-more" aria-haspopup="menu" aria-label="More panels" title="More panels" onClick={(e) => setMore(e.currentTarget.getBoundingClientRect())}>{hiddenBadge}<Icon name="chevron-down" size={13} /></button>
+      <span className="spacer" />
+      {children}
+    </Tabs>
+    {more && <Floating anchor={more} onClose={() => setMore(null)}>
+      {hidden.map((t) => <button key={t} onClick={() => { setMore(null); setTab(t); }}>{names[t]} {badge[t]}<kbd style={{ marginLeft: "auto" }}>{label({ key: String(TABS.indexOf(t) + 1), alt: true })}</kbd></button>)}
+      <div className="sep" />
+      <button onClick={() => { setMore(null); expand.toggle(); }}><Icon name="maximize" size={13} /> {expand.expanded ? "Put the panel back" : "Expand the panel"}</button>
+    </Floating>}
+  </>;
 }
 
 /// The conversation as turns, newest first — what each one asked, wrote, ran, and how its checks

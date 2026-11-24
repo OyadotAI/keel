@@ -71,7 +71,7 @@ useIde.getState().setLayout(params.get("layout") === "ide" ? "ide" : "chat");
 function patch(id: string, patch: Partial<Lane>) { useStore.setState((state) => ({ lanes: { ...state.lanes, [id]: { ...state.lanes[id], ...patch } } })); }
 function remove(id: string) { useStore.setState((state) => ({ lanes: Object.fromEntries(Object.entries(state.lanes).filter(([key]) => key !== id)), projects: Object.fromEntries(Object.entries(state.projects).map(([path, project]) => [path, { ...project, lanes: project.lanes.filter((lane) => lane !== id) }])) })); }
 function Controls() {
-  const [visible, setVisible] = React.useState(true);
+  const [visible, setVisible] = React.useState(!params.has("bare"));
   const [layoutResult, setLayoutResult] = React.useState("");
   const [focus, setFocus] = React.useState("No focused control");
   React.useEffect(() => {

@@ -1,6 +1,9 @@
 /* Attention stays a flat, bounded list over existing state, with no animation or new assets. */
-.attention-entry { display: flex; align-items: center; gap: .5rem; color: var(--dim); background: transparent; border: 0; min-height: 32px; font: 500 .875rem/1.5 var(--font); }
-.sidebar > .attention-entry { margin: 0 16px 12px; padding: 4px 8px; }
+.attention-entry { display: flex; align-items: center; gap: .5rem; color: var(--dim); background: transparent; border: 0; box-shadow: none; min-height: 30px; font: 450 var(--t-body)/1.5 var(--font); }
+/* Sidebar navigation reads as rows, not buttons: no box, one hover fill, a hairline below. */
+.sidebar-nav { display: flex; flex-direction: column; gap: 1px; margin: 0 10px 8px; padding-bottom: 8px; box-shadow: 0 1px 0 var(--hairline); }
+.sidebar-nav > .attention-entry { width: 100%; height: 30px; padding: 0 8px; border-radius: var(--r-sm); }
+.attention-entry kbd.attention-count { background: none; box-shadow: none; color: var(--faint); font: 450 var(--t-small) var(--font); padding: 0; }
 .attention-entry .attention-count { margin-left: auto; font-variant-numeric: tabular-nums; }
 .statusbar > .attention-entry { flex: none; font-size: .875rem; min-height: 32px; }
 .attention-entry:hover { background: var(--hover); color: var(--text); }

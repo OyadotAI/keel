@@ -3,9 +3,9 @@ import { expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
-const styles = read("./styles.css"), workspace = read("./workspace.css"), ide = read("./ide.css");
+const styles = read("./design/tokens.css") + read("./styles.css"), workspace = read("./workspace.css"), ide = read("./ide.css");
 const website = read("../../website/public/tokens.css");
-import { terminalPalette } from "./terminal-palette";
+import { terminalPalette } from "./design/terminal";
 
 const BASES = ["#1a1a1a", "#f7f5f0", "#cdf01e", "#f2554a", "#f5b14c"];
 const channels = (hex) => hex.slice(1).match(/../g).map((channel) => parseInt(channel, 16));
@@ -32,7 +32,7 @@ function resolve(value, values) {
 }
 
 it("uses the same five Oya base colors in the desktop and public website", () => {
-  for (const source of [styles, website]) expect([...new Set(source.match(/#[\da-f]{6}\b/gi))]).toEqual(BASES);
+  for (const source of [read("./design/tokens.css"), website]) expect([...new Set(source.match(/#[\da-f]{6}\b/gi))]).toEqual(BASES);
 });
 
 for (const dark of [false, true]) {

@@ -1,5 +1,6 @@
 import { setAppearance, useAppearance } from "../appearance";
 import { Icon } from "./icons";
+import { WindowZoom } from "./WindowZoom";
 
 export function AppearanceSetting() {
   const { mode } = useAppearance();
@@ -11,5 +12,6 @@ export function AppearanceSetting() {
         <input type="radio" name="appearance" value={value} checked={mode === value} onChange={() => setAppearance(value)} /><Icon name={icon} size={17} /><span>{title}</span>
       </label>)}
     </div>
+    <div className="appearance-zoom"><WindowZoom /></div>
   </section>;
 }

@@ -1,4 +1,6 @@
-// One palette owns main-terminal ANSI colors and read-only child transcript colors.
+// The terminal's colours, in the design system: xterm takes concrete hex and no CSS variables, so
+// these are the five brand colours flattened by hand. styles.test.mjs proves each one equals the
+// token it stands for; nothing outside design/ writes a colour.
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"] as const;
 
 // Fixed values are flattened mixes of the same five Oya colors as styles.css. A terminal
@@ -52,5 +54,17 @@ export function terminalPaneColors(dark: boolean): Record<string, string> {
     "--child-tool": p.cyan, "--child-link": p.blue, "--child-keyword": p.magenta,
     "--child-string": p.green, "--child-number": p.yellow, "--child-error": p.red,
     "--child-surface": p.surface, "--child-line": p.border, "--child-selection": p.selection,
+  };
+}
+
+/** Find-in-terminal highlights: lime for the current match, the add role for the others. */
+export function terminalFindDecorations(dark: boolean) {
+  const p = terminalPalette(dark);
+  return {
+    matchOverviewRuler: p.ansi[6],
+    activeMatchColorOverviewRuler: LIME,
+    matchBackground: p.green,
+    activeMatchBackground: LIME,
+    activeMatchBorder: p.foreground,
   };
 }

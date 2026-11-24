@@ -6,6 +6,7 @@ import { useDelivery, refreshDelivery, openTask, type TaskPage } from "../delive
 import type { TaskSummary } from "../delivery/model";
 import { Dialog, Empty, Tabs } from "./kit";
 import { Icon } from "./icons";
+import { label } from "../keys";
 import { AgentMark } from "./AgentMark";
 import { IssueIntake } from "./TaskIssue";
 import { RecurringTasks } from "./TaskSchedules";
@@ -13,6 +14,11 @@ import { RecurringTasks } from "./TaskSchedules";
 /** A persistent entry complements Attention even when every task is currently quiet. */
 export function TasksButton({ open }: { open: () => void }) {
   return <button className="attention-entry" onClick={open} aria-haspopup="dialog"><Icon name="branch" size={16} /><span>Tasks</span></button>;
+}
+
+/** The palette, from the sidebar: everything is findable from one place, as in the window's ⌘K. */
+export function SearchButton({ open }: { open: () => void }) {
+  return <button className="attention-entry" onClick={open}><Icon name="search" size={16} /><span>Search</span><kbd className="attention-count">{label({ key: "k" })}</kbd></button>;
 }
 
 type Tab = "tasks" | "recurring";

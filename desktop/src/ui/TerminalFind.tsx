@@ -5,6 +5,7 @@ import type { SearchAddon } from "@xterm/addon-search";
 import { ideCommand } from "../ide-keys";
 import { MAC, matches } from "../keys";
 import { Icon } from "./icons";
+import { terminalFindDecorations } from "../design/terminal";
 
 /// ⌘F (Ctrl+Shift+F on Windows, or the editor's Find chord) inside a terminal opens its find bar.
 /// Caught on the host, before the window's handler, so the editor's Find keeps it everywhere else.
@@ -26,14 +27,6 @@ export function useFindKey(host: RefObject<HTMLElement | null>, open: () => void
   }, [host, remount]);
 }
 
-/// Highlights drawn while the bar is open, in the brand lime (`--lime`); the addon takes hex only.
-const DECORATIONS = {
-  matchOverviewRuler: "#888888",
-  activeMatchColorOverviewRuler: "#cdf01e",
-  matchBackground: "#4a5410",
-  activeMatchBackground: "#7d8f12",
-  activeMatchBorder: "#cdf01e",
-};
 
 /// The addon stops counting past this; the count then reads "1000+".
 const COUNT_CAP = 1000;
@@ -48,7 +41,7 @@ export function findCount(query: string, r?: { resultIndex: number; resultCount:
 }
 
 /// The bar. `focusTerminal` puts typing back where it was when the bar closes.
-export function TerminalFind({ search, onClose, focusTerminal, selectToken }: { search: SearchAddon; onClose: () => void; focusTerminal: () => void; selectToken: number }) {
+export function TerminalFind({ search, onClose, focusTerminal, selectToken, dark }: { search: SearchAddon; onClose: () => void; focusTerminal: () => void; selectToken: number; dark: boolean }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<{ resultIndex: number; resultCount: number }>();
@@ -63,7 +56,7 @@ export function TerminalFind({ search, onClose, focusTerminal, selectToken }: { 
   useEffect(() => input.current?.select(), [selectToken]);
   const go = (forward: boolean, q = query) => {
     if (!q) return search.clearDecorations();
-    const opts = { decorations: DECORATIONS, incremental: false };
+    const opts = { decorations: terminalFindDecorations(dark), incremental: false };
     if (forward) search.findNext(q, opts);
     else search.findPrevious(q, opts);
   };

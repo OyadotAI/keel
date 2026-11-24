@@ -1,112 +1,5 @@
-/* Type: DM Sans, shipped with the app (fonts/, SIL Open Font License) — the same as Oya's browser,
-   so the two read as one family and look the same offline and on any machine. */
-@font-face {
-  font-family: "DM Sans";
-  font-style: normal;
-  font-weight: 100 1000;
-  font-display: block;
-  src: url("./fonts/dm-sans-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "DM Sans";
-  font-style: normal;
-  font-weight: 100 1000;
-  font-display: block;
-  src: url("./fonts/dm-sans-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
-/* AgentChrome's current Oya palette: five base colors, shared by both appearances.
-   Readable accents and lime fills are separate so text and focus also work on paper. */
-:root {
-  --ink: #1a1a1a;
-  --paper: #f7f5f0;
-  --lime: #cdf01e;
-  --red: #f2554a;
-  --amber: #f5b14c;
-  --bg: var(--paper);
-  --workspace-bg: color-mix(in srgb, var(--ink) 4%, var(--paper));
-  --surface: color-mix(in srgb, var(--ink) 9%, var(--paper));
-  --chrome: color-mix(in srgb, var(--ink) 12%, var(--paper));
-  --raised: var(--paper);
-  --well: color-mix(in srgb, var(--ink) 6%, var(--paper));
-  --line: color-mix(in srgb, var(--ink) 19%, var(--paper));
-  --control-edge: color-mix(in srgb, var(--paper) 45%, var(--ink));
-  --line-strong: var(--control-edge);
-  --text: var(--ink);
-  --dim: color-mix(in srgb, var(--paper) 30%, var(--ink));
-  --faint: var(--dim);
-  --accent: var(--ink);
-  --accent-fill: var(--lime);
-  --accent-hover: color-mix(in srgb, var(--lime) 88%, var(--ink));
-  --fill-edge: var(--ink);
-  --on-accent: var(--ink);
-  --add: color-mix(in srgb, var(--lime) 34%, var(--ink));
-  --del: color-mix(in srgb, var(--red) 58%, var(--ink));
-  --warn: color-mix(in srgb, var(--amber) 42%, var(--ink));
-  --add-bg: color-mix(in srgb, var(--lime) 12%, var(--bg));
-  --del-bg: color-mix(in srgb, var(--red) 10%, var(--bg));
-  --hover: color-mix(in srgb, var(--text) 8%, transparent);
-  --tint: color-mix(in srgb, var(--lime) 30%, transparent);
-  --hairline: color-mix(in srgb, var(--ink) 10%, transparent);
-  --shadow-xs: 0 1px 1px color-mix(in srgb, var(--ink) 4%, transparent), 0 0 0 0.5px var(--hairline);
-  --shadow-sm: 0 2px 4px color-mix(in srgb, var(--ink) 4%, transparent), 0 6px 18px color-mix(in srgb, var(--ink) 3%, transparent), 0 0 0 0.5px var(--hairline);
-  --shadow: 0 12px 40px color-mix(in srgb, var(--ink) 12%, transparent), 0 0 0 0.5px var(--hairline);
-  --shadow-lg: 0 30px 80px color-mix(in srgb, var(--ink) 20%, transparent), 0 0 0 0.5px var(--hairline);
-  --ring: 0 0 0 2px var(--accent);
-  --spring: linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 20.4%, 1.043 24.5%, 1.035 29.4%, 1.007 38.6%, 0.997 48.3%, 1);
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --t-fast: 160ms;
-  --t-base: 280ms;
-  --term-bg: var(--well);
-  --selection: color-mix(in srgb, var(--lime) 30%, transparent);
-  --font: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  --t-tiny: 10px;
-  --t-micro: 11px;
-  --t-small: 12px;
-  --t-body: 13px;
-  --t-title: 16px;
-  --tracking: 0.06em;
-  --r-sm: 7px;
-  --r-md: 9px;
-  --r-lg: 14px;
-  --sidebar-w: 240px;
-  --panel-w: 420px;
-  --ansi-0: var(--text); --ansi-1: var(--del); --ansi-2: var(--add); --ansi-3: var(--warn);
-  --ansi-4: var(--text); --ansi-5: var(--accent); --ansi-6: var(--dim); --ansi-7: var(--dim);
-  --ansi-8: var(--dim); --ansi-9: var(--del); --ansi-10: var(--add); --ansi-11: var(--warn);
-  --ansi-12: var(--text); --ansi-13: var(--accent); --ansi-14: var(--dim); --ansi-15: var(--text);
-  color-scheme: light;
-  accent-color: var(--accent);
-}
-
-:root:where([data-theme="dark"]) {
-  --bg: color-mix(in srgb, var(--paper) 3%, var(--ink));
-  --workspace-bg: var(--ink);
-  --surface: color-mix(in srgb, var(--paper) 6%, var(--ink));
-  --chrome: color-mix(in srgb, var(--paper) 12%, var(--ink));
-  --raised: color-mix(in srgb, var(--paper) 10%, var(--ink));
-  --well: var(--ink);
-  --line: color-mix(in srgb, var(--paper) 16%, var(--ink));
-  --text: var(--paper);
-  --dim: color-mix(in srgb, var(--paper) 66%, var(--ink));
-  --accent: var(--lime);
-  --accent-hover: color-mix(in srgb, var(--lime) 80%, var(--paper));
-  --fill-edge: transparent;
-  --add: var(--lime);
-  --del: color-mix(in srgb, var(--red) 65%, var(--paper));
-  --warn: var(--amber);
-  --tint: color-mix(in srgb, var(--lime) 8%, transparent);
-  --hairline: color-mix(in srgb, var(--paper) 14%, transparent);
-  --shadow-xs: 0 0 0 0.5px var(--hairline);
-  --shadow-sm: 0 1px 2px color-mix(in srgb, var(--ink) 30%, transparent), 0 0 0 0.5px var(--hairline);
-  --shadow: 0 12px 40px color-mix(in srgb, var(--ink) 60%, transparent), 0 0 0 0.5px var(--hairline);
-  --shadow-lg: 0 30px 80px color-mix(in srgb, var(--ink) 70%, transparent), 0 0 0 0.5px var(--hairline);
-  color-scheme: dark;
-}
-
+/* Every token lives in design/tokens.css; this file is the components that use them. */
+@import "./design/tokens.css";
 
 * {
   box-sizing: border-box;
@@ -130,6 +23,18 @@ body {
 }
 code {
   font: var(--t-small) var(--mono);
+}
+
+/* Links in the text colour with a quiet underline: the browser's own blue was a sixth hue beside
+   the brand's five. */
+a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+a:hover {
+  text-decoration-color: var(--text);
 }
 
 /* Buttons: primary (one per surface), quiet, ghost. 28px, never wrapping. */
@@ -2072,7 +1977,7 @@ input.field,
 .segmented button[aria-checked="true"], .segmented button[aria-pressed="true"] {
   background: var(--raised);
   color: var(--text);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  box-shadow: var(--shadow-xs);
 }
 .lane-view-switch { flex: none; }
 .lane-view-switch button { display: inline-flex; align-items: center; gap: 5px; }
@@ -2253,7 +2158,7 @@ h3 {
   display: grid;
   place-items: center;
   padding: 16px;
-  background: color-mix(in srgb, var(--bg) 40%, rgb(0 0 0 / 0.28));
+  background: color-mix(in srgb, var(--bg) 40%, color-mix(in srgb, var(--ink) 28%, transparent));
   animation: fade var(--t-fast) var(--ease);
 }
 @keyframes fade {

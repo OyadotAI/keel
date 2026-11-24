@@ -4,7 +4,7 @@
 /* Tiles never need to scroll sideways, and a bar that came and went with an animation changed the column count. */
 .split .terminal-grid { grid-template-rows: var(--terminal-rows); grid-auto-rows: auto; gap: var(--pane-gap); padding: var(--pane-gap); background: var(--surface); overflow-x: hidden; }
 .terminal-grid-main, .child-terminal-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--child-bg); color: var(--child-fg); }
-.child-terminal-surface { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.child-terminal-surface { border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow-xs); }
 .terminal-grid-main { position: relative; overflow: visible; grid-column: 1 / -1; }
 /* Minimized: the header alone, after the open panes. Maximized: the whole subagent area, under main. */
 .child-terminal-pane.is-min { order: 1; }
@@ -75,7 +75,7 @@
 .child-terminal-pane .hljs-number, .child-terminal-pane .hljs-type, .child-terminal-pane .hljs-built_in { color: var(--child-number); }
 .child-terminal-pane .hljs-comment { color: var(--child-muted); }
 /* A feathered diagonal front materializes the surface; independent lobes linger after it. */
-.child-terminal-surface[data-motion] { mask-image: linear-gradient(165deg, #000 0%, #000 calc(50% - 24px), transparent calc(50% + 24px), transparent 100%); mask-size: 100% 300%; mask-repeat: no-repeat; }
+.child-terminal-surface[data-motion] { mask-image: linear-gradient(165deg, var(--ink) 0%, var(--ink) calc(50% - 24px), transparent calc(50% + 24px), transparent 100%); mask-size: 100% 300%; mask-repeat: no-repeat; }
 .child-terminal-smoke { display: none; position: absolute; inset: calc(-1 * var(--pane-gap)); overflow: hidden; border-radius: 20px; pointer-events: none; z-index: 2; }
 .child-terminal-surface[data-motion] + .child-terminal-smoke { display: block; }
 .child-terminal-smoke i, .child-terminal-smoke span { position: absolute; inset: 25% -5% -15%; opacity: 0; transform-origin: 50% 80%; background: radial-gradient(ellipse at 40% 65%, color-mix(in srgb, var(--child-tool) 18%, transparent), transparent 62%), radial-gradient(ellipse at 65% 75%, color-mix(in srgb, var(--child-fg) 14%, transparent), transparent 55%); }
@@ -147,7 +147,7 @@
 .chat-helpers .child-terminal-surface::before {
   content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; border-radius: inherit; padding: 1px;
   background: conic-gradient(from var(--helper-angle), var(--line) 0deg, var(--line) 250deg, color-mix(in srgb, var(--accent) 90%, var(--paper)) 310deg, var(--line) 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  -webkit-mask: linear-gradient(var(--ink) 0 0) content-box, linear-gradient(var(--ink) 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
   opacity: .9; transition: opacity 500ms var(--ease);
 }
 .chat-helpers [data-status="working"] .child-terminal-surface::before { animation: helper-orbit 3.2s linear infinite; }
@@ -173,7 +173,7 @@
 
 /* Output reads like the chat: page font, room to breathe, and the oldest lines fading out above. */
 .chat-helpers .child-terminal-output { padding: 12px 14px 8px; line-height: 1.55; color: var(--text);
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px); mask-image: linear-gradient(180deg, transparent 0, #000 28px); scroll-behavior: smooth; }
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, var(--ink) 28px); mask-image: linear-gradient(180deg, transparent 0, var(--ink) 28px); scroll-behavior: smooth; }
 .chat-helpers .child-line { animation: helper-line 360ms var(--ease) both; }
 @keyframes helper-line { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .chat-helpers .terminal-pane-footer { min-height: 30px; padding: 6px 12px; font-size: 11px; background: color-mix(in srgb, var(--surface) 60%, transparent); border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }

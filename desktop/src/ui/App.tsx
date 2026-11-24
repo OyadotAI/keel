@@ -33,7 +33,7 @@ import { TrustDialog } from "./TrustDialog";
 import { ideCommand } from "../ide-keys";
 import { MAC } from "../keys";
 import { AttentionButton, AttentionDialog } from "./Attention";
-import { TasksButton,TasksDialog } from "./Tasks";
+import { SearchButton, TasksButton, TasksDialog } from "./Tasks";
 import { useAttentionNavigation } from "../use-attention-navigation";
 import { revealAttention, ATTENTION_DRAWER_QUERY } from "../attention-navigation";
 
@@ -234,7 +234,7 @@ export function App() {
   const workspace = showPanel && lane ? <SidePanel key={lane} lane={lane} tab={tab} setTab={setTab} expanded={expanded} toggleExpanded={() => setExpanded((x) => !x)} close={closePanel} ask={(what) => setAsking(what)} /> : null;
   return (
     <div className={`app ${sidebar ? "" : "no-sidebar"} ${ideActive ? "ide-layout" : ""} ${conversation ? "ide-conversation-open" : ""}`}>
-      <Sidebar attention={<><AttentionButton open={attention.show} /><TasksButton open={() => setTasksOpen(true)} /></>} showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
+      <Sidebar attention={<nav className="sidebar-nav" aria-label="Workspace"><AttentionButton open={attention.show} /><TasksButton open={() => setTasksOpen(true)} /><SearchButton open={() => setPalette(true)} /></nav>} showCode={showCode} explorer={ideActive && lane ? <Explorer key={lane} lane={lane} enabled={ideActive} showCode={showCode} /> : undefined} />
       <button className="sidebar-backdrop" style={{ background: "transparent" }} aria-label="Close projects" onClick={toggleSidebar} />
       <Handle name={ideActive ? "--coding-sidebar-w" : "--sidebar-w"} min={240} max={ideActive ? 480 : 360} fallback={ideActive ? 320 : 240} from="left" />
       <WorkspaceMain lane={lane} overlay={overlay} showPanel={showPanel} expanded={expanded} ideActive={ideActive} shell={shell} setShell={setShell} closePanel={closePanel} workspace={workspace} conversation={conversation} setConversation={setConversation} showGit={showGit} />

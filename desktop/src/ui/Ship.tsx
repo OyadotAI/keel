@@ -10,12 +10,12 @@ import type { Endpoint } from "../api";
 import { usePlain } from "../plain";
 
 const COPY = {
-  open: { text: "Happy with it? Share it as a pull request.", button: "Open pull request" },
-  update: { text: "Share your new changes.", button: "Update pull request" },
+  open: { text: "Not shared yet.", button: "Open pull request" },
+  update: { text: "New changes since the pull request.", button: "Update pull request" },
 };
 /** A chat lane's words: a version saved to GitHub, never a pull request. */
 const PLAIN = {
-  open: { text: "Happy with it? Save this version to GitHub.", button: "Save to GitHub" },
+  open: { text: "Only on this computer so far.", button: "Save to GitHub" },
   update: { text: "New changes since your last save.", button: "Save new changes" },
 };
 const CLOSE = "Hide until there are new changes";
@@ -46,7 +46,7 @@ export function ShipCard({ lane, ep, wt }: { lane: string; ep: Endpoint; wt?: st
   const card = (offer || step || error) && (
     <div className="ship-row">
       {step ? <><Working /><span>{STEP_WORDS[step]}</span></> : <span className="ship-text" title={error}>{error ? `${plain ? "Couldn’t save to GitHub" : "Didn’t work"}: ${error.split(/\n|\s+hint:/)[0].trim()}` : words[offer ?? "open"].text}</span>}
-      {!step && <button onClick={() => void go()}>{error ? "Try again" : words[offer ?? "open"].button}</button>}
+      {!step && <button className="link ship-go" onClick={() => void go()}>{error ? "Try again" : words[offer ?? "open"].button}</button>}
       {!step && <button className="ghost review-close" aria-label={CLOSE} title={CLOSE} onClick={close}><Icon name="x" size={14} /></button>}
     </div>
   );

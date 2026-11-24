@@ -1,6 +1,6 @@
 // Shared colors must remain readable on terminal-owned surfaces independently of window theme.
 import { expect, it } from "vitest";
-import { terminalPalette, terminalPaneColors, terminalXtermTheme } from "./terminal-palette";
+import { terminalPalette, terminalPaneColors, terminalXtermTheme } from "./terminal";
 
 const luminance = (hex: string) => {
   const channels = hex.slice(1).match(/../g)!.map((part) => parseInt(part, 16) / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);

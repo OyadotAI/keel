@@ -9,7 +9,7 @@ import { childrenOf, childScope, useChildPane, useChildReading, releaseGridText,
 import { gridColumns, useHeldSlots, useFlip, useLiveInvocations, useVisibleChildren, usePaneMotion, useReducedMotion, PANE_OPEN_MS, PANE_CLOSE_MS, PANE_MOVE_MS, SPLIT_LINGER_MS } from "../subagents";
 import { useGridOutput } from "../subagent-output";
 import { onTerminalTheme, terminalDark } from "../terminal-theme";
-import { terminalPaneColors } from "../terminal-palette";
+import { terminalPaneColors } from "../design/terminal";
 import { onTerminalFont, terminalFont } from "../zoom";
 import { MemberAvatar } from "./MemberAvatar";
 import { Icon } from "./icons";

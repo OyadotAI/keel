@@ -10,7 +10,6 @@ import type { Tab } from "./Lane";
 import { activity } from "../activity";
 import { usageSummary } from "../session-usage";
 import { useFooterHeight } from "../use-footer-height";
-import { WindowZoom } from "./WindowZoom";
 import { isPlain } from "../plain";
 export { activity } from "../activity";
 
@@ -122,12 +121,7 @@ export function StatusBar({ openTab, panel, togglePanel, sidebar, toggleSidebar,
       ) : project && !project.endpoint && project.starting ? (
         <span className="warn" role="status">Starting Oya Factory…</span>
       ) : null}
-      <span className="sb-sep" />
-      <button className="sb-shortcuts" onClick={() => useStore.setState({ shortcuts: true })} title="Every keyboard shortcut">
-        Shortcuts <kbd>{label({ key: "/" })}</kbd>
-      </button>
       </div>
-      <WindowZoom />
       {layout}
       {l && (
         <button className="workspace-toggle" onClick={togglePanel} aria-label={panel ? "Close workspace" : "Open workspace"} aria-expanded={panel} aria-controls={panel ? "workspace-panel" : undefined} title={`${panel ? "Close" : "Open"} workspace · Changes, Git, preview and readiness (${label({ key: "i", alt: true })})`}>

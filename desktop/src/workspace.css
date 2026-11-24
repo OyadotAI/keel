@@ -1,15 +1,4 @@
-/* Workspace surfaces and controls. Shared by every panel, not just the transcript. */
-:root {
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 16px;
-  --panel-w: 380px;
-  --statusbar-h: 44px;
-  --t-body: 14px;
-  --t-small: 13px;
-  --control-ink: var(--accent-fill);
-  --control-text: var(--on-accent);
-}
+/* Workspace surfaces and controls. Shared by every panel, not just the transcript. Tokens: design/tokens.css. */
 
 body { background: var(--workspace-bg); }
 .app { padding: 10px 10px 0 0; background: var(--workspace-bg); }
@@ -78,10 +67,14 @@ body { background: var(--workspace-bg); }
 .inspector-heading > span { min-width: 0; }
 .inspector-heading button { flex: none; }
 .inspector-heading button svg { flex: none; }
-.side-panel > .tabs { height: 42px; background: transparent; padding: 0 10px; gap: 0; }
+.side-panel > .tabs { height: 42px; background: transparent; padding: 0 8px 0 14px; gap: 0; border-bottom: 1px solid var(--hairline); }
 .side-panel > .tabs { min-width: 0; overflow-x: auto; }
 .side-panel > .tabs [role=tab] { flex-shrink: 0; }
-.side-panel > .tabs [role=tab] { height: 28px; padding: 0 7px; font-size: 12px; }
+.side-panel > .tabs [role=tab] { height: 42px; padding: 0 2px; margin-right: 12px; font-size: var(--t-body); font-weight: 450; color: var(--dim); background: none; box-shadow: none; border-radius: 0; }
+.side-panel > .tabs [role=tab][aria-selected=true] { color: var(--text); background: none; box-shadow: inset 0 -2px 0 var(--text); }
+.side-panel > .tabs [role=tab]:hover { color: var(--text); }
+.side-panel > .tabs button.panel-more { flex: none; width: auto; min-width: 24px; height: 24px; padding: 0 4px; gap: 4px; }
+.side-panel > .tabs > button.ghost:not(.panel-more) { flex: none; }
 .tabs [role=tab][aria-selected=true] { box-shadow: var(--shadow-xs); }
 .tab-badge, .tab-count { font-size: 12px; min-width: 14px; }
 .panel-head { min-height: 48px; padding: 12px 18px; background: transparent; }
@@ -96,7 +89,7 @@ body { background: var(--workspace-bg); }
 .chat-speaker { font-size: 12px; font-weight: 600; color: var(--dim); }
 .chat-user > p { padding: 15px 18px; font-size: 14px; background: var(--well); border-radius: 10px; box-shadow: inset 0 0 0 .5px var(--hairline); }
 .assistant-speaker { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 650; margin-bottom: 16px; }
-.assistant-speaker > span { display: grid; place-items: center; width: 24px; height: 24px; background: var(--text); color: var(--bg); border-radius: 7px; }
+.assistant-speaker > span { display: grid; place-items: center; width: 18px; height: 18px; }
 .chat-markdown { font-size: 15px; line-height: 1.75; letter-spacing: -.006em; }
 .chat-markdown code { background: var(--well); box-shadow: inset 0 0 0 .5px var(--hairline); }
 .chat-code code { box-shadow: none; }
@@ -334,7 +327,7 @@ button.primary:focus-visible { box-shadow: var(--ring); }
   .scm-layout.has-diff .scm-editor { border-top: 0; border-left: 1px solid var(--line); }
 }
 @media (hover: none) { .scm-file-actions { opacity: 1; } }
-.statusbar { height: auto; min-height: 44px; flex-wrap: wrap; background: transparent; border: 0; font-size: 12px; padding: 0 10px; gap: 4px; }
+.statusbar { height: auto; min-height: 36px; flex-wrap: wrap; background: transparent; border: 0; font-size: 12px; padding: 0 10px; gap: 4px; }
 .window-zoom { position: relative; flex: none; }
 .window-zoom-controls { display: flex; align-items: center; gap: 2px; white-space: nowrap; color: var(--dim); }
 .window-zoom-controls > span { margin-right: 3px; }
@@ -499,7 +492,11 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 .chat-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .chat-images .markdown-image img { max-width: 220px; max-height: 160px; object-fit: cover; border-radius: 8px; box-shadow: 0 0 0 .5px var(--hairline); }
 /* The one-click pull request: one sentence, one button. */
-.ship-card .ship-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
+/* One quiet line above the composer, not a card: the composer's Send stays the one primary action. */
+.strip.ship-card { background: none; box-shadow: none; border: 0; padding: 0; margin-bottom: 2px; }
+.ship-card .ship-row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 6px; font-size: var(--t-small); color: var(--dim); }
+.ship-card button.ship-go { color: var(--text); font-weight: 500; padding: 2px 6px; }
+.ship-card button.ship-go:hover:not(:disabled) { background: var(--hover); }
 .ship-card .ship-text { flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ship-card .ship-row > button { flex: none; }
 .ship-card .ship-row > .review-close { position: static; }
@@ -519,3 +516,5 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 .chat-broken details { flex-basis: 100%; font-size: var(--t-small); }
 .chat-broken ul { margin: 4px 0 0; padding-left: 18px; }
 .approval-details > summary { cursor: pointer; font-size: var(--t-small); color: var(--dim); }
+
+.appearance-zoom { margin-top: var(--s-3); }

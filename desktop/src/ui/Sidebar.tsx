@@ -153,7 +153,8 @@ function Members({ project }: { project: string }) {
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus());
   }
 
-  if (!loaded) return null;
+  // No team yet is not a sidebar section: Extensions › Agents is where one is added.
+  if (!loaded || (!members.length && !loadError)) return null;
   const shown = showAll ? members : members.slice(0, MEMBERS_VISIBLE);
   return <section className="sidebar-section member-section" aria-label={`Oya Factory Agents in ${projectName ?? project}`}>
     <button className="sidebar-section-toggle" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded} aria-controls="sidebar-members" title={`Oya Factory Agents in ${projectName ?? project}`}>
