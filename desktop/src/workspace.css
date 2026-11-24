@@ -534,3 +534,19 @@ li:hover > .ext-edit, li:focus-within > .ext-edit { opacity: 1; }
 .team-offer-row { display: flex; align-items: center; gap: var(--s-2); }
 .team-offer-row .spacer { flex: 1; }
 .team-offer .delivery-section > summary { font-weight: 450; color: var(--dim); font-size: var(--t-small); }
+/* Skills: filter and New skill on top; groups instead of a label per row; one line per skill. */
+.skills-bar { display: flex; gap: var(--s-2); margin-bottom: var(--s-4); }
+.skills-bar .field { flex: 1; max-width: none; margin: 0; height: 32px; }
+.skills-bar button { flex: none; }
+.skill-group { margin-bottom: var(--s-4); }
+.skill-group h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 var(--s-1); font-size: var(--t-small); font-weight: 500; color: var(--dim); }
+.skill-list { list-style: none; margin: 0; padding: 0; }
+.skill-list li { display: flex; align-items: baseline; gap: var(--s-3); padding: 7px var(--s-2); border-radius: var(--r-sm); }
+.skill-list li:hover { background: var(--hover); }
+.skill-name { flex: none; max-width: 40%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-desc { flex: 1; min-width: 0; font-size: var(--t-small); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-list li > button, .skill-list li > .small { flex: none; }
+.skill-catalog { margin-top: var(--s-2); border-top: 1px solid var(--hairline); padding-top: var(--s-2); }
+.skill-form { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-4); margin-bottom: var(--s-4); border-radius: var(--r-md); background: var(--surface); }
+.skill-form label { display: flex; flex-direction: column; gap: 6px; font-size: var(--t-small); color: var(--dim); }
+.skill-form .field { width: 100%; max-width: none; margin: 0; color: var(--text); font: var(--t-body) / 1.4 var(--font); }

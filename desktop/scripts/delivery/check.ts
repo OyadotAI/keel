@@ -24,11 +24,21 @@ function manyTasks(page:{tasks:unknown[]}){
     row("t6","Bug: Keel's Browser tab can't test a mobile layout, and browser_read misses frames","antigravity"),
   ]};
 }
+if(params.get("open")==="extensions")setTimeout(()=>useStore.setState({extensions:true}),500);
 if(params.get("open")==="start")setTimeout(()=>useStore.setState({starting:useStore.getState().order[0]}),500);
 if(params.get("open")==="tasks"||params.get("open")?.startsWith("recurring")){const tab=()=>{if(!params.get("open")?.startsWith("recurring"))return;[...document.querySelectorAll<HTMLButtonElement>(".tasks-toolbar [role=tab]")].find((x)=>x.textContent?.startsWith("Recurring"))?.click();if(params.get("open")==="recurring-new")setTimeout(()=>document.querySelector<HTMLButtonElement>(".recurring-new")?.click(),200);};const tryOpen=(left:number)=>{const b=[...document.querySelectorAll<HTMLButtonElement>("button.attention-entry")].find((x)=>x.textContent?.includes("Tasks"));if(b&&!document.querySelector(".delivery-dialog")){b.click();setTimeout(tab,300);}else if(left>0)setTimeout(()=>tryOpen(left-1),250);};setTimeout(()=>tryOpen(20),500);}
 window.fetch=async(input,init)=>{
   const target=new URL(String(input),location.href),method=init?.method??"GET";
   if(!target.pathname.startsWith("/api/"))return base(input,init);
+  if(target.pathname==="/api/state"&&params.get("open")==="extensions")return Response.json({workspace:{agents:[],commands:[],hooks:[],mcp_servers:[],plugins:[],skills:[
+    {name:"frontend",scope:"project",description:"Use when building or changing anything in the frontend: a page, a component, a layout, styling, copy on screen. Produces distinctive, production-grade UI."},
+    {name:"browseros-neo",scope:"user",description:"The user's dedicated browser for agents — a real browser signed into their accounts, with live logins and a persistent profile."},
+    {name:"hyperframes",scope:"user",description:"Read first to make, edit, animate or render any video with HyperFrames (HTML rendered to video)."},
+    {name:"hyperframes-audio",scope:"user",description:"Use when audio already placed in a HyperFrames composition needs to be mixed: fade-in/fade-out, crossfade, track gain."},
+    {name:"motion-graphics",scope:"user",description:"A short, design-led motion graphic where motion is the message — kinetic typography, stat count-up, chart hit."},
+    {name:"code-review",scope:"user",plugin:"code-review",description:"Code review a pull request"},
+  ]}});
+  if(target.pathname==="/api/skills/catalog")return Response.json({entries:[{id:"release-notes",description:"Write release notes from the git log.",author:"oya"}]});
   let body={};try{body=JSON.parse(String(init?.body??"{}"));}catch{/* Read-only calls have no body. */}
   try{const data=target.pathname==="/api/tasks"&&many?manyTasks(fixture.respond(target.pathname,method,body,target.searchParams) as {tasks:unknown[]}):fixture.respond(target.pathname,method,body,target.searchParams);if(data===undefined)return base(input,init);if(method==="POST")queueMicrotask(()=>deliveryChanged(ep));return Response.json(data);}
   catch(error){return new Response(String(error),{status:409});}

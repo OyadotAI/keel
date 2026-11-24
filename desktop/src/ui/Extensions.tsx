@@ -216,68 +216,63 @@ function List({ items, empty, remove }: { items: Named[]; empty: string; remove?
   );
 }
 
+const SKILL_GROUPS: [string, (n: Named) => boolean][] = [
+  ["This project", (n) => !n.plugin && n.scope === "project"],
+  ["Yours", (n) => !n.plugin && n.scope !== "project"],
+  ["From plugins", (n) => !!n.plugin],
+];
+
+/// Skills, findable: a filter and New skill on top, the list grouped by where each comes from (so
+/// no row repeats it), one line of description each, and the catalog one click away. Writing a
+/// skill used to sit below all seventy of them.
 function Skills({ ep, ws, call }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void> }) {
   const [catalog, setCatalog] = useState<CatalogSkill[]>();
-  const [form, setForm] = useState({ name: "", description: "", instructions: "" });
+  const [writing, setWriting] = useState(false);
+  const [filter, setFilter] = useState("");
   useEffect(() => {
     get<{ entries: CatalogSkill[] }>(ep, "/api/skills/catalog").then((c) => setCatalog(c.entries), () => setCatalog([]));
   }, [ep]);
   const dirOf = (path?: string) => (path ? path.replace(/\/SKILL\.md$/i, "") : "");
+  const q = filter.trim().toLowerCase();
+  const shown = ws.skills.filter((n) => !q || `${n.name} ${n.description ?? ""}`.toLowerCase().includes(q));
+  const remove = (n: Named) => call(() => post(ep, "/api/skills/remove", { dir: dirOf(n.path), commit: true }));
   return (
-    <>
-      <section className="settings-section">
-        <h2>Installed</h2>
-        <List items={ws.skills} empty="No skills yet. Add one from the catalog below, or write your own." remove={(n) => call(() => post(ep, "/api/skills/remove", { dir: dirOf(n.path), commit: true }))} />
-      </section>
-      <section className="settings-section">
-        <h2>From Oya Factory's catalog</h2>
-        {!catalog ? (
-          <p className="muted">Reading…</p>
-        ) : (
-          <ul className="rules">
-            {catalog.map((c) => (
-              <li key={c.id} style={{ alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 500 }}>{c.id}</div>
-                  <div className="small muted ext-desc" title={c.description}>{c.description}</div>
-                </div>
-                {c.present ? (
-                  <span className="small faint">installed</span>
-                ) : (
-                  <button onClick={() => call(() => post(ep, "/api/skills/add", { id: c.id, commit: true }))}>Add</button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section className="settings-section">
-        <h2>Write a skill</h2>
-        <label className="field">
-          Name
-          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="release-notes" />
-        </label>
-        <label className="field" style={{ maxWidth: 560 }}>
-          When to use it
-          <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Use when writing release notes from the git log" />
-        </label>
-        <label className="field" style={{ maxWidth: 560 }}>
-          Instructions
-          <textarea rows={6} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} style={{ font: "inherit", color: "inherit", background: "var(--raised)", border: "1px solid var(--line)", borderRadius: 6, padding: 8 }} />
-        </label>
-        <button
-          className="primary"
-          disabled={!form.name.trim() || !form.description.trim()}
-          onClick={() => call(async () => {
-            await post(ep, "/api/skills/create", { ...form, commit: true });
-            setForm({ name: "", description: "", instructions: "" });
-          })}
-        >
-          Create skill
-        </button>
-      </section>
-    </>
+    <section className="settings-section skills">
+      <div className="skills-bar">
+        <input className="field" aria-label="Filter skills" placeholder={`Filter ${ws.skills.length} skills`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <button className="primary" onClick={() => setWriting(true)}><Icon name="plus" size={13} />New skill</button>
+      </div>
+      {writing && <WriteSkill ep={ep} call={call} close={() => setWriting(false)} />}
+      {!ws.skills.length && <p className="muted">No skills yet. Write one, or add one from the catalog below.</p>}
+      {ws.skills.length > 0 && !shown.length && <p className="muted">No skill matches “{filter}”.</p>}
+      {SKILL_GROUPS.map(([title, keep]) => {
+        const group = shown.filter(keep);
+        return group.length > 0 && <div key={title} className="skill-group"><h3>{title} <span className="tab-count">{group.length}</span></h3>
+          <ul className="skill-list">{group.map((n) => <li key={`${n.scope}:${n.name}:${n.path ?? ""}`} title={n.description ?? undefined}>
+            <span className="skill-name">{n.name}</span>
+            <span className="skill-desc">{n.plugin ? `${n.plugin} · ` : ""}{n.description}</span>
+            {n.scope === "project" && !n.plugin && <span className="ext-edit"><button className="link small" onClick={() => remove(n)}>Remove</button></span>}
+          </li>)}</ul></div>;
+      })}
+      <details className="delivery-section skill-catalog"><summary>Add from Oya Factory's catalog</summary>
+        {!catalog ? <p className="muted">Reading…</p> : <ul className="skill-list">{catalog.map((c) => <li key={c.id} title={c.description}>
+          <span className="skill-name">{c.id}</span><span className="skill-desc">{c.description}</span>
+          {c.present ? <span className="small faint">Added</span> : <button className="link small" onClick={() => call(() => post(ep, "/api/skills/add", { id: c.id, commit: true }))}>Add</button>}
+        </li>)}</ul>}
+      </details>
+    </section>
   );
+}
+
+/// The write-a-skill form, opened from New skill at the top of the list.
+function WriteSkill({ ep, call, close }: { ep: Endpoint; call: (run: () => Promise<unknown>) => Promise<void>; close: () => void }) {
+  const [form, setForm] = useState({ name: "", description: "", instructions: "" });
+  return <form className="skill-form" onSubmit={(e) => { e.preventDefault(); void call(async () => { await post(ep, "/api/skills/create", { ...form, commit: true }); close(); }); }}>
+    <label>Name<input className="field" autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="release-notes" /></label>
+    <label>When to use it<input className="field" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Use when writing release notes from the git log" /></label>
+    <label>Instructions<textarea className="field" rows={5} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} /></label>
+    <div className="schedule-foot"><p className="small muted">Saved to this project and committed.</p><button type="button" className="link" onClick={close}>Cancel</button><button type="submit" className="primary" disabled={!form.name.trim() || !form.description.trim()}>Save skill</button></div>
+  </form>;
 }
 
 function Agents({ ep, ws, call, project }: { ep: Endpoint; ws: Workspace; call: (run: () => Promise<unknown>) => Promise<void>; project: string }) {
