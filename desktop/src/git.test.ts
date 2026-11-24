@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { hunkLines, prepare, slug } from "./git";
+import { hunkLines, isWorkspace, prepare, slug } from "./git";
 
 it("prepares a diff once: rows, counts", () => {
   const p = prepare({
@@ -71,4 +71,12 @@ it("a hunk row carries the daemon's id and its place, so it can be staged on its
 it("a hunk header with no count is one line", () => {
   expect(hunkLines("@@ -7 +7 @@ fn x")).toEqual({ first: 7, last: 7 });
   expect(hunkLines("@@ -1,0 +0,0 @@")).toEqual({ first: 0, last: 0 });
+});
+
+it("a folder holding several repositories is a workspace; a repository opened at its root is not", () => {
+  const base = { is_repo: true, branch: null, changes: [] };
+  expect(isWorkspace({ ...base, repos: [{ dir: "", branch: "main" }] })).toBe(false);
+  expect(isWorkspace({ ...base, repos: [{ dir: "api", branch: "main" }] })).toBe(true);
+  expect(isWorkspace({ ...base, repos: [{ dir: "a", branch: "main" }, { dir: "b", branch: null }] })).toBe(true);
+  expect(isWorkspace(base)).toBe(false);
 });

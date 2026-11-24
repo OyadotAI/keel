@@ -28,7 +28,13 @@ export interface GitStatus {
   unsaved?: number | null;
   /** The pull request opened from this branch, and the commit GitHub has for it. */
   pr?: { url: string; head: string } | null;
+  /** Each repository in the opened folder; one with an empty `dir` when the folder is the repository. */
+  repos?: { dir: string; branch: string | null }[];
 }
+
+/// A folder that holds several repositories rather than being one: branches, history and sync
+/// belong to each repository, and asking git about the folder itself only fails.
+export const isWorkspace = (git?: GitStatus) => (git?.repos?.length ?? 0) > 1 || !!git?.repos?.[0]?.dir;
 
 export interface DiffLine {
   kind: "add" | "del" | "ctx" | string;

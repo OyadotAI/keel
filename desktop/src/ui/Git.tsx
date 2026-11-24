@@ -2,7 +2,7 @@
 import { Floating } from "./Menu";
 import { useCallback, useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { get, post, type Endpoint } from "../api";
-import { prepare, type DiffResponse, type Prepared } from "../git";
+import { isWorkspace, prepare, type DiffResponse, type Prepared } from "../git";
 import { useStore } from "../store";
 import { SourceControl } from "./SourceControl";
 import { InlineDiff } from "./InlineDiff";
@@ -106,7 +106,10 @@ export function Git({ lane, onOpenDiff, onOpenCommit, selection }: { onOpenCommi
     );
   const current = branches?.local.find((b) => b.current);
   const content = <GitContent lane={lane} ep={ep} wt={wt} act={act} section={section} log={log} branches={branches} pending={pending} running={running} onOpenDiff={onOpenDiff} selection={selection} branchError={branchError} retryBranches={() => void read(ep)} />;
-  const feedback = <GitFeedback error={error || readError} note={note} retry={() => void read(ep)} />;
+  // A folder of repositories has no branch of its own: git's "not a repository" about the folder is
+  // not news, and showing it twice read as the panel being broken.
+  const workspace = isWorkspace(git);
+  const feedback = <GitFeedback error={error || (workspace ? undefined : readError)} note={note} retry={() => void read(ep)} />;
   if (onOpenDiff) return <CodingGit lane={lane} ep={ep} wt={wt} branches={branches} pending={pending} running={running} act={act} section={section} setSection={setSection} feedback={feedback} onOpenCommit={onOpenCommit}>{content}</CodingGit>;
   return (
     <div className="git-panel">
@@ -184,9 +187,26 @@ function CodingGit({ lane, ep, wt, branches, pending, running, act, section, set
         {section !== "changes" && <button className="link coding-back" onClick={() => setSection("changes")}>← Back to changes</button>}
         {children}
       </div>
-    </section>} lower={<CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />} />
-    <button className="coding-branch-status" title="Manage branches" onClick={() => { setSection("branches"); setChangesOpen(true); }}><Icon name="branch" size={13} /><span>{branches?.current ?? git?.branch ?? "No commits yet"}</span><small>{current?.behind ?? 0}↓ {current?.ahead ?? 0}↑</small></button>
+    </section>} lower={isWorkspace(git) ? <Repositories repos={git?.repos ?? []} /> : <CommitGraph ep={ep} wt={wt} revision={git} selected={selected} onOpen={(commit) => { useIde.getState().patch(lane, { commit, follow: false }); onOpenCommit?.(); }} tools={<GraphRemoteActions ep={ep} wt={wt} current={current} pending={pending} running={running} remotes={branches?.remotes} act={act} />} />} />
+    <BranchStatus lane={lane} branches={branches} open={() => { setSection("branches"); setChangesOpen(true); }} />
   </div>;
+}
+
+/// The branch the checkout is on and how far it is from its upstream — or, for a folder of
+/// repositories, how many there are, since none of their branches is the folder's.
+function BranchStatus({ lane, branches, open }: { lane: string; branches?: Branches; open: () => void }) {
+  const git = useStore((s) => s.lanes[lane]?.git);
+  if (isWorkspace(git)) return <div className="coding-branch-status"><Icon name="folder" size={13} /><span>{git?.repos?.length} repositories</span></div>;
+  const current = branches?.local.find((b) => b.current);
+  return <button className="coding-branch-status" title="Manage branches" onClick={open}><Icon name="branch" size={13} /><span>{branches?.current ?? git?.branch ?? "No commits yet"}</span><small>{current?.behind ?? 0}↓ {current?.ahead ?? 0}↑</small></button>;
+}
+
+/// In a folder of repositories the graph's place lists them: history is each one's own.
+function Repositories({ repos }: { repos: { dir: string; branch: string | null }[] }) {
+  return <section className="commit-graph coding-repos" aria-label="Repositories in this folder">
+    <p className="coding-repos-note">History and branches are per repository.</p>
+    <ul>{repos.map((r) => <li key={r.dir}><Icon name="folder" size={13} /><span className="coding-repo-name">{r.dir || "."}</span><span className="mono coding-repo-branch">{r.branch ?? "detached"}</span></li>)}</ul>
+  </section>;
 }
 
 function GraphRemoteActions({ ep, wt, current, pending, running, remotes, act }: { ep: Endpoint; wt?: string; current?: Branch; pending: boolean; running: boolean; remotes?: string[]; act: Act }) {
