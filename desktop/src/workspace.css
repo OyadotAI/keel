@@ -4,7 +4,9 @@ body { background: var(--workspace-bg); }
 .app { padding: 10px 10px 0 0; background: var(--workspace-bg); }
 .app.no-sidebar { padding-left: 10px; }
 .main { background: transparent; }
-.agent-pane, .settings { background: var(--bg); border-radius: 14px; box-shadow: var(--shadow-sm); overflow: hidden; }
+/* A 1px hairline frames each pane: a terminal fills its pane with the same ink as the window, so
+   a background difference alone left no edge between the conversation and the sidebar. */
+.agent-pane, .settings { background: var(--bg); border-radius: 14px; box-shadow: 0 0 0 1px var(--hairline), var(--shadow-sm); overflow: hidden; }
 .main.with-panel { grid-template-columns: minmax(380px, 1fr) 10px var(--panel-w); }
 .main.expanded { grid-template-columns: 0 0 minmax(0, 1fr); }
 .handle::after { background: transparent; width: 2px; border-radius: 2px; top: 14px; bottom: 14px; left: calc(50% - 1px); }
@@ -61,7 +63,7 @@ body { background: var(--workspace-bg); }
 .lane-view-switch button { font-size: 12px; height: 25px; padding: 0 9px; }
 .lane-view-switch button:disabled { opacity: 1; color: var(--faint); }
 .lane-view-switch button[aria-pressed=true]:disabled { color: var(--text); }
-.side-panel { border-radius: 14px; background: color-mix(in srgb, var(--bg) 55%, var(--workspace-bg)); box-shadow: var(--shadow-xs); overflow: hidden; }
+.side-panel { border-radius: 14px; background: color-mix(in srgb, var(--bg) 55%, var(--workspace-bg)); box-shadow: 0 0 0 1px var(--hairline); overflow: hidden; }
 .inspector-heading { height: 42px; padding: 12px 14px 0 18px; flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 650; }
 .inspector-heading > div { display: flex; align-items: center; flex: none; gap: 6px; }
 .inspector-heading > span { min-width: 0; }
