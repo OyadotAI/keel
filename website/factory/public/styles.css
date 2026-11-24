@@ -1,4 +1,4 @@
-/* oyafactory.com — dark, like the app. The five Oya colours and nothing else: ink is the ground,
+/* oyafactory.com: dark, like the app. The five Oya colours and nothing else: ink is the ground,
    paper the type, lime the one accent per screen, red and amber unused here. */
 @font-face {
   font-family: "DM Sans";
@@ -38,7 +38,8 @@ code { font: 0.88em var(--mono); padding: 1px 5px; border-radius: 4px; backgroun
 :focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; border-radius: 4px; }
 
 /* Navigation */
-.nav { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+.nav { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.nav::before { content: ""; position: absolute; inset: 0 calc(50% - 50vw); z-index: -1; background: color-mix(in srgb, var(--ink) 72%, transparent); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4); border-bottom: 1px solid var(--hairline); }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.02em; text-decoration: none; }
 .nav nav { display: flex; align-items: center; gap: 28px; font-size: 15px; }
 .nav nav a { color: var(--dim); text-decoration: none; transition: color 160ms; }
@@ -46,22 +47,37 @@ code { font: 0.88em var(--mono); padding: 1px 5px; border-radius: 4px; backgroun
 .nav nav a.nav-cta { color: var(--text); padding: 7px 14px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--hairline); }
 
 /* Hero, over faint vertical lanes: one per agent, running side by side. */
-.hero { position: relative; padding: 96px 0 56px; text-align: center; }
+.hero { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 82svh; padding: 72px 0 120px; text-align: center; clip-path: inset(0 -100vw); }
 .hero::before {
   content: "";
   position: absolute;
-  inset: 0 calc(50% - 50vw);
+  inset: 40% calc(50% - 50vw) 0;
   z-index: -1;
-  background: repeating-linear-gradient(90deg, transparent 0 119px, var(--hairline) 119px 120px);
-  mask-image: radial-gradient(ellipse 60% 70% at 50% 30%, var(--ink), transparent 75%);
+  background:
+    linear-gradient(90deg, var(--hairline) 1px, transparent 1px) 50% 0 / 96px 100%,
+    linear-gradient(var(--hairline) 1px, transparent 1px) 0 0 / 100% 96px;
+  transform: perspective(520px) rotateX(64deg) scale(1.6);
+  transform-origin: 50% 0;
+  mask-image: linear-gradient(transparent, #000 30%, transparent 96%);
+  animation: floor 5s linear infinite;
+  pointer-events: none;
 }
+@keyframes floor { to { background-position: 50% 0, 0 96px; } }
+.cue { position: absolute; bottom: 28px; display: inline-flex; flex-direction: column; align-items: center; gap: 10px; font-size: 14px; color: var(--dim); text-decoration: none; }
+.cue span { font: 500 12px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--lime); }
+.cue::after { content: ""; width: 1px; height: 28px; background: linear-gradient(var(--lime), transparent); animation: cue 1.8s ease-in-out infinite; transform-origin: top; }
+@keyframes cue { 0%, 100% { transform: scaleY(.3); opacity: .4; } 50% { transform: scaleY(1); opacity: 1; } }
+/* Reading progress, where the browser can tie an animation to the scroll position. */
+.progress { position: fixed; inset: 0 0 auto; height: 2px; z-index: 20; background: var(--lime); transform: scaleX(0); transform-origin: left; }
+@supports (animation-timeline: scroll()) { .progress { animation: progress linear both; animation-timeline: scroll(root); } }
+@keyframes progress { to { transform: scaleX(1); } }
 .eyebrow { display: inline-flex; align-items: center; gap: 10px; margin: 0 0 28px; padding: 6px 14px; border-radius: 999px; font-size: 14px; color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 12px var(--lime); }
-h1 { margin: 0 auto; max-width: 18ch; font-size: clamp(44px, 7.4vw, 96px); line-height: 0.98; font-weight: 750; letter-spacing: -0.045em; }
+h1 { margin: 0 auto; max-width: 16ch; font-size: clamp(48px, 8.6vw, 124px); line-height: 0.94; font-weight: 750; letter-spacing: -0.05em; text-wrap: balance; }
 h1 em { font-style: normal; color: var(--lime); }
 /* The set-up line: quieter and smaller, so the question and its lime payoff land. */
-.h1-lead { display: block; margin-bottom: 0.18em; font-size: 0.5em; font-weight: 600; letter-spacing: -0.03em; color: var(--dim); }
-.lede { max-width: 640px; margin: 28px auto 0; font-size: clamp(17px, 2vw, 20px); color: var(--dim); }
+.h1-lead { display: block; margin-bottom: 0.3em; font-size: 0.36em; font-weight: 600; letter-spacing: -0.03em; color: var(--dim); }
+.lede { max-width: 600px; margin: 28px auto 0; font-size: clamp(18px, 2vw, 21px); line-height: 1.5; color: var(--dim); }
 .ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
 .button { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 999px; font-weight: 600; font-size: 16px; text-decoration: none; box-shadow: inset 0 0 0 1px var(--hairline); transition: transform 160ms, background 160ms; }
 .button:hover { background: var(--raised); }
@@ -69,7 +85,9 @@ h1 em { font-style: normal; color: var(--lime); }
 .button.primary:hover { background: color-mix(in srgb, var(--lime) 88%, var(--paper)); transform: translateY(-1px); }
 .fine { margin: 18px 0 0; font-size: 14px; color: var(--dim); }
 /* Used by: one muted row; marks where a company's mark may be used, typeset names otherwise. */
-.logos { margin: 64px 0 0; }
+/* Under the screenshot: who uses it, then the agents it drives, in one quiet centred band. */
+.proof { padding: 160px 0 0; text-align: center; }
+.logos { margin: 0; }
 .logos p { margin: 0 0 18px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
 .logos ul { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 44px; margin: 0; padding: 0; list-style: none; }
 .logos li { display: inline-flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 700; letter-spacing: -0.03em; color: color-mix(in srgb, var(--paper) 70%, var(--ink)); transition: color 200ms; }
@@ -78,24 +96,138 @@ h1 em { font-style: normal; color: var(--lime); }
 .logos .more { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--dim); }
 
 /* The product, framed the way the app frames its own panes. */
-.shot { margin-top: 24px; margin-bottom: 0; }
+.shot { margin-top: 0; margin-bottom: 0; }
 .shot img { display: block; width: 100%; height: auto; border-radius: 16px; box-shadow: 0 0 0 1px var(--hairline), 0 40px 120px color-mix(in srgb, var(--lime) 9%, transparent); }
 
-.agents { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 56px 0 24px; }
-.agents p { margin: 0; font-size: 14px; color: var(--dim); }
-.agents ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 36px; margin: 0; padding: 0; list-style: none; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+.agents { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 20px; margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--hairline); }
+.agents p { margin: 0; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.agents ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.agents svg { width: 16px; height: 16px; flex: none; }
+.agents li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; font-size: 15px; font-weight: 600; box-shadow: inset 0 0 0 1px var(--hairline); }
 
-/* Why switch: one line of copy beside a moving picture of it. */
-.why { padding: 120px 0 0; }
-.reasons { margin: 48px 0 0; padding: 0; list-style: none; display: grid; gap: 20px; }
-.reasons > li { display: grid; grid-template-columns: 1fr 1.15fr; align-items: center; gap: 48px; padding: 36px 40px; border-radius: 24px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
-.reasons h3 { font-size: clamp(24px, 2.6vw, 32px); line-height: 1.1; letter-spacing: -0.03em; margin: 10px 0 12px; }
-.reasons p { margin: 0; color: var(--dim); font-size: 17px; }
-.reasons .num { margin: 0; font-size: 15px; }
-.vis { margin: 0; min-height: 168px; padding: 24px; border-radius: 16px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); font: 14px/1.5 var(--mono); }
-@media (max-width: 860px) { .reasons > li { grid-template-columns: 1fr; gap: 24px; padding: 28px; } }
+/* The window rises out of the hero: tilted back and small, flattening as it is scrolled to. */
+.reveal { position: relative; margin-top: -72px; padding-bottom: 40px; perspective: 1600px; }
+.reveal figure { margin-block: 0; }
+/* The horizon the window rises from: one wide lime glow behind its top edge. */
+.reveal::before { content: ""; position: absolute; inset: -260px 0 auto; height: 620px; z-index: -1; background: radial-gradient(ellipse 44% 50% at 50% 50%, color-mix(in srgb, var(--lime) 24%, transparent), transparent 70%); pointer-events: none; }
+.reveal img { display: block; width: 100%; height: auto; border-radius: 18px; box-shadow: 0 0 0 1px var(--hairline), 0 -30px 120px color-mix(in srgb, var(--lime) 14%, transparent), 0 60px 160px #000; transform-origin: 50% 0; }
+.reveal figcaption { margin-top: 28px; text-align: center; font-size: 15px; color: var(--dim); }
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal img { animation: flatten linear both; animation-timeline: view(); animation-range: entry 0% cover 42%; }
+    .scene { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% cover 34%; }
+    .ch-title { animation: lift linear both; animation-timeline: view(); animation-range: entry 0% cover 30%; }
+    .beat p { animation: wipe linear both; animation-timeline: view(); animation-range: cover 12% cover 46%; }
+  }
+}
+@keyframes flatten { from { transform: rotateX(34deg) scale(.84); filter: brightness(.6); } to { transform: none; filter: none; } }
+@keyframes rise { from { transform: translateY(80px) scale(.9); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes lift { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes wipe { to { background-position: 0 0; } }
 
-/* 01 — a diff streams in, the checks run, the verdict lands. 6s loop. */
+/* The story: one feature, told in chapters. One idea per screen: the time, a line as large as
+   the page allows, one sentence, then its moving picture. The "before" chapter has no lime in
+   it; the colour arrives with the team. */
+.story { padding: 120px 0 0; }
+.story-intro { margin: 0 auto; text-align: center; font-size: clamp(28px, 3.6vw, 48px); font-weight: 650; letter-spacing: -0.03em; color: var(--dim); }
+.story-intro span { color: var(--text); }
+.chapter { width: min(1040px, 100% - 40px); margin-inline: auto; padding: 140px 0 60px; text-align: center; scroll-margin-top: 40px; }
+.ch-time { display: inline-flex; align-items: center; gap: 12px; margin: 0 0 28px; padding: 6px 16px 6px 6px; border-radius: 999px; font: 500 13px var(--mono); letter-spacing: 0.04em; color: var(--lime); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 30%, transparent); }
+.ch-time span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font-size: 11px; color: var(--ink); background: var(--lime); }
+.ch-title { margin-inline: auto; max-width: 14ch; font-size: clamp(44px, 7.2vw, 104px); line-height: .96; font-weight: 750; letter-spacing: -0.05em; text-wrap: balance; }
+.ch-copy { max-width: 560px; margin: 28px auto 0; font-size: clamp(18px, 1.7vw, 22px); line-height: 1.5; color: var(--dim); text-wrap: balance; }
+.scene { position: relative; display: grid; gap: 16px; max-width: 880px; margin: 72px auto 0; padding: 32px; border-radius: 32px; text-align: left; font-size: 17px; background: linear-gradient(170deg, color-mix(in srgb, var(--paper) 9%, var(--ink)), color-mix(in srgb, var(--paper) 3%, var(--ink)) 60%); box-shadow: inset 0 0 0 1px var(--hairline), inset 0 1px 0 color-mix(in srgb, var(--paper) 16%, transparent), 0 60px 160px color-mix(in srgb, var(--lime) 9%, transparent); }
+.scene::before { content: ""; position: absolute; inset: -18% 10% auto; height: 60%; z-index: -1; background: radial-gradient(ellipse at 50% 100%, color-mix(in srgb, var(--lime) 14%, transparent), transparent 70%); filter: blur(40px); }
+.before .ch-time { color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); }
+.before .ch-time span { color: var(--dim); background: var(--hairline); }
+.before .ch-title { color: color-mix(in srgb, var(--paper) 55%, var(--ink)); }
+.before .scene { max-width: 720px; box-shadow: inset 0 0 0 1px var(--hairline); }
+.before .scene::before { display: none; }
+/* Where scroll-linked animation is missing, chapters rise in once instead. */
+.js:not(.scrub) .chapter .ch-text, .js:not(.scrub) .chapter .scene, .js:not(.scrub) .beat p { opacity: 0; transform: translateY(36px); transition: opacity 700ms cubic-bezier(.2,.7,.2,1), transform 900ms cubic-bezier(.2,.7,.2,1); }
+.js:not(.scrub) .chapter.in .ch-text, .js:not(.scrub) .chapter.in .scene, .js:not(.scrub) .beat.in p { opacity: 1; transform: none; }
+@media (max-width: 860px) {
+  .chapter { padding: 88px 0 32px; }
+  .scene { margin-top: 44px; padding: 16px; border-radius: 22px; font-size: 15px; }
+  .reveal { margin-top: -40px; }
+}
+
+/* The turn of the story: one line, filling with light as it crosses the screen. */
+.beat { display: grid; place-items: center; min-height: 90vh; padding: 0 20px; text-align: center; scroll-margin-top: -10vh; }
+.beat p { margin: 0; padding: .06em 0 .16em; font-size: clamp(56px, 11vw, 168px); line-height: .92; font-weight: 750; letter-spacing: -0.055em; color: transparent; background: linear-gradient(90deg, var(--paper) 0 34%, var(--lime) 50%, color-mix(in srgb, var(--paper) 16%, var(--ink)) 50%) 0 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; }
+.scrub .beat p { background-position: 100% 0; }
+.beat em { font-style: normal; }
+
+/* 00: a terminal that waits on you. */
+.win { border-radius: 16px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); font: 16px/1.8 var(--mono); color: var(--dim); overflow: hidden; }
+.win-bar { display: flex; align-items: center; gap: 7px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--hairline); }
+.win-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--hairline); }
+.win-bar span { margin-left: 8px; font-size: 12px; }
+.win pre { margin: 0; padding: 28px; font: inherit; white-space: pre-wrap; }
+.win pre b { color: var(--text); font-weight: 500; }
+.caret { display: inline-block; width: 8px; height: 1.1em; vertical-align: text-bottom; background: var(--text); animation: blink 1.1s steps(1) infinite; }
+.win-foot { margin: 0; padding: 12px 20px; border-top: 1px solid var(--hairline); font: 13px var(--font); }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 01: the ask types itself, the agents wait to be picked. */
+.ask { display: grid; gap: 16px; }
+.ask-box { margin: 0; padding: 32px 30px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 40%, transparent); font-size: clamp(22px, 3vw, 38px); font-weight: 600; letter-spacing: -0.03em; }
+.typed { display: inline-block; white-space: nowrap; clip-path: inset(0 100% 0 0); animation: type 7s steps(26) infinite; }
+@keyframes type { 0%, 6% { clip-path: inset(0 100% 0 0); } 36%, 92% { clip-path: inset(0 0 0 0); } 100% { clip-path: inset(0 100% 0 0); } }
+.ask-agents { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ask-agents li { display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px; border-radius: 999px; font-size: 16px; font-weight: 600; color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); }
+.ask-agents li.on { color: var(--ink); background: var(--lime); box-shadow: none; }
+.ask-agents svg, .lane b svg, .handoff b svg { width: 18px; height: 18px; flex: none; }
+.ask-branch { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 14px; color: var(--dim); }
+
+/* 02: what the product manager scoped in and out, under the pipeline. */
+.scope { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 0; }
+.scope div { padding: 14px 16px; border-radius: 12px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); }
+.scope dt { font: 500 12px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--lime); }
+.scope div + div dt { color: var(--dim); }
+.scope dd { margin: 4px 0 0; font-size: 15px; }
+.lane b { display: inline-flex; align-items: center; gap: 8px; }
+
+/* 05: the work changes hands, the notes travel with it. */
+.handoff { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.handoff li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; padding: 20px 22px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); font-size: 16px; color: var(--dim); animation: lit 6s infinite; animation-delay: calc(var(--i) * 1s); }
+.handoff b { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-weight: 600; }
+.handoff .note { align-items: flex-start; flex-direction: column; }
+.handoff .note b { font: 500 12px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--lime); }
+.handoff .note span { color: var(--text); }
+@keyframes lit { 0%, 6% { box-shadow: inset 0 0 0 1px var(--hairline); } 12%, 30% { box-shadow: inset 0 0 0 1px var(--lime); } 40%, 100% { box-shadow: inset 0 0 0 1px var(--hairline); } }
+.meter { display: flex; align-items: center; gap: 12px; margin: 4px 0 0; font-size: 13px; color: var(--dim); }
+.meter i { flex: 1; height: 6px; border-radius: 3px; background: var(--hairline); overflow: hidden; }
+.meter b { display: block; width: 38%; height: 100%; border-radius: 3px; background: var(--lime); }
+
+/* 06: the pull request, its proof ticking in. */
+.pr { display: grid; gap: 22px; padding: 32px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); }
+.pr-head { display: flex; justify-content: space-between; gap: 16px; margin: 0; font-size: clamp(20px, 2.4vw, 28px); letter-spacing: -0.02em; }
+.pr-head span { font: 14px var(--mono); color: var(--dim); }
+.pr-ready { justify-self: start; margin: 0; padding: 8px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--ink); background: var(--lime); }
+
+/* Scenes carry the same pictures as elsewhere, a size up. */
+.scene .vis { min-height: 200px; padding: 30px; font-size: 16px; }
+.scene .lane { grid-template-columns: 170px 1fr; }
+.scene .lane b { font-size: 17px; }
+.scene .lane code { font-size: 15px; }
+.scene .lane .bar { height: 8px; border-radius: 4px; }
+.scene .vis-setup p { font-size: 17px; }
+.scene .pipeline { padding: 44px 32px 30px; }
+.scene .node { width: 64px; height: 64px; font-size: 15px; }
+.scene .pipeline ol::before { top: 31px; left: 32px; right: 32px; }
+.scene .pipeline small { font-size: 14px; }
+@media (max-width: 700px) { .scene .node { width: 38px; height: 38px; font-size: 11px; } .scene .pipeline ol::before { top: 18px; } .scene .pipeline small { font-size: 10px; } .scene .pipeline { padding: 24px 12px; } .scene .lane { grid-template-columns: 1fr; } }
+
+/* Comparison pages: numbered reasons as a plain list. */
+.reasons { margin: 48px 0 0; padding: 0; list-style: none; display: grid; gap: 16px; }
+.reasons > li { display: grid; grid-template-columns: auto 1fr; gap: 20px; padding: 24px 28px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.reasons h3 { font-size: 22px; letter-spacing: -0.02em; }
+.reasons p { margin: 0; color: var(--dim); }
+.reasons .num { margin: 4px 0 0; }
+.vis { margin: 0; min-height: 150px; padding: 22px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); font: 14px/1.5 var(--mono); }
+
+/* 01: a diff streams in, the checks run, the verdict lands. 6s loop. */
 .vis-turn .diff span { display: block; opacity: 0; animation: line 6s infinite; }
 .vis-turn .diff span:nth-child(2) { animation-delay: .4s; }
 .vis-turn .diff span:nth-child(3) { animation-delay: .8s; }
@@ -110,7 +242,7 @@ h1 em { font-style: normal; color: var(--lime); }
 @keyframes running { 0%, 35% { opacity: 0; } 40%, 62% { opacity: 1; } 66%, 100% { opacity: 0; } }
 @keyframes pass { 0%, 64% { opacity: 0; } 70%, 92% { opacity: 1; } 100% { opacity: 0; } }
 
-/* 02 — turns along a track; the playhead overshoots into two bad turns, then rewinds. */
+/* 02: turns along a track; the playhead overshoots into two bad turns, then rewinds. */
 .vis-rewind { display: flex; flex-direction: column; justify-content: center; gap: 22px; }
 .track { position: relative; display: flex; justify-content: space-between; align-items: center; height: 24px; }
 .track::before { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--hairline); }
@@ -121,7 +253,7 @@ h1 em { font-style: normal; color: var(--lime); }
 @keyframes head { 0% { left: 0; } 45% { left: calc(100% - 12px); } 55% { left: calc(100% - 12px); } 70%, 100% { left: 50%; } }
 @keyframes bad { 0%, 30% { background: color-mix(in srgb, var(--paper) 55%, var(--ink)); } 40%, 62% { background: color-mix(in srgb, var(--paper) 25%, var(--ink)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--paper) 25%, var(--ink)); } 72%, 100% { background: transparent; box-shadow: 0 0 0 1px var(--hairline); } }
 
-/* 03 — three agents, three branches, each at its own pace. */
+/* 03: three agents, three branches, each at its own pace. */
 .vis-lanes { display: flex; flex-direction: column; justify-content: center; gap: 16px; }
 .lane { display: grid; grid-template-columns: 110px 1fr; grid-template-rows: auto auto; column-gap: 12px; row-gap: 6px; }
 .lane b { color: var(--text); font: 600 14px var(--font); }
@@ -130,14 +262,14 @@ h1 em { font-style: normal; color: var(--lime); }
 .lane .bar::after { content: ""; position: absolute; inset: 0; width: 0; border-radius: 3px; background: var(--lime); animation: fill var(--d) ease-in-out infinite alternate; }
 @keyframes fill { to { width: 100%; } }
 
-/* 04 — the setup checklist ticks itself off. */
+/* 04: the setup checklist ticks itself off. */
 .vis-setup { display: flex; flex-direction: column; justify-content: center; gap: 12px; }
 .vis-setup p { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--dim); font: 15px var(--font); animation: tick 6s infinite; animation-delay: calc(var(--i) * .6s); }
 .vis-setup p::before { content: "✓"; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; color: var(--ink); background: var(--hairline); animation: tickmark 6s infinite; animation-delay: inherit; }
 @keyframes tick { 0%, 8% { color: var(--dim); } 14%, 85% { color: var(--text); } 100% { color: var(--dim); } }
 @keyframes tickmark { 0%, 8% { background: var(--hairline); } 14%, 85% { background: var(--lime); } 100% { background: var(--hairline); } }
 
-/* 05 — the one graph: real installer sizes, bars grown in. */
+/* 05: the one graph: real installer sizes, bars grown in. */
 .vis-size { display: flex; flex-direction: column; gap: 18px; font-family: var(--font); }
 .pair .os { display: block; margin-bottom: 8px; font-size: 13px; color: var(--dim); }
 .pair .row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
@@ -149,7 +281,7 @@ h1 em { font-style: normal; color: var(--lime); }
 @keyframes grow { from { transform: scaleX(0); } }
 
 /* Hero: the team as a pipeline; a wave of lime passes through, then the verdict. 10s loop. */
-.pipeline { margin: 56px auto 0; max-width: 760px; }
+.pipeline { margin: 0; padding: 26px 22px 20px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); text-align: center; }
 .pipeline ol { position: relative; display: flex; justify-content: space-between; margin: 0; padding: 0; list-style: none; }
 .pipeline ol::before { content: ""; position: absolute; top: 22px; left: 22px; right: 22px; height: 2px; background: linear-gradient(90deg, transparent, var(--lime), transparent) no-repeat, var(--hairline); background-size: 30% 100%, auto; animation: sweep 10s linear infinite; }
 .pipeline li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
@@ -162,18 +294,120 @@ h1 em { font-style: normal; color: var(--lime); }
 @keyframes verdict { 0%, 38% { opacity: 0; transform: translateY(6px); } 42%, 80% { opacity: 1; transform: none; } 88%, 100% { opacity: 0; } }
 @media (max-width: 560px) { .node { width: 36px; height: 36px; font-size: 11px; } .pipeline ol::before { top: 17px; } .pipeline small { font-size: 10px; } }
 
-/* The platform: tiles in one hairline frame; the team tile shows its members. */
+/* The platform: three columns of one-line tiles; the team tile carries the pipeline. */
 .platform { padding: 120px 0 0; }
-.section-lede { margin: 16px 0 0; max-width: 640px; color: var(--dim); font-size: 18px; }
 .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 48px; }
-.tile { padding: 32px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.tile { padding: 28px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
 .tile.wide { grid-column: 1 / -1; }
-.tile p { margin: 0; color: var(--dim); font-size: 16px; max-width: 760px; }
-.tile h3 { font-size: 22px; letter-spacing: -0.02em; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; padding: 0; list-style: none; }
-.chips li { padding: 6px 12px; border-radius: 999px; font: 500 14px var(--mono); color: var(--lime); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 35%, transparent); }
-.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
-@media (max-width: 860px) { .tiles, .modes { grid-template-columns: 1fr; } }
+.tile p { margin: 0; color: var(--dim); font-size: 16px; }
+.tile h3 { font-size: clamp(22px, 2.4vw, 30px); line-height: 1.1; letter-spacing: -0.03em; }
+.tile { padding: 36px; }
+.modes > div { padding: 36px; }
+.team { display: grid; grid-template-columns: 1fr 1.5fr; align-items: center; gap: 48px; padding: 36px; }
+.team h3 { font-size: clamp(24px, 2.6vw, 32px); line-height: 1.1; letter-spacing: -0.03em; margin-bottom: 12px; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 0; }
+.modes > div { padding: 28px; }
+.modes > div + div { border-left: 1px solid var(--hairline); }
+@media (max-width: 860px) {
+  .tiles, .team, .modes { grid-template-columns: 1fr; }
+  .team { gap: 32px; padding: 28px; }
+  .modes > div + div { border-left: 0; border-top: 1px solid var(--hairline); }
+}
+
+/* Pillars and features */
+h2 { margin: 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.05; font-weight: 720; letter-spacing: -0.035em; }
+h3 { margin: 0 0 8px; font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
+.grid p { margin: 0; color: var(--dim); font-size: 15px; }
+.num { margin: 0; font-size: 13px; }
+.vis { margin: 0; min-height: 176px; padding: 22px; border-radius: 12px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); font: 14px/1.5 var(--mono); }
+@media (max-width: 860px) { .reasons { grid-template-columns: 1fr; } .reasons > li, .reasons > li:nth-child(-n+2) { grid-column: auto; } }
+
+/* 01: a diff streams in, the checks run, the verdict lands. 6s loop. */
+.vis-turn .diff span { display: block; opacity: 0; animation: line 6s infinite; }
+.vis-turn .diff span:nth-child(2) { animation-delay: .4s; }
+.vis-turn .diff span:nth-child(3) { animation-delay: .8s; }
+.vis-turn .del { color: color-mix(in srgb, var(--paper) 45%, var(--ink)); text-decoration: line-through; }
+.vis-turn .add { color: var(--lime); }
+.vis-turn .run { display: flex; align-items: center; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); color: var(--dim); }
+.vis-turn .run code { background: none; padding: 0; }
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--hairline); border-top-color: var(--lime); animation: spin .8s linear infinite, running 6s infinite; }
+.pass { color: var(--lime); font-weight: 600; opacity: 0; animation: pass 6s infinite; }
+@keyframes line { 0%, 10% { opacity: 0; transform: translateX(-6px); } 20%, 90% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes running { 0%, 35% { opacity: 0; } 40%, 62% { opacity: 1; } 66%, 100% { opacity: 0; } }
+@keyframes pass { 0%, 64% { opacity: 0; } 70%, 92% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 02: turns along a track; the playhead overshoots into two bad turns, then rewinds. */
+.vis-rewind { display: flex; flex-direction: column; justify-content: center; gap: 22px; }
+.track { position: relative; display: flex; justify-content: space-between; align-items: center; height: 24px; }
+.track::before { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--hairline); }
+.track i { position: relative; width: 12px; height: 12px; border-radius: 50%; background: color-mix(in srgb, var(--paper) 55%, var(--ink)); }
+.track i.bad { animation: bad 6s infinite; }
+.head { position: absolute; top: 0; left: 0; width: 24px; height: 24px; margin-left: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--lime), 0 0 18px var(--lime); animation: head 6s infinite cubic-bezier(.6,0,.3,1); }
+.rewound { margin: 0; color: var(--lime); opacity: 0; animation: pass 6s infinite; }
+@keyframes head { 0% { left: 0; } 45% { left: calc(100% - 12px); } 55% { left: calc(100% - 12px); } 70%, 100% { left: 50%; } }
+@keyframes bad { 0%, 30% { background: color-mix(in srgb, var(--paper) 55%, var(--ink)); } 40%, 62% { background: color-mix(in srgb, var(--paper) 25%, var(--ink)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--paper) 25%, var(--ink)); } 72%, 100% { background: transparent; box-shadow: 0 0 0 1px var(--hairline); } }
+
+/* 03: three agents, three branches, each at its own pace. */
+.vis-lanes { display: flex; flex-direction: column; justify-content: center; gap: 16px; }
+.lane { display: grid; grid-template-columns: 110px 1fr; grid-template-rows: auto auto; column-gap: 12px; row-gap: 6px; }
+.lane b { color: var(--text); font: 600 14px var(--font); }
+.lane code { background: none; padding: 0; color: var(--dim); font-size: 13px; }
+.lane .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--hairline); overflow: hidden; position: relative; }
+.lane .bar::after { content: ""; position: absolute; inset: 0; width: 0; border-radius: 3px; background: var(--lime); animation: fill var(--d) ease-in-out infinite alternate; }
+@keyframes fill { to { width: 100%; } }
+
+/* 04: the setup checklist ticks itself off. */
+.vis-setup { display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+.vis-setup p { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--dim); font: 15px var(--font); animation: tick 6s infinite; animation-delay: calc(var(--i) * .6s); }
+.vis-setup p::before { content: "✓"; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; color: var(--ink); background: var(--hairline); animation: tickmark 6s infinite; animation-delay: inherit; }
+@keyframes tick { 0%, 8% { color: var(--dim); } 14%, 85% { color: var(--text); } 100% { color: var(--dim); } }
+@keyframes tickmark { 0%, 8% { background: var(--hairline); } 14%, 85% { background: var(--lime); } 100% { background: var(--hairline); } }
+
+/* 05: the one graph: real installer sizes, bars grown in. */
+.vis-size { display: flex; flex-direction: column; gap: 18px; font-family: var(--font); }
+.pair .os { display: block; margin-bottom: 8px; font-size: 13px; color: var(--dim); }
+.pair .row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.pair .bar { display: block; height: 14px; width: var(--w); min-width: 8px; border-radius: 7px; background: color-mix(in srgb, var(--paper) 22%, var(--ink)); transform-origin: left; animation: grow 1.4s cubic-bezier(.2,.8,.2,1) both; }
+.pair .ours .bar { background: var(--lime); }
+.pair em { font-style: normal; font-size: 14px; white-space: nowrap; color: var(--dim); }
+.pair .ours em { color: var(--text); font-weight: 600; }
+.vis-size figcaption { font-size: 12px; color: var(--dim); }
+@keyframes grow { from { transform: scaleX(0); } }
+
+/* Hero: the team as a pipeline; a wave of lime passes through, then the verdict. 10s loop. */
+.pipeline { margin: 0; padding: 26px 22px 20px; border-radius: 14px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); text-align: center; }
+.pipeline ol { position: relative; display: flex; justify-content: space-between; margin: 0; padding: 0; list-style: none; }
+.pipeline ol::before { content: ""; position: absolute; top: 22px; left: 22px; right: 22px; height: 2px; background: linear-gradient(90deg, transparent, var(--lime), transparent) no-repeat, var(--hairline); background-size: 30% 100%, auto; animation: sweep 10s linear infinite; }
+.pipeline li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.node { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; font: 600 13px var(--mono); color: var(--dim); background: var(--ink); box-shadow: inset 0 0 0 1.5px var(--hairline); animation: node 10s infinite; animation-delay: calc(var(--i) * .5s); }
+.node.build { font-family: var(--font); font-size: 17px; }
+.pipeline small { font-size: 12px; color: var(--dim); }
+.verdict { display: inline-flex; align-items: center; gap: 8px; margin: 22px 0 0; padding: 6px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--lime); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 40%, transparent); opacity: 0; animation: verdict 10s infinite; }
+@keyframes sweep { 0% { background-position: -40% 0, 0 0; } 40%, 100% { background-position: 140% 0, 0 0; } }
+@keyframes node { 0% { color: var(--dim); box-shadow: inset 0 0 0 1.5px var(--hairline); } 4% { color: var(--ink); background: var(--lime); box-shadow: 0 0 22px var(--lime); } 10%, 58% { color: var(--paper); background: var(--ink); box-shadow: inset 0 0 0 1.5px var(--lime); } 66%, 100% { color: var(--dim); background: var(--ink); box-shadow: inset 0 0 0 1.5px var(--hairline); } }
+@keyframes verdict { 0%, 38% { opacity: 0; transform: translateY(6px); } 42%, 80% { opacity: 1; transform: none; } 88%, 100% { opacity: 0; } }
+@media (max-width: 560px) { .node { width: 36px; height: 36px; font-size: 11px; } .pipeline ol::before { top: 17px; } .pipeline small { font-size: 10px; } }
+
+/* The platform: three columns of one-line tiles; the team tile carries the pipeline. */
+.platform { padding: 120px 0 0; }
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 48px; }
+.tile { padding: 28px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.tile.wide { grid-column: 1 / -1; }
+.tile p { margin: 0; color: var(--dim); font-size: 16px; }
+.tile h3 { font-size: clamp(22px, 2.4vw, 30px); line-height: 1.1; letter-spacing: -0.03em; }
+.tile { padding: 36px; }
+.modes > div { padding: 36px; }
+.team { display: grid; grid-template-columns: 1fr 1.5fr; align-items: center; gap: 48px; padding: 36px; }
+.team h3 { font-size: clamp(24px, 2.6vw, 32px); line-height: 1.1; letter-spacing: -0.03em; margin-bottom: 12px; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 0; }
+.modes > div { padding: 28px; }
+.modes > div + div { border-left: 1px solid var(--hairline); }
+@media (max-width: 860px) {
+  .tiles, .team, .modes { grid-template-columns: 1fr; }
+  .team { gap: 32px; padding: 28px; }
+  .modes > div + div { border-left: 0; border-top: 1px solid var(--hairline); }
+}
 
 /* Pillars and features */
 h2 { margin: 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.05; font-weight: 720; letter-spacing: -0.035em; }
@@ -183,9 +417,11 @@ h3 { margin: 0 0 8px; font-size: 19px; font-weight: 650; letter-spacing: -0.015e
 .pillars li { padding-top: 22px; border-top: 1px solid var(--hairline); }
 .pillars p, .grid p { margin: 0; color: var(--dim); font-size: 16px; }
 .num { display: block; margin-bottom: 14px; font: 500 14px var(--mono); color: var(--lime); }
-.features { padding: 100px 0 40px; }
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 48px 0 0; padding: 0; list-style: none; background: var(--hairline); border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--hairline); }
-.grid li { padding: 28px; background: var(--bg); transition: background 160ms; }
+.features { padding: 72px 0 0; }
+h2.minor { font-size: 14px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 20px 0 0; padding: 0; list-style: none; background: var(--hairline); border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--hairline); }
+.grid li { padding: 22px 24px; background: var(--bg); transition: background 160ms; }
+.grid h3 { margin-bottom: 4px; font-size: 17px; }
 .grid li:hover { background: var(--raised); }
 
 /* Comparison and questions */
@@ -222,9 +458,13 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 .page .reasons h3 { font-size: 22px; }
 
 /* Closing */
-.open { display: flex; align-items: center; justify-content: space-between; gap: 32px; margin-top: 110px; padding: 56px; border-radius: 24px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
-.open p { max-width: 520px; margin: 16px 0 0; color: var(--dim); }
-.open .ctas { margin: 0; flex: none; }
+.open { position: relative; display: flex; flex-direction: column; align-items: center; gap: 40px; margin-top: 160px; padding: 120px 24px; text-align: center; border-radius: 40px; overflow: hidden; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.open::before { content: ""; position: absolute; inset: 40% -10% -60%; background: radial-gradient(ellipse at 50% 50%, color-mix(in srgb, var(--lime) 26%, transparent), transparent 65%); pointer-events: none; }
+.open > * { position: relative; }
+.open h2 { max-width: 12ch; margin-inline: auto; font-size: clamp(44px, 7.4vw, 104px); line-height: .96; letter-spacing: -0.05em; text-wrap: balance; }
+.open h2 em { font-style: normal; color: var(--lime); }
+.open p { max-width: 520px; margin: 28px auto 0; font-size: 19px; color: var(--dim); }
+.open .ctas { margin: 0; }
 .foot { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 64px 0 48px; font-size: 14px; }
 .foot nav { display: flex; flex-wrap: wrap; gap: 22px; }
 .foot nav a { color: var(--dim); text-decoration: none; }
@@ -233,8 +473,8 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 860px) {
   .nav nav a:not(.nav-cta) { display: none; }
   .hero { padding-top: 64px; }
-  .pillars, .grid { grid-template-columns: 1fr; }
-  .open { flex-direction: column; align-items: flex-start; padding: 32px; }
+  .grid { grid-template-columns: 1fr; }
+  .open { margin-top: 96px; padding: 72px 20px; border-radius: 28px; }
   .foot { flex-direction: column; align-items: flex-start; }
 }
 /* Reduced motion: every animation stops on its finished frame, so nothing is hidden. */
@@ -244,5 +484,144 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
   .pass, .rewound, .verdict, .vis-turn .diff span { opacity: 1; }
   .spin { display: none; }
   .vis-setup p { color: var(--text); } .vis-setup p::before { background: var(--lime); }
+  .typed { clip-path: none; }
+  .hero::before { animation: none; }
+  .caret, .cue::after { display: none; }
   .lane .bar::after { width: 100%; }
 }
+
+/* Section openers after the story keep its voice: centred and large. */
+.platform > h2, .compare > h2, .faq > h2 { text-align: center; font-size: clamp(40px, 5.6vw, 76px); letter-spacing: -0.045em; text-wrap: balance; }
+.platform, .compare, .faq { padding-top: 160px; }
+.features h2.minor { text-align: center; }
+.compare-more { text-align: center; }
+.faq-list { max-width: 820px; margin-inline: auto; }
+
+/* Everything else, as names drifting past: no paragraphs. Two copies of the list make the loop. */
+.features { padding: 96px 0 0; overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.marquee { display: flex; width: max-content; animation: drift 48s linear infinite; }
+.marquee:hover { animation-play-state: paused; }
+.marquee ul { display: flex; gap: 12px; margin: 0; padding: 0 6px; list-style: none; }
+.marquee li { padding: 14px 26px; border-radius: 999px; font-size: clamp(18px, 2vw, 26px); font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; color: color-mix(in srgb, var(--paper) 78%, var(--ink)); box-shadow: inset 0 0 0 1px var(--hairline); }
+.marquee li:nth-child(3n+1) { color: var(--lime); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 35%, transparent); }
+@keyframes drift { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .features { mask-image: none; } .marquee { width: auto; } .marquee ul { flex-wrap: wrap; justify-content: center; } .marquee ul[aria-hidden] { display: none; } }
+
+/* Restraint pass. One accent, used rarely; no badge pills, no box inside a box, no halo per
+   section. The pictures sit on the page like windows on a desk: small radius, a real shadow. */
+.eyebrow { margin: 0 0 24px; padding: 0; border-radius: 0; box-shadow: none; font-size: 15px; font-weight: 500; letter-spacing: 0.01em; color: var(--dim); }
+.hero::before { display: none; }
+.reveal::before { opacity: .7; }
+.reveal img { border-radius: 12px; }
+
+.ch-time { gap: 14px; margin-bottom: 24px; padding: 0; border-radius: 0; box-shadow: none; font: 500 14px var(--font); letter-spacing: 0.02em; color: var(--dim); }
+.ch-time span { width: auto; height: auto; border-radius: 0; background: none; font: 500 14px var(--mono); color: var(--lime); }
+.before .ch-time { box-shadow: none; }
+.before .ch-time span { background: none; color: var(--dim); }
+
+.scene, .before .scene { max-width: 820px; padding: 0; border-radius: 0; background: none; box-shadow: none; }
+.scene::before { display: none; }
+.scene > *, .scene .vis, .scene .pipeline, .ask-box, .pr, .win { border-radius: 12px; }
+.scene > :first-child, .ask .ask-box { box-shadow: inset 0 0 0 1px var(--hairline), 0 40px 100px -20px #000; }
+.scene .vis, .scene .pipeline, .win, .pr, .handoff li, .scope div { background: color-mix(in srgb, var(--paper) 4%, var(--ink)); }
+.ask { gap: 20px; }
+.ask-box { background: color-mix(in srgb, var(--paper) 4%, var(--ink)); box-shadow: inset 0 0 0 1px var(--hairline); }
+.handoff li, .scope div { border-radius: 10px; }
+
+/* The platform: rows on the page, ruled like a spec sheet, not a grid of cards. */
+.tiles { grid-template-columns: 1fr 1fr; gap: 0 64px; border-top: 1px solid var(--hairline); }
+.tile, .tile.wide, .team, .modes { padding: 40px 0; border-radius: 0; background: none; box-shadow: none; border-bottom: 1px solid var(--hairline); }
+.modes { gap: 64px; }
+.modes > div { padding: 0; }
+.modes > div + div { border-left: 0; }
+.vis-size { background: none; box-shadow: none; padding: 0; min-height: 0; }
+@media (max-width: 860px) { .modes { gap: 32px; } .modes > div + div { border-top: 0; } }
+
+/* More that is included: plain names in a line, no chips. */
+.marquee ul { gap: 0; padding: 0; }
+.marquee li, .marquee li:nth-child(3n+1) { padding: 0 28px; border-radius: 0; box-shadow: none; font-size: clamp(22px, 2.6vw, 34px); color: color-mix(in srgb, var(--paper) 45%, var(--ink)); }
+.marquee li + li, .marquee ul + ul li:first-child { border-left: 1px solid var(--hairline); }
+.marquee li:nth-child(3n+1) { color: var(--text); }
+
+.agents li { padding: 0; border-radius: 0; box-shadow: none; font-size: 17px; }
+.agents ul { gap: 10px 32px; }
+.table-scroll { border-radius: 12px; }
+
+/* The close: type on the page over one glow, no card. */
+.open { margin-top: 120px; padding: 140px 0 100px; border-radius: 0; background: none; box-shadow: none; overflow: visible; }
+.open::before { inset: 10% calc(50% - 50vw) -20%; z-index: -1; background: radial-gradient(ellipse 40% 50% at 50% 60%, color-mix(in srgb, var(--lime) 16%, transparent), transparent 70%); }
+
+/* Real captures: the hero's time-lapse and the chapter screenshots, full width of the column. */
+.reveal video { display: block; width: 100%; height: auto; border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px var(--hairline), 0 -30px 120px color-mix(in srgb, var(--lime) 14%, transparent), 0 60px 160px #000; transform-origin: 50% 0; }
+@supports (animation-timeline: view()) { @media (prefers-reduced-motion: no-preference) { .reveal video { animation: flatten linear both; animation-timeline: view(); animation-range: entry 0% cover 42%; } } }
+.scene.shot-real { max-width: 1040px; }
+.scene.shot-real img { display: block; width: 100%; height: auto; border-radius: 12px; box-shadow: 0 0 0 1px var(--hairline), 0 40px 100px -20px #000; }
+
+/* Atmosphere and motion. Behind everything: two slow drifting lights and a film grain, so the
+   ink is never flat. Down the story: a lime thread that draws itself as the page is read, with a
+   glowing head at the middle of the screen and a node per chapter that lights as it is passed. */
+.ambient { position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+.ambient i { position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; filter: blur(90px); will-change: transform; }
+.ambient i:first-child { left: -25vmax; top: -20vmax; background: radial-gradient(circle, color-mix(in srgb, var(--lime) 10%, transparent), transparent 62%); animation: drift-a 38s ease-in-out infinite alternate; }
+.ambient i:last-child { right: -30vmax; bottom: -30vmax; background: radial-gradient(circle, color-mix(in srgb, var(--paper) 7%, transparent), transparent 62%); animation: drift-b 46s ease-in-out infinite alternate; }
+@keyframes drift-a { to { transform: translate(38vw, 46vh) scale(1.15); } }
+@keyframes drift-b { to { transform: translate(-34vw, -40vh) scale(.9); } }
+.ambient::after { content: ""; position: absolute; inset: 0; opacity: .07; mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+/* The pointer's light on the hero. */
+.hero { --mx: 50vw; --my: 40%; }
+.hero::before { display: block; inset: 0 calc(50% - 50vw); transform: none; animation: none; mask-image: none; background: radial-gradient(520px circle at var(--mx) var(--my), color-mix(in srgb, var(--lime) 9%, transparent), transparent 70%); }
+
+.story { position: relative; }
+.thread { display: none; }
+@media (min-width: 1280px) {
+  .thread { display: block; position: absolute; top: 0; bottom: 120px; left: calc(50% - 600px); width: 2px; border-radius: 1px; background: var(--hairline); }
+  .thread::before { content: ""; position: absolute; inset: 0; border-radius: 1px; background: linear-gradient(var(--lime), color-mix(in srgb, var(--lime) 55%, transparent)); }
+  .thread i { position: sticky; top: 50vh; display: block; width: 12px; height: 12px; margin-left: -5px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 5px color-mix(in srgb, var(--lime) 18%, transparent), 0 0 28px 4px var(--lime); }
+  .chapter { position: relative; }
+  .chapter::before { content: ""; position: absolute; left: calc(520px - 600px - 5px + 1px); top: 147px; width: 10px; height: 10px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 2px color-mix(in srgb, var(--paper) 30%, var(--ink)); }
+}
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .thread::before { animation: thread linear both; animation-timeline: view(50% 50%); animation-range: cover 0% cover 100%; }
+    .chapter::before { animation: node-on linear both; animation-timeline: view(50% 50%); animation-range: cover 0% cover 3%; }
+    .scene { perspective: 1400px; }
+    .scene.shot-real img, .scene > :first-child { animation: tilt linear both; animation-timeline: view(); animation-range: entry 0% cover 40%; transform-origin: 50% 100%; }
+    .ch-title { color: transparent; background: linear-gradient(90deg, var(--paper) 0 50%, color-mix(in srgb, var(--paper) 18%, var(--ink)) 50%) 100% 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; padding-bottom: .12em; animation: title-in linear both; animation-timeline: view(); animation-range: entry 10% cover 34%; }
+    .before .ch-title { background-image: linear-gradient(90deg, color-mix(in srgb, var(--paper) 55%, var(--ink)) 0 50%, color-mix(in srgb, var(--paper) 14%, var(--ink)) 50%); }
+    .tile, .logos, .agents, .table-scroll, .faq-list, .open > * { animation: lift linear both; animation-timeline: view(); animation-range: entry 0% cover 22%; }
+    .platform > h2, .compare > h2, .faq > h2 { animation: lift linear both; animation-timeline: view(); animation-range: entry 0% cover 26%; }
+    .ambient i:first-child { animation: drift-a 38s ease-in-out infinite alternate; }
+  }
+}
+@media (prefers-reduced-motion: reduce) { .thread::before { clip-path: none; } .ambient i { animation: none; } }
+@keyframes thread { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0); } }
+@keyframes node-on { to { background: var(--lime); box-shadow: 0 0 0 2px var(--lime), 0 0 18px var(--lime); } }
+@keyframes tilt { from { transform: rotateX(14deg) scale(.94); filter: brightness(.7); } to { transform: none; filter: none; } }
+@keyframes title-in { from { background-position: 100% 0; transform: translateY(36px); } to { background-position: 0 0; transform: none; } }
+
+/* Rough-edge pass on the story. Each scene moves as one piece (its parts used to arrive
+   separately), finishes arriving sooner, and the big line stays inside the column so the thread
+   never runs through a letter. */
+.beat p { font-size: clamp(52px, 9.2vw, 132px); max-width: 1120px; }
+.scene.shot-real img { border-radius: 10px; }
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .chapter { perspective: 1400px; }
+    .scene { perspective: none; animation: arrive linear both; animation-timeline: view(); animation-range: entry 0% cover 26%; transform-origin: 50% 100%; }
+    .scene.shot-real img, .scene > :first-child { animation: none; }
+    .ch-title { animation-range: entry 0% cover 24%; }
+  }
+}
+@keyframes arrive { from { transform: translateY(56px) rotateX(12deg) scale(.95); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* The thread's lit part is drawn by its own head: one tall lime line hanging above the sticky
+   dot, cut off at the top of the thread. Head and line cannot drift apart on a fast scroll,
+   which a separately animated line did. */
+@media (min-width: 1280px) {
+  .thread { clip-path: inset(0 -48px); }
+  .thread::before { display: none; }
+  .thread i::before { content: ""; position: absolute; left: 5px; bottom: 6px; width: 2px; height: 200000px; border-radius: 1px; background: var(--lime); }
+  .thread i { position: sticky; }
+}
+@media (min-width: 1280px) { .thread { z-index: 2; } }

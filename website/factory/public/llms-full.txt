@@ -1,4 +1,4 @@
-# Oya Factory — full description
+# Oya Factory: full description
 
 > Oya Factory is for AI-native teams that want to ship 100x faster and still keep the SDLC: a built-in team of agents around Claude Code, Codex, Antigravity and OpenCode, your checks on every turn, any turn rewindable. Free and open source for macOS and Windows.
 
@@ -9,92 +9,94 @@ Made by: Oya (https://oya.dev)
 
 ## In one line
 
-It's 2026. Are you still using one agent?
+It's 2026. Still shipping with one agent?
 
-Oya Factory is for AI-native teams that want to ship 100× faster and still keep the SDLC: a product manager, designer, principal engineer, QA, reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode — scope, design, build, review and test on every task, your checks on every turn.
+Oya Factory puts a full agent team on every task, so you ship 100× faster and keep your SDLC.
 
-Used by engineers at Oya, Google, Amazon, Salesforce, Jumper Media and other companies.
+Used by engineers from Oya, Google, Amazon, Salesforce, Jumper Media and other companies.
 
-## Why engineers switch
+## The story of one feature
 
-### Every turn is checked, not trusted
+### Before: One agent. One terminal. You, watching.
 
-Your tests run after each turn. A turn that fails is never committed.
+You prompt. You wait. You approve. You check.
 
-### Undo any turn, instantly
+### The ask: You type one sentence.
 
-A snapshot before every turn. Rewind in one click — and undo the rewind.
+Pick an agent. It starts on its own branch.
 
-### Five agents, zero collisions
+### The team: A team picks it up.
 
-Every task on its own branch. Two agents never share a working tree.
+Scoped, designed, planned, built, reviewed, tested, secured.
 
-### Projects set up right, automatically
+### The lanes: Three agents. Zero collisions.
 
-An agent team, the skills your stack needs and plugins — added and kept current.
+One branch each. Never the same files.
 
-### A fraction of the size
+### The proof: Proof, not promises.
 
-A native app on your system's webview — not a bundled copy of Chromium.
+Your checks after every turn. Undo any turn.
+
+### The memory: Nothing gets forgotten.
+
+Notes travel with the task, agent to agent.
+
+### Shipped: Shipped before lunch.
+
+One pull request, with everything that passed.
 
 ## The platform
 
-### A team of agents, built in
+### A fraction of the size
 
-Every project gets a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability — subagents your coding agent calls in order: scope, design, plan, build, review, test. Tag one with @pm or @qa from the chat. Oya Factory keeps the team current as it improves.
+A native app, not a bundled Chromium.
 
-### Skills, managed for you
+### Skills and plugins, handled
 
-Oya Factory recommends the skills your stack needs, adds them, and keeps them current. Write your own in a form, or browse a catalog.
-
-### Plugins, MCP servers and tools
-
-Skills, subagents, MCP servers, plugins, hooks and commands for every agent, in one Extensions screen. Recommended plugins install themselves in trusted projects.
+Recommended, installed, kept current.
 
 ### Every project, one window
 
-Open all your repositories side by side in one sidebar, each with its own engine, its own lanes and its own state.
-
-### Many lanes per project
-
-A lane is one task: its own conversation, its own agent, and on its own branch when you want it. Run several at once; Attention tells you which one needs you.
+All your repositories, side by side.
 
 ### Agentic mode
 
-The conversation in the centre: agents work, you steer, review the turns and answer what they ask.
+Agents work, you steer.
 
 ### Coding mode
 
-An editor in the centre with files, source control and the terminal, the agent beside you. Edit, save with ⌘S, accept suggestions with Tab.
+An editor, the agent beside you.
 
-## Features
+## Also included
 
-- **Your checks, every turn**: Your project's own make check, tests or lint run after each turn, and the verdict sits beside the reply.
-- **Rewind any turn**: A snapshot before every turn. Undo what an agent did without touching what you did.
-- **Stage one hunk**: Keep three of an agent's four edits. Hunks are matched by content, so nothing stages at the wrong place.
-- **Issue to pull request**: Start a task from a GitHub issue on its own branch, send corrections, and publish one traceable PR.
-- **Recurring tasks**: A saved instruction on a schedule — nightly dependency checks, weekly cleanups — each run on its own branch.
-- **A browser for your agents**: Each lane gets its own browser tab, so an agent can test the page it just built without touching yours.
-- **Point at the pixel**: Click an element in the live preview, say what should change, and see whether the right file changed.
-- **Find in the terminal**: ⌘F through an agent's scrollback, and quick commands you save once and run from anywhere.
-- **Set up right, automatically**: An agent team, recommended skills and a readiness scan, kept current as Oya Factory improves.
+- Stage one hunk
+- Issue to pull request
+- Recurring tasks
+- A browser per lane
+- Point at the pixel
+- Terminal search
+- Context meter
+- Shared memory
+- Clean handover
+- Rewind any turn
+- MCP servers
+- Readiness scan
 
 ## Compared with running an agent in a terminal
 
 | | Oya Factory | An agent in a terminal |
 |---|---|---|
-| Each task on its own branch and worktree | Yes, automatically | By hand |
-| Your project's checks after every turn | Yes, verdict beside the reply | If you remember to run them |
-| Rewind a turn | Yes, a snapshot before each | git reflog, carefully |
-| Permission prompts | Questions in the conversation | A prompt in whichever pane |
-| Several agents at once | Yes, never two in one working tree | Several terminals, one checkout |
-| Claude Code, Codex, Antigravity, OpenCode | All four, one workspace | One CLI per window |
+| A branch per task | Automatic | By hand |
+| Checks after every turn | Automatic | If you remember |
+| Undo a turn | One click | git reflog |
+| Several agents at once | Never the same files | One shared checkout |
+| All four agents | One window | One CLI each |
 
 ## Frequently asked questions
 
 ### What is Oya Factory?
 
-Oya Factory is a free, open-source desktop app for running AI coding agents — Claude Code, Codex, Antigravity and OpenCode — on your own repositories. Each task runs in its own git branch and worktree, and every diff, command, approval and check result is shown as it happens.
+Oya Factory is a free, open-source desktop app for running AI coding agents (Claude Code, Codex, Antigravity and OpenCode) on your own repositories. Each task runs in its own git branch and worktree, and every diff, command, approval and check result is shown as it happens.
 
 ### Which coding agents does it support?
 
@@ -122,7 +124,7 @@ No. It works on any git repository. It can optionally add an agent team, recomme
 
 ### How does it compare to Orca or Conductor?
 
-See the side-by-side pages for Orca and Conductor. In short: Oya Factory focuses on proving each turn — checks, rewind, clean branches — on macOS and Windows; Orca adds remote hosts and a phone app; Conductor is a polished Mac-only app.
+See the side-by-side pages for Orca and Conductor. In short: Oya Factory focuses on proving each turn (checks, rewind, clean branches) on macOS and Windows; Orca adds remote hosts and a phone app; Conductor is a polished Mac-only app.
 
 ## Oya Factory vs Orca
 
@@ -136,7 +138,7 @@ After each turn, Oya Factory runs your project's own checks and puts the verdict
 
 ### Any turn can be rewound
 
-A snapshot is taken before every turn, so a bad one is undone in a click — and the undo can be undone. No digging through git history.
+A snapshot is taken before every turn, so a bad one is undone in a click, and the undo can be undone. No digging through git history.
 
 ### Two agents never share a working tree
 
@@ -155,12 +157,12 @@ Oya Factory uses the webview your operating system already has, with a small Rus
 | Licence | MIT | MIT |
 | Price | Free | Free |
 | App shell | Tauri, your OS's webview | Electron, bundled Chromium |
-| Checks verdict on every turn | Built in | — |
-| Rewind any turn | Built in | — |
-| One writer per working tree | Enforced | — |
-| Automatic project setup | Built in | — |
+| Checks verdict on every turn | Built in | Not stated |
+| Rewind any turn | Built in | Not stated |
+| One writer per working tree | Enforced | Not stated |
+| Automatic project setup | Built in | Not stated |
 
-Orca details are from orca.dev and its documentation as of 23 November 2026; “—” means its documentation does not describe the feature.
+Orca details are from orca.dev and its documentation as of 23 November 2026; “Not stated” means its documentation does not describe the feature.
 
 Page: https://oyafactory.com/compare/orca/
 
@@ -193,13 +195,13 @@ A readiness scan, an agent team and the skills your stack needs, added and kept 
 | | Oya Factory | Conductor |
 |---|---|---|
 | Platforms | macOS and Windows | macOS |
-| Licence | Open source, MIT | — |
+| Licence | Open source, MIT | Not stated |
 | Price | Free | Paid Pro plan |
 | Runs entirely on your machine | Yes | Also offers cloud workspaces |
-| Checks verdict on every turn | Built in | — |
-| One writer per working tree | Enforced | — |
+| Checks verdict on every turn | Built in | Not stated |
+| One writer per working tree | Enforced | Not stated |
 
-Conductor details are from conductor.build and its documentation as of 23 November 2026; “—” means its site does not state it.
+Conductor details are from conductor.build and its documentation as of 23 November 2026; “Not stated” means its site does not say.
 
 Page: https://oyafactory.com/compare/conductor/
 

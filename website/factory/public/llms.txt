@@ -1,6 +1,6 @@
 # Oya Factory
 
-> Oya Factory is a free, open-source (MIT) desktop app for macOS and Windows that runs AI coding agents — Claude Code, OpenAI Codex, Google Antigravity and OpenCode — side by side on your own git repositories. Each task runs on its own branch and worktree, and every diff, command, approval and check result is shown as it happens.
+> Oya Factory is a free, open-source (MIT) desktop app for macOS and Windows that runs AI coding agents (Claude Code, OpenAI Codex, Google Antigravity and OpenCode) side by side on your own git repositories. Each task runs on its own branch and worktree, and every diff, command, approval and check result is shown as it happens.
 
 Oya Factory is made by Oya (https://oya.dev). It drives the agent CLIs you already have installed and signed in, so it uses your existing subscriptions. It needs no account, has no license key and no step limits.
 
