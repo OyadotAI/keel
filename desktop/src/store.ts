@@ -249,6 +249,8 @@ interface State {
   settings: boolean;
   /// The new-project page over the window.
   creating: boolean;
+  /** A project just opened with no lanes, waiting for the person to choose its agent and surface. */
+  starting?: string;
   /// A confirmation open for the active lane: merge, discard or close.
   asking: "merge" | "discard" | "close" | null;
   /// The lane whose sidebar row is an input right now — set by F2, a double-click, the menu or the palette.
@@ -456,10 +458,12 @@ export const useStore = create<State>()((set, getState, api) => {
       ),
     );
   const lanesOf = (path: string) => getState().projects[path]?.lanes ?? [];
-  /// Select the project's first lane, making one when it has none.
+  /// Select the project's first lane. A project with none asks which agent and surface to start
+  /// with (`starting`) rather than assuming Claude: a terminal lane launches its agent on select.
   const openLane = (path: string) => {
     if (!getState().projects[path]) return;
-    const lid = getState().projects[path].lanes[0] ?? getState().newLane(path);
+    const lid = getState().projects[path].lanes[0];
+    if (!lid) return set({ starting: path });
     getState().select(lid);
     save(getState());
   };

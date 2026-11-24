@@ -70,7 +70,7 @@ describe("opening a folder", () => {
     expect(s.getState().projects["/old/app"].lanes).toEqual([]);
     await s.getState().answerMove(false);
     expect(s.getState().moving).toBeNull();
-    expect(s.getState().projects["/old/app"].lanes).toHaveLength(1);
+    expect(s.getState().starting).toBe("/old/app");
     expect(declined()).toEqual(["/old/app"]);
     await s.getState().closeProject("/old/app");
     await s.getState().openProject("/old/app", true);
@@ -81,7 +81,8 @@ describe("opening a folder", () => {
     const s = await store(true, { from: "/ws/app", to: "/ws/app" });
     await s.getState().openProject("/ws/app", true);
     expect(s.getState().moving).toBeNull();
-    expect(s.getState().projects["/ws/app"].lanes).toHaveLength(1);
+    expect(s.getState().projects["/ws/app"].lanes).toHaveLength(0);
+    expect(s.getState().starting).toBe("/ws/app");
     const t = await store(false, { from: "/new/app", to: "/ws/app" });
     await t.getState().openProject("/new/app");
     expect(t.getState().moving).toBeNull();
@@ -91,7 +92,8 @@ describe("opening a folder", () => {
     const s = await store(false, { from: "/repo/sub", to: "/ws/sub", refusal: { code: "submodule", parent: "/repo" } });
     await s.getState().openProject("/repo/sub", true);
     expect(s.getState().moving).toBeNull();
-    expect(s.getState().projects["/repo/sub"].lanes).toHaveLength(1);
+    expect(s.getState().projects["/repo/sub"].lanes).toHaveLength(0);
+    expect(s.getState().starting).toBe("/repo/sub");
   });
 
   it("a move re-files the project under its new path and closes the old daemon", async () => {
@@ -101,7 +103,7 @@ describe("opening a folder", () => {
     await s.getState().answerMove(true);
     expect(s.getState().moving).toMatchObject({ phase: "moved", to: "/ws/app" });
     expect(s.getState().order).toEqual(["/ws/app"]);
-    expect(s.getState().projects["/ws/app"].lanes).toHaveLength(1);
+    expect(s.getState().starting).toBe("/ws/app");
     expect(mocks.invoke).toHaveBeenCalledWith("close_project", { path: "/old/app" });
   });
 
@@ -113,5 +115,13 @@ describe("opening a folder", () => {
     await s.getState().answerMove(true);
     expect(s.getState().moving).toMatchObject({ phase: "moved" });
     expect(s.getState().order).toEqual(["/ws/app"]);
+  });
+  it("a new project asks which agent and surface before any lane exists, and starts what was chosen", async () => {
+    const s = await store(true, { from: "/ws/app", to: "/ws/app" });
+    await s.getState().openProject("/ws/app", false);
+    expect(s.getState().projects["/ws/app"].lanes).toEqual([]);
+    expect(s.getState().starting).toBe("/ws/app");
+    const lid = s.getState().newLane("/ws/app", false, "codex", "terminal");
+    expect(s.getState().lanes[lid]).toMatchObject({ agent: "codex", interface: "terminal" });
   });
 });

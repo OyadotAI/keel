@@ -1,4 +1,5 @@
 // Preview source and provider choice before creating one isolated durable task.
+import { Icon } from "./icons";
 import { useEffect,useMemo,useState } from "react";
 import { post, type Endpoint } from "../api";
 import { AGENT_NAME, type Agent } from "../store";
@@ -18,8 +19,8 @@ export function IssueIntake({ ep, open }: { ep: Endpoint; open: (task: string, t
     try { const receipt = await post<Receipt>(ep, "/api/delivery/tasks/start", { receipt: id, ...input }); setReceipt(receipt); if (receipt.task && ["accepted", "completed"].includes(receipt.phase)) await open(receipt.task, preview.issue.title); } catch (error) { setError(`${error} Check this saved request before starting another copy.`); } finally { setBusy(""); }
   }
   async function status() { if (pending) try { const next = await receiptStatus(ep, pending); setReceipt(next); if (next.task) await open(next.task, preview?.issue.title ?? "Issue task"); } catch (error) { setError(String(error)); } }
-  return <section className="delivery-intake"><h3>Start from a GitHub issue</h3><label>Issue URL<input className="field" value={url} disabled={frozen} onChange={(event) => { reader.invalidate();setUrl(event.target.value); setPreview(undefined);setBusy(""); }} placeholder="https://github.com/owner/repo/issues/123" /></label>
-    <div className="actions"><button disabled={!!busy || frozen || !url} onClick={() => void inspect()}>{busy === "Previewing…" ? busy : "Preview issue"}</button></div>
+  return <section className="delivery-intake" aria-label="Start from a GitHub issue"><form className="intake-row" onSubmit={(event) => { event.preventDefault(); if (url && !busy && !frozen) void inspect(); }}><Icon name="plus" size={14} /><input aria-label="GitHub issue URL" value={url} disabled={frozen} onChange={(event) => { reader.invalidate();setUrl(event.target.value); setPreview(undefined);setBusy(""); }} placeholder="Start from a GitHub issue — paste its URL" />
+    <button type="submit" className="ghost" disabled={!!busy || frozen || !url}>{busy === "Previewing…" ? busy : "Preview"}</button></form>
     {preview && <><a href={preview.issue.url}><strong>{preview.issue.title}</strong></a><p className="small muted">{preview.issue.state} · Changes in {preview.change_repository}{preview.parent && ` · Upstream ${preview.parent}`}</p><details><summary>Issue source</summary><pre className="delivery-source">{preview.issue.body || "No description."}</pre>{preview.issue.truncated && <p>Preview shortened. Read the full issue before starting.</p>}</details>
       <div className="delivery-fields"><label>Agent<select value={provider} disabled={!!busy ||frozen} onChange={(event) => setProvider(event.target.value as Agent)}>{Object.entries(AGENT_NAME).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label>Local base branch<input className="field" value={base} disabled={!!busy ||frozen} onChange={(event) => setBase(event.target.value)} /></label></div>
       <p className="small muted">Starts a fresh isolated chat task using this source snapshot and normal project permissions.</p><div className="actions"><button className="primary" disabled={!!busy ||frozen} onClick={() => void start()}>{busy === "Starting…" ? busy : "Start isolated task"}</button>{pending && <button onClick={() => void status()}>Check saved start</button>}</div></>}

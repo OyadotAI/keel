@@ -37,3 +37,55 @@
   .ide-layout .main.has-shell:has(.delivery-panel) .ide-center { padding-bottom: 0; }
   .ide-layout .main:has(.delivery-panel) > .shell-dock { visibility: hidden; }
 }
+
+/* Tasks: a quiet list in the brand's five colours. Rows are one click to open; everything that is
+   the same on every row (the source, a zero count) is left unsaid. */
+.dialog:has(> .delivery-dialog) { width: min(680px, 100%); position: relative; }
+.delivery-dialog { height: min(620px, calc(100dvh - 140px)); }
+.tasks-close { position: absolute; top: 16px; right: 16px; }
+.tasks-toolbar { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); margin: 0 -22px; padding: 0 22px; }
+.tasks-toolbar .tabs { background: none; border-bottom: 0; padding: 0; height: 44px; gap: 18px; }
+.tasks-toolbar .tabs [role="tab"] { height: 44px; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: var(--t-body); border-bottom: 2px solid transparent; }
+.tasks-toolbar .tabs [role="tab"][aria-selected="true"] { background: none; box-shadow: none; border-bottom-color: var(--text); }
+.tasks-toolbar .tab-count { margin-left: 6px; }
+.tasks-toolbar .spacer { flex: 1; }
+.tasks-project { height: 28px; padding: 0 24px 0 10px; font: 500 var(--t-small) var(--font); color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.delivery-intake.delivery-intake { border-bottom: 0; padding: 0; margin: 4px 0 12px; }
+.intake-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 8px; background: var(--well); color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); transition: box-shadow var(--t-fast) var(--ease); }
+.intake-row:focus-within { box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--text); }
+.intake-row input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font: inherit; color: var(--text); padding: 4px 0; }
+.intake-row input::placeholder { color: var(--dim); }
+.intake-row button.ghost { width: auto; flex: none; padding: 0 10px; height: 28px; }
+.task-list { list-style: none; margin: 0; padding: 0; }
+.task-list li { display: flex; align-items: center; border-radius: 8px; }
+.task-list li + li { margin-top: 2px; }
+.task-list button.task-row { box-shadow: none; flex: 1; min-width: 0; height: auto; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-align: left; white-space: normal; cursor: pointer; transition: background var(--t-fast) var(--ease); }
+.task-list button.task-row:hover:not(:disabled), .task-list button.task-row:focus-visible { background: var(--hover); }
+.task-row > .agent-mark { flex: none; color: var(--dim); }
+.task-row > svg:last-child { flex: none; color: var(--dim); opacity: 0; transform: translateX(-4px); transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+.task-row:hover > svg:last-child, .task-row:focus-visible > svg:last-child { opacity: 1; transform: none; }
+.task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.task-title { font-weight: 500; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-meta { line-height: 1.35; font-size: var(--t-small); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-pill { flex: none; font-size: var(--t-small); font-weight: 500; padding: 1px 8px; border-radius: 999px; background: var(--tint); color: var(--text); }
+.task-pr { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 0 12px; font-size: var(--t-small); color: var(--dim); text-decoration: none; }
+.task-pr:hover { color: var(--text); }
+button.tasks-more { width: auto; padding: 0 10px; margin: 8px 6px; }
+.tasks-saved .empty-state { margin-top: 40px; }
+
+/* Starting a project: the agent and the surface are chosen, never assumed. */
+.dialog:has(> .start-project) { width: min(520px, 100%); }
+.start-project { display: flex; flex-direction: column; }
+.start-label { margin: 14px 0 8px; font-size: var(--t-small); font-weight: 500; color: var(--dim); }
+.start-agents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+button.start-agent { height: auto; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; text-align: left; white-space: normal; transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+button.start-agent:hover:not(:disabled) { background: var(--hover); }
+button.start-agent[aria-checked="true"] { border-color: var(--text); background: var(--hover); }
+button.start-agent .agent-mark { flex: none; }
+.start-agent span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.start-agent strong { font-size: var(--t-body); font-weight: 600; }
+.start-agent small { font-size: var(--t-small); font-weight: 400; color: var(--dim); }
+.start-surface { align-self: flex-start; }
+.start-note { margin: 8px 0 0; font-size: var(--t-small); color: var(--dim); }
+.start-project .actions { margin-top: 20px; }
+@media (max-width: 480px) { .start-agents { grid-template-columns: 1fr; } }

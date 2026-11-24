@@ -10,11 +10,27 @@ import "../../src/delivery.css";
 
 const fixture=new DeliveryFixture(), base=window.fetch.bind(window), ep={port:Number(location.port),token:"synthetic-fixture"};
 seedScenario(fixture,new URLSearchParams(location.search).get("scenario"));
+// `?open=tasks` opens the Tasks dialog on load; `&many=1` lists the kinds of titles real use produces.
+const params=new URLSearchParams(location.search), many=params.has("many");
+function manyTasks(page:{tasks:unknown[]}){
+  const base=page.tasks[0] as Record<string,unknown>&{owner:Record<string,unknown>};
+  const row=(task:string,title:string,provider:string,extra:Record<string,unknown>={})=>({...base,task,title,source:"Conversation task",owner:{...base.owner,provider},unresolved:0,check:null,publication:null,...extra});
+  return {...page,tasks:[...page.tasks,
+    row("t1","there are alot of work from codex but its not finish and codex hit the wall... alot of people like https://github.com/stablyai/orca dive deep and add the missing features","claude",{unresolved:3}),
+    row("t2","https://github.com/jumper-media/jm-local-v2/actions/runs/42022447662/job/127296469666?pr=452","codex",{publication:{url:"https://github.com/owner/repo/pull/452"}}),
+    row("t3","i need landing page for this","codex"),
+    row("t4","Fix: a closed Oya tab locks the lane's browser until restart (\"Tab N not found\")","codex"),
+    row("t5","hi","claude"),
+    row("t6","Bug: Keel's Browser tab can't test a mobile layout, and browser_read misses frames","antigravity"),
+  ]};
+}
+if(params.get("open")==="start")setTimeout(()=>useStore.setState({starting:useStore.getState().order[0]}),500);
+if(params.get("open")==="tasks"){const tryOpen=(left:number)=>{const b=[...document.querySelectorAll<HTMLButtonElement>("button.attention-entry")].find((x)=>x.textContent?.includes("Tasks"));if(b&&!document.querySelector(".delivery-dialog"))b.click();else if(left>0)setTimeout(()=>tryOpen(left-1),250);};setTimeout(()=>tryOpen(20),500);}
 window.fetch=async(input,init)=>{
   const target=new URL(String(input),location.href),method=init?.method??"GET";
   if(!target.pathname.startsWith("/api/"))return base(input,init);
   let body={};try{body=JSON.parse(String(init?.body??"{}"));}catch{/* Read-only calls have no body. */}
-  try{const data=fixture.respond(target.pathname,method,body,target.searchParams);if(data===undefined)return base(input,init);if(method==="POST")queueMicrotask(()=>deliveryChanged(ep));return Response.json(data);}
+  try{const data=target.pathname==="/api/tasks"&&many?manyTasks(fixture.respond(target.pathname,method,body,target.searchParams) as {tasks:unknown[]}):fixture.respond(target.pathname,method,body,target.searchParams);if(data===undefined)return base(input,init);if(method==="POST")queueMicrotask(()=>deliveryChanged(ep));return Response.json(data);}
   catch(error){return new Response(String(error),{status:409});}
 };
 const lane=useStore.getState().lanes.update;
