@@ -77,6 +77,28 @@ h1 em { font-style: normal; color: var(--lime); }
 .agents p { margin: 0; font-size: 14px; color: var(--dim); }
 .agents ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 36px; margin: 0; padding: 0; list-style: none; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
 
+/* Why switch: the case, one reason per row, the number in lime. */
+.why { padding: 120px 0 0; }
+.reasons { margin: 48px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hairline); }
+.reasons li { display: grid; grid-template-columns: 80px 1fr; gap: 24px; padding: 32px 0; border-bottom: 1px solid var(--hairline); }
+.reasons h3 { font-size: clamp(22px, 2.4vw, 28px); letter-spacing: -0.025em; margin-bottom: 10px; }
+.reasons p { margin: 0; max-width: 760px; color: var(--dim); font-size: 17px; }
+.reasons .num { margin: 6px 0 0; font-size: 15px; }
+@media (max-width: 860px) { .reasons li { grid-template-columns: 1fr; gap: 6px; } }
+
+/* The platform: tiles in one hairline frame; the team tile shows its members. */
+.platform { padding: 120px 0 0; }
+.section-lede { margin: 16px 0 0; max-width: 640px; color: var(--dim); font-size: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 48px; }
+.tile { padding: 32px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }
+.tile.wide { grid-column: 1 / -1; }
+.tile p { margin: 0; color: var(--dim); font-size: 16px; max-width: 760px; }
+.tile h3 { font-size: 22px; letter-spacing: -0.02em; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; padding: 0; list-style: none; }
+.chips li { padding: 6px 12px; border-radius: 999px; font: 500 14px var(--mono); color: var(--lime); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lime) 35%, transparent); }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+@media (max-width: 860px) { .tiles, .modes { grid-template-columns: 1fr; } }
+
 /* Pillars and features */
 h2 { margin: 0; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.05; font-weight: 720; letter-spacing: -0.035em; }
 h3 { margin: 0 0 8px; font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
@@ -118,6 +140,10 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 .page p, .page li { color: var(--dim); }
 .page ul { padding-left: 20px; }
 .page .note { font-size: 14px; }
+
+.steps { margin: 28px 0 0; padding-left: 22px; }
+.steps li { margin: 10px 0; color: var(--text); }
+.page .reasons h3 { font-size: 22px; }
 
 /* Closing */
 .open { display: flex; align-items: center; justify-content: space-between; gap: 32px; margin-top: 110px; padding: 56px; border-radius: 24px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--hairline); }

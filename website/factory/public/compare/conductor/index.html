@@ -4,11 +4,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Oya Factory vs Conductor — parallel coding agents compared</title>
-  <meta name="description" content="Oya Factory and Conductor both run Claude Code and Codex in isolated workspaces. How they differ: open source on macOS and Windows versus a polished Mac app with an iOS companion.">
+  <title>Oya Factory vs Conductor — open source, on Mac and Windows</title>
+  <meta name="description" content="Conductor runs coding agents on a Mac. Oya Factory runs them on macOS and Windows, free and open source, and checks every turn with your project's own tests.">
   <link rel="canonical" href="https://oyafactory.com/compare/conductor/">
-  <meta property="og:title" content="Oya Factory vs Conductor — parallel coding agents compared">
-  <meta property="og:description" content="Oya Factory and Conductor both run Claude Code and Codex in isolated workspaces. How they differ: open source on macOS and Windows versus a polished Mac app with an iOS companion.">
+  <meta property="og:title" content="Oya Factory vs Conductor — open source, on Mac and Windows">
+  <meta property="og:description" content="Conductor runs coding agents on a Mac. Oya Factory runs them on macOS and Windows, free and open source, and checks every turn with your project's own tests.">
   <meta property="og:url" content="https://oyafactory.com/compare/conductor/">
   <meta property="og:image" content="https://oyafactory.com/assets/oya-factory-workspace.png">
   <meta name="theme-color" content="#1a1a1a">
@@ -22,27 +22,39 @@
     <nav aria-label="Primary"><a href="/#features">Features</a><a href="/#faq">FAQ</a><a class="nav-cta" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download</a></nav>
   </header>
   <main class="page wrap">
-    <h1>Oya Factory vs Conductor</h1>
-    <p class="lede">Both run coding agents side by side, each task in an isolated git workspace, with diffs and pull requests in the app. They differ in platform, licence and what each turn shows you.</p>
-    <section aria-label="Side by side">
+    <h1>Conductor is a Mac app.<br>Oya Factory is yours, everywhere.</h1>
+    <p class="lede">Conductor made parallel agents feel polished on a Mac. Oya Factory brings the same workflow to macOS and Windows, open source and free, and adds proof: your checks on every turn, and agents that never collide.</p>
+    <section aria-labelledby="further-title">
+      <h2 id="further-title">Where Oya Factory goes further</h2>
+      <ol class="reasons">
+        <li><span class="num">01</span><div><h3>macOS and Windows</h3><p>One app, one workflow, on both platforms. Conductor is macOS only.</p></div></li>
+        <li><span class="num">02</span><div><h3>Free and open source</h3><p>MIT licensed, no account and no paid tier. Read the code, change it, ship it.</p></div></li>
+        <li><span class="num">03</span><div><h3>Your checks run on every turn</h3><p>After each turn, Oya Factory runs your project's own checks and records the verdict beside the reply. A turn that fails is never committed for you.</p></div></li>
+        <li><span class="num">04</span><div><h3>Your code stays on your machine</h3><p>Everything runs locally; there is no cloud workspace and no server of ours between you and your repository.</p></div></li>
+        <li><span class="num">05</span><div><h3>Projects configured for you</h3><p>A readiness scan, an agent team and the skills your stack needs, added and kept current automatically.</p></div></li>
+      </ol>
+    </section>
+    <section aria-labelledby="glance-title">
+      <h2 id="glance-title">At a glance</h2>
       <div class="table-scroll"><table><thead><tr><th scope="col"></th><th scope="col">Oya Factory</th><th scope="col">Conductor</th></tr></thead><tbody>
-        <tr><th scope="row">Licence</th><td>Open source, MIT</td><td>Not stated on its site</td></tr>
-        <tr><th scope="row">Price</th><td>Free</td><td>Not stated on its site; it has a Pro plan</td></tr>
-        <tr><th scope="row">Platforms</th><td>macOS, Windows</td><td>macOS</td></tr>
-        <tr><th scope="row">Agents</th><td>Claude Code, Codex, Antigravity, OpenCode</td><td>Claude Code, Codex, Cursor, OpenCode</td></tr>
-        <tr><th scope="row">Isolated workspaces</th><td>A branch and worktree per lane</td><td>A worktree per workspace</td></tr>
-        <tr><th scope="row">Your project's checks after every turn</th><td>Yes, with the verdict beside the reply</td><td>A Checks tab for CI and merge blockers</td></tr>
-        <tr><th scope="row">Rewind a turn</th><td>Yes, a snapshot before every turn</td><td>Checkpoints</td></tr>
-        <tr><th scope="row">Pull requests</th><td>Yes, from GitHub issues to one traceable PR</td><td>Yes, with drafted descriptions and merge</td></tr>
-        <tr><th scope="row">Phone</th><td>No</td><td>An iOS app and remote control</td></tr>
-        <tr><th scope="row">Cloud workspaces</th><td>No; everything runs locally</td><td>Yes</td></tr>
+        <tr><th scope="row">Platforms</th><td>macOS and Windows</td><td>macOS</td></tr>
+        <tr><th scope="row">Licence</th><td>Open source, MIT</td><td>—</td></tr>
+        <tr><th scope="row">Price</th><td>Free</td><td>Paid Pro plan</td></tr>
+        <tr><th scope="row">Runs entirely on your machine</th><td>Yes</td><td>Also offers cloud workspaces</td></tr>
+        <tr><th scope="row">Checks verdict on every turn</th><td>Built in</td><td>—</td></tr>
+        <tr><th scope="row">One writer per working tree</th><td>Enforced</td><td>—</td></tr>
       </tbody></table></div>
     </section>
-      <h2>Choose Oya Factory if</h2>
-      <ul><li>you work on Windows as well as macOS;</li><li>you want the source, under MIT, and no account;</li><li>you want your own checks run and recorded on every turn, with any turn rewindable.</li></ul>
-      <h2>Choose Conductor if</h2>
-      <ul><li>you are on a Mac and want its polished interface;</li><li>you want to follow and merge from your iPhone;</li><li>you want hosted cloud workspaces.</li></ul>
-      <p class="note">Conductor facts are from conductor.build and its documentation, read on 23 November 2026; they change often, so check the source.</p>
+    <section aria-labelledby="switch-title">
+      <h2 id="switch-title">Switch in a minute</h2>
+      <ol class="steps">
+        <li>Download Oya Factory for macOS or Windows — free, no account.</li>
+        <li>Open the same repository. Nothing in it has to change.</li>
+        <li>Your Claude Code, Codex, Antigravity and OpenCode logins carry over: Oya Factory drives the CLIs you already signed into.</li>
+        <li>Start a lane. Your first turn runs with your project's checks.</li>
+      </ol>
+      <p class="note">Conductor details are from conductor.build and its documentation as of 23 November 2026; “—” means its site does not state it.</p>
+    </section>
     <section class="open" aria-label="Get Oya Factory">
       <div><h2>Try Oya Factory</h2><p>Free and open source (MIT), for macOS and Windows. No account.</p></div>
       <div class="ctas"><a class="button primary" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download</a><a class="button" href="https://github.com/OyadotAI/keel">GitHub <span aria-hidden="true">↗</span></a></div>

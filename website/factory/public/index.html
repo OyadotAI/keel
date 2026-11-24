@@ -4,11 +4,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Oya Factory — run every coding agent, see everything they do</title>
-  <meta name="description" content="Oya Factory is a free, open-source desktop workspace for Claude Code, Codex, Antigravity and OpenCode. Every task on its own branch, every change on screen, your checks after every turn.">
+  <title>Oya Factory — agents write code fast, know it works before you merge</title>
+  <meta name="description" content="Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side with a built-in team of agents, checks every turn with your project's own tests, and rewinds any turn. Free, open source, for macOS and Windows.">
   <link rel="canonical" href="https://oyafactory.com/">
   <meta property="og:title" content="Oya Factory">
-  <meta property="og:description" content="Run every coding agent. See everything they do. Free and open source.">
+  <meta property="og:description" content="Agents write code fast. Know it works before you merge. Free and open source.">
   <meta property="og:image" content="https://oyafactory.com/assets/oya-factory-workspace.png">
   <meta property="og:url" content="https://oyafactory.com/">
   <meta name="theme-color" content="#1a1a1a">
@@ -25,8 +25,8 @@
   <header class="nav wrap">
     <a class="brand" href="/" aria-label="Oya Factory home"><img src="/assets/logo.svg" alt="" width="28" height="28"><span>Oya Factory</span></a>
     <nav aria-label="Primary">
-      <a href="#how">How it works</a>
-      <a href="#features">Features</a>
+      <a href="#why">Why switch</a>
+      <a href="#platform">Platform</a>
       <a href="#compare">Compare</a>
       <a href="#faq">FAQ</a>
       <a class="nav-cta" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download</a>
@@ -36,8 +36,8 @@
   <main id="main">
     <section class="hero wrap" aria-labelledby="hero-title">
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>An agentic development environment</p>
-      <h1 id="hero-title">Run every coding agent.<br><em>See everything</em> they do.</h1>
-      <p class="lede">Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side — each task on its own branch — and puts every diff, command and check on screen the moment it happens.</p>
+      <h1 id="hero-title">Agents write code fast.<br><em>Know it works</em> before you merge.</h1>
+      <p class="lede">Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side, runs your project's own checks after every turn, and lets you rewind any turn. Ship what your agents write without reading every line twice.</p>
       <div class="ctas">
         <a class="button primary" href="https://github.com/OyadotAI/keel-releases/releases/latest">Download for macOS &amp; Windows</a>
         <a class="button" href="https://github.com/OyadotAI/keel">View on GitHub <span aria-hidden="true">↗</span></a>
@@ -53,6 +53,49 @@
     <section class="agents wrap" aria-label="Supported agents">
       <p>Works with the agents you already use</p>
       <ul><li>Claude Code</li><li>Codex</li><li>Antigravity</li><li>OpenCode</li></ul>
+    </section>
+
+    <section class="why wrap" id="why" aria-labelledby="why-title">
+      <h2 id="why-title">Why engineers switch to Oya Factory</h2>
+      <ol class="reasons">
+        <li><span class="num">01</span><div><h3>Every turn is checked, not trusted</h3><p>Your <code>make check</code>, tests and lint run after each turn, and the verdict sits beside the reply. A turn that fails its checks is never committed for you. Other agent apps show you what the agent said; Oya Factory shows you whether it works.</p></div></li>
+        <li><span class="num">02</span><div><h3>Undo any turn, instantly</h3><p>A snapshot is taken before every turn. When an agent goes sideways, rewind to the moment before it — and if you change your mind, the rewind itself can be undone. No <code>git reflog</code> archaeology.</p></div></li>
+        <li><span class="num">03</span><div><h3>Five agents, zero collisions</h3><p>Every task gets its own branch and worktree, and Oya Factory refuses to let two agents write the same working tree. Run Claude and Codex in parallel without one sweeping up the other's half-written files.</p></div></li>
+        <li><span class="num">04</span><div><h3>Projects set up right, automatically</h3><p>Oya Factory scans your repository, adds an agent team and the skills your stack needs, and keeps them current as it improves. Your agents start every task with the right instructions.</p></div></li>
+        <li><span class="num">05</span><div><h3>Light, private and free</h3><p>A native app on your system's webview, not a bundled browser. No account, no server of ours between you and your code, no step limits. MIT licensed, on macOS and Windows.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="platform wrap" id="platform" aria-labelledby="platform-title">
+      <h2 id="platform-title">A whole engineering team in one window</h2>
+      <p class="section-lede">Not just a terminal for one agent: the projects, the people and the tools around it.</p>
+      <div class="tiles">
+        <article class="tile wide">
+          <h3>A team of agents, built in</h3>
+          <p>Every project gets a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability — subagents your coding agent calls in order: scope, design, plan, build, review, test. Tag one with <code>@pm</code> or <code>@qa</code> from the chat. Oya Factory keeps the team current as it improves.</p>
+          <ul class="chips"><li>@pm</li><li>@designer</li><li>@principal</li><li>@reviewer</li><li>@qa</li><li>@security</li><li>@reliability</li></ul>
+        </article>
+        <article class="tile">
+          <h3>Skills, managed for you</h3>
+          <p>Oya Factory recommends the skills your stack needs, adds them, and keeps them current. Write your own in a form, or browse a catalog.</p>
+        </article>
+        <article class="tile">
+          <h3>Plugins, MCP servers and tools</h3>
+          <p>Skills, subagents, MCP servers, plugins, hooks and commands for every agent, in one Extensions screen. Recommended plugins install themselves in trusted projects.</p>
+        </article>
+        <article class="tile">
+          <h3>Every project, one window</h3>
+          <p>Open all your repositories side by side in one sidebar, each with its own engine, its own lanes and its own state.</p>
+        </article>
+        <article class="tile">
+          <h3>Many lanes per project</h3>
+          <p>A lane is one task: its own conversation, its own agent, and on its own branch when you want it. Run several at once; Attention tells you which one needs you.</p>
+        </article>
+        <article class="tile wide modes">
+          <div><h3>Agentic mode</h3><p>The conversation in the centre: agents work, you steer, review the turns and answer what they ask.</p></div>
+          <div><h3>Coding mode</h3><p>An editor in the centre with files, source control and the terminal, the agent beside you. Edit, save with ⌘S, accept suggestions with Tab.</p></div>
+        </article>
+      </div>
     </section>
 
     <section class="how wrap" id="how" aria-labelledby="how-title">
