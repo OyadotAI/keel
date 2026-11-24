@@ -57,8 +57,10 @@ code { font: 0.88em var(--mono); padding: 1px 5px; border-radius: 4px; backgroun
 }
 .eyebrow { display: inline-flex; align-items: center; gap: 10px; margin: 0 0 28px; padding: 6px 14px; border-radius: 999px; font-size: 14px; color: var(--dim); box-shadow: inset 0 0 0 1px var(--hairline); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 12px var(--lime); }
-h1 { margin: 0 auto; max-width: 17ch; font-size: clamp(44px, 7.4vw, 96px); line-height: 0.98; font-weight: 750; letter-spacing: -0.045em; }
+h1 { margin: 0 auto; max-width: 18ch; font-size: clamp(44px, 7.4vw, 96px); line-height: 0.98; font-weight: 750; letter-spacing: -0.045em; }
 h1 em { font-style: normal; color: var(--lime); }
+/* The turn in the joke: quieter, so the lime payoff lands. */
+.h1-turn { display: block; margin-top: 0.12em; font-size: 0.56em; font-weight: 600; letter-spacing: -0.03em; color: var(--dim); }
 .lede { max-width: 640px; margin: 28px auto 0; font-size: clamp(17px, 2vw, 20px); color: var(--dim); }
 .ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
 .button { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 999px; font-weight: 600; font-size: 16px; text-decoration: none; box-shadow: inset 0 0 0 1px var(--hairline); transition: transform 160ms, background 160ms; }

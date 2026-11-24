@@ -9,9 +9,9 @@ Made by: Oya (https://oya.dev)
 
 ## In one line
 
-Agents write code fast.Know it works before you merge.
+Claude Code is cool.You know what's cooler? A whole team of agents.
 
-Oya Factory runs Claude Code, Codex, Antigravity and OpenCode side by side, runs your project's own checks after every turn, and lets you rewind any turn. Ship what your agents write without reading every line twice.
+Oya Factory puts a product manager, a designer, a principal engineer, QA, a reviewer, security and reliability around Claude Code, Codex, Antigravity and OpenCode. Run them side by side, each task on its own branch, with your project's checks on every turn.
 
 Used by engineers at Amazon, Google, Salesforce and other companies.
 
