@@ -53,7 +53,10 @@
 /* A recommendation reads as an offer: the accent on the count, nothing louder. */
 .recommended-entry .attention-count { color: var(--accent); font-weight: 600; }
 /* The Recommended dialog: one row per skill or plugin, its why, and its own Install. */
-.rec { display: flex; flex-direction: column; gap: 12px; min-width: min(560px, 80vw); }
+/* The dialog is widened for it, as the other wide dialogs are. A minimum width on the content
+   instead pushed Install and Done outside the dialog's own box. */
+.dialog:has(> .rec) { width: min(600px, 100%); }
+.rec { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .rec-list { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow: auto; }
 .rec-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; box-shadow: 0 1px 0 var(--hairline); }
 .rec-row:last-child { box-shadow: none; }
@@ -67,3 +70,4 @@
 .rec-status.done { color: var(--add); }
 .rec-status.failed { color: var(--del); white-space: pre-wrap; }
 .rec-row > button { flex: none; }
+.rec .actions { justify-content: flex-end; }
