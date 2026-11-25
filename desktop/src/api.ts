@@ -33,6 +33,13 @@ export function query(params: Params = {}): string {
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
+/// Where the daemon's tunnel (`tunnel.rs`) carries a GET stream: `/api/stream?path=<path and
+/// query>` over ws://, so the stream holds none of WebKit's six HTTP connections per daemon.
+export function tunnelled(url: string): string {
+  const u = new URL(url);
+  return `ws://${u.host}/api/stream?path=${encodeURIComponent(u.pathname + u.search)}`;
+}
+
 export function url(ep: Endpoint, path: string, params?: Params): string {
   return `http://127.0.0.1:${ep.port}${path}${query(params)}`;
 }

@@ -68,6 +68,7 @@ mod team;
 mod term;
 mod terminal_attention;
 mod tree;
+mod tunnel;
 mod turns;
 mod verify;
 mod vouched;

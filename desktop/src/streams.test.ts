@@ -20,3 +20,10 @@ it("closing a subscription ignores already queued worker messages without affect
   WorkerStub.current.onmessage?.({ data: { id: secondMessage[0].id, events: [{ event: "turn", data: [] }] } });
   expect(receive).not.toHaveBeenCalled(); expect(ended).not.toHaveBeenCalled(); expect(other).toHaveBeenCalledOnce();
 });
+
+it("a GET stream goes through the daemon's WebSocket tunnel, so it holds none of WebKit's six HTTP connections", async () => {
+  const { tunnelled } = await import("./api");
+  expect(tunnelled("http://127.0.0.1:4321/api/chat/events?lane=a&after=3")).toBe(
+    "ws://127.0.0.1:4321/api/stream?path=%2Fapi%2Fchat%2Fevents%3Flane%3Da%26after%3D3",
+  );
+});

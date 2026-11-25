@@ -1198,6 +1198,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .route("/api/fs/delete", axum::routing::post(crate::fsops::delete))
         .route("/api/fs/reveal", axum::routing::post(crate::fsops::reveal))
         .route("/api/term/ws", get(crate::term::ws))
+        .route("/api/stream", get(crate::tunnel::ws))
         .route("/api/monitors", get(crate::monitor::api_list))
         .route(
             "/api/monitors/stop",
@@ -1351,6 +1352,7 @@ async fn serve(state: AppState, port: u16) -> Result<()> {
         .layer(axum::middleware::from_fn(crate::events::after_mutation))
         .layer(axum::middleware::from_fn(cors))
         .with_state(state.clone());
+    crate::tunnel::install(app.clone());
 
     // What happens outside Keel — a session started in a terminal, a file saved in an editor —
     // reaches the window through these.
