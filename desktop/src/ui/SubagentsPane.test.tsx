@@ -64,3 +64,9 @@ it("the main row does not depend on the child row count", () => {
   for (const id of ["b", "c", "d", "e", "f"]) fake.state.lanes[source.id].subagents!.invocations.push({ id, status: "working", output: "waiting" });
   expect(main()).toBe(one);
 });
+it("a chat lane's helper column can be minimized or closed from its own header", () => {
+  const html = renderToStaticMarkup(<SubagentsPane lane={source.id} hidden={false} surface="chat"><div /></SubagentsPane>);
+  expect(html).toContain('aria-label="Minimize helpers"');
+  expect(html).toContain('aria-label="Close helpers until a new one starts"');
+  expect(html).toContain("chat-helpers-controls");
+});

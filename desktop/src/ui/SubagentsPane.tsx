@@ -85,7 +85,7 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
   const agentName = current?.agent === "claude" ? "Claude Code" : AGENT_NAME[current?.agent ?? "claude"];
   const mainName = surface === "chat" ? "Conversation" : "Main terminal";
   const panes = shown.map((child, index) => <ChildPane key={scope + ":" + child.slot} lane={lane} scope={scope} child={child} reduced={reduced} order={index + 2} output={view.outputs[child.id]} span={child.slot === lastOpen && surface !== "chat" ? span : 1} size={sizeOf(child.slot)} onSize={(size) => resize(child.slot, size)} />);
-  if (surface === "chat") return <ChatHelpers grid={grid} main={main} label={mainName} style={style} panes={panes} working={active.filter((c) => c.status === "working").length}>{children}</ChatHelpers>;
+  if (surface === "chat") return <ChatHelpers grid={grid} main={main} label={mainName} style={style} panes={panes} ids={shown.map((c) => c.id)} working={active.filter((c) => c.status === "working").length}>{children}</ChatHelpers>;
   return <div className={"terminal-grid-shell" + (shown.length ? " split" : "")} style={style}>
     <div ref={grid} className="terminal-grid" onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}>
       <section key="main" ref={main} className="terminal-grid-main" data-pane="main" aria-label={mainName}>
@@ -101,13 +101,28 @@ export function SubagentsPane({ lane, hidden, enabled = true, surface = "termina
   </div>;
 }
 /** A chat lane keeps the conversation where it is and stacks its helpers in a column on the right;
- *  the terminal's tiling grid rearranged the whole lane each time a helper started. */
-function ChatHelpers({ grid, main, label, style, panes, working, children }: { grid: RefObject<HTMLDivElement | null>; main: RefObject<HTMLElement | null>; label: string; style: CSSProperties; panes: ReactNode[]; working: number; children?: ReactNode }) {
-  return <div className={"terminal-grid-shell chat-grid" + (panes.length ? " has-helpers" : "")} style={style}>
+ *  the terminal's tiling grid rearranged the whole lane each time a helper started. The column can
+ *  be folded to a rail that still says how many are working, or closed until a new helper starts —
+ *  closing must not hide a helper the person has never seen. Folded or closed, no card is mounted,
+ *  so nothing polls output for it either. */
+function ChatHelpers({ grid, main, label, style, panes, ids, working, children }: { grid: RefObject<HTMLDivElement | null>; main: RefObject<HTMLElement | null>; label: string; style: CSSProperties; panes: ReactNode[]; ids: string[]; working: number; children?: ReactNode }) {
+  const [folded, setFolded] = useState(false);
+  const [closedOn, setClosedOn] = useState<string[] | null>(null);
+  const closed = !!closedOn && ids.every((id) => closedOn.includes(id));
+  const show = panes.length > 0 && !closed;
+  const count = <small>{working || "none"} working</small>;
+  const dot = <span className={"chat-helpers-dot" + (working ? " is-live" : "")} />;
+  return <div className={"terminal-grid-shell chat-grid" + (show ? " has-helpers" : "")} style={style}>
     <div className="chat-grid-row">
       <section key="main" ref={main} className="chat-grid-main" data-pane="main" aria-label={label}>{children}</section>
-      {panes.length > 0 && <div ref={grid} role="complementary" className="chat-helpers" aria-label="Subagents">
-        <header className="chat-helpers-head"><span className={"chat-helpers-dot" + (working ? " is-live" : "")} /><strong>Helpers</strong><small>{working || "none"} working</small></header>
+      {show && folded && <button className="chat-helpers-rail" aria-label={`Show helpers, ${working || "none"} working`} title="Show helpers" onClick={() => setFolded(false)}>{dot}<strong>Helpers</strong>{count}</button>}
+      {show && !folded && <div ref={grid} role="complementary" className="chat-helpers" aria-label="Subagents">
+        <header className="chat-helpers-head">{dot}<strong>Helpers</strong>{count}
+          <span className="chat-helpers-controls">
+            <button className="terminal-pane-control" aria-label="Minimize helpers" title="Minimize" onClick={() => setFolded(true)}><Icon name="minus" size={12} /></button>
+            <button className="terminal-pane-control" aria-label="Close helpers until a new one starts" title="Close (reopens when a new helper starts)" onClick={() => { setClosedOn(ids); setFolded(false); }}><Icon name="x" size={12} /></button>
+          </span>
+        </header>
         {panes}</div>}
     </div>
   </div>;
