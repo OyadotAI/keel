@@ -2184,6 +2184,10 @@ h3 {
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
   padding: 20px 22px 18px;
+  /* A dialog never grows past the window: one taller than the viewport is centred with its top
+     and its buttons cut off, and nothing scrolls to them. */
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   animation: rise var(--t-base) var(--spring);
 }
 @keyframes rise {
@@ -2196,6 +2200,14 @@ h3 {
   margin: 0 0 8px;
   font-size: var(--t-title);
   font-weight: 600;
+  /* Titles quote names Keel did not choose (a lane named from a long first prompt, a URL with no
+     spaces). Break anywhere and stop at three lines; the full text is the dialog's label. */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
 }
 .dialog p {
   margin: 0 0 16px;

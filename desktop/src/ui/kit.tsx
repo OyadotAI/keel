@@ -117,7 +117,7 @@ export function Dialog({ title, children, onClose, tone }: { title: string; chil
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
     }}>
       <div ref={ref} className={`dialog${tone ? ` ${tone}` : ""}`} role="dialog" aria-modal="true" aria-label={title}>
-        <h2>{title}</h2>
+        <h2 title={title}>{title}</h2>
         {children}
       </div>
     </div>
